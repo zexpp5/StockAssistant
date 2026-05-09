@@ -1,0 +1,19 @@
+# 核心
+requests>=2.32.0
+yfinance>=1.3.0
+
+# 多源数据
+akshare>=1.18.0          # A 股 / 港股
+finnhub-python>=2.4.0    # 美股新闻 + 内部人 + 分析师
+pytrends>=4.9.0          # Google Trends 搜索热度
+
+# 存储（可选）
+duckdb>=1.0.0
+
+# Web 部署（可选 — api/ 模块用）
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+
+# 数据处理
+pandas>=2.0.0
+numpy>=1.26.0

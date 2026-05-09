@@ -1,0 +1,45 @@
+# 凭证 / 密钥
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 虚拟环境
+venv/
+.venv/
+env/
+
+# 数据快照（运行时生成）
+data/
+prices_*.json
+13f_snapshots/
+*.duckdb
+*.duckdb.wal
+
+# 日志
+*.log
+daily_refresh.log*
+
+# 输出产物
+stock_dashboard.html
+
+# 编辑器
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# 飞书开发者工具临时文件
+.feishu/
