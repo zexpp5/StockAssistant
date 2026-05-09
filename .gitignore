@@ -33,7 +33,7 @@ prices_*.json
 daily_refresh.log*
 
 # 输出产物
-stock_dashboard.html
+# stock_dashboard.html
 
 # 编辑器
 .idea/
