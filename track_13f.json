@@ -1,701 +1,2322 @@
 {
-  "generated_at": "2026-05-09T19:35:27.465090",
+  "generated_at": "2026-05-09T15:47:05",
+  "data_source": "SEC EDGAR 13F-HR (真实季度持仓变动)",
+  "report_quarter": "2025-12-31",
+  "investors_tracked": [
+    "Renaissance Technologies",
+    "Coatue Management",
+    "Third Point (Loeb)",
+    "Pershing Square (Ackman)",
+    "Greenlight Capital (Einhorn)",
+    "Bridgewater Associates (Dalio)",
+    "Soros Fund Management",
+    "Berkshire Hathaway (Buffett)",
+    "Tiger Global Management",
+    "Scion Asset Mgmt (Burry)"
+  ],
   "tickers": {
-    "NVDA": {
-      "name": "NVDA",
-      "institutional": [
-        {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Vanguard Group Inc",
-          "pctHeld": 0.0933,
-          "Shares": 2266683275,
-          "Value": 487790233862,
-          "pctChange": 0.0194
-        },
-        {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Blackrock Inc.",
-          "pctHeld": 0.08,
-          "Shares": 1943812884,
-          "Value": 418308526704,
-          "pctChange": 0.0075
-        },
-        {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "State Street Corporation",
-          "pctHeld": 0.040799998,
-          "Shares": 991480489,
-          "Value": 213366598207,
-          "pctChange": 0.0117
-        },
-        {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "FMR, LLC",
-          "pctHeld": 0.04,
-          "Shares": 971063283,
-          "Value": 208972815538,
-          "pctChange": -0.0117999995
-        },
-        {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Geode Capital Management, LLC",
-          "pctHeld": 0.0242,
-          "Shares": 588803093,
-          "Value": 126710423816,
-          "pctChange": 0.0058
-        }
-      ],
-      "mutual_fund": [
-        {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "VANGUARD INDEX FUNDS-Vanguard Total Stock Market Index Fund",
-          "pctHeld": 0.0299,
-          "Shares": 725485169,
-          "Value": 156124406154,
-          "pctChange": -0.0016
-        },
-        {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "VANGUARD INDEX FUNDS-Vanguard 500 Index Fund",
-          "pctHeld": 0.0252,
-          "Shares": 612769545,
-          "Value": 131868004213,
-          "pctChange": 0.0179
-        },
-        {
-          "Date Reported": "2026-03-31 00:00:00",
-          "Holder": "iShares Trust-iShares Core S&P 500 ETF",
-          "pctHeld": 0.0128999995,
-          "Shares": 312356660,
-          "Value": 67219152278,
-          "pctChange": 0.0084
-        },
-        {
-          "Date Reported": "2026-03-31 00:00:00",
-          "Holder": "Fidelity Concord Street Trust-Fidelity 500 Index Fund",
-          "pctHeld": 0.0128,
-          "Shares": 310329646,
-          "Value": 66782938872,
-          "pctChange": 0.0034999999
-        },
-        {
-          "Date Reported": "2026-03-31 00:00:00",
-          "Holder": "SPDR S&P 500 ETF TRUST-State Street SPDR S&P 500 ETF Trust",
-          "pctHeld": 0.0116,
-          "Shares": 281784117,
-          "Value": 60639941118,
-          "pctChange": -0.0145000005
-        }
-      ]
-    },
-    "TSM": {
-      "name": "TSM",
-      "institutional": [
-        {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "FMR, LLC",
-          "pctHeld": 0.0117999995,
-          "Shares": 61131828,
-          "Value": 25166750503,
-          "pctChange": -0.16469999
-        },
-        {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Sanders Capital, LLC",
-          "pctHeld": 0.0062,
-          "Shares": 31958360,
-          "Value": 13156617410,
-          "pctChange": -0.01
-        },
-        {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Capital World Investors",
-          "pctHeld": 0.0053,
-          "Shares": 27404289,
-          "Value": 11281797494,
-          "pctChange": -0.0121
-        },
-        {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Capital International Investors",
-          "pctHeld": 0.0049,
-          "Shares": 25658661,
-          "Value": 10563157372,
-          "pctChange": 0.00059999997
-        },
-        {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "JPMORGAN CHASE & CO",
-          "pctHeld": 0.0049,
-          "Shares": 25182540,
-          "Value": 10367147882,
-          "pctChange": -0.4859
-        }
-      ],
-      "mutual_fund": [
-        {
-          "Date Reported": "2026-03-31 00:00:00",
-          "Holder": "AMERICAN BALANCED FUND",
-          "pctHeld": 0.0034999999,
-          "Shares": 18182509,
-          "Value": 7485375171,
-          "pctChange": -0.113800004
-        },
-        {
-          "Date Reported": "2026-03-31 00:00:00",
-          "Holder": "VanEck ETF Trust-VanEck Semiconductor ETF",
-          "pctHeld": 0.0028,
-          "Shares": 14493801,
-          "Value": 5966807889,
-          "pctChange": 0.0318
-        },
-        {
-          "Date Reported": "2026-03-31 00:00:00",
-          "Holder": "Fidelity Contrafund",
-          "pctHeld": 0.0011,
-          "Shares": 5954007,
-          "Value": 2451145558,
-          "pctChange": 0.0422
-        },
-        {
-          "Date Reported": "2026-03-31 00:00:00",
-          "Holder": "AMERICAN FUNDS FUNDAMENTAL INVESTORS",
-          "pctHeld": 0.001,
-          "Shares": 5208165,
-          "Value": 2144097329,
-          "pctChange": -0.0502
-        },
-        {
-          "Date Reported": "2026-03-31 00:00:00",
-          "Holder": "AMERICAN MUTUAL FUND",
-          "pctHeld": 0.00090000004,
-          "Shares": 4912093,
-          "Value": 2022210410,
-          "pctChange": 0.0
-        }
-      ]
-    },
     "GOOGL": {
       "name": "GOOGL",
-      "institutional": [
+      "summary": {
+        "total_signals": 7,
+        "investors_adding": 0,
+        "investors_cutting": 5,
+        "net_direction": "卖出主导"
+      },
+      "institutional_signals": [
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Vanguard Group Inc",
-          "pctHeld": 0.0908,
-          "Shares": 528969322,
-          "Value": 212010897800,
-          "pctChange": 0.024300002
+          "investor": "Renaissance Technologies",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-12",
+          "cik": "0001037389",
+          "issuer": "ALPHABET INC",
+          "cusip": "02079K305",
+          "action": "📉 减仓",
+          "shares_curr": 296470,
+          "shares_prev": 2606747,
+          "shares_change_pct": -88.63,
+          "value_curr_kusd": 92795821
         },
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Blackrock Inc.",
-          "pctHeld": 0.0759,
-          "Shares": 441987843,
-          "Value": 177148722079,
-          "pctChange": 0.031600002
+          "investor": "Pershing Square (Ackman)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001336528",
+          "issuer": "ALPHABET INC",
+          "cusip": "02079K305",
+          "action": "📉 减仓",
+          "shares_curr": 678297,
+          "shares_prev": 4843973,
+          "shares_change_pct": -86.0,
+          "value_curr_kusd": 212306961
         },
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "FMR, LLC",
-          "pctHeld": 0.0398,
-          "Shares": 231778122,
-          "Value": 92896668468,
-          "pctChange": 0.007900001
+          "investor": "Bridgewater Associates (Dalio)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001350694",
+          "issuer": "ALPHABET INC",
+          "cusip": "02079K305",
+          "action": "📉 减仓",
+          "shares_curr": 1590826,
+          "shares_prev": 2653896,
+          "shares_change_pct": -40.06,
+          "value_curr_kusd": 497928538
         },
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "State Street Corporation",
-          "pctHeld": 0.0392,
-          "Shares": 228296955,
-          "Value": 91501416777,
-          "pctChange": 0.0087
+          "investor": "Coatue Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001135730",
+          "issuer": "ALPHABET INC",
+          "cusip": "02079K305",
+          "action": "📉 减仓",
+          "shares_curr": 6841436,
+          "shares_prev": 7221115,
+          "shares_change_pct": -5.26,
+          "value_curr_kusd": 2141369468
         },
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Geode Capital Management, LLC",
-          "pctHeld": 0.0251,
-          "Shares": 146193037,
-          "Value": 58594167445,
-          "pctChange": 0.0186
+          "investor": "Soros Fund Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001029160",
+          "issuer": "ALPHABET INC",
+          "cusip": "02079K305",
+          "action": "📉 减仓",
+          "shares_curr": 639067,
+          "shares_prev": 658367,
+          "shares_change_pct": -2.93,
+          "value_curr_kusd": 200027971
+        },
+        {
+          "investor": "Berkshire Hathaway (Buffett)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001067983",
+          "issuer": "ALPHABET INC",
+          "cusip": "02079K305",
+          "action": "➡️ 持平",
+          "shares_curr": 17846142,
+          "shares_prev": 17846142,
+          "shares_change_pct": 0.0,
+          "value_curr_kusd": 5585842446
+        },
+        {
+          "investor": "Tiger Global Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001167483",
+          "issuer": "ALPHABET INC",
+          "cusip": "02079K305",
+          "action": "➡️ 持平",
+          "shares_curr": 10631402,
+          "shares_prev": 10631402,
+          "shares_change_pct": 0.0,
+          "value_curr_kusd": 3327628826
         }
       ],
-      "mutual_fund": [
+      "top_holders": [
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "VANGUARD INDEX FUNDS-Vanguard Total Stock Market Index Fund",
-          "pctHeld": 0.031400003,
-          "Shares": 182856702,
-          "Value": 73288963929,
-          "pctChange": -0.0011
+          "name": "Renaissance Technologies",
+          "shares": 296470,
+          "change_pct": -88.63,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 92795821000
         },
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "VANGUARD INDEX FUNDS-Vanguard 500 Index Fund",
-          "pctHeld": 0.0252,
-          "Shares": 146714532,
-          "Value": 58803182634,
-          "pctChange": 0.0223
+          "name": "Pershing Square (Ackman)",
+          "shares": 678297,
+          "change_pct": -86.0,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 212306961000
         },
         {
-          "Date Reported": "2026-03-31 00:00:00",
-          "Holder": "iShares Trust-iShares Core S&P 500 ETF",
-          "pctHeld": 0.0128,
-          "Shares": 74837395,
-          "Value": 29994827002,
-          "pctChange": 0.0091
+          "name": "Bridgewater Associates (Dalio)",
+          "shares": 1590826,
+          "change_pct": -40.06,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 497928538000
         },
         {
-          "Date Reported": "2026-03-31 00:00:00",
-          "Holder": "Fidelity Concord Street Trust-Fidelity 500 Index Fund",
-          "pctHeld": 0.0128,
-          "Shares": 74351614,
-          "Value": 29800125983,
-          "pctChange": 0.0042
+          "name": "Coatue Management",
+          "shares": 6841436,
+          "change_pct": -5.26,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 2141369468000
         },
         {
-          "Date Reported": "2026-03-31 00:00:00",
-          "Holder": "SPDR S&P 500 ETF TRUST-State Street SPDR S&P 500 ETF Trust",
-          "pctHeld": 0.0116,
-          "Shares": 67509720,
-          "Value": 27057894951,
-          "pctChange": -0.0138
+          "name": "Soros Fund Management",
+          "shares": 639067,
+          "change_pct": -2.93,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 200027971000
+        },
+        {
+          "name": "Berkshire Hathaway (Buffett)",
+          "shares": 17846142,
+          "change_pct": 0.0,
+          "action": "➡️ 持平",
+          "report_date": "2025-12-31",
+          "value_usd": 5585842446000
+        },
+        {
+          "name": "Tiger Global Management",
+          "shares": 10631402,
+          "change_pct": 0.0,
+          "action": "➡️ 持平",
+          "report_date": "2025-12-31",
+          "value_usd": 3327628826000
         }
-      ]
+      ],
+      "major_funds": []
+    },
+    "GOOG": {
+      "name": "GOOG",
+      "summary": {
+        "total_signals": 3,
+        "investors_adding": 0,
+        "investors_cutting": 3,
+        "net_direction": "卖出主导"
+      },
+      "institutional_signals": [
+        {
+          "investor": "Renaissance Technologies",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-12",
+          "cik": "0001037389",
+          "issuer": "ALPHABET INC",
+          "cusip": "02079K107",
+          "action": "📉 减仓",
+          "shares_curr": 102081,
+          "shares_prev": 1720002,
+          "shares_change_pct": -94.07,
+          "value_curr_kusd": 32033315
+        },
+        {
+          "investor": "Coatue Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001135730",
+          "issuer": "ALPHABET INC",
+          "cusip": "02079K107",
+          "action": "📉 减仓",
+          "shares_curr": 2000536,
+          "shares_prev": 2091574,
+          "shares_change_pct": -4.35,
+          "value_curr_kusd": 627768196
+        },
+        {
+          "investor": "Pershing Square (Ackman)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001336528",
+          "issuer": "ALPHABET INC",
+          "cusip": "02079K107",
+          "action": "📉 减仓",
+          "shares_curr": 6163871,
+          "shares_prev": 6324031,
+          "shares_change_pct": -2.53,
+          "value_curr_kusd": 1934222720
+        }
+      ],
+      "top_holders": [
+        {
+          "name": "Renaissance Technologies",
+          "shares": 102081,
+          "change_pct": -94.07,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 32033315000
+        },
+        {
+          "name": "Coatue Management",
+          "shares": 2000536,
+          "change_pct": -4.35,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 627768196000
+        },
+        {
+          "name": "Pershing Square (Ackman)",
+          "shares": 6163871,
+          "change_pct": -2.53,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 1934222720000
+        }
+      ],
+      "major_funds": []
+    },
+    "AMZN": {
+      "name": "AMZN",
+      "summary": {
+        "total_signals": 8,
+        "investors_adding": 5,
+        "investors_cutting": 3,
+        "net_direction": "买入主导"
+      },
+      "institutional_signals": [
+        {
+          "investor": "Berkshire Hathaway (Buffett)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001067983",
+          "issuer": "AMAZON COM INC",
+          "cusip": "023135106",
+          "action": "📉 减仓",
+          "shares_curr": 2276000,
+          "shares_prev": 10000000,
+          "shares_change_pct": -77.24,
+          "value_curr_kusd": 525346320
+        },
+        {
+          "investor": "Bridgewater Associates (Dalio)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001350694",
+          "issuer": "AMAZON COM INC",
+          "cusip": "023135106",
+          "action": "📈 加仓",
+          "shares_curr": 1948254,
+          "shares_prev": 1124977,
+          "shares_change_pct": 73.18,
+          "value_curr_kusd": 449695988
+        },
+        {
+          "investor": "Pershing Square (Ackman)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001336528",
+          "issuer": "AMAZON COM INC",
+          "cusip": "023135106",
+          "action": "📈 加仓",
+          "shares_curr": 9607824,
+          "shares_prev": 5823316,
+          "shares_change_pct": 64.99,
+          "value_curr_kusd": 2217677936
+        },
+        {
+          "investor": "Third Point (Loeb)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001040273",
+          "issuer": "AMAZON COM INC",
+          "cusip": "023135106",
+          "action": "📉 减仓",
+          "shares_curr": 2165000,
+          "shares_prev": 2810000,
+          "shares_change_pct": -22.95,
+          "value_curr_kusd": 499725300
+        },
+        {
+          "investor": "Coatue Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001135730",
+          "issuer": "AMAZON COM INC",
+          "cusip": "023135106",
+          "action": "📈 加仓",
+          "shares_curr": 9932265,
+          "shares_prev": 8743095,
+          "shares_change_pct": 13.6,
+          "value_curr_kusd": 2292565408
+        },
+        {
+          "investor": "Soros Fund Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001029160",
+          "issuer": "AMAZON COM INC",
+          "cusip": "023135106",
+          "action": "📈 加仓",
+          "shares_curr": 2659572,
+          "shares_prev": 2376187,
+          "shares_change_pct": 11.93,
+          "value_curr_kusd": 613882409
+        },
+        {
+          "investor": "Tiger Global Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001167483",
+          "issuer": "AMAZON COM INC",
+          "cusip": "023135106",
+          "action": "📉 减仓",
+          "shares_curr": 10011379,
+          "shares_prev": 11043441,
+          "shares_change_pct": -9.35,
+          "value_curr_kusd": 2310826501
+        },
+        {
+          "investor": "Renaissance Technologies",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-12",
+          "cik": "0001037389",
+          "issuer": "AMAZON COM INC",
+          "cusip": "023135106",
+          "action": "🆕 新建仓",
+          "shares_curr": 890926,
+          "shares_prev": 0,
+          "shares_change_pct": null,
+          "value_curr_kusd": 205645092
+        }
+      ],
+      "top_holders": [
+        {
+          "name": "Berkshire Hathaway (Buffett)",
+          "shares": 2276000,
+          "change_pct": -77.24,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 525346320000
+        },
+        {
+          "name": "Bridgewater Associates (Dalio)",
+          "shares": 1948254,
+          "change_pct": 73.18,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 449695988000
+        },
+        {
+          "name": "Pershing Square (Ackman)",
+          "shares": 9607824,
+          "change_pct": 64.99,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 2217677936000
+        },
+        {
+          "name": "Third Point (Loeb)",
+          "shares": 2165000,
+          "change_pct": -22.95,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 499725300000
+        },
+        {
+          "name": "Coatue Management",
+          "shares": 9932265,
+          "change_pct": 13.6,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 2292565408000
+        },
+        {
+          "name": "Soros Fund Management",
+          "shares": 2659572,
+          "change_pct": 11.93,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 613882409000
+        },
+        {
+          "name": "Tiger Global Management",
+          "shares": 10011379,
+          "change_pct": -9.35,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 2310826501000
+        },
+        {
+          "name": "Renaissance Technologies",
+          "shares": 890926,
+          "change_pct": null,
+          "action": "🆕 新建仓",
+          "report_date": "2025-12-31",
+          "value_usd": 205645092000
+        }
+      ],
+      "major_funds": []
+    },
+    "AVGO": {
+      "name": "AVGO",
+      "summary": {
+        "total_signals": 5,
+        "investors_adding": 3,
+        "investors_cutting": 2,
+        "net_direction": "买入主导"
+      },
+      "institutional_signals": [
+        {
+          "investor": "Bridgewater Associates (Dalio)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001350694",
+          "issuer": "BROADCOM INC",
+          "cusip": "11135F101",
+          "action": "📈 加仓",
+          "shares_curr": 1165740,
+          "shares_prev": 845391,
+          "shares_change_pct": 37.89,
+          "value_curr_kusd": 403462614
+        },
+        {
+          "investor": "Renaissance Technologies",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-12",
+          "cik": "0001037389",
+          "issuer": "BROADCOM INC",
+          "cusip": "11135F101",
+          "action": "📈 加仓",
+          "shares_curr": 889,
+          "shares_prev": 827,
+          "shares_change_pct": 7.5,
+          "value_curr_kusd": 308095
+        },
+        {
+          "investor": "Coatue Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001135730",
+          "issuer": "BROADCOM INC",
+          "cusip": "11135F101",
+          "action": "📉 减仓",
+          "shares_curr": 5510227,
+          "shares_prev": 5767559,
+          "shares_change_pct": -4.46,
+          "value_curr_kusd": 1907089565
+        },
+        {
+          "investor": "Tiger Global Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001167483",
+          "issuer": "BROADCOM INC",
+          "cusip": "11135F101",
+          "action": "📉 减仓",
+          "shares_curr": 2875614,
+          "shares_prev": 2889614,
+          "shares_change_pct": -0.48,
+          "value_curr_kusd": 995250005
+        },
+        {
+          "investor": "Soros Fund Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001029160",
+          "issuer": "BROADCOM INC",
+          "cusip": "11135F101",
+          "action": "🆕 新建仓",
+          "shares_curr": 102379,
+          "shares_prev": 0,
+          "shares_change_pct": null,
+          "value_curr_kusd": 35433372
+        }
+      ],
+      "top_holders": [
+        {
+          "name": "Bridgewater Associates (Dalio)",
+          "shares": 1165740,
+          "change_pct": 37.89,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 403462614000
+        },
+        {
+          "name": "Renaissance Technologies",
+          "shares": 889,
+          "change_pct": 7.5,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 308095000
+        },
+        {
+          "name": "Coatue Management",
+          "shares": 5510227,
+          "change_pct": -4.46,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 1907089565000
+        },
+        {
+          "name": "Tiger Global Management",
+          "shares": 2875614,
+          "change_pct": -0.48,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 995250005000
+        },
+        {
+          "name": "Soros Fund Management",
+          "shares": 102379,
+          "change_pct": null,
+          "action": "🆕 新建仓",
+          "report_date": "2025-12-31",
+          "value_usd": 35433372000
+        }
+      ],
+      "major_funds": []
+    },
+    "CCJ": {
+      "name": "CCJ",
+      "summary": {
+        "total_signals": 4,
+        "investors_adding": 1,
+        "investors_cutting": 3,
+        "net_direction": "卖出主导"
+      },
+      "institutional_signals": [
+        {
+          "investor": "Bridgewater Associates (Dalio)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001350694",
+          "issuer": "CAMECO CORP",
+          "cusip": "13321L108",
+          "action": "❌ 清仓",
+          "shares_curr": 0,
+          "shares_prev": 293928,
+          "shares_change_pct": -100.0,
+          "value_curr_kusd": 0
+        },
+        {
+          "investor": "Bridgewater Associates (Dalio)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001350694",
+          "issuer": "CARDINAL HEALTH INC",
+          "cusip": "14149Y108",
+          "action": "📉 减仓",
+          "shares_curr": 216669,
+          "shares_prev": 272033,
+          "shares_change_pct": -20.35,
+          "value_curr_kusd": 44525480
+        },
+        {
+          "investor": "Renaissance Technologies",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-12",
+          "cik": "0001037389",
+          "issuer": "CARDINAL HEALTH INC",
+          "cusip": "14149Y108",
+          "action": "📈 加仓",
+          "shares_curr": 773825,
+          "shares_prev": 692300,
+          "shares_change_pct": 11.78,
+          "value_curr_kusd": 159021038
+        },
+        {
+          "investor": "Renaissance Technologies",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-12",
+          "cik": "0001037389",
+          "issuer": "CAMECO CORP",
+          "cusip": "13321L108",
+          "action": "📉 减仓",
+          "shares_curr": 219700,
+          "shares_prev": 236489,
+          "shares_change_pct": -7.1,
+          "value_curr_kusd": 20100353
+        }
+      ],
+      "top_holders": [
+        {
+          "name": "Bridgewater Associates (Dalio)",
+          "shares": 0,
+          "change_pct": -100.0,
+          "action": "❌ 清仓",
+          "report_date": "2025-12-31",
+          "value_usd": null
+        },
+        {
+          "name": "Bridgewater Associates (Dalio)",
+          "shares": 216669,
+          "change_pct": -20.35,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 44525480000
+        },
+        {
+          "name": "Renaissance Technologies",
+          "shares": 773825,
+          "change_pct": 11.78,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 159021038000
+        },
+        {
+          "name": "Renaissance Technologies",
+          "shares": 219700,
+          "change_pct": -7.1,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 20100353000
+        }
+      ],
+      "major_funds": []
+    },
+    "NET": {
+      "name": "NET",
+      "summary": {
+        "total_signals": 4,
+        "investors_adding": 2,
+        "investors_cutting": 2,
+        "net_direction": "持平"
+      },
+      "institutional_signals": [
+        {
+          "investor": "Bridgewater Associates (Dalio)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001350694",
+          "issuer": "CLOUDFLARE INC",
+          "cusip": "18915M107",
+          "action": "📈 加仓",
+          "shares_curr": 40897,
+          "shares_prev": 15015,
+          "shares_change_pct": 172.37,
+          "value_curr_kusd": 8062844
+        },
+        {
+          "investor": "Soros Fund Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001029160",
+          "issuer": "CLOUDFLARE INC",
+          "cusip": "18915MAC1",
+          "action": "❌ 清仓",
+          "shares_curr": 0,
+          "shares_prev": 25000000,
+          "shares_change_pct": -100.0,
+          "value_curr_kusd": 0
+        },
+        {
+          "investor": "Renaissance Technologies",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-12",
+          "cik": "0001037389",
+          "issuer": "CLOUDFLARE INC",
+          "cusip": "18915M107",
+          "action": "📉 减仓",
+          "shares_curr": 130400,
+          "shares_prev": 328500,
+          "shares_change_pct": -60.3,
+          "value_curr_kusd": 25708360
+        },
+        {
+          "investor": "Bridgewater Associates (Dalio)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001350694",
+          "issuer": "NEXTERA ENERGY INC",
+          "cusip": "65339F101",
+          "action": "🆕 新建仓",
+          "shares_curr": 7297,
+          "shares_prev": 0,
+          "shares_change_pct": null,
+          "value_curr_kusd": 585803
+        }
+      ],
+      "top_holders": [
+        {
+          "name": "Bridgewater Associates (Dalio)",
+          "shares": 40897,
+          "change_pct": 172.37,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 8062844000
+        },
+        {
+          "name": "Soros Fund Management",
+          "shares": 0,
+          "change_pct": -100.0,
+          "action": "❌ 清仓",
+          "report_date": "2025-12-31",
+          "value_usd": null
+        },
+        {
+          "name": "Renaissance Technologies",
+          "shares": 130400,
+          "change_pct": -60.3,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 25708360000
+        },
+        {
+          "name": "Bridgewater Associates (Dalio)",
+          "shares": 7297,
+          "change_pct": null,
+          "action": "🆕 新建仓",
+          "report_date": "2025-12-31",
+          "value_usd": 585803000
+        }
+      ],
+      "major_funds": []
+    },
+    "KO": {
+      "name": "KO",
+      "summary": {
+        "total_signals": 3,
+        "investors_adding": 1,
+        "investors_cutting": 1,
+        "net_direction": "持平"
+      },
+      "institutional_signals": [
+        {
+          "investor": "Renaissance Technologies",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-12",
+          "cik": "0001037389",
+          "issuer": "COCA COLA CO",
+          "cusip": "191216100",
+          "action": "📉 减仓",
+          "shares_curr": 3014392,
+          "shares_prev": 3873501,
+          "shares_change_pct": -22.18,
+          "value_curr_kusd": 210739739
+        },
+        {
+          "investor": "Bridgewater Associates (Dalio)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001350694",
+          "issuer": "COCA COLA CO",
+          "cusip": "191216100",
+          "action": "📈 加仓",
+          "shares_curr": 286109,
+          "shares_prev": 251459,
+          "shares_change_pct": 13.78,
+          "value_curr_kusd": 20001880
+        },
+        {
+          "investor": "Berkshire Hathaway (Buffett)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001067983",
+          "issuer": "COCA COLA CO",
+          "cusip": "191216100",
+          "action": "➡️ 持平",
+          "shares_curr": 400000000,
+          "shares_prev": 400000000,
+          "shares_change_pct": 0.0,
+          "value_curr_kusd": 27964000000
+        }
+      ],
+      "top_holders": [
+        {
+          "name": "Renaissance Technologies",
+          "shares": 3014392,
+          "change_pct": -22.18,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 210739739000
+        },
+        {
+          "name": "Bridgewater Associates (Dalio)",
+          "shares": 286109,
+          "change_pct": 13.78,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 20001880000
+        },
+        {
+          "name": "Berkshire Hathaway (Buffett)",
+          "shares": 400000000,
+          "change_pct": 0.0,
+          "action": "➡️ 持平",
+          "report_date": "2025-12-31",
+          "value_usd": 27964000000000
+        }
+      ],
+      "major_funds": []
+    },
+    "EQIX": {
+      "name": "EQIX",
+      "summary": {
+        "total_signals": 3,
+        "investors_adding": 0,
+        "investors_cutting": 3,
+        "net_direction": "卖出主导"
+      },
+      "institutional_signals": [
+        {
+          "investor": "Bridgewater Associates (Dalio)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001350694",
+          "issuer": "EQUINIX INC",
+          "cusip": "29444U700",
+          "action": "📉 减仓",
+          "shares_curr": 25912,
+          "shares_prev": 35892,
+          "shares_change_pct": -27.81,
+          "value_curr_kusd": 19852738
+        },
+        {
+          "investor": "Bridgewater Associates (Dalio)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001350694",
+          "issuer": "DROPBOX INC",
+          "cusip": "26210C104",
+          "action": "📉 减仓",
+          "shares_curr": 600252,
+          "shares_prev": 785486,
+          "shares_change_pct": -23.58,
+          "value_curr_kusd": 16687006
+        },
+        {
+          "investor": "Renaissance Technologies",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-12",
+          "cik": "0001037389",
+          "issuer": "DROPBOX INC",
+          "cusip": "26210C104",
+          "action": "📉 减仓",
+          "shares_curr": 8376364,
+          "shares_prev": 9384298,
+          "shares_change_pct": -10.74,
+          "value_curr_kusd": 232862919
+        }
+      ],
+      "top_holders": [
+        {
+          "name": "Bridgewater Associates (Dalio)",
+          "shares": 25912,
+          "change_pct": -27.81,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 19852738000
+        },
+        {
+          "name": "Bridgewater Associates (Dalio)",
+          "shares": 600252,
+          "change_pct": -23.58,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 16687006000
+        },
+        {
+          "name": "Renaissance Technologies",
+          "shares": 8376364,
+          "change_pct": -10.74,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 232862919000
+        }
+      ],
+      "major_funds": []
+    },
+    "AAPL": {
+      "name": "AAPL",
+      "summary": {
+        "total_signals": 5,
+        "investors_adding": 1,
+        "investors_cutting": 4,
+        "net_direction": "卖出主导"
+      },
+      "institutional_signals": [
+        {
+          "investor": "Renaissance Technologies",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-12",
+          "cik": "0001037389",
+          "issuer": "APPLE INC",
+          "cusip": "037833100",
+          "action": "❌ 清仓",
+          "shares_curr": 0,
+          "shares_prev": 3125,
+          "shares_change_pct": -100.0,
+          "value_curr_kusd": 0
+        },
+        {
+          "investor": "Soros Fund Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001029160",
+          "issuer": "APPLE INC",
+          "cusip": "037833100",
+          "action": "📈 加仓",
+          "shares_curr": 416239,
+          "shares_prev": 349736,
+          "shares_change_pct": 19.02,
+          "value_curr_kusd": 113158735
+        },
+        {
+          "investor": "Bridgewater Associates (Dalio)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001350694",
+          "issuer": "APPLE INC",
+          "cusip": "037833100",
+          "action": "📉 减仓",
+          "shares_curr": 289471,
+          "shares_prev": 344756,
+          "shares_change_pct": -16.04,
+          "value_curr_kusd": 78695586
+        },
+        {
+          "investor": "Renaissance Technologies",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-12",
+          "cik": "0001037389",
+          "issuer": "MAUI LD & PINEAPPLE INC",
+          "cusip": "577345101",
+          "action": "📉 减仓",
+          "shares_curr": 100849,
+          "shares_prev": 105649,
+          "shares_change_pct": -4.54,
+          "value_curr_kusd": 1708382
+        },
+        {
+          "investor": "Berkshire Hathaway (Buffett)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001067983",
+          "issuer": "APPLE INC",
+          "cusip": "037833100",
+          "action": "📉 减仓",
+          "shares_curr": 227917808,
+          "shares_prev": 238212764,
+          "shares_change_pct": -4.32,
+          "value_curr_kusd": 61961735283
+        }
+      ],
+      "top_holders": [
+        {
+          "name": "Renaissance Technologies",
+          "shares": 0,
+          "change_pct": -100.0,
+          "action": "❌ 清仓",
+          "report_date": "2025-12-31",
+          "value_usd": null
+        },
+        {
+          "name": "Soros Fund Management",
+          "shares": 416239,
+          "change_pct": 19.02,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 113158735000
+        },
+        {
+          "name": "Bridgewater Associates (Dalio)",
+          "shares": 289471,
+          "change_pct": -16.04,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 78695586000
+        },
+        {
+          "name": "Renaissance Technologies",
+          "shares": 100849,
+          "change_pct": -4.54,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 1708382000
+        },
+        {
+          "name": "Berkshire Hathaway (Buffett)",
+          "shares": 227917808,
+          "change_pct": -4.32,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 61961735283000
+        }
+      ],
+      "major_funds": []
+    },
+    "MCD": {
+      "name": "MCD",
+      "summary": {
+        "total_signals": 2,
+        "investors_adding": 0,
+        "investors_cutting": 2,
+        "net_direction": "卖出主导"
+      },
+      "institutional_signals": [
+        {
+          "investor": "Bridgewater Associates (Dalio)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001350694",
+          "issuer": "MCDONALDS CORP",
+          "cusip": "580135101",
+          "action": "📉 减仓",
+          "shares_curr": 47902,
+          "shares_prev": 61259,
+          "shares_change_pct": -21.8,
+          "value_curr_kusd": 14640288
+        },
+        {
+          "investor": "Renaissance Technologies",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-12",
+          "cik": "0001037389",
+          "issuer": "MCDONALDS CORP",
+          "cusip": "580135101",
+          "action": "📉 减仓",
+          "shares_curr": 91437,
+          "shares_prev": 103328,
+          "shares_change_pct": -11.51,
+          "value_curr_kusd": 27945978
+        }
+      ],
+      "top_holders": [
+        {
+          "name": "Bridgewater Associates (Dalio)",
+          "shares": 47902,
+          "change_pct": -21.8,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 14640288000
+        },
+        {
+          "name": "Renaissance Technologies",
+          "shares": 91437,
+          "change_pct": -11.51,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 27945978000
+        }
+      ],
+      "major_funds": []
     },
     "MSFT": {
       "name": "MSFT",
-      "institutional": [
+      "summary": {
+        "total_signals": 6,
+        "investors_adding": 2,
+        "investors_cutting": 4,
+        "net_direction": "卖出主导"
+      },
+      "institutional_signals": [
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Vanguard Group Inc",
-          "pctHeld": 0.096599996,
-          "Shares": 717942580,
-          "Value": 298032320304,
-          "pctChange": 0.0227
+          "investor": "Soros Fund Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001029160",
+          "issuer": "MICROSOFT CORP",
+          "cusip": "594918104",
+          "action": "📈 加仓",
+          "shares_curr": 263041,
+          "shares_prev": 101743,
+          "shares_change_pct": 158.53,
+          "value_curr_kusd": 127211888
         },
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Blackrock Inc.",
-          "pctHeld": 0.081,
-          "Shares": 601897495,
-          "Value": 249859685185,
-          "pctChange": 0.017
+          "investor": "Renaissance Technologies",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-12",
+          "cik": "0001037389",
+          "issuer": "MICROSOFT CORP",
+          "cusip": "594918104",
+          "action": "📉 减仓",
+          "shares_curr": 688118,
+          "shares_prev": 1318907,
+          "shares_change_pct": -47.83,
+          "value_curr_kusd": 332789699
         },
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "State Street Corporation",
-          "pctHeld": 0.041199997,
-          "Shares": 306150608,
-          "Value": 127089238898,
-          "pctChange": 0.021300001
+          "investor": "Tiger Global Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001167483",
+          "issuer": "MICROSOFT CORP",
+          "cusip": "594918104",
+          "action": "📉 减仓",
+          "shares_curr": 5477747,
+          "shares_prev": 6551368,
+          "shares_change_pct": -16.39,
+          "value_curr_kusd": 2649148004
         },
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "FMR, LLC",
-          "pctHeld": 0.0271,
-          "Shares": 200948745,
-          "Value": 83417842043,
-          "pctChange": -0.045300003
+          "investor": "Third Point (Loeb)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001040273",
+          "issuer": "MICROSOFT CORP",
+          "cusip": "594918104",
+          "action": "📉 减仓",
+          "shares_curr": 925000,
+          "shares_prev": 1100000,
+          "shares_change_pct": -15.91,
+          "value_curr_kusd": 447348500
         },
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Geode Capital Management, LLC",
-          "pctHeld": 0.024600001,
-          "Shares": 182618400,
-          "Value": 75808549316,
-          "pctChange": 0.0106
+          "investor": "Coatue Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001135730",
+          "issuer": "MICROSOFT CORP",
+          "cusip": "594918104",
+          "action": "📈 加仓",
+          "shares_curr": 5171976,
+          "shares_prev": 4643050,
+          "shares_change_pct": 11.39,
+          "value_curr_kusd": 2501271034
+        },
+        {
+          "investor": "Bridgewater Associates (Dalio)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001350694",
+          "issuer": "MICROSOFT CORP",
+          "cusip": "594918104",
+          "action": "📉 减仓",
+          "shares_curr": 984091,
+          "shares_prev": 1097169,
+          "shares_change_pct": -10.31,
+          "value_curr_kusd": 475926089
         }
       ],
-      "mutual_fund": [
+      "top_holders": [
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "VANGUARD INDEX FUNDS-Vanguard Total Stock Market Index Fund",
-          "pctHeld": 0.031400003,
-          "Shares": 233573777,
-          "Value": 96961145167,
-          "pctChange": -0.0017
+          "name": "Soros Fund Management",
+          "shares": 263041,
+          "change_pct": 158.53,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 127211888000
         },
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "VANGUARD INDEX FUNDS-Vanguard 500 Index Fund",
-          "pctHeld": 0.0252,
-          "Shares": 187420611,
-          "Value": 77802043123,
-          "pctChange": 0.0219
+          "name": "Renaissance Technologies",
+          "shares": 688118,
+          "change_pct": -47.83,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 332789699000
         },
         {
-          "Date Reported": "2026-03-31 00:00:00",
-          "Holder": "iShares Trust-iShares Core S&P 500 ETF",
-          "pctHeld": 0.0128,
-          "Shares": 95450669,
-          "Value": 39623481249,
-          "pctChange": 0.0074
+          "name": "Tiger Global Management",
+          "shares": 5477747,
+          "change_pct": -16.39,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 2649148004000
         },
         {
-          "Date Reported": "2026-03-31 00:00:00",
-          "Holder": "Fidelity Concord Street Trust-Fidelity 500 Index Fund",
-          "pctHeld": 0.0128,
-          "Shares": 94830980,
-          "Value": 39366235954,
-          "pctChange": 0.0026
+          "name": "Third Point (Loeb)",
+          "shares": 925000,
+          "change_pct": -15.91,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 447348500000
         },
         {
-          "Date Reported": "2026-03-31 00:00:00",
-          "Holder": "SPDR S&P 500 ETF TRUST-State Street SPDR S&P 500 ETF Trust",
-          "pctHeld": 0.0116,
-          "Shares": 86106881,
-          "Value": 35744688020,
-          "pctChange": -0.0154
+          "name": "Coatue Management",
+          "shares": 5171976,
+          "change_pct": 11.39,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 2501271034000
+        },
+        {
+          "name": "Bridgewater Associates (Dalio)",
+          "shares": 984091,
+          "change_pct": -10.31,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 475926089000
         }
-      ]
+      ],
+      "major_funds": []
     },
-    "AMD": {
-      "name": "AMD",
-      "institutional": [
+    "NVDA": {
+      "name": "NVDA",
+      "summary": {
+        "total_signals": 7,
+        "investors_adding": 4,
+        "investors_cutting": 3,
+        "net_direction": "买入主导"
+      },
+      "institutional_signals": [
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Vanguard Group Inc",
-          "pctHeld": 0.097200006,
-          "Shares": 158522860,
-          "Value": 72158021030,
-          "pctChange": 0.0162
+          "investor": "Renaissance Technologies",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-12",
+          "cik": "0001037389",
+          "issuer": "NVIDIA CORPORATION",
+          "cusip": "67066G104",
+          "action": "📉 减仓",
+          "shares_curr": 871420,
+          "shares_prev": 5628605,
+          "shares_change_pct": -84.52,
+          "value_curr_kusd": 162519830
         },
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Blackrock Inc.",
-          "pctHeld": 0.090500005,
-          "Shares": 147528808,
-          "Value": 67153638473,
-          "pctChange": 0.0817
+          "investor": "Bridgewater Associates (Dalio)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001350694",
+          "issuer": "NVIDIA CORPORATION",
+          "cusip": "67066G104",
+          "action": "📈 加仓",
+          "shares_curr": 3865205,
+          "shares_prev": 2509751,
+          "shares_change_pct": 54.01,
+          "value_curr_kusd": 720860733
         },
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "State Street Corporation",
-          "pctHeld": 0.045900002,
-          "Shares": 74919276,
-          "Value": 34102505425,
-          "pctChange": 0.0148
+          "investor": "Soros Fund Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001029160",
+          "issuer": "NVIDIA CORPORATION",
+          "cusip": "67066G104",
+          "action": "📈 加仓",
+          "shares_curr": 665676,
+          "shares_prev": 547703,
+          "shares_change_pct": 21.54,
+          "value_curr_kusd": 124148574
         },
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Geode Capital Management, LLC",
-          "pctHeld": 0.023,
-          "Shares": 37584845,
-          "Value": 17108245687,
-          "pctChange": 0.0077
+          "investor": "Coatue Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001135730",
+          "issuer": "NVIDIA CORPORATION",
+          "cusip": "67066G104",
+          "action": "📉 减仓",
+          "shares_curr": 9203338,
+          "shares_prev": 9870743,
+          "shares_change_pct": -6.76,
+          "value_curr_kusd": 1716422538
         },
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Morgan Stanley",
-          "pctHeld": 0.0154,
-          "Shares": 25041819,
-          "Value": 11398785651,
-          "pctChange": -0.16700001
+          "investor": "Tiger Global Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001167483",
+          "issuer": "NVIDIA CORPORATION",
+          "cusip": "67066G104",
+          "action": "📉 减仓",
+          "shares_curr": 11011752,
+          "shares_prev": 11709752,
+          "shares_change_pct": -5.96,
+          "value_curr_kusd": 2053691748
+        },
+        {
+          "investor": "Third Point (Loeb)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001040273",
+          "issuer": "NVIDIA CORPORATION",
+          "cusip": "67066G104",
+          "action": "📈 加仓",
+          "shares_curr": 2950000,
+          "shares_prev": 2850000,
+          "shares_change_pct": 3.51,
+          "value_curr_kusd": 550175000
+        },
+        {
+          "investor": "Scion Asset Mgmt (Burry)",
+          "report_date": "2025-09-30",
+          "filing_date": "2025-11-03",
+          "cik": "0001649339",
+          "issuer": "NVIDIA CORPORATION",
+          "cusip": "67066G104",
+          "action": "🆕 新建仓",
+          "shares_curr": 1000000,
+          "shares_prev": 0,
+          "shares_change_pct": null,
+          "value_curr_kusd": 186580000
         }
       ],
-      "mutual_fund": [
+      "top_holders": [
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "VANGUARD INDEX FUNDS-Vanguard Total Stock Market Index Fund",
-          "pctHeld": 0.031400003,
-          "Shares": 51158699,
-          "Value": 23286928322,
-          "pctChange": 0.0014
+          "name": "Renaissance Technologies",
+          "shares": 871420,
+          "change_pct": -84.52,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 162519830000
         },
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "VANGUARD INDEX FUNDS-Vanguard 500 Index Fund",
-          "pctHeld": 0.0252,
-          "Shares": 41053619,
-          "Value": 18687196932,
-          "pctChange": 0.0253
+          "name": "Bridgewater Associates (Dalio)",
+          "shares": 3865205,
+          "change_pct": 54.01,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 720860733000
         },
         {
-          "Date Reported": "2026-04-30 00:00:00",
-          "Holder": "Invesco QQQ Trust, Series 1",
-          "pctHeld": 0.0214,
-          "Shares": 34896363,
-          "Value": 15884475559,
-          "pctChange": 0.016
+          "name": "Soros Fund Management",
+          "shares": 665676,
+          "change_pct": 21.54,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 124148574000
         },
         {
-          "Date Reported": "2026-03-31 00:00:00",
-          "Holder": "iShares Trust-iShares Core S&P 500 ETF",
-          "pctHeld": 0.0128999995,
-          "Shares": 20958014,
-          "Value": 9539878443,
-          "pctChange": 0.0098
+          "name": "Coatue Management",
+          "shares": 9203338,
+          "change_pct": -6.76,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 1716422538000
         },
         {
-          "Date Reported": "2026-03-31 00:00:00",
-          "Holder": "Fidelity Concord Street Trust-Fidelity 500 Index Fund",
-          "pctHeld": 0.0128,
-          "Shares": 20821599,
-          "Value": 9477783699,
-          "pctChange": 0.005
+          "name": "Tiger Global Management",
+          "shares": 11011752,
+          "change_pct": -5.96,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 2053691748000
+        },
+        {
+          "name": "Third Point (Loeb)",
+          "shares": 2950000,
+          "change_pct": 3.51,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 550175000000
+        },
+        {
+          "name": "Scion Asset Mgmt (Burry)",
+          "shares": 1000000,
+          "change_pct": null,
+          "action": "🆕 新建仓",
+          "report_date": "2025-09-30",
+          "value_usd": 186580000000
         }
-      ]
+      ],
+      "major_funds": []
+    },
+    "ORCL": {
+      "name": "ORCL",
+      "summary": {
+        "total_signals": 3,
+        "investors_adding": 2,
+        "investors_cutting": 1,
+        "net_direction": "买入主导"
+      },
+      "institutional_signals": [
+        {
+          "investor": "Bridgewater Associates (Dalio)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001350694",
+          "issuer": "ORACLE CORP",
+          "cusip": "68389X105",
+          "action": "📈 加仓",
+          "shares_curr": 1873481,
+          "shares_prev": 406279,
+          "shares_change_pct": 361.13,
+          "value_curr_kusd": 365160182
+        },
+        {
+          "investor": "Coatue Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001135730",
+          "issuer": "ORACLE CORP",
+          "cusip": "68389X105",
+          "action": "📉 减仓",
+          "shares_curr": 4440008,
+          "shares_prev": 4796157,
+          "shares_change_pct": -7.43,
+          "value_curr_kusd": 865401960
+        },
+        {
+          "investor": "Renaissance Technologies",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-12",
+          "cik": "0001037389",
+          "issuer": "ORACLE CORP",
+          "cusip": "68389X105",
+          "action": "🆕 新建仓",
+          "shares_curr": 1639,
+          "shares_prev": 0,
+          "shares_change_pct": null,
+          "value_curr_kusd": 323168
+        }
+      ],
+      "top_holders": [
+        {
+          "name": "Bridgewater Associates (Dalio)",
+          "shares": 1873481,
+          "change_pct": 361.13,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 365160182000
+        },
+        {
+          "name": "Coatue Management",
+          "shares": 4440008,
+          "change_pct": -7.43,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 865401960000
+        },
+        {
+          "name": "Renaissance Technologies",
+          "shares": 1639,
+          "change_pct": null,
+          "action": "🆕 新建仓",
+          "report_date": "2025-12-31",
+          "value_usd": 323168000
+        }
+      ],
+      "major_funds": []
+    },
+    "RDDT": {
+      "name": "RDDT",
+      "summary": {
+        "total_signals": 4,
+        "investors_adding": 1,
+        "investors_cutting": 3,
+        "net_direction": "卖出主导"
+      },
+      "institutional_signals": [
+        {
+          "investor": "Bridgewater Associates (Dalio)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001350694",
+          "issuer": "REDDIT INC",
+          "cusip": "75734B100",
+          "action": "📈 加仓",
+          "shares_curr": 767816,
+          "shares_prev": 617208,
+          "shares_change_pct": 24.4,
+          "value_curr_kusd": 176497864
+        },
+        {
+          "investor": "Tiger Global Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001167483",
+          "issuer": "REDDIT INC",
+          "cusip": "75734B100",
+          "action": "📉 减仓",
+          "shares_curr": 3843915,
+          "shares_prev": 4672515,
+          "shares_change_pct": -17.73,
+          "value_curr_kusd": 883600741
+        },
+        {
+          "investor": "Renaissance Technologies",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-12",
+          "cik": "0001037389",
+          "issuer": "REDDIT INC",
+          "cusip": "75734B100",
+          "action": "📉 减仓",
+          "shares_curr": 1883578,
+          "shares_prev": 2230235,
+          "shares_change_pct": -15.54,
+          "value_curr_kusd": 432978075
+        },
+        {
+          "investor": "Coatue Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001135730",
+          "issuer": "REDDIT INC",
+          "cusip": "75734B100",
+          "action": "📉 减仓",
+          "shares_curr": 5550241,
+          "shares_prev": 5897540,
+          "shares_change_pct": -5.89,
+          "value_curr_kusd": 1275833901
+        }
+      ],
+      "top_holders": [
+        {
+          "name": "Bridgewater Associates (Dalio)",
+          "shares": 767816,
+          "change_pct": 24.4,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 176497864000
+        },
+        {
+          "name": "Tiger Global Management",
+          "shares": 3843915,
+          "change_pct": -17.73,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 883600741000
+        },
+        {
+          "name": "Renaissance Technologies",
+          "shares": 1883578,
+          "change_pct": -15.54,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 432978075000
+        },
+        {
+          "name": "Coatue Management",
+          "shares": 5550241,
+          "change_pct": -5.89,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 1275833901000
+        }
+      ],
+      "major_funds": []
+    },
+    "TSM": {
+      "name": "TSM",
+      "summary": {
+        "total_signals": 5,
+        "investors_adding": 2,
+        "investors_cutting": 3,
+        "net_direction": "卖出主导"
+      },
+      "institutional_signals": [
+        {
+          "investor": "Soros Fund Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001029160",
+          "issuer": "TAIWAN SEMICONDUCTOR MFG LTD",
+          "cusip": "874039100",
+          "action": "📈 加仓",
+          "shares_curr": 349858,
+          "shares_prev": 136092,
+          "shares_change_pct": 157.07,
+          "value_curr_kusd": 106318348
+        },
+        {
+          "investor": "Third Point (Loeb)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001040273",
+          "issuer": "TAIWAN SEMICONDUCTOR MFG LTD",
+          "cusip": "874039100",
+          "action": "📉 减仓",
+          "shares_curr": 425000,
+          "shares_prev": 1100000,
+          "shares_change_pct": -61.36,
+          "value_curr_kusd": 129153250
+        },
+        {
+          "investor": "Tiger Global Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001167483",
+          "issuer": "TAIWAN SEMICONDUCTOR MFG LTD",
+          "cusip": "874039100",
+          "action": "📉 减仓",
+          "shares_curr": 3725474,
+          "shares_prev": 4578374,
+          "shares_change_pct": -18.63,
+          "value_curr_kusd": 1132134294
+        },
+        {
+          "investor": "Renaissance Technologies",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-12",
+          "cik": "0001037389",
+          "issuer": "TAIWAN SEMICONDUCTOR MFG LTD",
+          "cusip": "874039100",
+          "action": "📉 减仓",
+          "shares_curr": 1167280,
+          "shares_prev": 1342920,
+          "shares_change_pct": -13.08,
+          "value_curr_kusd": 354724719
+        },
+        {
+          "investor": "Coatue Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001135730",
+          "issuer": "TAIWAN SEMICONDUCTOR MFG LTD",
+          "cusip": "874039100",
+          "action": "📈 加仓",
+          "shares_curr": 8629524,
+          "shares_prev": 8072536,
+          "shares_change_pct": 6.9,
+          "value_curr_kusd": 2622426049
+        }
+      ],
+      "top_holders": [
+        {
+          "name": "Soros Fund Management",
+          "shares": 349858,
+          "change_pct": 157.07,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 106318348000
+        },
+        {
+          "name": "Third Point (Loeb)",
+          "shares": 425000,
+          "change_pct": -61.36,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 129153250000
+        },
+        {
+          "name": "Tiger Global Management",
+          "shares": 3725474,
+          "change_pct": -18.63,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 1132134294000
+        },
+        {
+          "name": "Renaissance Technologies",
+          "shares": 1167280,
+          "change_pct": -13.08,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 354724719000
+        },
+        {
+          "name": "Coatue Management",
+          "shares": 8629524,
+          "change_pct": 6.9,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 2622426049000
+        }
+      ],
+      "major_funds": []
+    },
+    "TSLA": {
+      "name": "TSLA",
+      "summary": {
+        "total_signals": 3,
+        "investors_adding": 2,
+        "investors_cutting": 1,
+        "net_direction": "买入主导"
+      },
+      "institutional_signals": [
+        {
+          "investor": "Renaissance Technologies",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-12",
+          "cik": "0001037389",
+          "issuer": "TESLA INC",
+          "cusip": "88160R101",
+          "action": "📈 加仓",
+          "shares_curr": 1362122,
+          "shares_prev": 424490,
+          "shares_change_pct": 220.88,
+          "value_curr_kusd": 612583061
+        },
+        {
+          "investor": "Coatue Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001135730",
+          "issuer": "TESLA INC",
+          "cusip": "88160R101",
+          "action": "📉 减仓",
+          "shares_curr": 1641406,
+          "shares_prev": 1729211,
+          "shares_change_pct": -5.08,
+          "value_curr_kusd": 738173107
+        },
+        {
+          "investor": "Soros Fund Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001029160",
+          "issuer": "TESLA INC",
+          "cusip": "88160R101",
+          "action": "🆕 新建仓",
+          "shares_curr": 56661,
+          "shares_prev": 0,
+          "shares_change_pct": null,
+          "value_curr_kusd": 25481585
+        }
+      ],
+      "top_holders": [
+        {
+          "name": "Renaissance Technologies",
+          "shares": 1362122,
+          "change_pct": 220.88,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 612583061000
+        },
+        {
+          "name": "Coatue Management",
+          "shares": 1641406,
+          "change_pct": -5.08,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 738173107000
+        },
+        {
+          "name": "Soros Fund Management",
+          "shares": 56661,
+          "change_pct": null,
+          "action": "🆕 新建仓",
+          "report_date": "2025-12-31",
+          "value_usd": 25481585000
+        }
+      ],
+      "major_funds": []
     },
     "VRT": {
-      "name": "Vertiv",
-      "institutional": [
+      "name": "VRT",
+      "summary": {
+        "total_signals": 3,
+        "investors_adding": 3,
+        "investors_cutting": 0,
+        "net_direction": "买入主导"
+      },
+      "institutional_signals": [
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Vanguard Group Inc",
-          "pctHeld": 0.0996,
-          "Shares": 38258636,
-          "Value": 13006788527,
-          "pctChange": -0.0148
+          "investor": "Renaissance Technologies",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-12",
+          "cik": "0001037389",
+          "issuer": "VERTIV HOLDINGS CO",
+          "cusip": "92537N108",
+          "action": "📈 加仓",
+          "shares_curr": 1144329,
+          "shares_prev": 358212,
+          "shares_change_pct": 219.46,
+          "value_curr_kusd": 185392741
         },
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Blackrock Inc.",
-          "pctHeld": 0.0834,
-          "Shares": 32047941,
-          "Value": 10895338540,
-          "pctChange": -0.1118
+          "investor": "Bridgewater Associates (Dalio)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001350694",
+          "issuer": "VERTIV HOLDINGS CO",
+          "cusip": "92537N108",
+          "action": "📈 加仓",
+          "shares_curr": 430599,
+          "shares_prev": 250414,
+          "shares_change_pct": 71.95,
+          "value_curr_kusd": 69761344
         },
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Bank of America Corporation",
-          "pctHeld": 0.024,
-          "Shares": 9231337,
-          "Value": 3138377651,
-          "pctChange": -0.0509
-        },
-        {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "State Street Corporation",
-          "pctHeld": 0.0226,
-          "Shares": 8694900,
-          "Value": 2956005163,
-          "pctChange": 0.0278
-        },
-        {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Geode Capital Management, LLC",
-          "pctHeld": 0.0184,
-          "Shares": 7065912,
-          "Value": 2402198111,
-          "pctChange": 0.0208
+          "investor": "Coatue Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001135730",
+          "issuer": "VERTIV HOLDINGS CO",
+          "cusip": "92537N108",
+          "action": "🆕 新建仓",
+          "shares_curr": 828947,
+          "shares_prev": 0,
+          "shares_change_pct": null,
+          "value_curr_kusd": 134297703
         }
       ],
-      "mutual_fund": [
+      "top_holders": [
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "VANGUARD INDEX FUNDS-Vanguard Total Stock Market Index Fund",
-          "pctHeld": 0.0313,
-          "Shares": 12015363,
-          "Value": 4084862973,
-          "pctChange": -0.00090000004
+          "name": "Renaissance Technologies",
+          "shares": 1144329,
+          "change_pct": 219.46,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 185392741000
         },
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "VANGUARD INDEX FUNDS-Vanguard Mid-Cap Index Fund",
-          "pctHeld": 0.021300001,
-          "Shares": 8176753,
-          "Value": 2779850727,
-          "pctChange": -0.015
+          "name": "Bridgewater Associates (Dalio)",
+          "shares": 430599,
+          "change_pct": 71.95,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 69761344000
         },
         {
-          "Date Reported": "2026-03-31 00:00:00",
-          "Holder": "iShares Trust-iShares Core S&P 500 ETF",
-          "pctHeld": 0.0128,
-          "Shares": 4917342,
-          "Value": 1671748765,
-          "pctChange": 1.0
-        },
-        {
-          "Date Reported": "2026-03-31 00:00:00",
-          "Holder": "Fidelity Concord Street Trust-Fidelity 500 Index Fund",
-          "pctHeld": 0.0127,
-          "Shares": 4885508,
-          "Value": 1660926160,
-          "pctChange": 1.0
-        },
-        {
-          "Date Reported": "2026-03-31 00:00:00",
-          "Holder": "SPDR S&P 500 ETF TRUST-State Street SPDR S&P 500 ETF Trust",
-          "pctHeld": 0.0115,
-          "Shares": 4436261,
-          "Value": 1508195657,
-          "pctChange": 1.0
+          "name": "Coatue Management",
+          "shares": 828947,
+          "change_pct": null,
+          "action": "🆕 新建仓",
+          "report_date": "2025-12-31",
+          "value_usd": 134297703000
         }
-      ]
+      ],
+      "major_funds": []
     },
-    "CCJ": {
-      "name": "Cameco",
-      "institutional": [
+    "VST": {
+      "name": "VST",
+      "summary": {
+        "total_signals": 7,
+        "investors_adding": 3,
+        "investors_cutting": 3,
+        "net_direction": "持平"
+      },
+      "institutional_signals": [
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Vanguard Group Inc",
-          "pctHeld": 0.041500002,
-          "Shares": 18059335,
-          "Value": 2108427361,
-          "pctChange": 0.0145000005
+          "investor": "Renaissance Technologies",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-12",
+          "cik": "0001037389",
+          "issuer": "VISA INC",
+          "cusip": "92826C839",
+          "action": "📈 加仓",
+          "shares_curr": 221768,
+          "shares_prev": 764,
+          "shares_change_pct": 28927.23,
+          "value_curr_kusd": 77777390
         },
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "FMR, LLC",
-          "pctHeld": 0.0347,
-          "Shares": 15100690,
-          "Value": 1763005557,
-          "pctChange": -0.1278
+          "investor": "Coatue Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001135730",
+          "issuer": "VISTRA CORP",
+          "cusip": "92840M102",
+          "action": "❌ 清仓",
+          "shares_curr": 0,
+          "shares_prev": 512811,
+          "shares_change_pct": -100.0,
+          "value_curr_kusd": 0
         },
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Mirae Asset Global ETFs Holdings Ltd.",
-          "pctHeld": 0.0334,
-          "Shares": 14529956,
-          "Value": 1696372363,
-          "pctChange": 0.119899996
+          "investor": "Renaissance Technologies",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-12",
+          "cik": "0001037389",
+          "issuer": "VISTRA CORP",
+          "cusip": "92840M102",
+          "action": "📈 加仓",
+          "shares_curr": 1042015,
+          "shares_prev": 581242,
+          "shares_change_pct": 79.27,
+          "value_curr_kusd": 168108280
         },
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Capital World Investors",
-          "pctHeld": 0.0311,
-          "Shares": 13545354,
-          "Value": 1581420079,
-          "pctChange": 0.0031
+          "investor": "Bridgewater Associates (Dalio)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001350694",
+          "issuer": "VISA INC",
+          "cusip": "92826C839",
+          "action": "📉 减仓",
+          "shares_curr": 536497,
+          "shares_prev": 675954,
+          "shares_change_pct": -20.63,
+          "value_curr_kusd": 188154863
         },
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Royal Bank of Canada",
-          "pctHeld": 0.0211,
-          "Shares": 9169196,
-          "Value": 1070503633,
-          "pctChange": -0.077800006
+          "investor": "Bridgewater Associates (Dalio)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001350694",
+          "issuer": "VISTRA CORP",
+          "cusip": "92840M102",
+          "action": "📉 减仓",
+          "shares_curr": 309849,
+          "shares_prev": 338335,
+          "shares_change_pct": -8.42,
+          "value_curr_kusd": 49987939
+        },
+        {
+          "investor": "Third Point (Loeb)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001040273",
+          "issuer": "VISTRA CORP",
+          "cusip": "92840M102",
+          "action": "📈 加仓",
+          "shares_curr": 1005000,
+          "shares_prev": 935000,
+          "shares_change_pct": 7.49,
+          "value_curr_kusd": 162136650
+        },
+        {
+          "investor": "Berkshire Hathaway (Buffett)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001067983",
+          "issuer": "VISA INC",
+          "cusip": "92826C839",
+          "action": "➡️ 持平",
+          "shares_curr": 8297460,
+          "shares_prev": 8297460,
+          "shares_change_pct": 0.0,
+          "value_curr_kusd": 2910002197
         }
       ],
-      "mutual_fund": [
+      "top_holders": [
         {
-          "Date Reported": "2026-03-31 00:00:00",
-          "Holder": "GLOBAL X FUNDS-Global X Uranium ETF",
-          "pctHeld": 0.032899998,
-          "Shares": 14327093,
-          "Value": 1672688107,
-          "pctChange": -0.0161
+          "name": "Renaissance Technologies",
+          "shares": 221768,
+          "change_pct": 28927.23,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 77777390000
         },
         {
-          "Date Reported": "2026-03-31 00:00:00",
-          "Holder": "CAPITAL WORLD GROWTH & INCOME FUND",
-          "pctHeld": 0.025899999,
-          "Shares": 11281412,
-          "Value": 1317104851,
-          "pctChange": 0.0
+          "name": "Coatue Management",
+          "shares": 0,
+          "change_pct": -100.0,
+          "action": "❌ 清仓",
+          "report_date": "2025-12-31",
+          "value_usd": null
         },
         {
-          "Date Reported": "2026-01-31 00:00:00",
-          "Holder": "VANGUARD STAR FUNDS-Vanguard Total International Stock Index Fund",
-          "pctHeld": 0.0146,
-          "Shares": 6347179,
-          "Value": 741033148,
-          "pctChange": 0.0083
+          "name": "Renaissance Technologies",
+          "shares": 1042015,
+          "change_pct": 79.27,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 168108280000
         },
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "VANGUARD TAX-MANAGED FUNDS-Vanguard Developed Markets Index Fund",
-          "pctHeld": 0.0094,
-          "Shares": 4094643,
-          "Value": 478049570,
-          "pctChange": 0.020299999
+          "name": "Bridgewater Associates (Dalio)",
+          "shares": 536497,
+          "change_pct": -20.63,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 188154863000
         },
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "SPROTT FUNDS TRUST-SPROTT URANIUM MINERS ETF",
-          "pctHeld": 0.0087,
-          "Shares": 3808966,
-          "Value": 444696780,
-          "pctChange": -0.0086
+          "name": "Bridgewater Associates (Dalio)",
+          "shares": 309849,
+          "change_pct": -8.42,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 49987939000
+        },
+        {
+          "name": "Third Point (Loeb)",
+          "shares": 1005000,
+          "change_pct": 7.49,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 162136650000
+        },
+        {
+          "name": "Berkshire Hathaway (Buffett)",
+          "shares": 8297460,
+          "change_pct": 0.0,
+          "action": "➡️ 持平",
+          "report_date": "2025-12-31",
+          "value_usd": 2910002197000
         }
-      ]
+      ],
+      "major_funds": []
     },
-    "DDOG": {
-      "name": "Datadog",
-      "institutional": [
+    "XYL": {
+      "name": "XYL",
+      "summary": {
+        "total_signals": 2,
+        "investors_adding": 2,
+        "investors_cutting": 0,
+        "net_direction": "买入主导"
+      },
+      "institutional_signals": [
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Vanguard Group Inc",
-          "pctHeld": 0.1267,
-          "Shares": 41912928,
-          "Value": 8389291821,
-          "pctChange": 0.00029999999
+          "investor": "Bridgewater Associates (Dalio)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001350694",
+          "issuer": "XYLEM INC",
+          "cusip": "98419M100",
+          "action": "📈 加仓",
+          "shares_curr": 39593,
+          "shares_prev": 6958,
+          "shares_change_pct": 469.03,
+          "value_curr_kusd": 5391775
         },
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Blackrock Inc.",
-          "pctHeld": 0.0856,
-          "Shares": 28329611,
-          "Value": 5670455041,
-          "pctChange": 0.0404
-        },
-        {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "FMR, LLC",
-          "pctHeld": 0.055,
-          "Shares": 18201356,
-          "Value": 3643183483,
-          "pctChange": 0.1137
-        },
-        {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "Price (T.Rowe) Associates Inc",
-          "pctHeld": 0.0436,
-          "Shares": 14423814,
-          "Value": 2887070663,
-          "pctChange": 0.071100004
-        },
-        {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "State Street Corporation",
-          "pctHeld": 0.0424,
-          "Shares": 14031486,
-          "Value": 2808542289,
-          "pctChange": 0.0218
+          "investor": "Renaissance Technologies",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-12",
+          "cik": "0001037389",
+          "issuer": "XYLEM INC",
+          "cusip": "98419M100",
+          "action": "📈 加仓",
+          "shares_curr": 359371,
+          "shares_prev": 323171,
+          "shares_change_pct": 11.2,
+          "value_curr_kusd": 48939143
         }
       ],
-      "mutual_fund": [
+      "top_holders": [
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "VANGUARD INDEX FUNDS-Vanguard Total Stock Market Index Fund",
-          "pctHeld": 0.0309,
-          "Shares": 10229679,
-          "Value": 2047572586,
-          "pctChange": 0.005
+          "name": "Bridgewater Associates (Dalio)",
+          "shares": 39593,
+          "change_pct": 469.03,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 5391775000
         },
         {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "VANGUARD INDEX FUNDS-Vanguard 500 Index Fund",
-          "pctHeld": 0.0248,
-          "Shares": 8207519,
-          "Value": 1642817033,
-          "pctChange": 0.029000001
-        },
-        {
-          "Date Reported": "2025-12-31 00:00:00",
-          "Holder": "VANGUARD INDEX FUNDS-Vanguard Mid-Cap Index Fund",
-          "pctHeld": 0.0214,
-          "Shares": 7083603,
-          "Value": 1417854002,
-          "pctChange": -0.0093
-        },
-        {
-          "Date Reported": "2026-04-30 00:00:00",
-          "Holder": "Invesco QQQ Trust, Series 1",
-          "pctHeld": 0.021300001,
-          "Shares": 7030654,
-          "Value": 1407255730,
-          "pctChange": 0.016
-        },
-        {
-          "Date Reported": "2026-03-31 00:00:00",
-          "Holder": "iShares Trust-iShares Core S&P 500 ETF",
-          "pctHeld": 0.0128,
-          "Shares": 4219191,
-          "Value": 844513286,
-          "pctChange": 0.017
+          "name": "Renaissance Technologies",
+          "shares": 359371,
+          "change_pct": 11.2,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 48939143000
         }
-      ]
+      ],
+      "major_funds": []
+    },
+    "META": {
+      "name": "META",
+      "summary": {
+        "total_signals": 7,
+        "investors_adding": 1,
+        "investors_cutting": 6,
+        "net_direction": "卖出主导"
+      },
+      "institutional_signals": [
+        {
+          "investor": "Renaissance Technologies",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-12",
+          "cik": "0001037389",
+          "issuer": "META PLATFORMS INC",
+          "cusip": "30303M102",
+          "action": "❌ 清仓",
+          "shares_curr": 0,
+          "shares_prev": 482499,
+          "shares_change_pct": -100.0,
+          "value_curr_kusd": 0
+        },
+        {
+          "investor": "Third Point (Loeb)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001040273",
+          "issuer": "META PLATFORMS INC",
+          "cusip": "30303M102",
+          "action": "❌ 清仓",
+          "shares_curr": 0,
+          "shares_prev": 220000,
+          "shares_change_pct": -100.0,
+          "value_curr_kusd": 0
+        },
+        {
+          "investor": "Scion Asset Mgmt (Burry)",
+          "report_date": "2025-09-30",
+          "filing_date": "2025-11-03",
+          "cik": "0001649339",
+          "issuer": "META PLATFORMS INC",
+          "cusip": "30303M102",
+          "action": "❌ 清仓",
+          "shares_curr": 0,
+          "shares_prev": 100000,
+          "shares_change_pct": -100.0,
+          "value_curr_kusd": 0
+        },
+        {
+          "investor": "Bridgewater Associates (Dalio)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001350694",
+          "issuer": "META PLATFORMS INC",
+          "cusip": "30303M102",
+          "action": "📉 减仓",
+          "shares_curr": 223701,
+          "shares_prev": 416919,
+          "shares_change_pct": -46.34,
+          "value_curr_kusd": 147662793
+        },
+        {
+          "investor": "Coatue Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001135730",
+          "issuer": "META PLATFORMS INC",
+          "cusip": "30303M102",
+          "action": "📉 减仓",
+          "shares_curr": 3781949,
+          "shares_prev": 4035717,
+          "shares_change_pct": -6.29,
+          "value_curr_kusd": 2496426714
+        },
+        {
+          "investor": "Tiger Global Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001167483",
+          "issuer": "META PLATFORMS INC",
+          "cusip": "30303M102",
+          "action": "📉 减仓",
+          "shares_curr": 2750615,
+          "shares_prev": 2819001,
+          "shares_change_pct": -2.43,
+          "value_curr_kusd": 1815653455
+        },
+        {
+          "investor": "Pershing Square (Ackman)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-17",
+          "cik": "0001336528",
+          "issuer": "META PLATFORMS INC",
+          "cusip": "30303M102",
+          "action": "🆕 新建仓",
+          "shares_curr": 2673569,
+          "shares_prev": 0,
+          "shares_change_pct": null,
+          "value_curr_kusd": 1764796161
+        }
+      ],
+      "top_holders": [
+        {
+          "name": "Renaissance Technologies",
+          "shares": 0,
+          "change_pct": -100.0,
+          "action": "❌ 清仓",
+          "report_date": "2025-12-31",
+          "value_usd": null
+        },
+        {
+          "name": "Third Point (Loeb)",
+          "shares": 0,
+          "change_pct": -100.0,
+          "action": "❌ 清仓",
+          "report_date": "2025-12-31",
+          "value_usd": null
+        },
+        {
+          "name": "Scion Asset Mgmt (Burry)",
+          "shares": 0,
+          "change_pct": -100.0,
+          "action": "❌ 清仓",
+          "report_date": "2025-09-30",
+          "value_usd": null
+        },
+        {
+          "name": "Bridgewater Associates (Dalio)",
+          "shares": 223701,
+          "change_pct": -46.34,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 147662793000
+        },
+        {
+          "name": "Coatue Management",
+          "shares": 3781949,
+          "change_pct": -6.29,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 2496426714000
+        },
+        {
+          "name": "Tiger Global Management",
+          "shares": 2750615,
+          "change_pct": -2.43,
+          "action": "📉 减仓",
+          "report_date": "2025-12-31",
+          "value_usd": 1815653455000
+        },
+        {
+          "name": "Pershing Square (Ackman)",
+          "shares": 2673569,
+          "change_pct": null,
+          "action": "🆕 新建仓",
+          "report_date": "2025-12-31",
+          "value_usd": 1764796161000
+        }
+      ],
+      "major_funds": []
+    },
+    "MP": {
+      "name": "MP",
+      "summary": {
+        "total_signals": 3,
+        "investors_adding": 2,
+        "investors_cutting": 1,
+        "net_direction": "买入主导"
+      },
+      "institutional_signals": [
+        {
+          "investor": "Renaissance Technologies",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-12",
+          "cik": "0001037389",
+          "issuer": "MP MATERIALS CORP",
+          "cusip": "553368101",
+          "action": "❌ 清仓",
+          "shares_curr": 0,
+          "shares_prev": 1404600,
+          "shares_change_pct": -100.0,
+          "value_curr_kusd": 0
+        },
+        {
+          "investor": "Bridgewater Associates (Dalio)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001350694",
+          "issuer": "MP MATERIALS CORP",
+          "cusip": "553368101",
+          "action": "📈 加仓",
+          "shares_curr": 62458,
+          "shares_prev": 61108,
+          "shares_change_pct": 2.21,
+          "value_curr_kusd": 3155378
+        },
+        {
+          "investor": "Soros Fund Management",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001029160",
+          "issuer": "MP MATERIALS CORP",
+          "cusip": "553368101",
+          "action": "🆕 新建仓",
+          "shares_curr": 12368,
+          "shares_prev": 0,
+          "shares_change_pct": null,
+          "value_curr_kusd": 624831
+        }
+      ],
+      "top_holders": [
+        {
+          "name": "Renaissance Technologies",
+          "shares": 0,
+          "change_pct": -100.0,
+          "action": "❌ 清仓",
+          "report_date": "2025-12-31",
+          "value_usd": null
+        },
+        {
+          "name": "Bridgewater Associates (Dalio)",
+          "shares": 62458,
+          "change_pct": 2.21,
+          "action": "📈 加仓",
+          "report_date": "2025-12-31",
+          "value_usd": 3155378000
+        },
+        {
+          "name": "Soros Fund Management",
+          "shares": 12368,
+          "change_pct": null,
+          "action": "🆕 新建仓",
+          "report_date": "2025-12-31",
+          "value_usd": 624831000
+        }
+      ],
+      "major_funds": []
+    },
+    "BWXT": {
+      "name": "BWXT",
+      "summary": {
+        "total_signals": 1,
+        "investors_adding": 1,
+        "investors_cutting": 0,
+        "net_direction": "买入主导"
+      },
+      "institutional_signals": [
+        {
+          "investor": "Bridgewater Associates (Dalio)",
+          "report_date": "2025-12-31",
+          "filing_date": "2026-02-13",
+          "cik": "0001350694",
+          "issuer": "BWX TECHNOLOGIES INC",
+          "cusip": "05605H100",
+          "action": "🆕 新建仓",
+          "shares_curr": 13990,
+          "shares_prev": 0,
+          "shares_change_pct": null,
+          "value_curr_kusd": 2418032
+        }
+      ],
+      "top_holders": [
+        {
+          "name": "Bridgewater Associates (Dalio)",
+          "shares": 13990,
+          "change_pct": null,
+          "action": "🆕 新建仓",
+          "report_date": "2025-12-31",
+          "value_usd": 2418032000
+        }
+      ],
+      "major_funds": []
     }
   }
 }

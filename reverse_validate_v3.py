@@ -42,18 +42,13 @@ SAMPLES_V3 = [
 
 
 def main():
-    # 1. 加载因子数据
-    factor_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "factor_scores.json")
-    sig_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "early_signals.json")
-    if not os.path.exists(factor_file):
-        print(f"❌ {factor_file} 不存在，先运行 factor_model.py --as-of 2025-12-31")
+    # 1. 加载因子数据（共享 loader：优先 today 缓存，回退独立 json）
+    from reverse_validate import load_factors_and_signals
+    try:
+        factor_data, sig_data = load_factors_and_signals()
+    except FileNotFoundError as e:
+        print(f"❌ {e}")
         return
-    if not os.path.exists(sig_file):
-        print(f"❌ {sig_file} 不存在，先运行 early_signals.py --as-of 2025-12-31")
-        return
-
-    factor_data = json.load(open(factor_file, encoding="utf-8"))
-    sig_data = json.load(open(sig_file, encoding="utf-8"))
     sig_map = {r["ticker"]: r for r in sig_data["results"]}
 
     # 2. 拉每只股票的实际未来涨幅

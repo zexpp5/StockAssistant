@@ -35,10 +35,8 @@ def fetch_spy_return(start_date, end_date):
 
 
 def main():
-    factor_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "factor_scores.json")
-    sig_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "early_signals.json")
-    factor_data = json.load(open(factor_file, encoding="utf-8"))
-    sig_data = json.load(open(sig_file, encoding="utf-8"))
+    from reverse_validate import load_factors_and_signals
+    factor_data, sig_data = load_factors_and_signals()
     sig_map = {r["ticker"]: r for r in sig_data["results"]}
 
     print("=" * 110)

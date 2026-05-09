@@ -6,9 +6,13 @@
 打分规则（满分 100）：
   • AI 关联度（35 分）：极强 35 / 强 28 / 中 18 / 弱 8 / 无 0
   • 估值（25 分）：PEG < 1 → 25；1-2 → 18；2-3 → 10；>3 → 4；负 PE 或 PEG 缺失但 PE 合理 → 12
-  • 趋势（25 分）：1Y > 0 → 15；> 50% → 20；> 100% → 18（已涨过头扣分）；< 0 → 8
+  • 趋势（25 分）：1Y > 0 → 15；> 50% → 20；> 200% → 12（已涨过头扣分）；< 0 → 8
                   + 1 周 > 0 → +5
   • 数据可信度（15 分）：高 → 15；中 → 10；低 → 5；无 → 3
+
+⚠️ 上述权重和阈值的「证据状态」：
+   跑 `python3 -m stock_research.jobs.calibrate_pick_weights` 生成 data/factor_weights.json，
+   本脚本启动时自动加载并打印各因子是否经 IC 实证。无该文件则全部 fallback 到上述 heuristic。
 
 入选规则：综合得分 ≥ 50 分进入「每日优选」
 评分等级：
@@ -23,9 +27,11 @@
 """
 import sys
 import os
+import json
 import argparse
 import requests
 from datetime import datetime
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from feishu_auth import feishu_token, FEISHU_APP_TOKEN  # noqa: E402
@@ -118,7 +124,7 @@ THEME_MAPPING = {
     # 💡 AI 连接（光通信+ASIC+IP）
     "MRVL": "💡 AI 连接（光通信+ASIC）", "AVGO": "💡 AI 连接（光通信+ASIC）",
     "300308": "💡 AI 连接（光通信+ASIC）", "300502": "💡 AI 连接（光通信+ASIC）",
-    "787635": "💡 AI 连接（光通信+ASIC）",
+    "688635": "💡 AI 连接（光通信+ASIC）",
     "ALAB": "💡 AI 连接（光通信+ASIC）", "ARM": "💡 AI 连接（光通信+ASIC）",
     # ⚡ AI 电力链
     "GEV": "⚡ AI 电力链", "ETN": "⚡ AI 电力链", "PWR": "⚡ AI 电力链",
@@ -201,18 +207,24 @@ def score_valuation(peg, forward_pe):
 
 
 def score_trend(one_year_pct, one_week_pct, ytd_pct):
+    """趋势打分。
+
+    实证依据（calibrate_pick_weights 2026-05-09 跑 16 只 × 6 regime）:
+      - 1Y 档位评分（带 >200% 追高扣分）: mean IC = +0.143, IR = +0.42 🟢 strong
+      - 1W >0 加 5 分: mean IC = -0.015 🔴 decayed —— 已删除（无预测力）
+
+    one_week_pct / ytd_pct 参数保留是为了向后兼容调用方，函数内不再使用。
+    """
     score = 0
     if one_year_pct is not None:
         if one_year_pct > 200:
-            score += 12  # 涨太多扣分
+            score += 12  # 涨太多扣分（追高风险，IC 实证有效）
         elif one_year_pct > 50:
             score += 20
         elif one_year_pct > 0:
             score += 15
         else:
             score += 8
-    if one_week_pct is not None and one_week_pct > 0:
-        score += 5
     return min(score, 25)
 
 
@@ -407,12 +419,53 @@ def write_pick(token, rec, scores, exclude_codes=None):
 # 主流程
 # ============================================================
 
+_CALIBRATION_PATH = Path(__file__).parent / "data" / "factor_weights.json"
+
+
+def load_calibration():
+    """读 factor_weights.json；缺失/损坏则返回 None（行为退回硬编码 heuristic）。
+
+    本函数仅供透明展示「打分规则是否有 IC 实证支撑」，不直接改变 score_xxx 的数值，
+    要把校准权重落到实际打分上，需要进一步重构 score_xxx（见 calibrate_pick_weights.py）。
+    """
+    if not _CALIBRATION_PATH.exists():
+        return None
+    try:
+        return json.loads(_CALIBRATION_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def print_calibration_status():
+    """开跑时打印一行：当前打分规则是否有 IC 实证证据。"""
+    calib = load_calibration()
+    if not calib:
+        print("⚠️  factor_weights.json 缺失 — 当前权重全部为手拍 heuristic（35/25/25/15）")
+        print("    跑 `python3 -m stock_research.jobs.calibrate_pick_weights` 生成 IC 实证")
+        return
+    gen_at = calib.get("generated_at", "未知")
+    print(f"📊 factor_weights.json 已加载（{gen_at}）")
+    trend_audit = calib.get("calibrated", {}).get("trend", {}).get("ic_audit", {})
+    if trend_audit:
+        print(f"   趋势子因子 IC 实证:")
+        for fname, summary in trend_audit.items():
+            ic = summary.get("mean_ic", 0)
+            mark = "🟢" if ic >= 0.05 else ("🟡" if ic >= 0.02 else "🔴")
+            print(f"     {mark} {fname:<22} mean IC = {ic:+.3f}  IR = {summary.get('ic_ir', 0):+.2f}")
+    uncal = calib.get("uncalibrated_heuristic", {})
+    if uncal:
+        print(f"   未校准（沿用 heuristic，无历史可测）: {', '.join(uncal.keys())}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--top", type=int, default=12, help="最多写入多少只")
     parser.add_argument("--min-score", type=float, default=50, help="最低入选分数")
     parser.add_argument("--dry-run", action="store_true", help="不写飞书")
     args = parser.parse_args()
+
+    print_calibration_status()
+    print()
 
     token = feishu_token()
     print("[1/3] 拉取 watchlist...")

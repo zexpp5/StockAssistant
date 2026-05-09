@@ -48,6 +48,29 @@ SAMPLES = [
 VALIDATION_DATE = "2025-12-31"  # 假设站在这一天打分
 
 
+def load_factors_and_signals():
+    """优先读 daily_picks_v5 的合并缓存 factor_scores_today.json；
+    缺失时回退到 factor_model.py / early_signals.py 的独立产物。
+    返回 (fd, sd)，schema 兼容旧的 {"results": [...]} 形态，供 v3-v6 共用。
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    today_cache = os.path.join(here, "factor_scores_today.json")
+    if os.path.exists(today_cache):
+        cache = json.load(open(today_cache, encoding="utf-8"))
+        return {"results": cache["factors"]}, {"results": cache["signals"]}
+    fd_path = os.path.join(here, "factor_scores.json")
+    sd_path = os.path.join(here, "early_signals.json")
+    if not os.path.exists(fd_path) or not os.path.exists(sd_path):
+        raise FileNotFoundError(
+            "缺少因子数据：先跑 `python3 daily_picks_v5.py` 生成 factor_scores_today.json，"
+            "或跑 `python3 factor_model.py` + `python3 early_signals.py` 生成独立 json。"
+        )
+    return (
+        json.load(open(fd_path, encoding="utf-8")),
+        json.load(open(sd_path, encoding="utf-8")),
+    )
+
+
 def fetch_data_at(ticker, target_date_str):
     """拉到指定日期为止的历史，模拟「当天的认知」"""
     target = datetime.strptime(target_date_str, "%Y-%m-%d")

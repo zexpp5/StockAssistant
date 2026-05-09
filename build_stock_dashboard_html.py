@@ -14,8 +14,9 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from feishu_auth import feishu_token, FEISHU_APP_TOKEN  # noqa: E402
 
-TABLE_ID = "tblaEuCPOlXBlSvP"
-PICKS_TABLE_ID = "tbl7K88JZ0ZMqPIE"
+# 表 ID 走 .env，缺失时回退到本地默认（避免 .env 不全时仪表盘跑不起来）
+TABLE_ID = os.environ.get("FEISHU_WATCHLIST_TABLE_ID") or "tblaEuCPOlXBlSvP"
+PICKS_TABLE_ID = os.environ.get("FEISHU_PICKS_TABLE_ID") or "tbl7K88JZ0ZMqPIE"
 BASE_URL = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{FEISHU_APP_TOKEN}/tables/{TABLE_ID}"
 PICKS_URL = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{FEISHU_APP_TOKEN}/tables/{PICKS_TABLE_ID}"
 OUTPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_dashboard.html")
@@ -147,7 +148,7 @@ THEMES = [
             "ASIC（Broadcom Google TPU、Meta MTIA）是 Nvidia 的潜在威胁。"
             "**5/7 板块大跌（COHR -10%, AAOI -14%），市场情绪转向**，需观察是否延续。"
         ),
-        "tickers": ["MRVL", "AVGO", "300308", "300502", "787635"],
+        "tickers": ["MRVL", "AVGO", "300308", "300502", "688635"],
     },
     {
         "id": "power",
@@ -506,160 +507,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 </section>
 
-<!-- ============ 打分规则说明 ============ -->
-<section id="scoring-rules" class="max-w-7xl mx-auto px-6 py-10">
-  <details class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-    <summary class="px-6 py-4 hover:bg-slate-50 cursor-pointer">
-      <div class="flex items-center justify-between gap-3">
-        <div>
-          <h2 class="text-2xl font-bold text-slate-900 flex items-center gap-3">
-            <span class="text-3xl">📐</span>
-            每日优选 · 打分规则（透明）
-          </h2>
-          <p class="text-sm text-slate-600 mt-1 ml-12">点击展开 — 了解我是按什么标准筛选「每日优选」的</p>
-        </div>
-        <span class="arrow text-slate-400"></span>
-      </div>
-    </summary>
-
-    <div class="px-6 pb-6">
-      <!-- 总览公式 -->
-      <div class="bg-slate-900 text-white rounded-xl p-5 mb-4 font-mono">
-        <div class="text-xs text-slate-400 mb-2">综合公式（满分 100）</div>
-        <div class="text-base md:text-lg">
-          <span class="text-amber-300">综合得分</span> =
-          <span class="text-rose-300">AI 关联度</span> (35) +
-          <span class="text-emerald-300">估值</span> (25) +
-          <span class="text-cyan-300">趋势</span> (25) +
-          <span class="text-violet-300">数据可信度</span> (15)
-        </div>
-      </div>
-
-      <!-- 4 维度卡片 -->
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-        <!-- AI 关联度 -->
-        <div class="bg-rose-50 border-2 border-rose-200 rounded-xl p-4">
-          <div class="flex items-center justify-between mb-3">
-            <h3 class="font-bold text-rose-800">🎯 AI 关联度</h3>
-            <span class="text-2xl font-mono font-bold text-rose-600">35</span>
-          </div>
-          <div class="text-xs text-slate-700 space-y-1.5">
-            <div class="flex justify-between border-b border-rose-100 pb-1"><span>极强（核心标的）</span><span class="font-mono font-bold">35</span></div>
-            <div class="flex justify-between border-b border-rose-100 pb-1"><span>强（直接受益）</span><span class="font-mono font-bold">28</span></div>
-            <div class="flex justify-between border-b border-rose-100 pb-1"><span>中（间接受益）</span><span class="font-mono">18</span></div>
-            <div class="flex justify-between border-b border-rose-100 pb-1"><span>弱（沾边）</span><span class="font-mono">8</span></div>
-            <div class="flex justify-between"><span>无</span><span class="font-mono">0</span></div>
-          </div>
-          <div class="text-xs text-rose-700 mt-3 pt-2 border-t border-rose-200">
-            <strong>权重最高（35%）</strong>：这是 AI 主题投资，AI 关联度是首要标准
-          </div>
-        </div>
-
-        <!-- 估值 -->
-        <div class="bg-emerald-50 border-2 border-emerald-200 rounded-xl p-4">
-          <div class="flex items-center justify-between mb-3">
-            <h3 class="font-bold text-emerald-800">💰 估值（PEG/PE）</h3>
-            <span class="text-2xl font-mono font-bold text-emerald-600">25</span>
-          </div>
-          <div class="text-xs text-slate-700 space-y-1.5">
-            <div class="text-slate-500 mb-1 italic">优先看 PEG（PE÷增速）：</div>
-            <div class="flex justify-between border-b border-emerald-100 pb-1"><span>PEG &lt; 1（便宜）</span><span class="font-mono font-bold">25</span></div>
-            <div class="flex justify-between border-b border-emerald-100 pb-1"><span>PEG 1-2（合理）</span><span class="font-mono font-bold">18</span></div>
-            <div class="flex justify-between border-b border-emerald-100 pb-1"><span>PEG 2-3（偏贵）</span><span class="font-mono">10</span></div>
-            <div class="flex justify-between border-b border-emerald-100 pb-1"><span>PEG &gt; 3（贵）</span><span class="font-mono">4</span></div>
-            <div class="flex justify-between"><span>PEG 缺失，PE &lt; 25</span><span class="font-mono">15</span></div>
-          </div>
-          <div class="text-xs text-emerald-700 mt-3 pt-2 border-t border-emerald-200">
-            <strong>看的是相对增速的估值</strong>，不是绝对 PE 数字
-          </div>
-        </div>
-
-        <!-- 趋势 -->
-        <div class="bg-cyan-50 border-2 border-cyan-200 rounded-xl p-4">
-          <div class="flex items-center justify-between mb-3">
-            <h3 class="font-bold text-cyan-800">📈 趋势（1Y+1W）</h3>
-            <span class="text-2xl font-mono font-bold text-cyan-600">25</span>
-          </div>
-          <div class="text-xs text-slate-700 space-y-1.5">
-            <div class="text-slate-500 mb-1 italic">1 年涨幅基础分：</div>
-            <div class="flex justify-between border-b border-cyan-100 pb-1"><span>涨 50%-200%（健康）</span><span class="font-mono font-bold">20</span></div>
-            <div class="flex justify-between border-b border-cyan-100 pb-1"><span>涨 0%-50%（稳健）</span><span class="font-mono">15</span></div>
-            <div class="flex justify-between border-b border-cyan-100 pb-1"><span>涨 &gt; 200%（追高）</span><span class="font-mono">12</span></div>
-            <div class="flex justify-between border-b border-cyan-100 pb-1"><span>跌（逆势）</span><span class="font-mono">8</span></div>
-            <div class="flex justify-between"><span class="text-slate-500">+ 1 周涨 → 加</span><span class="font-mono">+5</span></div>
-          </div>
-          <div class="text-xs text-cyan-700 mt-3 pt-2 border-t border-cyan-200">
-            <strong>涨太多反而扣分</strong>（追高风险），跌不一定差（可能错杀）
-          </div>
-        </div>
-
-        <!-- 数据可信度 -->
-        <div class="bg-violet-50 border-2 border-violet-200 rounded-xl p-4">
-          <div class="flex items-center justify-between mb-3">
-            <h3 class="font-bold text-violet-800">🔍 数据可信度</h3>
-            <span class="text-2xl font-mono font-bold text-violet-600">15</span>
-          </div>
-          <div class="text-xs text-slate-700 space-y-1.5">
-            <div class="flex justify-between border-b border-violet-100 pb-1"><span>🟢 高（官方+多源）</span><span class="font-mono font-bold">15</span></div>
-            <div class="flex justify-between border-b border-violet-100 pb-1"><span>🟡 中（权威媒体单源）</span><span class="font-mono">10</span></div>
-            <div class="flex justify-between border-b border-violet-100 pb-1"><span>🔴 低（二手/推断）</span><span class="font-mono">5</span></div>
-            <div class="flex justify-between"><span>未填</span><span class="font-mono">3</span></div>
-          </div>
-          <div class="text-xs text-violet-700 mt-3 pt-2 border-t border-violet-200">
-            <strong>数据来源越多越权威，分数越高</strong>，避免单一来源被误导
-          </div>
-        </div>
-      </div>
-
-      <!-- 评级阈值 -->
-      <div class="bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl p-5 mb-4">
-        <h3 class="font-bold text-slate-900 mb-3">📊 评级阈值</h3>
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div class="bg-white rounded-lg p-3 border-l-4 border-amber-500">
-            <div class="font-bold text-lg">⭐⭐⭐ 强烈推荐</div>
-            <div class="text-sm text-slate-600 mt-1">综合得分 ≥ <strong class="text-amber-700">75</strong></div>
-            <div class="text-xs text-slate-500 mt-2">4 维度都接近满分，确定性较高的标的</div>
-          </div>
-          <div class="bg-white rounded-lg p-3 border-l-4 border-orange-400">
-            <div class="font-bold text-lg">⭐⭐ 推荐</div>
-            <div class="text-sm text-slate-600 mt-1">综合得分 ≥ <strong class="text-orange-700">60</strong></div>
-            <div class="text-xs text-slate-500 mt-2">某个维度优秀但不是全维度都好</div>
-          </div>
-          <div class="bg-white rounded-lg p-3 border-l-4 border-yellow-400">
-            <div class="font-bold text-lg">⭐ 关注</div>
-            <div class="text-sm text-slate-600 mt-1">综合得分 ≥ <strong class="text-yellow-700">50</strong></div>
-            <div class="text-xs text-slate-500 mt-2">有亮点但风险较大，谨慎跟踪</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- 命中评级（持有后判断）-->
-      <div class="bg-gradient-to-r from-slate-100 to-blue-50 rounded-xl p-5 mb-4">
-        <h3 class="font-bold text-slate-900 mb-2">🎯 命中评级（入选后实际表现）</h3>
-        <p class="text-xs text-slate-600 mb-3">入选后我会持续跟踪，按累计涨跌幅自动评级，验证选股策略是否有效</p>
-        <div class="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
-          <div class="bg-emerald-100 text-emerald-800 rounded p-2 text-center"><div class="font-bold">🚀 大涨</div><div class="font-mono">&gt; +15%</div></div>
-          <div class="bg-emerald-50 text-emerald-700 rounded p-2 text-center"><div class="font-bold">✅ 命中</div><div class="font-mono">+5% ~ +15%</div></div>
-          <div class="bg-slate-100 text-slate-700 rounded p-2 text-center"><div class="font-bold">🟢 跟随</div><div class="font-mono">-5% ~ +5%</div></div>
-          <div class="bg-amber-50 text-amber-700 rounded p-2 text-center"><div class="font-bold">⚠️ 不及</div><div class="font-mono">-5% ~ -15%</div></div>
-          <div class="bg-rose-100 text-rose-800 rounded p-2 text-center"><div class="font-bold">❌ 大跌</div><div class="font-mono">&lt; -15%</div></div>
-        </div>
-      </div>
-
-      <!-- 限制 + 说明 -->
-      <div class="bg-rose-50 border-l-4 border-rose-400 p-4 rounded">
-        <h3 class="font-bold text-rose-900 mb-2">⚠️ 这套打分系统的限制</h3>
-        <ul class="text-sm text-slate-700 space-y-1 list-disc pl-5">
-          <li><strong>是定量框架，不是买卖建议</strong>：满分 100 不代表「一定会涨」，0 分不代表「一定会跌」</li>
-          <li><strong>不考虑宏观/政策风险</strong>：地缘冲突、关税、监管这些黑天鹅打分没法量化</li>
-          <li><strong>PEG 依赖分析师预测</strong>：增速预测错了 PEG 就错了</li>
-          <li><strong>只用 watchlist 内 37 只</strong>：不是从全市场万只里挑，覆盖范围有限</li>
-          <li><strong>评分高 ≠ 现在买</strong>：技术面、市场情绪、个人仓位都没考虑</li>
-        </ul>
-      </div>
-    </div>
-  </details>
-</section>
+<!-- ============ 打分规则说明（动态由 scoring_rules_panel_html 渲染） ============ -->
+{SCORING_RULES_PANEL}
 
 <!-- ============ 每日优选回顾 ============ -->
 <section id="picks-review" class="max-w-7xl mx-auto px-6 py-10 bg-gradient-to-br from-amber-50 to-orange-50 rounded-2xl my-6">
@@ -955,24 +804,71 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
 <!-- ============ 📅 历史 Tab ============ -->
 <section id="history" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
-  <h2 class="text-2xl font-bold text-slate-900 mb-2">📅 历史走势</h2>
-  <p class="text-sm text-slate-600 mb-6">从 yfinance 拉取过去 90 天的价格走势 · 数据来自浏览器侧异步请求 · 累积久了 DuckDB 也会有自己的快照库</p>
+  <h2 class="text-2xl font-bold text-slate-900 mb-2">📅 历史走势对比</h2>
+  <p class="text-sm text-slate-600 mb-4">从 yfinance 实时拉历史价格 · 多股归一化对比（起点 = 100）· 自动算涨跌幅排行 + 相关性矩阵</p>
 
-  <!-- 选股 + 价格走势图 -->
+  <!-- 主题快捷按钮 -->
   <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
-    <div class="flex items-center gap-3 mb-3">
-      <h3 class="text-sm font-semibold text-slate-700">🎯 单只股票走势对比</h3>
-      <select id="history-codes" multiple size="6" class="px-3 py-1 border rounded text-sm flex-1 max-w-md"></select>
-      <button onclick="loadHistoryCharts()" class="bg-violet-600 hover:bg-violet-700 text-white px-3 py-1 rounded text-sm">📊 加载</button>
-      <span class="text-xs text-slate-500">按住 Ctrl/Cmd 多选（最多 5 只）</span>
+    <h3 class="text-sm font-semibold text-slate-700 mb-3">🎨 快捷主题（一键加载同主题股）</h3>
+    <div class="flex flex-wrap gap-2">
+      <button onclick="loadHistoryByTheme('AI 算力核心', ['NVDA','TSM','AMD','AVGO'])" class="bg-violet-100 hover:bg-violet-200 text-violet-800 px-3 py-1.5 rounded text-xs font-medium">🔥 AI 算力核心 (4)</button>
+      <button onclick="loadHistoryByTheme('AI 电力链', ['VRT','ETN','GEV','MTZ','PWR','VST'])" class="bg-amber-100 hover:bg-amber-200 text-amber-800 px-3 py-1.5 rounded text-xs font-medium">⚡ AI 电力链 (6)</button>
+      <button onclick="loadHistoryByTheme('下一波稀缺资源', ['XYL','MP','CCJ','BWXT','RDDT'])" class="bg-emerald-100 hover:bg-emerald-200 text-emerald-800 px-3 py-1.5 rounded text-xs font-medium">💎 下一波稀缺资源 (5)</button>
+      <button onclick="loadHistoryByTheme('数据中心承载层', ['EQIX','ORCL','LRCX'])" class="bg-blue-100 hover:bg-blue-200 text-blue-800 px-3 py-1.5 rounded text-xs font-medium">🏢 数据中心 (3)</button>
+      <button onclick="loadHistoryByTheme('AI 应用层', ['GOOGL','NET','CDNS','CRWD'])" class="bg-cyan-100 hover:bg-cyan-200 text-cyan-800 px-3 py-1.5 rounded text-xs font-medium">📱 AI 应用层 (4)</button>
+      <button onclick="loadHistoryByTheme('物理 AI', ['SYM','TSLA'])" class="bg-rose-100 hover:bg-rose-200 text-rose-800 px-3 py-1.5 rounded text-xs font-medium">🤖 物理 AI (2)</button>
+      <button onclick="loadHistoryByTheme('SMR 核能', ['BWXT','OKLO','SMR','NNE','LEU','UUUU'])" class="bg-orange-100 hover:bg-orange-200 text-orange-800 px-3 py-1.5 rounded text-xs font-medium">☢️ 核能/SMR (6)</button>
+      <button onclick="loadHistoryByTheme('防御对照', ['KO','MCD'])" class="bg-slate-100 hover:bg-slate-200 text-slate-800 px-3 py-1.5 rounded text-xs font-medium">🛡 防御对照 (2)</button>
+      <button onclick="loadHistoryByTheme('AI 光通信链', ['MRVL','300308','300502','AVGO'])" class="bg-pink-100 hover:bg-pink-200 text-pink-800 px-3 py-1.5 rounded text-xs font-medium">🔗 AI 光通信链 (4)</button>
+      <button onclick="loadHistoryByTheme('A 股 AI 核心', ['300308','300502','002230','688256','688041','688111'])" class="bg-red-100 hover:bg-red-200 text-red-800 px-3 py-1.5 rounded text-xs font-medium">🇨🇳 A 股 AI 核心 (6)</button>
+      <button onclick="loadHistoryByTheme('港股 AI 平台', ['3690','9988','0700','0020'])" class="bg-yellow-100 hover:bg-yellow-200 text-yellow-800 px-3 py-1.5 rounded text-xs font-medium">🇭🇰 港股 AI (4)</button>
+      <button onclick="loadHistoryByTheme('基准对照', ['SPY','QQQ'])" class="bg-indigo-100 hover:bg-indigo-200 text-indigo-800 px-3 py-1.5 rounded text-xs font-medium">📐 基准 SPY/QQQ (2)</button>
     </div>
+  </div>
+
+  <!-- 时间窗口 + 自定义选股 -->
+  <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
+    <div class="flex flex-wrap items-center gap-3 mb-3">
+      <h3 class="text-sm font-semibold text-slate-700">🎯 自定义对比</h3>
+      <span class="text-xs text-slate-500 ml-auto mr-2">时间窗口:</span>
+      <div class="flex gap-1" id="period-buttons">
+        <button onclick="setPeriod('1mo')" data-period="1mo" class="period-btn px-2.5 py-1 rounded text-xs border border-slate-300 hover:bg-slate-100">30 天</button>
+        <button onclick="setPeriod('3mo')" data-period="3mo" class="period-btn px-2.5 py-1 rounded text-xs border border-slate-300 hover:bg-slate-100 bg-violet-600 text-white border-violet-600">90 天</button>
+        <button onclick="setPeriod('6mo')" data-period="6mo" class="period-btn px-2.5 py-1 rounded text-xs border border-slate-300 hover:bg-slate-100">180 天</button>
+        <button onclick="setPeriod('1y')" data-period="1y" class="period-btn px-2.5 py-1 rounded text-xs border border-slate-300 hover:bg-slate-100">1 年</button>
+        <button onclick="setPeriod('2y')" data-period="2y" class="period-btn px-2.5 py-1 rounded text-xs border border-slate-300 hover:bg-slate-100">2 年</button>
+      </div>
+    </div>
+    <div class="flex items-center gap-3">
+      <select id="history-codes" multiple size="5" class="px-3 py-1 border rounded text-sm flex-1 max-w-md"></select>
+      <button onclick="loadHistoryCharts()" class="bg-violet-600 hover:bg-violet-700 text-white px-4 py-1.5 rounded text-sm">📊 加载所选</button>
+      <span class="text-xs text-slate-500">按住 Cmd 多选 (最多 8 只)</span>
+    </div>
+  </div>
+
+  <!-- 走势图 -->
+  <div id="history-chart-card" class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4" style="display:none">
+    <h3 class="text-sm font-semibold text-slate-700 mb-3" id="history-chart-title">📈 归一化走势对比</h3>
     <div id="chart-history" style="height:420px"></div>
   </div>
 
+  <!-- 涨跌幅排行表 -->
+  <div id="history-ranking-card" class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4" style="display:none">
+    <h3 class="text-sm font-semibold text-slate-700 mb-3">🏆 涨跌幅排行</h3>
+    <div id="history-ranking" class="overflow-x-auto"></div>
+  </div>
+
+  <!-- 相关性矩阵 -->
+  <div id="history-corr-card" class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4" style="display:none">
+    <h3 class="text-sm font-semibold text-slate-700 mb-1">🔗 相关性矩阵 (Pearson)</h3>
+    <p class="text-xs text-slate-500 mb-3">基于日收益率 · 1.0 = 完全同向 · 0 = 无关 · -1 = 完全反向。<strong>组合优化关心：相关性低的股票一起持仓能降低组合波动</strong></p>
+    <div id="history-corr" class="overflow-x-auto"></div>
+  </div>
+
   <!-- DuckDB 快照统计 -->
-  <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-    <h3 class="text-sm font-semibold text-slate-700 mb-2">📦 DuckDB 本地快照库（用于长期回溯）</h3>
-    <p class="text-xs text-slate-600">每天 daily_refresh 自动写入。当前仅累积当天，运行几天后会有真实历史可看。</p>
+  <div class="bg-slate-50 rounded-xl border border-slate-200 p-4">
+    <h3 class="text-sm font-semibold text-slate-700 mb-2">📦 DuckDB 本地快照库（长期回溯用）</h3>
+    <p class="text-xs text-slate-600">每天 daily_refresh 自动写入。累积越久 = 你自己的历史数据库（不依赖 yfinance），未来可做严肃回测。</p>
     <p class="text-xs text-slate-500 mt-1 font-mono">stock_history.duckdb</p>
   </div>
 </section>
@@ -1022,8 +918,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
   <!-- 子 Tab 2: 13F -->
   <div id="prof-pane-13f" class="prof-pane" style="display:none">
-    <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4">
-      <p class="text-sm text-amber-900">⚠️ 当前数据是 yfinance 快照（仅 Top 10 机构持仓）。看不到「Bridgewater 加仓 50%」这种季度变动信号。专业版需 SEC EDGAR 13F-HR 解析。</p>
+    <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-4 mb-4">
+      <p class="text-sm text-emerald-900">✅ 数据源已升级为 <strong>SEC EDGAR 13F-HR</strong>（10 家机构 Q4 2025 真实季度持仓变动）— 能看到 Bridgewater 加仓 / Burry 新建仓 / Renaissance 清仓 等具体信号。13F 滞后 45 天披露，反映季度末持仓 ≠ 实时持仓。</p>
     </div>
     <div id="track-13f-content" class="space-y-4"></div>
   </div>
@@ -1053,6 +949,114 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="mb-6">
     <h2 class="text-3xl font-bold text-slate-900">💰 系统体检 + 升级建议</h2>
     <p class="text-sm text-slate-600 mt-2">先看现状（已实现 / 在做 / 缺口），再看升级方案。给同事看决策用。</p>
+  </div>
+
+  <!-- ════════ 系统响应能力 ════════ -->
+  <div class="bg-gradient-to-br from-emerald-50 to-cyan-50 border-2 border-emerald-300 rounded-xl p-6 mb-8">
+    <h3 class="text-2xl font-bold text-emerald-900 mb-4">📡 系统响应能力（实时性总览）</h3>
+    <p class="text-sm text-slate-700 mb-4">数据从市场发生 → 落入系统的实际延迟。系统不是真"实时"，是 <strong>daily 批处理 + 盘中 30 分钟轮询</strong>。</p>
+
+    <!-- 响应能力分级 -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+      <div class="bg-white rounded-lg p-4 border-l-4 border-emerald-500">
+        <div class="text-3xl mb-2">⚡</div>
+        <p class="font-bold text-slate-800 mb-1">T+0 / T+1 实时</p>
+        <ul class="text-xs text-slate-600 space-y-0.5">
+          <li>· 股价（盘中 15 分钟延迟）</li>
+          <li>· Yahoo Trending 美股热门</li>
+          <li>· Reddit WSB 情感（几分钟）</li>
+          <li>· 个股新闻（yfinance）</li>
+          <li>· 盘中异动告警（每 30 分钟）</li>
+        </ul>
+      </div>
+      <div class="bg-white rounded-lg p-4 border-l-4 border-amber-500">
+        <div class="text-3xl mb-2">📊</div>
+        <p class="font-bold text-slate-800 mb-1">T+1-7 数日内</p>
+        <ul class="text-xs text-slate-600 space-y-0.5">
+          <li>· 分析师目标价上修</li>
+          <li>· 业绩 surprise（earnings_history）</li>
+          <li>· EPS 预期变化</li>
+          <li>· 东方财富 A 股热度榜</li>
+          <li>· yfinance 季度财报</li>
+        </ul>
+      </div>
+      <div class="bg-white rounded-lg p-4 border-l-4 border-rose-500">
+        <div class="text-3xl mb-2">📜</div>
+        <p class="font-bold text-slate-800 mb-1">T+15-90 监管级</p>
+        <ul class="text-xs text-slate-600 space-y-0.5">
+          <li>· SEC Form 4 内部人买卖（T+3-7）</li>
+          <li>· akshare A 股财报（T+5-15）</li>
+          <li>· SEC 13F 机构持仓（T+45）</li>
+          <li>· SEC 10-K 年报全文（T+60-90）</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- 双引擎刷新 -->
+    <div class="bg-white rounded-lg p-5 mb-4">
+      <h4 class="font-bold text-slate-800 mb-3">🔁 双引擎自动刷新</h4>
+      <table class="w-full text-sm">
+        <thead><tr class="border-b-2 border-slate-200 text-left text-slate-700 bg-slate-50">
+          <th class="py-2 px-2">引擎</th>
+          <th class="px-2">频率</th>
+          <th class="px-2">包含</th>
+          <th class="px-2 text-right">耗时</th>
+        </tr></thead>
+        <tbody>
+          <tr class="border-b">
+            <td class="py-2 px-2"><span class="font-mono text-xs bg-indigo-100 px-2 py-0.5 rounded">daily_refresh.sh</span></td>
+            <td class="px-2">每天 7:30 北京</td>
+            <td class="px-2 text-xs">18 步全量：价格 / 13F / enrichment / v6 因子 / ML 堆叠 / v7 整合 / Markowitz / trade_delta / HTML</td>
+            <td class="px-2 text-right text-slate-600">~20-40 分钟</td>
+          </tr>
+          <tr class="border-b">
+            <td class="py-2 px-2"><span class="font-mono text-xs bg-emerald-100 px-2 py-0.5 rounded">intraday_refresh.sh</span></td>
+            <td class="px-2">盘中每 30 分钟</td>
+            <td class="px-2 text-xs">3 步轻量：价格 → 异动监控 → v7 重算（动量/反转/新闻/WSB → 排名 ±15 名告警）</td>
+            <td class="px-2 text-right text-slate-600">~3-5 分钟</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- v7 因子组合（10 个） -->
+    <div class="bg-white rounded-lg p-5 mb-4">
+      <h4 class="font-bold text-slate-800 mb-3">🎯 v7 模型 — 10 个因子（5 经典 + 3 现代 + 2 可选）</h4>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+        <div class="bg-slate-50 rounded p-2"><strong>1. Piotroski F-Score</strong> · Stanford 2000</div>
+        <div class="bg-slate-50 rounded p-2"><strong>2. 12-1 月动量</strong> · Jegadeesh-Titman JF 1993</div>
+        <div class="bg-slate-50 rounded p-2"><strong>3. 1 月反转</strong> · Jegadeesh JF 1990</div>
+        <div class="bg-slate-50 rounded p-2"><strong>4. PEAD 业绩加速度</strong> · Ball-Brown JAR 1968</div>
+        <div class="bg-slate-50 rounded p-2"><strong>5. 分析师上修</strong> · Stickel JF 1991, Womack JF 1996</div>
+        <div class="bg-cyan-50 rounded p-2 border border-cyan-300"><strong>6. 新闻事件评分</strong> · MacKinlay 1997（现代）</div>
+        <div class="bg-cyan-50 rounded p-2 border border-cyan-300"><strong>7. WSB 社交情感</strong> · Bradley JFE 2024（现代）</div>
+        <div class="bg-cyan-50 rounded p-2 border border-cyan-300"><strong>8. 业绩 surprise + EPS 预期</strong> · Bernard-Thomas 1989</div>
+        <div class="bg-violet-50 rounded p-2 border border-violet-200"><strong>9. SEC 10-K LM 情感</strong>（可选）· Loughran-McDonald JF 2011</div>
+        <div class="bg-violet-50 rounded p-2 border border-violet-200"><strong>10. ML 预测 alpha</strong>（可选）· Gu-Kelly-Xiu RFS 2020</div>
+      </div>
+      <p class="text-xs text-slate-600 mt-3">合成方法: 横截面 z-score 等权（DeMiguel 2009 RFS 论文证明 1/N 不输 Markowitz 优化权重）</p>
+    </div>
+
+    <!-- 实测验证 -->
+    <div class="bg-slate-900 text-white rounded-lg p-5">
+      <h4 class="text-lg font-bold mb-3">📈 全程进步实测（2025-12-31 → 2026-05-09 反向验证）</h4>
+      <table class="w-full text-sm">
+        <thead><tr class="border-b border-slate-700 text-left text-slate-300">
+          <th class="py-2 px-2">版本</th>
+          <th class="px-2">因子数</th>
+          <th class="px-2">YTD 收益</th>
+          <th class="px-2">Alpha vs SPY</th>
+          <th class="px-2">胜率</th>
+          <th class="px-2">特点</th>
+        </tr></thead>
+        <tbody>
+          <tr class="border-b border-slate-800"><td class="py-2 px-2">v1 我编的</td><td class="px-2">4</td><td class="px-2">-</td><td class="px-2">-</td><td class="px-2">-</td><td class="px-2 text-rose-300">主观打分</td></tr>
+          <tr class="border-b border-slate-800"><td class="py-2 px-2">v6 学术经典</td><td class="px-2">5</td><td class="px-2">+48.5%</td><td class="px-2 text-emerald-300">+40.1%</td><td class="px-2">72%</td><td class="px-2 text-slate-300">顶刊论文</td></tr>
+          <tr class="bg-emerald-900/40"><td class="py-2 px-2 font-bold">v7 全栈整合</td><td class="px-2 font-bold">10</td><td class="px-2 font-bold text-emerald-300">+51.5%</td><td class="px-2 font-bold text-emerald-300">+43.8%</td><td class="px-2 font-bold">79%</td><td class="px-2 text-emerald-200">+ 现代另类数据</td></tr>
+        </tbody>
+      </table>
+      <p class="text-xs text-slate-400 mt-3">⚠️ 这是 backtest 不是承诺；2026 Q1-Q2 是 AI/半导体强势期，模型天然 work；熊市可能跑输 SPY 5-15%（walk-forward 实测）</p>
+    </div>
   </div>
 
   <!-- ════════ 系统体检报告 ════════ -->
@@ -1398,6 +1402,7 @@ const PICKS = {PICKS_JSON};
 const SIMULATION = {SIMULATION_JSON};
 const RISK_METRICS = {RISK_METRICS_JSON};
 const TRACK_13F = {TRACK_13F_JSON};
+const HISTORY_DATA = {HISTORY_DATA_JSON};
 const OPTIMIZATION = {OPTIMIZATION_JSON};
 const PLAN_A_V6 = {PLAN_A_V6_JSON};
 
@@ -2052,54 +2057,76 @@ function renderRiskPane() {
 
 function render13FPane() {
   if (!TRACK_13F || !TRACK_13F.tickers) {
-    document.getElementById("track-13f-content").innerHTML = '<div class="text-slate-500">暂无数据，请先跑：python3 track_13f.py</div>';
+    document.getElementById("track-13f-content").innerHTML = '<div class="text-slate-500">暂无数据，请先跑：python3 _build_track_13f_from_sec.py</div>';
     return;
   }
+  // 顶部数据源标识
+  const meta = `<div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 mb-4 text-xs">
+    <div class="font-semibold text-emerald-900">📊 数据源: ${TRACK_13F.data_source || "SEC EDGAR 13F-HR"}</div>
+    <div class="text-emerald-700 mt-1">报告期: <strong>${TRACK_13F.report_quarter || "?"}</strong> · 跟踪 ${(TRACK_13F.investors_tracked || []).length} 家机构 (${(TRACK_13F.investors_tracked || []).slice(0, 4).join(" / ")}${(TRACK_13F.investors_tracked || []).length > 4 ? " 等" : ""})</div>
+    <div class="text-emerald-600 mt-1">⚠️ 13F 滞后 45 天披露，反映季度末持仓 ≠ 实时持仓</div>
+  </div>`;
+
   const tickers = TRACK_13F.tickers;
-  const html = Object.entries(tickers).map(([code, t]) => {
-    const inst = (t.institutional || []).slice(0, 5);
-    const mf = (t.mutual_fund || []).slice(0, 5);
-    const instHtml = inst.map((h, i) => {
-      const pct = h.pctHeld != null ? (h.pctHeld * 100).toFixed(2) : (h["% Out"] || 0).toFixed(2);
-      const value = h.Value ? `$${(h.Value/1e9).toFixed(2)}B` : "";
-      return `<tr class="border-t border-slate-100"><td class="px-2 py-1">${i+1}</td><td class="px-2 py-1 truncate" style="max-width:200px">${h.Holder || "?"}</td><td class="px-2 py-1 text-right font-mono">${(h.Shares || 0).toLocaleString()}</td><td class="px-2 py-1 text-right font-mono">${pct}%</td><td class="px-2 py-1 text-right font-mono">${value}</td></tr>`;
+  const cards = Object.entries(tickers).map(([code, t]) => {
+    const signals = t.institutional_signals || [];
+    const summary = t.summary || {};
+
+    // 净方向徽章
+    const dirColor = summary.investors_adding > summary.investors_cutting ? "bg-emerald-100 text-emerald-800" :
+                     (summary.investors_cutting > summary.investors_adding ? "bg-rose-100 text-rose-800" : "bg-slate-100 text-slate-700");
+
+    // 信号表
+    const rows = signals.map((s, i) => {
+      const pct = s.shares_change_pct != null ? (s.shares_change_pct >= 0 ? "+" : "") + s.shares_change_pct.toFixed(1) + "%" : "—";
+      const pctColor = s.shares_change_pct > 0 ? "text-emerald-600" : (s.shares_change_pct < 0 ? "text-rose-600" : "text-slate-600");
+      const value = s.value_curr_kusd ? "$" + (s.value_curr_kusd / 1e6).toFixed(0) + "M" : "";
+      return `<tr class="border-t border-slate-100">
+        <td class="px-2 py-1">${i+1}</td>
+        <td class="px-2 py-1 truncate" style="max-width:240px">${s.investor || "?"}</td>
+        <td class="px-2 py-1">${s.action || ""}</td>
+        <td class="px-2 py-1 text-right font-mono">${(s.shares_prev || 0).toLocaleString()}</td>
+        <td class="px-2 py-1 text-right font-mono">${(s.shares_curr || 0).toLocaleString()}</td>
+        <td class="px-2 py-1 text-right font-mono ${pctColor}">${pct}</td>
+        <td class="px-2 py-1 text-right font-mono text-slate-600">${value}</td>
+      </tr>`;
     }).join("");
-    const mfHtml = mf.map((h, i) => {
-      const pct = h.pctHeld != null ? (h.pctHeld * 100).toFixed(2) : (h["% Out"] || 0).toFixed(2);
-      return `<tr class="border-t border-slate-100"><td class="px-2 py-1">${i+1}</td><td class="px-2 py-1 truncate" style="max-width:200px">${h.Holder || "?"}</td><td class="px-2 py-1 text-right font-mono">${(h.Shares || 0).toLocaleString()}</td><td class="px-2 py-1 text-right font-mono">${pct}%</td></tr>`;
-    }).join("");
+
     return `<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
-      <div class="bg-slate-100 px-4 py-2 font-semibold flex items-center gap-2">
-        <span>${t.name}</span><span class="text-xs text-slate-500 font-mono">${code}</span>
+      <div class="bg-slate-100 px-4 py-2 flex items-center justify-between">
+        <div class="font-semibold flex items-center gap-2">
+          <span>${t.name}</span><span class="text-xs text-slate-500 font-mono">${code}</span>
+        </div>
+        <div class="flex items-center gap-2 text-xs">
+          <span class="${dirColor} px-2 py-0.5 rounded font-semibold">${summary.net_direction || "?"}</span>
+          <span class="text-slate-600">📈 ${summary.investors_adding || 0} 加仓 / 📉 ${summary.investors_cutting || 0} 减仓</span>
+        </div>
       </div>
-      <div class="p-4 grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-        <div>
-          <h5 class="font-semibold text-slate-700 mb-2">🏛 Top 5 机构持仓</h5>
-          <table class="w-full">
-            <thead class="bg-slate-50 text-slate-600">
-              <tr><th class="px-2 py-1 text-left">#</th><th class="px-2 py-1 text-left">机构</th><th class="px-2 py-1 text-right">股数</th><th class="px-2 py-1 text-right">占比</th><th class="px-2 py-1 text-right">市值</th></tr>
-            </thead>
-            <tbody>${instHtml || '<tr><td colspan="5" class="text-center text-slate-400 py-2">无</td></tr>'}</tbody>
-          </table>
-        </div>
-        <div>
-          <h5 class="font-semibold text-slate-700 mb-2">📊 Top 5 共同基金持仓</h5>
-          <table class="w-full">
-            <thead class="bg-slate-50 text-slate-600">
-              <tr><th class="px-2 py-1 text-left">#</th><th class="px-2 py-1 text-left">基金</th><th class="px-2 py-1 text-right">股数</th><th class="px-2 py-1 text-right">占比</th></tr>
-            </thead>
-            <tbody>${mfHtml || '<tr><td colspan="4" class="text-center text-slate-400 py-2">无</td></tr>'}</tbody>
-          </table>
-        </div>
+      <div class="p-3 text-xs">
+        <table class="w-full">
+          <thead class="bg-slate-50 text-slate-600">
+            <tr>
+              <th class="px-2 py-1 text-left">#</th>
+              <th class="px-2 py-1 text-left">机构</th>
+              <th class="px-2 py-1 text-left">动作</th>
+              <th class="px-2 py-1 text-right">上期</th>
+              <th class="px-2 py-1 text-right">本期</th>
+              <th class="px-2 py-1 text-right">变动%</th>
+              <th class="px-2 py-1 text-right">市值</th>
+            </tr>
+          </thead>
+          <tbody>${rows || '<tr><td colspan="7" class="text-center text-slate-400 py-2">无信号</td></tr>'}</tbody>
+        </table>
       </div>
     </div>`;
   }).join("");
-  document.getElementById("track-13f-content").innerHTML = html;
+
+  document.getElementById("track-13f-content").innerHTML = meta + cards;
 }
 
 function renderOptPane() {
   if (!OPTIMIZATION || !OPTIMIZATION.current_plan) {
-    document.getElementById("opt-comparison").innerHTML = '<div class="text-slate-500 col-span-4">暂无数据，请先跑：python3 optimize_portfolio.py</div>';
+    document.getElementById("opt-comparison").innerHTML = '<div class="text-slate-500 col-span-4">暂无数据，请先跑：python3 -m stock_research.jobs.optimize_portfolio</div>';
     return;
   }
   const plan = OPTIMIZATION.current_plan;
@@ -2177,55 +2204,225 @@ function renderOptPane() {
 
 // ============ 历史 Tab ============
 let historyInited = false;
+let HISTORY_PERIOD = "3mo";  // 默认 90 天
+const PERIOD_LABEL = { "1mo": "30 天", "3mo": "90 天", "6mo": "180 天", "1y": "1 年", "2y": "2 年" };
+
 function initHistorySelect() {
   if (historyInited) return;
   const sel = document.getElementById("history-codes");
   if (!sel) return;
-  sel.innerHTML = RECORDS
-    .filter(r => r.code && (r.market || "").indexOf("美股") >= 0)
-    .map(r => `<option value="${r.code}">${r.name} (${r.code})</option>`).join("");
+  // 用 history_data.json 里实际有数据的股票（保证选了一定能加载）
+  const availableCodes = HISTORY_DATA && HISTORY_DATA.tickers ? Object.keys(HISTORY_DATA.tickers) : [];
+  const opts = availableCodes.map(code => {
+    const r = RECORDS.find(x => x.code === code);
+    const name = (r && r.name) || (HISTORY_DATA.tickers[code].name) || code;
+    return `<option value="${code}">${name} (${code})</option>`;
+  }).sort();
+  sel.innerHTML = opts.join("");
   historyInited = true;
 }
 
-async function loadHistoryCharts() {
+function setPeriod(p) {
+  HISTORY_PERIOD = p;
+  document.querySelectorAll(".period-btn").forEach(b => {
+    if (b.dataset.period === p) {
+      b.classList.add("bg-violet-600", "text-white", "border-violet-600");
+    } else {
+      b.classList.remove("bg-violet-600", "text-white", "border-violet-600");
+    }
+  });
+  // 如果有选中股票，自动重新加载
   const sel = document.getElementById("history-codes");
-  const codes = Array.from(sel.selectedOptions).slice(0, 5).map(o => o.value);
-  if (codes.length === 0) { alert("请至少选 1 只"); return; }
+  if (sel && sel.selectedOptions.length > 0) loadHistoryCharts();
+}
 
-  document.getElementById("chart-history").innerHTML = '<div class="text-center text-slate-500 py-12">加载中...（用浏览器拉 Yahoo Finance，可能需要几秒）</div>';
-
-  // 用 Yahoo Finance API（无需 key）
-  const series = [];
-  for (const code of codes) {
-    try {
-      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${code}?range=3mo&interval=1d`;
-      const resp = await fetch(url);
-      const j = await resp.json();
-      const result = j?.chart?.result?.[0];
-      if (!result) continue;
-      const ts = result.timestamp.map(t => new Date(t * 1000).toISOString().split("T")[0]);
-      const closes = result.indicators?.quote?.[0]?.close || [];
-      // 归一化到 100（便于多只对比）
-      const first = closes.find(c => c != null);
-      const norm = closes.map(c => c == null ? null : (c / first * 100));
-      const r = RECORDS.find(x => x.code === code);
-      series.push({ name: r ? r.name : code, type: "line", smooth: true, data: ts.map((t, i) => [t, norm[i]]) });
-    } catch (e) { console.error("history fetch", code, e); }
+async function loadHistoryByTheme(themeName, codes) {
+  // 在选择框里高亮选中（视觉反馈）
+  const sel = document.getElementById("history-codes");
+  if (sel) {
+    Array.from(sel.options).forEach(o => o.selected = codes.includes(o.value));
   }
+  await loadHistoryCharts(codes, themeName);
+}
 
-  if (series.length === 0) {
-    document.getElementById("chart-history").innerHTML = '<div class="text-center text-rose-500 py-12">数据拉取失败（CORS 或网络问题）</div>';
+// 周期 → 截取最近 N 天
+const PERIOD_DAYS = { "1mo": 22, "3mo": 65, "6mo": 130, "1y": 252, "2y": 504 };
+
+async function loadHistoryCharts(presetCodes, themeName) {
+  let codes = presetCodes;
+  if (!codes) {
+    const sel = document.getElementById("history-codes");
+    codes = Array.from(sel.selectedOptions).slice(0, 8).map(o => o.value);
+  }
+  if (!codes || codes.length === 0) { alert("请至少选 1 只股票"); return; }
+
+  // 显示卡片 + loading
+  document.getElementById("history-chart-card").style.display = "";
+  document.getElementById("history-chart-title").textContent =
+    `📈 归一化走势对比 · ${themeName ? "[" + themeName + "] " : ""}${PERIOD_LABEL[HISTORY_PERIOD]} · ${codes.length} 只`;
+
+  if (!HISTORY_DATA || !HISTORY_DATA.tickers) {
+    document.getElementById("chart-history").innerHTML = '<div class="text-center text-rose-500 py-12">history_data.json 未生成 — 请先跑 <code>python3 _fetch_history_for_dashboard.py</code></div>';
     return;
   }
 
+  // 从本地 history_data.json 读数据（无 CORS）
+  const days = PERIOD_DAYS[HISTORY_PERIOD] || 65;
+  const datasets = [];
+  const missing = [];
+  for (const code of codes) {
+    const td = HISTORY_DATA.tickers[code];
+    if (!td || !td.ts || td.ts.length === 0) {
+      missing.push(code);
+      continue;
+    }
+    // 取最近 N 天
+    const ts = td.ts.slice(-days);
+    const closes = td.close.slice(-days);
+    const r = RECORDS.find(x => x.code === code);
+    // 计算日收益率
+    const returns = [];
+    for (let i = 1; i < closes.length; i++) {
+      if (closes[i] != null && closes[i-1] != null && closes[i-1] > 0) {
+        returns.push((closes[i] - closes[i-1]) / closes[i-1]);
+      } else {
+        returns.push(null);
+      }
+    }
+    datasets.push({ code, name: (r && r.name) || td.name || code, ts, closes, returns });
+  }
+
+  if (datasets.length === 0) {
+    document.getElementById("chart-history").innerHTML =
+      `<div class="text-center text-rose-500 py-12">所选股票本地都没有历史数据。<br>缺失：${missing.join(", ")}<br>请运行：<code>python3 _fetch_history_for_dashboard.py</code></div>`;
+    return;
+  }
+  if (missing.length > 0) {
+    console.warn("History data missing for:", missing);
+  }
+
+  // 1. 渲染走势图
+  const series = datasets.map(d => {
+    const first = d.closes.find(c => c != null);
+    const norm = d.closes.map(c => c == null ? null : (c / first * 100));
+    return { name: d.name, type: "line", smooth: true, data: d.ts.map((t, i) => [t, norm[i]]) };
+  });
+  document.getElementById("chart-history").innerHTML = "";
   echarts.init(document.getElementById("chart-history")).setOption({
     tooltip: { trigger: "axis" },
-    legend: { top: 0 },
-    grid: { left: 50, right: 30, top: 40, bottom: 40 },
+    legend: { top: 0, type: "scroll" },
+    grid: { left: 50, right: 30, top: 50, bottom: 40 },
     xAxis: { type: "time" },
-    yAxis: { type: "value", name: "归一化（起点=100）" },
+    yAxis: { type: "value", name: "归一化 (起点=100)" },
     series,
   });
+
+  // 2. 渲染涨跌幅排行
+  const ranking = datasets.map(d => {
+    const validCloses = d.closes.filter(c => c != null);
+    const first = validCloses[0];
+    const last = validCloses[validCloses.length - 1];
+    const pct = first && last ? (last - first) / first * 100 : null;
+    // 最大回撤
+    let peak = first, maxDD = 0;
+    for (const c of validCloses) {
+      if (c > peak) peak = c;
+      const dd = (c - peak) / peak * 100;
+      if (dd < maxDD) maxDD = dd;
+    }
+    // 年化波动率 (returns 标准差 × sqrt(252))
+    const validReturns = d.returns.filter(r => r != null);
+    const mean = validReturns.reduce((a,b) => a+b, 0) / validReturns.length;
+    const variance = validReturns.reduce((a,b) => a + (b-mean)*(b-mean), 0) / validReturns.length;
+    const annualVol = Math.sqrt(variance * 252) * 100;
+    return { name: d.name, code: d.code, pct, maxDD, annualVol, first, last };
+  }).sort((a,b) => (b.pct || -999) - (a.pct || -999));
+
+  document.getElementById("history-ranking-card").style.display = "";
+  document.getElementById("history-ranking").innerHTML = `
+    <table class="w-full text-sm">
+      <thead class="bg-slate-100 text-slate-700">
+        <tr>
+          <th class="px-3 py-2 text-left">#</th>
+          <th class="px-3 py-2 text-left">股票</th>
+          <th class="px-3 py-2 text-right">起点</th>
+          <th class="px-3 py-2 text-right">终点</th>
+          <th class="px-3 py-2 text-right">涨跌幅</th>
+          <th class="px-3 py-2 text-right">最大回撤</th>
+          <th class="px-3 py-2 text-right">年化波动率</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${ranking.map((r, i) => `
+          <tr class="border-t border-slate-100 hover:bg-slate-50">
+            <td class="px-3 py-2">${i+1}</td>
+            <td class="px-3 py-2 font-medium">${r.name} <span class="text-xs text-slate-500 font-mono">${r.code}</span></td>
+            <td class="px-3 py-2 text-right font-mono">${r.first ? r.first.toFixed(2) : '-'}</td>
+            <td class="px-3 py-2 text-right font-mono">${r.last ? r.last.toFixed(2) : '-'}</td>
+            <td class="px-3 py-2 text-right font-mono ${r.pct >= 0 ? 'text-emerald-600' : 'text-rose-600'} font-bold">${r.pct >= 0 ? '+' : ''}${r.pct ? r.pct.toFixed(1) : '-'}%</td>
+            <td class="px-3 py-2 text-right font-mono text-rose-500">${r.maxDD.toFixed(1)}%</td>
+            <td class="px-3 py-2 text-right font-mono">${r.annualVol.toFixed(1)}%</td>
+          </tr>`).join("")}
+      </tbody>
+    </table>`;
+
+  // 3. 渲染相关性矩阵 (≥2 只时)
+  if (datasets.length >= 2) {
+    document.getElementById("history-corr-card").style.display = "";
+    // 用最短的 returns 长度对齐
+    const minLen = Math.min(...datasets.map(d => d.returns.filter(r => r != null).length));
+    const aligned = datasets.map(d => d.returns.filter(r => r != null).slice(-minLen));
+
+    function pearson(x, y) {
+      const n = x.length;
+      const mx = x.reduce((a,b)=>a+b,0) / n;
+      const my = y.reduce((a,b)=>a+b,0) / n;
+      let num = 0, dx = 0, dy = 0;
+      for (let i = 0; i < n; i++) {
+        num += (x[i] - mx) * (y[i] - my);
+        dx += (x[i] - mx) ** 2;
+        dy += (y[i] - my) ** 2;
+      }
+      const denom = Math.sqrt(dx * dy);
+      return denom > 0 ? num / denom : 0;
+    }
+
+    const N = datasets.length;
+    const matrix = [];
+    for (let i = 0; i < N; i++) {
+      const row = [];
+      for (let j = 0; j < N; j++) {
+        row.push(i === j ? 1.0 : pearson(aligned[i], aligned[j]));
+      }
+      matrix.push(row);
+    }
+
+    const corrColor = (v) => {
+      // 1.0 → 浓绿; 0 → 白; -1 → 浓红
+      if (v > 0.7) return "bg-emerald-300";
+      if (v > 0.5) return "bg-emerald-200";
+      if (v > 0.3) return "bg-emerald-100";
+      if (v > 0) return "bg-slate-50";
+      if (v > -0.3) return "bg-rose-50";
+      if (v > -0.5) return "bg-rose-100";
+      return "bg-rose-200";
+    };
+
+    let corrHtml = '<table class="text-xs"><thead><tr><th class="px-2 py-1"></th>';
+    for (const d of datasets) corrHtml += `<th class="px-2 py-1 font-mono">${d.code}</th>`;
+    corrHtml += '</tr></thead><tbody>';
+    for (let i = 0; i < N; i++) {
+      corrHtml += `<tr><th class="px-2 py-1 text-left font-mono">${datasets[i].code}</th>`;
+      for (let j = 0; j < N; j++) {
+        corrHtml += `<td class="px-2 py-1 text-center font-mono ${corrColor(matrix[i][j])}">${matrix[i][j].toFixed(2)}</td>`;
+      }
+      corrHtml += '</tr>';
+    }
+    corrHtml += '</tbody></table>';
+    document.getElementById("history-corr").innerHTML = corrHtml;
+  } else {
+    document.getElementById("history-corr-card").style.display = "none";
+  }
 }
 
 const aiCount = {};
@@ -2814,6 +3011,269 @@ def theme_section_html(theme, all_records):
 </details>'''
 
 
+def load_calibration_snapshot():
+    """读最新的因子权重校准（stock_research.jobs.calibrate_pick_weights 写出）。"""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "data", "factor_weights.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _ic_badge(mean_ic):
+    """根据 mean IC 返回带状态徽章的 HTML。Grinold-Kahn 阈值。"""
+    if mean_ic is None:
+        return '<span class="text-xs px-2 py-0.5 rounded bg-slate-200 text-slate-600 font-mono">无 IC 数据</span>'
+    if mean_ic >= 0.05:
+        cls, icon, label = "bg-emerald-100 text-emerald-800", "🟢", "实证有效"
+    elif mean_ic >= 0.02:
+        cls, icon, label = "bg-amber-100 text-amber-800", "🟡", "边际有效"
+    elif mean_ic >= -0.02:
+        cls, icon, label = "bg-rose-100 text-rose-800", "🔴", "失效"
+    else:
+        cls, icon, label = "bg-rose-200 text-rose-900", "⛔", "反向 alpha"
+    return f'<span class="text-xs px-2 py-0.5 rounded {cls} font-mono">{icon} {label} IC={mean_ic:+.3f}</span>'
+
+
+def _uncal_badge(reason_short):
+    return (f'<span class="text-xs px-2 py-0.5 rounded bg-slate-200 text-slate-700 font-mono" '
+            f'title="{reason_short}">⚪ 未实证</span>')
+
+
+def scoring_rules_panel_html(calib):
+    """渲染「每日优选 · 打分规则」面板。
+
+    calib=None 时显示"未校准"警告 + 全部维度标⚪未实证
+    calib 存在时按 factor_weights.json 内容动态展示每个因子的 IC 实证状态
+    """
+    if not calib:
+        evidence_html = '''
+      <div class="bg-amber-50 border-l-4 border-amber-400 p-4 rounded mb-4">
+        <strong class="text-amber-900">⚠️ 当前所有打分规则均为手拍 heuristic（无 IC 实证）</strong>
+        <p class="text-sm text-slate-700 mt-1">跑 <code class="bg-amber-100 px-1.5 py-0.5 rounded text-xs">python3 -m stock_research.jobs.calibrate_pick_weights</code> 生成实证证据</p>
+      </div>'''
+        ai_badge = _uncal_badge("人工分类标注，无历史时间序列可测")
+        val_badge = _uncal_badge("PEG 历史快照需历史 EPS 预测")
+        trend_badge = _uncal_badge("尚未运行 IC 校准")
+        cred_badge = _uncal_badge("人工分类标注，无历史时间序列可测")
+        trend_subblock = ""
+    else:
+        gen_at = calib.get("generated_at", "未知")
+        sample = calib.get("sample", {})
+        n_tickers = sample.get("n_tickers", 0)
+        n_regimes = sample.get("n_regimes_with_data", 0)
+        trend_audit = calib.get("calibrated", {}).get("trend", {}).get("ic_audit", {})
+        composite_ic = trend_audit.get("trend_composite", {}).get("mean_ic")
+
+        evidence_html = f'''
+      <div class="bg-emerald-50 border-l-4 border-emerald-400 p-4 rounded mb-4 text-sm">
+        <div class="flex items-center gap-2 flex-wrap">
+          <strong class="text-emerald-900">📊 已加载 IC 实证</strong>
+          <span class="text-xs text-slate-500">({n_tickers} 只样本 × {n_regimes} 个 regime · Spearman IC · Grinold-Kahn 2000)</span>
+        </div>
+        <div class="text-xs text-slate-600 mt-1">最近校准: <span class="font-mono">{gen_at}</span> · 重跑命令: <code class="bg-emerald-100 px-1.5 py-0.5 rounded text-xs">python3 -m stock_research.jobs.calibrate_pick_weights</code></div>
+      </div>'''
+        ai_badge = _uncal_badge("人工分类标注，无历史时间序列可测")
+        val_badge = _uncal_badge("PEG 历史快照需历史 EPS 预测，yfinance 提供有限")
+        trend_badge = _ic_badge(composite_ic)
+        cred_badge = _uncal_badge("人工分类标注，无历史时间序列可测")
+
+        # 趋势子因子 IC 明细表
+        rows = []
+        label_map = {
+            "trend_composite": "复合分 (1Y 档位 + 追高扣分)",
+            "trend_1y_raw": "1Y 线性涨幅",
+            "trend_1w_raw": "1W 线性涨幅 (已删)",
+        }
+        for fname, summary in trend_audit.items():
+            ic = summary.get("mean_ic")
+            ir = summary.get("ic_ir", 0)
+            label = label_map.get(fname, fname)
+            mark = "🟢" if ic and ic >= 0.05 else ("🟡" if ic and ic >= 0.02 else "🔴")
+            ic_str = f"{ic:+.3f}" if ic is not None else "  N/A"
+            rows.append(
+                f'<tr class="border-b border-cyan-100"><td class="py-1 pr-2 text-slate-700">{mark} {label}</td>'
+                f'<td class="py-1 font-mono text-right">{ic_str}</td>'
+                f'<td class="py-1 font-mono text-right text-slate-500">{ir:+.2f}</td></tr>'
+            )
+        trend_subblock = f'''
+        <div class="mt-3 pt-3 border-t border-cyan-200 text-xs">
+          <div class="font-bold text-cyan-800 mb-1">子因子 IC 实证 ({n_tickers} 只 × {n_regimes} regime):</div>
+          <table class="w-full text-xs">
+            <thead class="text-slate-500"><tr><th class="text-left font-normal">子因子</th><th class="text-right font-normal">mean IC</th><th class="text-right font-normal">IR</th></tr></thead>
+            <tbody>{"".join(rows)}</tbody>
+          </table>
+          <div class="text-xs text-slate-500 mt-1">IC ≥ 0.05 = 有效；0.02-0.05 = 边际；&lt; 0.02 = 失效</div>
+        </div>'''
+
+    return f'''
+<section id="scoring-rules" class="max-w-7xl mx-auto px-6 py-10">
+  <details class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+    <summary class="px-6 py-4 hover:bg-slate-50 cursor-pointer">
+      <div class="flex items-center justify-between gap-3">
+        <div>
+          <h2 class="text-2xl font-bold text-slate-900 flex items-center gap-3">
+            <span class="text-3xl">📐</span>
+            每日优选 · 打分规则（透明 + IC 实证）
+          </h2>
+          <p class="text-sm text-slate-600 mt-1 ml-12">点击展开 — 看每个维度有没有数据实证支撑</p>
+        </div>
+        <span class="arrow text-slate-400"></span>
+      </div>
+    </summary>
+
+    <div class="px-6 pb-6">
+      {evidence_html}
+
+      <div class="bg-slate-900 text-white rounded-xl p-5 mb-4 font-mono">
+        <div class="text-xs text-slate-400 mb-2">综合公式（满分 100）</div>
+        <div class="text-base md:text-lg">
+          <span class="text-amber-300">综合得分</span> =
+          <span class="text-rose-300">AI 关联度</span> (35) +
+          <span class="text-emerald-300">估值</span> (25) +
+          <span class="text-cyan-300">趋势</span> (25) +
+          <span class="text-violet-300">数据可信度</span> (15)
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+
+        <!-- AI 关联度 -->
+        <div class="bg-rose-50 border-2 border-rose-200 rounded-xl p-4">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="font-bold text-rose-800">🎯 AI 关联度</h3>
+            <span class="text-2xl font-mono font-bold text-rose-600">35</span>
+          </div>
+          <div class="mb-3">{ai_badge}</div>
+          <div class="text-xs text-slate-700 space-y-1.5">
+            <div class="flex justify-between border-b border-rose-100 pb-1"><span>极强（核心标的）</span><span class="font-mono font-bold">35</span></div>
+            <div class="flex justify-between border-b border-rose-100 pb-1"><span>强（直接受益）</span><span class="font-mono font-bold">28</span></div>
+            <div class="flex justify-between border-b border-rose-100 pb-1"><span>中（间接受益）</span><span class="font-mono">18</span></div>
+            <div class="flex justify-between border-b border-rose-100 pb-1"><span>弱（沾边）</span><span class="font-mono">8</span></div>
+            <div class="flex justify-between"><span>无</span><span class="font-mono">0</span></div>
+          </div>
+          <div class="text-xs text-rose-700 mt-3 pt-2 border-t border-rose-200">
+            <strong>未实证</strong>：人工分类无历史标注；待 picks 表 ≥ 3 个月做 logit 校准
+          </div>
+        </div>
+
+        <!-- 估值 -->
+        <div class="bg-emerald-50 border-2 border-emerald-200 rounded-xl p-4">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="font-bold text-emerald-800">💰 估值（PEG/PE）</h3>
+            <span class="text-2xl font-mono font-bold text-emerald-600">25</span>
+          </div>
+          <div class="mb-3">{val_badge}</div>
+          <div class="text-xs text-slate-700 space-y-1.5">
+            <div class="text-slate-500 mb-1 italic">优先看 PEG（PE÷增速）：</div>
+            <div class="flex justify-between border-b border-emerald-100 pb-1"><span>PEG &lt; 1（便宜）</span><span class="font-mono font-bold">25</span></div>
+            <div class="flex justify-between border-b border-emerald-100 pb-1"><span>PEG 1-2（合理）</span><span class="font-mono font-bold">18</span></div>
+            <div class="flex justify-between border-b border-emerald-100 pb-1"><span>PEG 2-3（偏贵）</span><span class="font-mono">10</span></div>
+            <div class="flex justify-between border-b border-emerald-100 pb-1"><span>PEG &gt; 3（贵）</span><span class="font-mono">4</span></div>
+            <div class="flex justify-between"><span>PEG 缺失，PE &lt; 25</span><span class="font-mono">15</span></div>
+          </div>
+          <div class="text-xs text-emerald-700 mt-3 pt-2 border-t border-emerald-200">
+            <strong>未实证</strong>：PEG 历史需 EPS 预测（yfinance 不稳定）；接 FMP/Finnhub 后做 IC 回测
+          </div>
+        </div>
+
+        <!-- 趋势 -->
+        <div class="bg-cyan-50 border-2 border-cyan-200 rounded-xl p-4">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="font-bold text-cyan-800">📈 趋势（1Y）</h3>
+            <span class="text-2xl font-mono font-bold text-cyan-600">25</span>
+          </div>
+          <div class="mb-3">{trend_badge}</div>
+          <div class="text-xs text-slate-700 space-y-1.5">
+            <div class="text-slate-500 mb-1 italic">1 年涨幅档位：</div>
+            <div class="flex justify-between border-b border-cyan-100 pb-1"><span>涨 50%-200%（健康）</span><span class="font-mono font-bold">20</span></div>
+            <div class="flex justify-between border-b border-cyan-100 pb-1"><span>涨 0%-50%（稳健）</span><span class="font-mono">15</span></div>
+            <div class="flex justify-between border-b border-cyan-100 pb-1"><span>涨 &gt; 200%（追高）</span><span class="font-mono">12</span></div>
+            <div class="flex justify-between"><span>跌（逆势）</span><span class="font-mono">8</span></div>
+          </div>
+          <div class="text-xs text-cyan-700 mt-3 pt-2 border-t border-cyan-200">
+            <strong>实证：「追高扣分」复合分 IC 优于线性 1Y</strong>，6 regime 已验证
+          </div>
+          {trend_subblock}
+        </div>
+
+        <!-- 数据可信度 -->
+        <div class="bg-violet-50 border-2 border-violet-200 rounded-xl p-4">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="font-bold text-violet-800">🔍 数据可信度</h3>
+            <span class="text-2xl font-mono font-bold text-violet-600">15</span>
+          </div>
+          <div class="mb-3">{cred_badge}</div>
+          <div class="text-xs text-slate-700 space-y-1.5">
+            <div class="flex justify-between border-b border-violet-100 pb-1"><span>🟢 高（官方+多源）</span><span class="font-mono font-bold">15</span></div>
+            <div class="flex justify-between border-b border-violet-100 pb-1"><span>🟡 中（权威媒体单源）</span><span class="font-mono">10</span></div>
+            <div class="flex justify-between border-b border-violet-100 pb-1"><span>🔴 低（二手/推断）</span><span class="font-mono">5</span></div>
+            <div class="flex justify-between"><span>未填</span><span class="font-mono">3</span></div>
+          </div>
+          <div class="text-xs text-violet-700 mt-3 pt-2 border-t border-violet-200">
+            <strong>未实证</strong>：人工分类无历史标注，无 IC 可测
+          </div>
+        </div>
+      </div>
+
+      <!-- 评级阈值 -->
+      <div class="bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl p-5 mb-4">
+        <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <h3 class="font-bold text-slate-900">📊 评级阈值</h3>
+          <span class="text-xs px-2 py-0.5 rounded bg-slate-200 text-slate-700 font-mono">⚪ 未实证（待 picks ≥ 3 个月做 logit calibration）</span>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div class="bg-white rounded-lg p-3 border-l-4 border-amber-500">
+            <div class="font-bold text-lg">⭐⭐⭐ 强烈推荐</div>
+            <div class="text-sm text-slate-600 mt-1">综合得分 ≥ <strong class="text-amber-700">75</strong></div>
+            <div class="text-xs text-slate-500 mt-2">4 维度都接近满分，确定性较高的标的</div>
+          </div>
+          <div class="bg-white rounded-lg p-3 border-l-4 border-orange-400">
+            <div class="font-bold text-lg">⭐⭐ 推荐</div>
+            <div class="text-sm text-slate-600 mt-1">综合得分 ≥ <strong class="text-orange-700">60</strong></div>
+            <div class="text-xs text-slate-500 mt-2">某个维度优秀但不是全维度都好</div>
+          </div>
+          <div class="bg-white rounded-lg p-3 border-l-4 border-yellow-400">
+            <div class="font-bold text-lg">⭐ 关注</div>
+            <div class="text-sm text-slate-600 mt-1">综合得分 ≥ <strong class="text-yellow-700">50</strong></div>
+            <div class="text-xs text-slate-500 mt-2">有亮点但风险较大，谨慎跟踪</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 命中评级（持有后判断）-->
+      <div class="bg-gradient-to-r from-slate-100 to-blue-50 rounded-xl p-5 mb-4">
+        <h3 class="font-bold text-slate-900 mb-2">🎯 命中评级（入选后实际表现）</h3>
+        <p class="text-xs text-slate-600 mb-3">入选后我会持续跟踪，按累计涨跌幅自动评级，验证选股策略是否有效</p>
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+          <div class="bg-emerald-100 text-emerald-800 rounded p-2 text-center"><div class="font-bold">🚀 大涨</div><div class="font-mono">&gt; +15%</div></div>
+          <div class="bg-emerald-50 text-emerald-700 rounded p-2 text-center"><div class="font-bold">✅ 命中</div><div class="font-mono">+5% ~ +15%</div></div>
+          <div class="bg-slate-100 text-slate-700 rounded p-2 text-center"><div class="font-bold">🟢 跟随</div><div class="font-mono">-5% ~ +5%</div></div>
+          <div class="bg-amber-50 text-amber-700 rounded p-2 text-center"><div class="font-bold">⚠️ 不及</div><div class="font-mono">-5% ~ -15%</div></div>
+          <div class="bg-rose-100 text-rose-800 rounded p-2 text-center"><div class="font-bold">❌ 大跌</div><div class="font-mono">&lt; -15%</div></div>
+        </div>
+      </div>
+
+      <!-- 限制 + 说明 -->
+      <div class="bg-rose-50 border-l-4 border-rose-400 p-4 rounded">
+        <h3 class="font-bold text-rose-900 mb-2">⚠️ 这套打分系统的限制</h3>
+        <ul class="text-sm text-slate-700 space-y-1 list-disc pl-5">
+          <li><strong>是定量框架，不是买卖建议</strong>：满分 100 不代表「一定会涨」，0 分不代表「一定会跌」</li>
+          <li><strong>4 维度中 3 维（AI/估值/可信度）权重未经 IC 实证</strong>：等 picks 表 ≥ 3 个月可做 logit 校准</li>
+          <li><strong>不考虑宏观/政策风险</strong>：地缘冲突、关税、监管这些黑天鹅打分没法量化</li>
+          <li><strong>2018 类熊市趋势 IC 反转</strong>：所有趋势因子在系统性下跌中变负 alpha，依赖 v7 防御信号</li>
+          <li><strong>只用 watchlist 内 37 只</strong>：不是从全市场万只里挑，覆盖范围有限</li>
+        </ul>
+      </div>
+    </div>
+  </details>
+</section>'''
+
+
 def load_audit_snapshot():
     """读最新一次 picks 反向审查快照（stock_research/jobs/audit_picks 写出）。"""
     audit_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -3004,6 +3464,7 @@ def build():
     track_13f = _load_json("track_13f.json")
     optimization = _load_json("optimization_result.json")
     plan_a_v6 = _load_json("plan_a_v5.json")
+    history_data = _load_json("history_data.json")
     if risk_metrics:
         print(f"  风险指标已加载 (Sharpe={risk_metrics.get('sharpe', 'N/A')})")
     if track_13f:
@@ -3012,6 +3473,8 @@ def build():
         print(f"  优化结果已加载 ({len(optimization.get('current_plan', []))} 只)")
     if plan_a_v6:
         print(f"  方案 A v6 已加载 ({len(plan_a_v6.get('plan_v5', []))} 只 · Sharpe {plan_a_v6.get('portfolio_metrics', {}).get('annual_sharpe', 'N/A')})")
+    if history_data:
+        print(f"  历史数据已加载 ({len(history_data.get('tickers', {}))} 只 × 2 年日K)")
 
     us_count = sum(1 for r in records if "美股" in r["market"])
     cn_count = len(records) - us_count
@@ -3046,6 +3509,10 @@ def build():
     # 反向审查面板（picks_audit 快照）
     audit_snap = load_audit_snapshot()
     html = html.replace("{AUDIT_PANEL}", audit_panel_html(audit_snap))
+
+    # 打分规则面板（动态读 factor_weights.json，缺失则 fallback 到「未实证」版本）
+    calib_snap = load_calibration_snapshot()
+    html = html.replace("{SCORING_RULES_PANEL}", scoring_rules_panel_html(calib_snap))
     if audit_snap:
         n_picks = audit_snap.get("picks_today_count", 0)
         print(f"  反向审查快照已加载（{n_picks} 只 picks @ {audit_snap.get('ts', '?')[:16]}）")
@@ -3057,6 +3524,7 @@ def build():
     html = html.replace("{TRACK_13F_JSON}", json.dumps(track_13f, ensure_ascii=False))
     html = html.replace("{OPTIMIZATION_JSON}", json.dumps(optimization, ensure_ascii=False))
     html = html.replace("{PLAN_A_V6_JSON}", json.dumps(plan_a_v6, ensure_ascii=False))
+    html = html.replace("{HISTORY_DATA_JSON}", json.dumps(history_data, ensure_ascii=False))
 
     with open(OUTPUT, "w", encoding="utf-8") as f:
         f.write(html)

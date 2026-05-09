@@ -42,10 +42,12 @@ def run(skip_correlation: bool = False) -> dict[str, Any]:
     logger.info("watchlist=%d picks=%d picks_today=%d",
                 len(watchlist), len(picks), len(picks_today))
 
+    strong_count = len(picks_audit.filter_strong_picks(picks_today))
     result = {
         "ts": datetime.now().isoformat(timespec="seconds"),
         "date": datetime.now().strftime("%Y-%m-%d"),
         "picks_today_count": len(picks_today),
+        "strong_picks_count": strong_count,
         "theme_concentration": picks_audit.theme_concentration(picks_today),
         "valuation_sanity": picks_audit.valuation_sanity(picks_today, watchlist),
         "correlation": (
@@ -63,7 +65,7 @@ def run(skip_correlation: bool = False) -> dict[str, Any]:
 def print_report(r: dict[str, Any]) -> None:
     print(f"\n{'═' * 72}")
     print(f"  📋 当日 picks 横截面审查 · {r['ts']}")
-    print(f"     ⭐⭐⭐ 推荐共 {r['picks_today_count']} 只")
+    print(f"     当日 picks 共 {r['picks_today_count']} 只 · 其中 ⭐⭐⭐ 强推荐 {r.get('strong_picks_count', 0)} 只")
     print(f"{'═' * 72}\n")
 
     tc = r["theme_concentration"]

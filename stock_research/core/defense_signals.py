@@ -87,8 +87,14 @@ def check_stop_loss(picks_today: list[dict[str, Any]],
 
 def check_market_regime(as_of: str | None = None,
                         vix_panic: float = VIX_PANIC_THRESHOLD,
-                        vix_extreme: float = VIX_EXTREME_THRESHOLD) -> list[dict[str, Any]]:
-    """检查 VIX + SPY/200MA 市场层信号。"""
+                        vix_extreme: float = VIX_EXTREME_THRESHOLD,
+                        include_macro: bool = True,
+                        include_options: bool = True) -> list[dict[str, Any]]:
+    """检查市场层信号：VIX + SPY/200MA + 宏观 (FRED) + SPY put/call ratio。
+
+    include_macro: 加宏观经济 regime（FRED Fed/CPI/失业率/收益率曲线倒挂）
+    include_options: 加 SPY 期权 PCR（领先于 VIX）
+    """
     alerts = []
     try:
         from .regime_filter import _spy_above_200ma, _vix_below_panic
@@ -112,7 +118,7 @@ def check_market_regime(as_of: str | None = None,
         })
 
     # VIX
-    vix_safe, vix_info = _vix_below_panic(as_of, panic_threshold=vix_panic)
+    _, vix_info = _vix_below_panic(as_of, panic_threshold=vix_panic)
     vix_now = vix_info.get("vix_close")
     if vix_now is not None:
         if vix_now >= vix_extreme:
@@ -137,6 +143,49 @@ def check_market_regime(as_of: str | None = None,
                     f"Whaley 2009：建议组合减仓 50%，可考虑买 put 对冲。"
                 ),
             })
+
+    # 宏观经济 regime（FRED + yf fallback）
+    if include_macro and as_of is None:
+        # 仅当前实时检查时跑（历史回测不算宏观，避免数据获取慢）
+        try:
+            from .macro_data import macro_regime
+            macro = macro_regime()
+            for a in macro.get("alerts", []):
+                alerts.append({
+                    "type": f"MACRO_{a['type']}",
+                    "severity": a["severity"],
+                    "trigger": a["msg"][:80],
+                    "suggested_action": a["msg"],
+                    "macro_data": {
+                        "fed_rate": macro.get("fed_rate"),
+                        "ten_year_yield": macro.get("ten_year_yield"),
+                        "yield_curve": macro.get("yield_curve"),
+                    },
+                })
+        except Exception as e:
+            logger.warning("macro check 失败: %s", str(e)[:80])
+
+    # SPY put/call ratio（OpenBB 期权链，领先于 VIX）
+    if include_options and as_of is None:
+        try:
+            from .options_signals import diagnose as opt_diagnose
+            opt = opt_diagnose()
+            sig_vol = opt.get("signal_volume", {})
+            if sig_vol.get("severity") in ("HIGH", "CRITICAL"):
+                alerts.append({
+                    "type": "PUT_CALL_RATIO",
+                    "severity": sig_vol["severity"],
+                    "trigger": sig_vol.get("label", ""),
+                    "pcr_volume": opt.get("pcr_volume"),
+                    "pcr_oi": opt.get("pcr_oi"),
+                    "suggested_action": (
+                        f"SPY PCR (volume) = {opt.get('pcr_volume')} · "
+                        f"PCR (OI) = {opt.get('pcr_oi')}。"
+                        f"建议：{sig_vol.get('action', '—')}"
+                    ),
+                })
+        except Exception as e:
+            logger.warning("PCR check 失败: %s", str(e)[:80])
 
     return alerts
 

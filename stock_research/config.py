@@ -8,7 +8,10 @@ import os
 from pathlib import Path
 
 # ─────────── 路径 ───────────
-BASE_DIR = Path(os.environ.get("STOCK_RESEARCH_BASE", os.path.expanduser("~/.hermes/scripts")))
+# 默认指向 stock_research 包的父目录（即 StockAssistant 项目根），
+# 与 stock_db.py 的脚本相对路径保持一致，避免双 DuckDB 分裂。
+_DEFAULT_BASE = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(os.environ.get("STOCK_RESEARCH_BASE", str(_DEFAULT_BASE)))
 DATA_DIR = BASE_DIR / "data"
 SNAPSHOT_DIR = DATA_DIR / "snapshots"
 SEC_13F_DIR = SNAPSHOT_DIR / "13f"

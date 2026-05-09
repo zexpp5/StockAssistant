@@ -18,8 +18,8 @@ ALPHA_THR = 5.0
 
 
 def main():
-    fd = json.load(open("factor_scores.json", encoding="utf-8"))
-    sd = json.load(open("early_signals.json", encoding="utf-8"))
+    from reverse_validate import load_factors_and_signals
+    fd, sd = load_factors_and_signals()
     sig_map = {r["ticker"]: r for r in sd["results"]}
 
     print("=" * 105)

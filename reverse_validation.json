@@ -1,0 +1,162 @@
+{
+  "validation_date": "2025-12-31",
+  "results": [
+    {
+      "name": "AMD",
+      "ticker": "AMD",
+      "ai_rel": "极强（核心标的）",
+      "as_of_price": 214.16000366210938,
+      "one_year_pct_at_time": 74.9101595817068,
+      "one_week_pct_at_time": -0.4092213781147769,
+      "future_price": 455.19000244140625,
+      "future_pct": 112.54669156598523
+    },
+    {
+      "name": "Intel",
+      "ticker": "INTC",
+      "ai_rel": "中（间接受益）",
+      "as_of_price": 36.900001525878906,
+      "one_year_pct_at_time": 86.17559078729424,
+      "one_week_pct_at_time": 2.0464648274044706,
+      "future_price": 124.91999816894531,
+      "future_pct": 238.5365664045725
+    },
+    {
+      "name": "SK Hynix",
+      "ticker": "000660.KS",
+      "ai_rel": "极强（核心标的）",
+      "as_of_price": 649800.9375,
+      "one_year_pct_at_time": 274.8211055400479,
+      "one_week_pct_at_time": 11.472596681173265,
+      "future_price": 1686000.0,
+      "future_pct": 159.46407625796937
+    },
+    {
+      "name": "Datadog",
+      "ticker": "DDOG",
+      "ai_rel": "强（直接受益）",
+      "as_of_price": 135.99000549316406,
+      "one_year_pct_at_time": -5.673852243651655,
+      "one_week_pct_at_time": -1.4850680184542497,
+      "future_price": 200.16000366210938,
+      "future_pct": 47.187289930781716
+    },
+    {
+      "name": "Vertiv",
+      "ticker": "VRT",
+      "ai_rel": "极强（核心标的）",
+      "as_of_price": 161.97145080566406,
+      "one_year_pct_at_time": 39.670171920600204,
+      "one_week_pct_at_time": -2.912445270862929,
+      "future_price": 339.9700012207031,
+      "future_pct": 109.89501515832232
+    },
+    {
+      "name": "中际旭创",
+      "ticker": "300308.SZ",
+      "ai_rel": "极强（核心标的）",
+      "as_of_price": 609.2789916992188,
+      "one_year_pct_at_time": 382.5861391738809,
+      "one_week_pct_at_time": -4.657695462465849,
+      "future_price": 886.0,
+      "future_pct": 45.417782669485085
+    },
+    {
+      "name": "寒武纪",
+      "ticker": "688256.SS",
+      "ai_rel": "极强（核心标的）",
+      "as_of_price": 908.6765747070312,
+      "one_year_pct_at_time": 113.13007481505961,
+      "one_week_pct_at_time": 2.739096059241297,
+      "future_price": 1182.530029296875,
+      "future_pct": 30.137615760386204
+    },
+    {
+      "name": "Lam Research",
+      "ticker": "LRCX",
+      "ai_rel": "强（直接受益）",
+      "as_of_price": 170.9751434326172,
+      "one_year_pct_at_time": 139.4285140403491,
+      "one_week_pct_at_time": -3.468118107528251,
+      "future_price": 294.04998779296875,
+      "future_pct": 71.98405679879218
+    },
+    {
+      "name": "Marvell",
+      "ticker": "MRVL",
+      "ai_rel": "强（直接受益）",
+      "as_of_price": 84.87641143798828,
+      "one_year_pct_at_time": -23.65590025361518,
+      "one_week_pct_at_time": -1.7458625661707639,
+      "future_price": 170.1300048828125,
+      "future_pct": 100.44438967251992
+    },
+    {
+      "name": "Broadcom",
+      "ticker": "AVGO",
+      "ai_rel": "强（直接受益）",
+      "as_of_price": 345.3755187988281,
+      "one_year_pct_at_time": 48.241583194039464,
+      "one_week_pct_at_time": -1.176398574011528,
+      "future_price": 430.0,
+      "future_pct": 24.502165496699078
+    },
+    {
+      "name": "Apple",
+      "ticker": "AAPL",
+      "ai_rel": "强（直接受益）",
+      "as_of_price": 271.6058349609375,
+      "one_year_pct_at_time": 8.28293298974716,
+      "one_week_pct_at_time": -0.7121742096950157,
+      "future_price": 293.32000732421875,
+      "future_pct": 7.994737066824875
+    },
+    {
+      "name": "Microsoft",
+      "ticker": "MSFT",
+      "ai_rel": "极强（核心标的）",
+      "as_of_price": 482.5186767578125,
+      "one_year_pct_at_time": 14.678241855383977,
+      "one_week_pct_at_time": -0.90159700187189,
+      "future_price": 415.1199951171875,
+      "future_pct": -13.968098000578323
+    },
+    {
+      "name": "Salesforce",
+      "ticker": "CRM",
+      "ai_rel": "强（直接受益）",
+      "as_of_price": 264.2491149902344,
+      "one_year_pct_at_time": -20.581564377854235,
+      "one_week_pct_at_time": -0.131955366077241,
+      "future_price": 181.82000732421875,
+      "future_pct": -31.193711914252532
+    },
+    {
+      "name": "Snowflake",
+      "ticker": "SNOW",
+      "ai_rel": "强（直接受益）",
+      "as_of_price": 219.36000061035156,
+      "one_year_pct_at_time": 41.54997669384175,
+      "one_week_pct_at_time": -1.1580192629412678,
+      "future_price": 152.4499969482422,
+      "future_pct": -30.50237211703942
+    },
+    {
+      "name": "Tesla",
+      "ticker": "TSLA",
+      "ai_rel": "强（直接受益）",
+      "as_of_price": 449.7200012207031,
+      "one_year_pct_at_time": 7.740590133232272,
+      "one_week_pct_at_time": -7.350637232061919,
+      "future_price": 428.3500061035156,
+      "future_pct": -4.751844494170054
+    }
+  ],
+  "summary": {
+    "total": 15,
+    "correct": 4,
+    "wrong": 1,
+    "missed": 6,
+    "avoided": 4
+  }
+}
