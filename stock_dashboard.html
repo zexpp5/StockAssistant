@@ -48,7 +48,7 @@
     <a href="#history" data-tab="history" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">📅 历史</a>
     <a href="#professional" data-tab="professional" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">📊 专业分析</a>
     <a href="#upgrade" data-tab="upgrade" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">💰 升级建议</a>
-    <span class="ml-auto text-xs text-slate-500 flex-shrink-0">2026-05-09 20:54</span>
+    <span class="ml-auto text-xs text-slate-500 flex-shrink-0">2026-05-09 22:55</span>
   </div>
 </nav>
 
@@ -57,7 +57,7 @@
   <div class="max-w-7xl mx-auto px-6 py-10">
     <div class="flex items-center gap-3 mb-3">
       <span class="bg-violet-500/20 text-violet-300 text-xs font-bold px-3 py-1 rounded-full">AI 投资研究 · 资深分析员视角</span>
-      <span class="text-slate-400 text-sm">数据更新 2026-05-09 20:54</span>
+      <span class="text-slate-400 text-sm">数据更新 2026-05-09 22:55</span>
     </div>
     <h1 class="text-4xl md:text-5xl font-bold mb-3 leading-tight">AI 主线已轮动到「下一波稀缺资源」拐点</h1>
     <p class="text-lg text-slate-300 max-w-4xl mb-6">算力（NVDA）→ 网络（COHR）→ 电力（GEV/VST）→ 内存（SK Hynix）→ 存储（SanDisk）都已发生。下一波最可能的「百倍候选」在：水冷、稀土、铀、SMR、AI 数据。</p>
@@ -595,8 +595,23 @@
 </section>
 
 
+<div id="audit-panel">
+  <div class="max-w-7xl mx-auto px-6 pt-6">
+    <div class="flex flex-wrap items-center gap-3 bg-amber-50 border border-amber-300 rounded-lg p-3">
+      <span class="text-sm font-semibold text-amber-900">🔬 数据源对比模式</span>
+      <span class="text-xs text-amber-800">验证 DuckDB 迁移；下方面板可切换数据来源</span>
+      <div class="ml-auto flex items-center gap-2">
+        <span class="text-xs text-slate-600">当前：</span>
+        <span id="audit-source-label" class="text-xs font-mono px-2 py-0.5 bg-blue-100 text-blue-800 rounded">JSON 文件 · 2026-05-09T20:23</span>
+        <button onclick="toggleAuditSource()" class="text-xs px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded font-medium shadow-sm">
+          切换 ⇄
+        </button>
+      </div>
+    </div>
+  </div>
+  <div id="audit-panel-json-wrap" data-source="json" data-ts="2026-05-09T20:23">
 <!-- ============ 反向审查 · 自我校验 ============ -->
-<section id="audit-panel" class="max-w-7xl mx-auto px-6 py-10 bg-gradient-to-br from-violet-50 to-fuchsia-50 rounded-2xl my-6">
+<section id="audit-panel-json-section" class="max-w-7xl mx-auto px-6 py-10 bg-gradient-to-br from-violet-50 to-fuchsia-50 rounded-2xl my-6">
   <div class="flex items-center justify-between mb-4">
     <div>
       <div class="flex items-center gap-3 mb-1">
@@ -713,6 +728,146 @@
     <code class="bg-slate-200 px-2 py-0.5 rounded">python3 -m stock_research.jobs.audit_picks</code>
   </p>
 </section>
+</div>
+  <div id="audit-panel-db-wrap" data-source="duckdb" data-ts="2026-05-09T20:23" style="display:none">
+<!-- ============ 反向审查 · 自我校验 ============ -->
+<section id="audit-panel-db-section" class="max-w-7xl mx-auto px-6 py-10 bg-gradient-to-br from-violet-50 to-fuchsia-50 rounded-2xl my-6">
+  <div class="flex items-center justify-between mb-4">
+    <div>
+      <div class="flex items-center gap-3 mb-1">
+        <span class="text-3xl">🛡</span>
+        <h2 class="text-2xl font-bold text-slate-900">反向审查 · 自我校验</h2>
+      </div>
+      <p class="text-slate-700">用经典金融理论（Risk Parity / Markowitz / 13F / 估值）每日审查 ⭐⭐⭐ 推荐</p>
+    </div>
+    <div class="text-right">
+      <div class="inline-block px-4 py-2 rounded-lg bg-amber-100 text-amber-800 font-semibold text-sm">⚠️ 发现 1 项问题</div>
+      <p class="text-xs text-slate-500 mt-1">快照：2026-05-09T20:23:44 · 78 只 picks</p>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+    
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+          <h3 class="text-sm font-semibold text-slate-700 mb-1">🗂 主题集中度（Risk Parity）</h3>
+          <p class="text-xs mb-2">🟢 健康集中：🔥 AI 算力核心 占 ⭐⭐⭐ 推荐 33% (11/33)</p>
+          <div>
+                <div class="flex items-center gap-2 text-xs mb-1">
+                  <span class="w-32 truncate">🔥 AI 算力核心</span>
+                  <span class="w-10 text-right text-slate-500">11 只</span>
+                  <div class="flex-1 bg-slate-100 rounded h-3 relative overflow-hidden">
+                    <div class="absolute left-0 top-0 h-full bg-violet-400" style="width:33.3%"></div>
+                  </div>
+                  <span class="w-12 text-right font-mono">33.3%</span>
+                </div>
+                <div class="flex items-center gap-2 text-xs mb-1">
+                  <span class="w-32 truncate">🤖 AI 应用层</span>
+                  <span class="w-10 text-right text-slate-500">6 只</span>
+                  <div class="flex-1 bg-slate-100 rounded h-3 relative overflow-hidden">
+                    <div class="absolute left-0 top-0 h-full bg-violet-400" style="width:18.2%"></div>
+                  </div>
+                  <span class="w-12 text-right font-mono">18.2%</span>
+                </div>
+                <div class="flex items-center gap-2 text-xs mb-1">
+                  <span class="w-32 truncate">💡 AI 连接（光通信+ASIC）</span>
+                  <span class="w-10 text-right text-slate-500">5 只</span>
+                  <div class="flex-1 bg-slate-100 rounded h-3 relative overflow-hidden">
+                    <div class="absolute left-0 top-0 h-full bg-violet-400" style="width:15.2%"></div>
+                  </div>
+                  <span class="w-12 text-right font-mono">15.2%</span>
+                </div>
+                <div class="flex items-center gap-2 text-xs mb-1">
+                  <span class="w-32 truncate">💎 下一波稀缺资源</span>
+                  <span class="w-10 text-right text-slate-500">4 只</span>
+                  <div class="flex-1 bg-slate-100 rounded h-3 relative overflow-hidden">
+                    <div class="absolute left-0 top-0 h-full bg-violet-400" style="width:12.1%"></div>
+                  </div>
+                  <span class="w-12 text-right font-mono">12.1%</span>
+                </div>
+                <div class="flex items-center gap-2 text-xs mb-1">
+                  <span class="w-32 truncate">⚡ AI 电力链</span>
+                  <span class="w-10 text-right text-slate-500">3 只</span>
+                  <div class="flex-1 bg-slate-100 rounded h-3 relative overflow-hidden">
+                    <div class="absolute left-0 top-0 h-full bg-violet-400" style="width:9.1%"></div>
+                  </div>
+                  <span class="w-12 text-right font-mono">9.1%</span>
+                </div>
+                <div class="flex items-center gap-2 text-xs mb-1">
+                  <span class="w-32 truncate">🇨🇳 中国 AI</span>
+                  <span class="w-10 text-right text-slate-500">1 只</span>
+                  <div class="flex-1 bg-slate-100 rounded h-3 relative overflow-hidden">
+                    <div class="absolute left-0 top-0 h-full bg-violet-400" style="width:3.0%"></div>
+                  </div>
+                  <span class="w-12 text-right font-mono">3.0%</span>
+                </div>
+                <div class="flex items-center gap-2 text-xs mb-1">
+                  <span class="w-32 truncate">🌏 海外 AI 生态</span>
+                  <span class="w-10 text-right text-slate-500">1 只</span>
+                  <div class="flex-1 bg-slate-100 rounded h-3 relative overflow-hidden">
+                    <div class="absolute left-0 top-0 h-full bg-violet-400" style="width:3.0%"></div>
+                  </div>
+                  <span class="w-12 text-right font-mono">3.0%</span>
+                </div>
+                <div class="flex items-center gap-2 text-xs mb-1">
+                  <span class="w-32 truncate">🧬 AI 医疗</span>
+                  <span class="w-10 text-right text-slate-500">1 只</span>
+                  <div class="flex-1 bg-slate-100 rounded h-3 relative overflow-hidden">
+                    <div class="absolute left-0 top-0 h-full bg-violet-400" style="width:3.0%"></div>
+                  </div>
+                  <span class="w-12 text-right font-mono">3.0%</span>
+                </div>
+                <div class="flex items-center gap-2 text-xs mb-1">
+                  <span class="w-32 truncate">🏭 半导体设备</span>
+                  <span class="w-10 text-right text-slate-500">1 只</span>
+                  <div class="flex-1 bg-slate-100 rounded h-3 relative overflow-hidden">
+                    <div class="absolute left-0 top-0 h-full bg-violet-400" style="width:3.0%"></div>
+                  </div>
+                  <span class="w-12 text-right font-mono">3.0%</span>
+                </div></div>
+        </div>
+    
+        <div class="bg-white rounded-xl shadow-sm border border-amber-200 p-4">
+          <h3 class="text-sm font-semibold text-amber-700 mb-1">💰 估值合理性</h3>
+          <p class="text-xs mb-2">⚠️ 8 只 ⭐⭐⭐ 推荐有估值警告</p>
+          <ul class="space-y-1 list-disc list-inside"><li class="text-xs"><span class="font-semibold">中际旭创</span> (300308): <span class="text-rose-600">1Y涨幅=824%（已涨过头）</span></li><li class="text-xs"><span class="font-semibold">Vertiv</span> (VRT): <span class="text-rose-600">1Y涨幅=262%（已涨过头）</span></li><li class="text-xs"><span class="font-semibold">新易盛</span> (300502): <span class="text-rose-600">1Y涨幅=618%（已涨过头）</span></li><li class="text-xs"><span class="font-semibold">AMD</span> (AMD): <span class="text-rose-600">1Y涨幅=343%（已涨过头）</span></li><li class="text-xs"><span class="font-semibold">SK Hynix（韩股）</span> (000660.KS): <span class="text-rose-600">1Y涨幅=791%（已涨过头）</span></li><li class="text-xs"><span class="font-semibold">海光信息</span> (688041): <span class="text-rose-600">PEG=3.2（>3 偏贵） / 远期PE=118（>100 极贵）</span></li><li class="text-xs"><span class="font-semibold">Advantest（日股）</span> (6857.T): <span class="text-rose-600">远期PE=126（>100 极贵） / 1Y涨幅=355%（已涨过头）</span></li><li class="text-xs"><span class="font-semibold">Lam Research</span> (LRCX): <span class="text-rose-600">1Y涨幅=293%（已涨过头）</span></li></ul>
+        </div>
+    
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+          <h3 class="text-sm font-semibold text-slate-700 mb-1">📋 13F 一致性</h3>
+          <p class="text-xs text-slate-500">跳过：当日推荐无 13F 信号匹配</p>
+        </div>
+    
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+          <h3 class="text-sm font-semibold text-slate-700 mb-1">📐 相关性矩阵</h3>
+          <p class="text-xs text-slate-500">跳过：用户指定 --no-correlation</p>
+        </div>
+  </div>
+
+  <p class="text-xs text-slate-500 mt-4">
+    数据来源：<code>data/snapshots/audit/picks_audit_*.json</code> · 重新生成：
+    <code class="bg-slate-200 px-2 py-0.5 rounded">python3 -m stock_research.jobs.audit_picks</code>
+  </p>
+</section>
+</div>
+</div>
+<script>
+function toggleAuditSource() {
+  const j = document.getElementById('audit-panel-json-wrap');
+  const d = document.getElementById('audit-panel-db-wrap');
+  const lbl = document.getElementById('audit-source-label');
+  if (j.style.display === 'none') {
+    j.style.display = '';
+    d.style.display = 'none';
+    lbl.textContent = 'JSON 文件 · ' + (j.dataset.ts || '—');
+    lbl.className = 'text-xs font-mono px-2 py-0.5 bg-blue-100 text-blue-800 rounded';
+  } else {
+    j.style.display = 'none';
+    d.style.display = '';
+    lbl.textContent = 'DuckDB · ' + (d.dataset.ts || '—');
+    lbl.className = 'text-xs font-mono px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded';
+  }
+}
+</script>
 
 
 <!-- ============ 估值视角 ============ -->
@@ -4168,7 +4323,7 @@
   <div class="max-w-7xl mx-auto px-6 text-sm">
     <p class="mb-2"><strong class="text-white">免责声明</strong>：本看板由 Claude AI 基于公开信息生成，仅作研究学习参考，<strong class="text-rose-300">绝不构成任何投资建议</strong>。</p>
     <p class="mb-2">投资有风险，所有交易决策需自行判断、自负盈亏。本看板的数据可能滞后、错误或解读偏差。</p>
-    <p class="text-slate-500">数据源：飞书「股票研究 Watchlist」表 · WebSearch 抓取的最新公司财报 · 数据更新时间 2026-05-09 20:54</p>
+    <p class="text-slate-500">数据源：飞书「股票研究 Watchlist」表 · WebSearch 抓取的最新公司财报 · 数据更新时间 2026-05-09 22:55</p>
   </div>
 </footer>
 

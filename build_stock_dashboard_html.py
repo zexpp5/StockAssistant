@@ -3275,7 +3275,7 @@ def scoring_rules_panel_html(calib):
 
 
 def load_audit_snapshot():
-    """读最新一次 picks 反向审查快照（stock_research/jobs/audit_picks 写出）。"""
+    """读最新一次 picks 反向审查快照（JSON 文件路径）。"""
     audit_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              "data", "snapshots", "audit")
     if not os.path.isdir(audit_dir):
@@ -3288,6 +3288,34 @@ def load_audit_snapshot():
         with open(os.path.join(audit_dir, files[0]), encoding="utf-8") as f:
             return json.load(f)
     except Exception:
+        return None
+
+
+def load_audit_snapshot_from_db():
+    """读最新一次 picks 反向审查快照（DuckDB snapshots 表）。"""
+    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "stock_history.duckdb")
+    if not os.path.exists(db_path):
+        return None
+    try:
+        import duckdb
+    except ImportError:
+        return None
+    try:
+        con = duckdb.connect(db_path, read_only=True)
+        row = con.execute(
+            "SELECT payload FROM snapshots "
+            "WHERE category=? AND name=? "
+            "ORDER BY taken_at DESC LIMIT 1",
+            ["audit", "picks_audit"],
+        ).fetchone()
+        con.close()
+        if not row:
+            return None
+        payload = row[0]
+        return json.loads(payload) if isinstance(payload, str) else payload
+    except Exception as e:
+        print(f"  ⚠️  从 DuckDB 读 picks_audit 失败: {e}")
         return None
 
 
@@ -3506,16 +3534,71 @@ def build():
     theme_sections = "\n".join(theme_section_html(t, records) for t in THEMES)
     html = html.replace("{THEME_SECTIONS}", theme_sections)
 
-    # 反向审查面板（picks_audit 快照）
-    audit_snap = load_audit_snapshot()
-    html = html.replace("{AUDIT_PANEL}", audit_panel_html(audit_snap))
+    # 反向审查面板（picks_audit 快照）—— 双数据源：JSON 文件 + DuckDB
+    audit_snap_json = load_audit_snapshot()
+    audit_snap_db = load_audit_snapshot_from_db()
+
+    panel_json_inner = audit_panel_html(audit_snap_json)
+    panel_db_inner = (
+        audit_panel_html(audit_snap_db) if audit_snap_db else
+        '<section class="max-w-7xl mx-auto px-6 py-10 bg-rose-50 rounded-2xl my-6">'
+        '<p class="text-rose-700">⚠️ DuckDB <code>snapshots</code> 表中暂无 picks_audit 数据。</p>'
+        '</section>'
+    )
+    panel_json_inner = panel_json_inner.replace('id="audit-panel"', 'id="audit-panel-json-section"', 1)
+    panel_db_inner = panel_db_inner.replace('id="audit-panel"', 'id="audit-panel-db-section"', 1)
+
+    ts_json = (audit_snap_json or {}).get("ts", "—")[:16] if audit_snap_json else "—"
+    ts_db = (audit_snap_db or {}).get("ts", "—")[:16] if audit_snap_db else "—"
+
+    audit_panel_combined = f'''
+<div id="audit-panel">
+  <div class="max-w-7xl mx-auto px-6 pt-6">
+    <div class="flex flex-wrap items-center gap-3 bg-amber-50 border border-amber-300 rounded-lg p-3">
+      <span class="text-sm font-semibold text-amber-900">🔬 数据源对比模式</span>
+      <span class="text-xs text-amber-800">验证 DuckDB 迁移；下方面板可切换数据来源</span>
+      <div class="ml-auto flex items-center gap-2">
+        <span class="text-xs text-slate-600">当前：</span>
+        <span id="audit-source-label" class="text-xs font-mono px-2 py-0.5 bg-blue-100 text-blue-800 rounded">JSON 文件 · {ts_json}</span>
+        <button onclick="toggleAuditSource()" class="text-xs px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded font-medium shadow-sm">
+          切换 ⇄
+        </button>
+      </div>
+    </div>
+  </div>
+  <div id="audit-panel-json-wrap" data-source="json" data-ts="{ts_json}">{panel_json_inner}</div>
+  <div id="audit-panel-db-wrap" data-source="duckdb" data-ts="{ts_db}" style="display:none">{panel_db_inner}</div>
+</div>
+<script>
+function toggleAuditSource() {{
+  const j = document.getElementById('audit-panel-json-wrap');
+  const d = document.getElementById('audit-panel-db-wrap');
+  const lbl = document.getElementById('audit-source-label');
+  if (j.style.display === 'none') {{
+    j.style.display = '';
+    d.style.display = 'none';
+    lbl.textContent = 'JSON 文件 · ' + (j.dataset.ts || '—');
+    lbl.className = 'text-xs font-mono px-2 py-0.5 bg-blue-100 text-blue-800 rounded';
+  }} else {{
+    j.style.display = 'none';
+    d.style.display = '';
+    lbl.textContent = 'DuckDB · ' + (d.dataset.ts || '—');
+    lbl.className = 'text-xs font-mono px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded';
+  }}
+}}
+</script>
+'''
+    html = html.replace("{AUDIT_PANEL}", audit_panel_combined)
 
     # 打分规则面板（动态读 factor_weights.json，缺失则 fallback 到「未实证」版本）
     calib_snap = load_calibration_snapshot()
     html = html.replace("{SCORING_RULES_PANEL}", scoring_rules_panel_html(calib_snap))
-    if audit_snap:
-        n_picks = audit_snap.get("picks_today_count", 0)
-        print(f"  反向审查快照已加载（{n_picks} 只 picks @ {audit_snap.get('ts', '?')[:16]}）")
+    if audit_snap_json:
+        n_picks = audit_snap_json.get("picks_today_count", 0)
+        print(f"  反向审查快照已加载 [JSON]（{n_picks} 只 picks @ {ts_json}）")
+    if audit_snap_db:
+        n_picks_db = audit_snap_db.get("picks_today_count", 0)
+        print(f"  反向审查快照已加载 [DuckDB]（{n_picks_db} 只 picks @ {ts_db}）")
 
     html = html.replace("{RECORDS_JSON}", json.dumps(records, ensure_ascii=False))
     html = html.replace("{PICKS_JSON}", json.dumps(picks, ensure_ascii=False))
