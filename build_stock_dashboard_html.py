@@ -416,7 +416,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <a href="#history" data-tab="history" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">📅 历史</a>
     <a href="#professional" data-tab="professional" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">📊 专业分析</a>
     <a href="#upgrade" data-tab="upgrade" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">💰 升级建议</a>
-    <span class="ml-auto text-xs text-slate-500 flex-shrink-0">{UPDATE_TIME}</span>
+    <span class="ml-auto flex items-center gap-2 flex-shrink-0">
+      <span class="text-[11px] text-slate-500" title="切换数据来源以验证 DuckDB 迁移">数据源</span>
+      <button id="ds-toggle-btn" onclick="swapDataSource(_DATA_SOURCE === 'file' ? 'db' : 'file')"
+        class="text-[11px] font-mono px-2 py-1 rounded border border-blue-300 bg-blue-50 text-blue-800 hover:bg-blue-100 transition whitespace-nowrap"
+        title="点击切换到 DuckDB / JSON 文件">JSON 文件 ⇄</button>
+      <span class="text-xs text-slate-500">{UPDATE_TIME}</span>
+    </span>
   </div>
 </nav>
 
@@ -1397,14 +1403,84 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 </footer>
 
 <script>
-const RECORDS = {RECORDS_JSON};
-const PICKS = {PICKS_JSON};
-const SIMULATION = {SIMULATION_JSON};
-const RISK_METRICS = {RISK_METRICS_JSON};
-const TRACK_13F = {TRACK_13F_JSON};
-const HISTORY_DATA = {HISTORY_DATA_JSON};
-const OPTIMIZATION = {OPTIMIZATION_JSON};
-const PLAN_A_V6 = {PLAN_A_V6_JSON};
+// ============ 双数据源（验证 DuckDB 迁移用）============
+// RECORDS / PICKS / SIMULATION 来自飞书 API，无 DB 镜像；其余每个数据有两份。
+const _DATA_FILE = {
+  RECORDS:       {RECORDS_JSON},
+  PICKS:         {PICKS_JSON},
+  SIMULATION:    {SIMULATION_JSON},
+  RISK_METRICS:  {RISK_METRICS_JSON_FILE},
+  TRACK_13F:     {TRACK_13F_JSON_FILE},
+  HISTORY_DATA:  {HISTORY_DATA_JSON_FILE},
+  OPTIMIZATION:  {OPTIMIZATION_JSON_FILE},
+  PLAN_A_V6:     {PLAN_A_V6_JSON_FILE},
+};
+const _DATA_DB = {
+  RECORDS:       {RECORDS_JSON},
+  PICKS:         {PICKS_JSON},
+  SIMULATION:    {SIMULATION_JSON},
+  RISK_METRICS:  {RISK_METRICS_JSON_DB},
+  TRACK_13F:     {TRACK_13F_JSON_DB},
+  HISTORY_DATA:  {HISTORY_DATA_JSON_DB},
+  OPTIMIZATION:  {OPTIMIZATION_JSON_DB},
+  PLAN_A_V6:     {PLAN_A_V6_JSON_DB},
+};
+let _DATA_SOURCE = 'file';
+let RECORDS       = _DATA_FILE.RECORDS;
+let PICKS         = _DATA_FILE.PICKS;
+let SIMULATION    = _DATA_FILE.SIMULATION;
+let RISK_METRICS  = _DATA_FILE.RISK_METRICS;
+let TRACK_13F     = _DATA_FILE.TRACK_13F;
+let HISTORY_DATA  = _DATA_FILE.HISTORY_DATA;
+let OPTIMIZATION  = _DATA_FILE.OPTIMIZATION;
+let PLAN_A_V6     = _DATA_FILE.PLAN_A_V6;
+
+function swapDataSource(src) {
+  if (src !== 'file' && src !== 'db') return;
+  _DATA_SOURCE = src;
+  const D = (src === 'db') ? _DATA_DB : _DATA_FILE;
+  RECORDS = D.RECORDS; PICKS = D.PICKS; SIMULATION = D.SIMULATION;
+  RISK_METRICS = D.RISK_METRICS; TRACK_13F = D.TRACK_13F;
+  HISTORY_DATA = D.HISTORY_DATA; OPTIMIZATION = D.OPTIMIZATION;
+  PLAN_A_V6 = D.PLAN_A_V6;
+
+  // 更新按钮样式
+  const btn = document.getElementById('ds-toggle-btn');
+  if (btn) {
+    if (src === 'db') {
+      btn.textContent = 'DuckDB ⇄';
+      btn.className = 'text-[11px] font-mono px-2 py-1 rounded border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 transition whitespace-nowrap';
+    } else {
+      btn.textContent = 'JSON 文件 ⇄';
+      btn.className = 'text-[11px] font-mono px-2 py-1 rounded border border-blue-300 bg-blue-50 text-blue-800 hover:bg-blue-100 transition whitespace-nowrap';
+    }
+  }
+
+  // 同步切换 audit 面板（已 prerender 两份）
+  const aJ = document.getElementById('audit-panel-json-wrap');
+  const aD = document.getElementById('audit-panel-db-wrap');
+  const aLbl = document.getElementById('audit-source-label');
+  if (aJ && aD) {
+    aJ.style.display = (src === 'file') ? '' : 'none';
+    aD.style.display = (src === 'db') ? '' : 'none';
+    if (aLbl) {
+      aLbl.textContent = (src === 'db' ? 'DuckDB · ' : 'JSON 文件 · ') + ((src === 'db' ? aD : aJ).dataset.ts || '—');
+      aLbl.className = 'text-xs font-mono px-2 py-0.5 rounded ' +
+        (src === 'db' ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800');
+    }
+  }
+
+  // 触发各 panel 重新渲染
+  try { if (typeof renderPortfolio === 'function') renderPortfolio(); } catch (e) {}
+  try { if (typeof renderRiskPane === 'function') renderRiskPane(); } catch (e) {}
+  try { if (typeof render13FPane === 'function') render13FPane(); } catch (e) {}
+  try { if (typeof renderOptPane === 'function') renderOptPane(); } catch (e) {}
+  try { if (typeof renderSimulation === 'function') renderSimulation(); } catch (e) {}
+  try { if (typeof loadPlanAv6 === 'function') loadPlanAv6(); } catch (e) {}
+  try { if (typeof initHistorySelect === 'function') initHistorySelect(); } catch (e) {}
+
+  console.log('[swapDataSource] →', src);
+}
 
 // ============ Tab 切换框架 ============
 const TAB_SECTIONS = {
@@ -3481,18 +3557,53 @@ def build():
             simulation = json.load(f)
         print(f"  共 {len(simulation.get('stock_stats', {}))} 条模拟数据")
 
-    # 读取专业分析数据
+    # 读取专业分析数据 —— 双源：本地 JSON 文件 + DuckDB pipeline 镜像
     def _load_json(name):
         p = os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
         if os.path.exists(p):
             with open(p, encoding="utf-8") as f:
                 return json.load(f)
         return {}
+
+    def _load_pipeline_db(name_no_ext):
+        """从 DuckDB snapshots 表读 category='pipeline' 最新快照。"""
+        db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_history.duckdb")
+        if not os.path.exists(db_path):
+            return {}
+        try:
+            import duckdb
+        except ImportError:
+            return {}
+        try:
+            con = duckdb.connect(db_path, read_only=True)
+            row = con.execute(
+                "SELECT payload FROM snapshots WHERE category='pipeline' AND name=? "
+                "ORDER BY taken_at DESC LIMIT 1",
+                [name_no_ext],
+            ).fetchone()
+            con.close()
+            if not row:
+                return {}
+            payload = row[0]
+            return json.loads(payload) if isinstance(payload, str) else payload
+        except Exception as e:
+            print(f"  ⚠️  从 DuckDB 读 {name_no_ext} 失败: {e}")
+            return {}
+
+    # 文件源
     risk_metrics = _load_json("risk_metrics.json")
     track_13f = _load_json("track_13f.json")
     optimization = _load_json("optimization_result.json")
     plan_a_v6 = _load_json("plan_a_v5.json")
     history_data = _load_json("history_data.json")
+
+    # DuckDB 源
+    risk_metrics_db = _load_pipeline_db("risk_metrics")
+    track_13f_db = _load_pipeline_db("track_13f")
+    optimization_db = _load_pipeline_db("optimization_result")
+    plan_a_v6_db = _load_pipeline_db("plan_a_v5")
+    history_data_db = _load_pipeline_db("history_data")
+
     if risk_metrics:
         print(f"  风险指标已加载 (Sharpe={risk_metrics.get('sharpe', 'N/A')})")
     if track_13f:
@@ -3503,6 +3614,9 @@ def build():
         print(f"  方案 A v6 已加载 ({len(plan_a_v6.get('plan_v5', []))} 只 · Sharpe {plan_a_v6.get('portfolio_metrics', {}).get('annual_sharpe', 'N/A')})")
     if history_data:
         print(f"  历史数据已加载 ({len(history_data.get('tickers', {}))} 只 × 2 年日K)")
+    print(f"  [DuckDB 镜像] risk={'✓' if risk_metrics_db else '✗'} 13f={'✓' if track_13f_db else '✗'} "
+          f"opt={'✓' if optimization_db else '✗'} plan={'✓' if plan_a_v6_db else '✗'} "
+          f"hist={'✓' if history_data_db else '✗'}")
 
     us_count = sum(1 for r in records if "美股" in r["market"])
     cn_count = len(records) - us_count
@@ -3570,20 +3684,10 @@ def build():
   <div id="audit-panel-db-wrap" data-source="duckdb" data-ts="{ts_db}" style="display:none">{panel_db_inner}</div>
 </div>
 <script>
+// 局部按钮联动到全局数据源切换（顶部 nav 也会同步）
 function toggleAuditSource() {{
-  const j = document.getElementById('audit-panel-json-wrap');
-  const d = document.getElementById('audit-panel-db-wrap');
-  const lbl = document.getElementById('audit-source-label');
-  if (j.style.display === 'none') {{
-    j.style.display = '';
-    d.style.display = 'none';
-    lbl.textContent = 'JSON 文件 · ' + (j.dataset.ts || '—');
-    lbl.className = 'text-xs font-mono px-2 py-0.5 bg-blue-100 text-blue-800 rounded';
-  }} else {{
-    j.style.display = 'none';
-    d.style.display = '';
-    lbl.textContent = 'DuckDB · ' + (d.dataset.ts || '—');
-    lbl.className = 'text-xs font-mono px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded';
+  if (typeof swapDataSource === 'function') {{
+    swapDataSource(_DATA_SOURCE === 'file' ? 'db' : 'file');
   }}
 }}
 </script>
@@ -3600,14 +3704,21 @@ function toggleAuditSource() {{
         n_picks_db = audit_snap_db.get("picks_today_count", 0)
         print(f"  反向审查快照已加载 [DuckDB]（{n_picks_db} 只 picks @ {ts_db}）")
 
+    # RECORDS / PICKS / SIMULATION 来自飞书 / 本地中间结果，无 DB 镜像
     html = html.replace("{RECORDS_JSON}", json.dumps(records, ensure_ascii=False))
     html = html.replace("{PICKS_JSON}", json.dumps(picks, ensure_ascii=False))
     html = html.replace("{SIMULATION_JSON}", json.dumps(simulation, ensure_ascii=False))
-    html = html.replace("{RISK_METRICS_JSON}", json.dumps(risk_metrics, ensure_ascii=False))
-    html = html.replace("{TRACK_13F_JSON}", json.dumps(track_13f, ensure_ascii=False))
-    html = html.replace("{OPTIMIZATION_JSON}", json.dumps(optimization, ensure_ascii=False))
-    html = html.replace("{PLAN_A_V6_JSON}", json.dumps(plan_a_v6, ensure_ascii=False))
-    html = html.replace("{HISTORY_DATA_JSON}", json.dumps(history_data, ensure_ascii=False))
+    # 双源：每个数据嵌入 _FILE 与 _DB 两份
+    html = html.replace("{RISK_METRICS_JSON_FILE}", json.dumps(risk_metrics, ensure_ascii=False))
+    html = html.replace("{RISK_METRICS_JSON_DB}", json.dumps(risk_metrics_db, ensure_ascii=False))
+    html = html.replace("{TRACK_13F_JSON_FILE}", json.dumps(track_13f, ensure_ascii=False))
+    html = html.replace("{TRACK_13F_JSON_DB}", json.dumps(track_13f_db, ensure_ascii=False))
+    html = html.replace("{OPTIMIZATION_JSON_FILE}", json.dumps(optimization, ensure_ascii=False))
+    html = html.replace("{OPTIMIZATION_JSON_DB}", json.dumps(optimization_db, ensure_ascii=False))
+    html = html.replace("{PLAN_A_V6_JSON_FILE}", json.dumps(plan_a_v6, ensure_ascii=False))
+    html = html.replace("{PLAN_A_V6_JSON_DB}", json.dumps(plan_a_v6_db, ensure_ascii=False))
+    html = html.replace("{HISTORY_DATA_JSON_FILE}", json.dumps(history_data, ensure_ascii=False))
+    html = html.replace("{HISTORY_DATA_JSON_DB}", json.dumps(history_data_db, ensure_ascii=False))
 
     with open(OUTPUT, "w", encoding="utf-8") as f:
         f.write(html)

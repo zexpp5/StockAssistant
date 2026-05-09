@@ -190,6 +190,46 @@ def db_load_all(dirpath: Path, name_prefix: str = "") -> list[dict | list]:
 
 
 # ────────────────────────────────────────────────────────
+# pipeline 数据（根目录数据 JSON 的 DuckDB 镜像）
+# 复用 snapshots 表，category='pipeline'，name=去掉 .json 后缀的文件名
+# ────────────────────────────────────────────────────────
+
+def pipeline_save(name: str, payload: Any) -> None:
+    """把 pipeline 数据写入 DuckDB（category='pipeline'）。"""
+    import duckdb
+
+    payload_json = json.dumps(payload, ensure_ascii=False, default=str)
+    con = duckdb.connect(str(config.DUCKDB_PATH))
+    try:
+        _ensure_snapshots_schema(con)
+        con.execute(
+            "INSERT INTO snapshots(category, name, taken_at, payload) VALUES (?, ?, ?, ?)",
+            ["pipeline", name, datetime.now(), payload_json],
+        )
+    finally:
+        con.close()
+
+
+def pipeline_load_latest(name: str) -> dict | list | None:
+    """读最新一条 pipeline 数据。"""
+    import duckdb
+
+    con = duckdb.connect(str(config.DUCKDB_PATH), read_only=True)
+    try:
+        row = con.execute(
+            "SELECT payload FROM snapshots "
+            "WHERE category='pipeline' AND name=? "
+            "ORDER BY taken_at DESC LIMIT 1",
+            [name],
+        ).fetchone()
+    finally:
+        con.close()
+    if not row:
+        return None
+    return json.loads(row[0]) if isinstance(row[0], str) else row[0]
+
+
+# ────────────────────────────────────────────────────────
 # enrichment 表（保留原有逻辑，与 snapshots 独立）
 # ────────────────────────────────────────────────────────
 
