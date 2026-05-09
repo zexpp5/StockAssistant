@@ -33,10 +33,9 @@ PEERS_TABLE_ID = os.environ.get("FEISHU_PEERS_TABLE_ID", "")
 FEISHU_BITABLE_API = "https://open.feishu.cn/open-apis/bitable/v1"
 
 # ─────────── 第三方 API ───────────
-# SEC 要求所有 API 请求带 User-Agent + 真实联系方式（合规要求）
 SEC_USER_AGENT = os.environ.get(
     "SEC_USER_AGENT",
-    "stock-research-toolkit your-email@example.com",
+    "stock-research-toolkit your-email@example.com",  # 部署时改成自己的联系方式
 )
 SEC_RATE_LIMIT_DELAY = 0.12  # SEC 限流 10 req/sec
 

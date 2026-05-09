@@ -1,6 +1,6 @@
 """飞书 Bitable 适配器：读取 watchlist、批量更新字段。
 
-凭证：从环境变量 FEISHU_APP_ID/SECRET 拿，回退到 feishu_auth.feishu_token()。
+凭证优先级：环境变量 FEISHU_APP_ID/SECRET → 回退到旧的 douyin_to_feishu.feishu_token()。
 所有方法都是无状态的纯 I/O，便于将来从 Web 服务调用。
 """
 from __future__ import annotations
@@ -22,9 +22,9 @@ logger = logging.getLogger(__name__)
 # ────────────────────────────────────────────────────────
 
 def _legacy_token() -> str:
-    """fallback：从仓库根目录的 feishu_auth.py 拿 tenant_access_token。"""
+    """fallback：从旧 douyin_to_feishu.py 拿 tenant_access_token。"""
     sys.path.insert(0, str(config.BASE_DIR))
-    from feishu_auth import feishu_token  # type: ignore
+    from douyin_to_feishu import feishu_token  # type: ignore
     return feishu_token()
 
 

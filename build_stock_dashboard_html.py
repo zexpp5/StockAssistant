@@ -3,7 +3,7 @@ AI 投资研究 Dashboard - 专业研究报告风格
 
 设计目标：让一个完全没看过这些数据的同伴，30 秒看懂全局，3 分钟看懂任何一只股票。
 
-输出：/Users/yanli/.hermes/scripts/stock_dashboard.html
+输出：stock_dashboard.html（脚本所在目录）
 """
 import sys
 import os
@@ -409,6 +409,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <a href="#overview" data-tab="overview" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">📌 概览</a>
     <a href="#portfolio" data-tab="portfolio" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">💼 我的持仓</a>
     <a href="#picks" data-tab="picks" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">⭐ 每日优选</a>
+    <a href="#audit-panel" data-tab="audit" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">🛡 反向审查</a>
     <a href="#valuation" data-tab="valuation" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">📈 估值视角</a>
     <a href="#themes" data-tab="themes" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">🗂 主题分组</a>
     <a href="#history" data-tab="history" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">📅 历史</a>
@@ -702,6 +703,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 </section>
 
+{AUDIT_PANEL}
+
 <!-- ============ 估值视角 ============ -->
 <section id="valuation" class="max-w-7xl mx-auto px-6 py-10 bg-gradient-to-br from-cyan-50 to-blue-50 rounded-2xl my-6">
   <div class="flex items-center gap-3 mb-2">
@@ -941,7 +944,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
     <h3 class="text-sm font-semibold text-slate-700 mb-2">📦 DuckDB 本地快照库（用于长期回溯）</h3>
     <p class="text-xs text-slate-600">每天 daily_refresh 自动写入。当前仅累积当天，运行几天后会有真实历史可看。</p>
-    <p class="text-xs text-slate-500 mt-1 font-mono">/Users/yanli/.hermes/scripts/stock_history.duckdb</p>
+    <p class="text-xs text-slate-500 mt-1 font-mono">stock_history.duckdb</p>
   </div>
 </section>
 
@@ -2370,6 +2373,167 @@ def theme_section_html(theme, all_records):
 </details>'''
 
 
+def load_audit_snapshot():
+    """读最新一次 picks 反向审查快照（stock_research/jobs/audit_picks 写出）。"""
+    audit_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "data", "snapshots", "audit")
+    if not os.path.isdir(audit_dir):
+        return None
+    files = sorted([f for f in os.listdir(audit_dir) if f.startswith("picks_audit_")],
+                   reverse=True)
+    if not files:
+        return None
+    try:
+        with open(os.path.join(audit_dir, files[0]), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def audit_panel_html(snap):
+    """渲染 picks 反向审查面板（Risk Parity + 估值 + 13F + Markowitz）。"""
+    if not snap:
+        return """
+<section id="audit-panel" class="max-w-7xl mx-auto px-6 py-10 bg-gradient-to-br from-slate-50 to-slate-100 rounded-2xl my-6">
+  <div class="flex items-center gap-3 mb-2">
+    <span class="text-3xl">🛡</span>
+    <h2 class="text-2xl font-bold text-slate-900">反向审查 · 自我校验</h2>
+  </div>
+  <p class="text-slate-600">尚无审查快照。先跑：<code class="bg-slate-200 px-2 py-0.5 rounded">python3 -m stock_research.jobs.audit_picks --fast</code></p>
+</section>
+"""
+
+    # 总评
+    issues = []
+    tc = snap.get("theme_concentration", {})
+    if tc.get("level") == "严重":
+        issues.append(f"主题严重失衡（{tc.get('top_theme')} 占 {tc.get('top_pct', 0):.0f}%）")
+    if snap.get("valuation_sanity", {}).get("warn_count", 0) > 0:
+        issues.append(f"{snap['valuation_sanity']['warn_count']} 只估值警告")
+    if snap.get("thirteen_f_consistency", {}).get("warn_count", 0) > 0:
+        issues.append(f"{snap['thirteen_f_consistency']['warn_count']} 只与 13F 矛盾")
+
+    overall_color = "emerald" if not issues else ("amber" if len(issues) <= 2 else "rose")
+    overall_text = "🟢 通过六项审查，无重大问题" if not issues else f"⚠️ 发现 {len(issues)} 项问题"
+
+    # 1. 主题集中度（条形图）
+    tc_html = ""
+    if tc.get("status") == "ok":
+        bars = []
+        for d in tc.get("distribution", []):
+            pct = d.get("pct", 0)
+            bars.append(f'''
+                <div class="flex items-center gap-2 text-xs mb-1">
+                  <span class="w-32 truncate">{d.get("theme", "")}</span>
+                  <span class="w-10 text-right text-slate-500">{d.get("n", 0)} 只</span>
+                  <div class="flex-1 bg-slate-100 rounded h-3 relative overflow-hidden">
+                    <div class="absolute left-0 top-0 h-full bg-violet-400" style="width:{pct}%"></div>
+                  </div>
+                  <span class="w-12 text-right font-mono">{pct:.1f}%</span>
+                </div>''')
+        tc_html = f'''
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+          <h3 class="text-sm font-semibold text-slate-700 mb-1">🗂 主题集中度（Risk Parity）</h3>
+          <p class="text-xs mb-2">{tc.get("verdict", "")}</p>
+          <div>{"".join(bars)}</div>
+        </div>'''
+    else:
+        tc_html = f'''
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+          <h3 class="text-sm font-semibold text-slate-700 mb-1">🗂 主题集中度</h3>
+          <p class="text-xs text-slate-500">跳过：{tc.get("reason", "")}</p>
+        </div>'''
+
+    # 2. 估值警告
+    vs = snap.get("valuation_sanity", {})
+    if vs.get("warn_count", 0) == 0:
+        vs_html = '''
+        <div class="bg-white rounded-xl shadow-sm border border-emerald-200 p-4">
+          <h3 class="text-sm font-semibold text-emerald-700 mb-1">💰 估值合理性</h3>
+          <p class="text-xs text-emerald-600">🟢 当日 ⭐⭐⭐ 推荐估值均在合理范围</p>
+        </div>'''
+    else:
+        items = []
+        for w in vs.get("warnings", []):
+            flags = " / ".join(w.get("flags", []))
+            items.append(f'<li class="text-xs"><span class="font-semibold">{w.get("name")}</span> ({w.get("code")}): <span class="text-rose-600">{flags}</span></li>')
+        vs_html = f'''
+        <div class="bg-white rounded-xl shadow-sm border border-amber-200 p-4">
+          <h3 class="text-sm font-semibold text-amber-700 mb-1">💰 估值合理性</h3>
+          <p class="text-xs mb-2">⚠️ {vs["warn_count"]} 只 ⭐⭐⭐ 推荐有估值警告</p>
+          <ul class="space-y-1 list-disc list-inside">{"".join(items)}</ul>
+        </div>'''
+
+    # 3. 13F 一致性
+    tf = snap.get("thirteen_f_consistency", {})
+    if tf.get("status") == "ok" and tf.get("items"):
+        items = []
+        for it in tf["items"]:
+            items.append(f'<li class="text-xs">{it["verdict"]} <span class="font-semibold">{it["name"]}</span> ({it["code"]})</li>')
+        tf_html = f'''
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+          <h3 class="text-sm font-semibold text-slate-700 mb-1">📋 13F 一致性</h3>
+          <p class="text-xs mb-2">{tf.get("total", 0)} 只 ⭐⭐⭐ 推荐有 13F 信号，矛盾 {tf.get("warn_count", 0)} 只</p>
+          <ul class="space-y-1 list-disc list-inside">{"".join(items)}</ul>
+        </div>'''
+    else:
+        tf_html = '''
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+          <h3 class="text-sm font-semibold text-slate-700 mb-1">📋 13F 一致性</h3>
+          <p class="text-xs text-slate-500">跳过：当日推荐无 13F 信号匹配</p>
+        </div>'''
+
+    # 4. 相关性矩阵
+    cr = snap.get("correlation", {})
+    if cr.get("status") == "ok":
+        pairs = cr.get("high_corr_pairs", [])
+        items = [f'<li class="text-xs">{p.get("name_a")} ↔ {p.get("name_b")}: <span class="font-mono">r={p.get("r"):.2f}</span></li>' for p in pairs[:8]]
+        body = "".join(items) if items else f'<p class="text-xs text-emerald-600">🟢 无相关 > {cr.get("threshold", 0.85)} 的"伪分散"对</p>'
+        cr_html = f'''
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+          <h3 class="text-sm font-semibold text-slate-700 mb-1">📐 相关性矩阵（Markowitz）</h3>
+          <p class="text-xs mb-2">分析 {cr.get("n_tickers", 0)} 只 ⭐⭐⭐ · 阈值 r &gt; {cr.get("threshold", 0.85)}</p>
+          {f'<ul class="space-y-1 list-disc list-inside">{body}</ul>' if items else body}
+        </div>'''
+    else:
+        cr_html = f'''
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+          <h3 class="text-sm font-semibold text-slate-700 mb-1">📐 相关性矩阵</h3>
+          <p class="text-xs text-slate-500">跳过：{cr.get("reason", "")}</p>
+        </div>'''
+
+    return f'''
+<!-- ============ 反向审查 · 自我校验 ============ -->
+<section id="audit-panel" class="max-w-7xl mx-auto px-6 py-10 bg-gradient-to-br from-violet-50 to-fuchsia-50 rounded-2xl my-6">
+  <div class="flex items-center justify-between mb-4">
+    <div>
+      <div class="flex items-center gap-3 mb-1">
+        <span class="text-3xl">🛡</span>
+        <h2 class="text-2xl font-bold text-slate-900">反向审查 · 自我校验</h2>
+      </div>
+      <p class="text-slate-700">用经典金融理论（Risk Parity / Markowitz / 13F / 估值）每日审查 ⭐⭐⭐ 推荐</p>
+    </div>
+    <div class="text-right">
+      <div class="inline-block px-4 py-2 rounded-lg bg-{overall_color}-100 text-{overall_color}-800 font-semibold text-sm">{overall_text}</div>
+      <p class="text-xs text-slate-500 mt-1">快照：{snap.get("ts", "?")} · {snap.get("picks_today_count", 0)} 只 picks</p>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+    {tc_html}
+    {vs_html}
+    {tf_html}
+    {cr_html}
+  </div>
+
+  <p class="text-xs text-slate-500 mt-4">
+    数据来源：<code>data/snapshots/audit/picks_audit_*.json</code> · 重新生成：
+    <code class="bg-slate-200 px-2 py-0.5 rounded">python3 -m stock_research.jobs.audit_picks</code>
+  </p>
+</section>
+'''
+
+
 def build():
     print("[1/3] 拉取飞书数据...")
     token = feishu_token()
@@ -2434,6 +2598,13 @@ def build():
 
     theme_sections = "\n".join(theme_section_html(t, records) for t in THEMES)
     html = html.replace("{THEME_SECTIONS}", theme_sections)
+
+    # 反向审查面板（picks_audit 快照）
+    audit_snap = load_audit_snapshot()
+    html = html.replace("{AUDIT_PANEL}", audit_panel_html(audit_snap))
+    if audit_snap:
+        n_picks = audit_snap.get("picks_today_count", 0)
+        print(f"  反向审查快照已加载（{n_picks} 只 picks @ {audit_snap.get('ts', '?')[:16]}）")
 
     html = html.replace("{RECORDS_JSON}", json.dumps(records, ensure_ascii=False))
     html = html.replace("{PICKS_JSON}", json.dumps(picks, ensure_ascii=False))

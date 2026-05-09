@@ -6,7 +6,7 @@
 3 个审查器（与 reverse_validate v6 时间维度回测互补）：
   1. theme_concentration  — Risk Parity 视角，单一主题占 ⭐⭐⭐ 推荐比例
   2. valuation_sanity     — PEG > 3 / PE > 100 / 1Y > 200% 警告
-  3. correlation_matrix   — Markowitz 视角，⭐⭐⭐ 推荐两两相关 > 0.85 的"伪分散"对
+  3. correlation_matrix   — Markowitz 视角，⭐⭐⭐ 推荐两两相关 > 0.75 的"伪分散"对
 """
 from __future__ import annotations
 from collections import Counter
@@ -120,7 +120,7 @@ def _ticker_for(code: str) -> str:
 
 def correlation_matrix(picks_today: list[dict[str, Any]],
                        lookback_days: int = 180,
-                       threshold: float = 0.85) -> dict[str, Any]:
+                       threshold: float = 0.75) -> dict[str, Any]:
     """Markowitz 相关性矩阵：⭐⭐⭐ 推荐两两相关 > threshold 的"伪分散"对。
 
     需要 yfinance 拉历史价；失败则 skip。

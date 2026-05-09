@@ -100,26 +100,6 @@ def create_app():
         background.add_task(job.run_audit, only_code=code)
         return {"status": "queued", "job": "daily_audit", "code": code}
 
-    # ────────── picks 横截面审查（Risk Parity + 估值 + Markowitz）──────────
-    @app.post("/api/jobs/audit-picks")
-    def trigger_audit_picks(background: BackgroundTasks, fast: bool = True):
-        """触发当日 picks 横截面审查（主题集中度 + 估值理性 + 相关性矩阵）。
-
-        参数 fast=True 跳过 yfinance 相关性矩阵（默认开启，避免慢）。
-        """
-        from ..jobs import audit_picks as job
-        background.add_task(job.run, skip_correlation=fast)
-        return {"status": "queued", "job": "audit_picks", "fast": fast}
-
-    @app.get("/api/audit-picks/latest")
-    def get_latest_picks_audit() -> dict[str, Any]:
-        """读最新一次 picks 审查快照（同步，秒级返回）。"""
-        from ..adapters import store
-        snap = store.load_latest_json(config.AUDIT_DIR, "picks_audit")
-        if not snap:
-            raise HTTPException(404, "no picks audit snapshot found; run /api/jobs/audit-picks first")
-        return snap
-
     return app
 
 
