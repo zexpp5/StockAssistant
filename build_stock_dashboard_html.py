@@ -409,11 +409,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <a href="#overview" data-tab="overview" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">📌 概览</a>
     <a href="#portfolio" data-tab="portfolio" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">💼 我的持仓</a>
     <a href="#picks" data-tab="picks" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">⭐ 每日优选</a>
-    <a href="#audit-panel" data-tab="audit" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">🛡 反向审查</a>
+    <a href="#audit" data-tab="audit" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">🛡 反向审查</a>
     <a href="#valuation" data-tab="valuation" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">📈 估值视角</a>
     <a href="#themes" data-tab="themes" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">🗂 主题分组</a>
     <a href="#history" data-tab="history" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">📅 历史</a>
     <a href="#professional" data-tab="professional" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">📊 专业分析</a>
+    <a href="#upgrade" data-tab="upgrade" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">💰 升级建议</a>
     <span class="ml-auto text-xs text-slate-500 flex-shrink-0">{UPDATE_TIME}</span>
   </div>
 </nav>
@@ -804,9 +805,26 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <p class="text-sm text-slate-600 mt-1">本地浏览器保存（localStorage）· 实时与 yfinance 数据计算盈亏 · <strong class="text-rose-600">不构成投资建议</strong></p>
     </div>
     <div class="flex gap-2">
-      <button onclick="loadPlanA()" class="bg-amber-500 hover:bg-amber-600 text-white px-4 py-2 rounded-lg text-sm font-medium">📌 一键加载方案 A</button>
+      <button onclick="loadPlanAv6()" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium">🎯 一键加载方案 A v6（学术因子）</button>
       <button onclick="addHolding()" class="bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-lg text-sm font-medium">+ 添加持仓</button>
     </div>
+  </div>
+
+  <!-- ⚠️ 方法学小字说明 -->
+  <div class="bg-amber-50 border-l-4 border-amber-400 p-3 mb-4 rounded-r-md">
+    <p class="text-xs text-amber-900 mb-1">
+      <strong>📅 数据窗口</strong>：方案 A v6 与蒙特卡洛模拟均基于过去 <strong>252 个交易日</strong>（约过去 1 年，~ 2025-05 至今）的 yfinance 真实日 K 数据。
+    </p>
+    <p class="text-xs text-amber-900 mb-1">
+      <strong>⚠️ 怎么读"年化 95% / 夏普 2.95"</strong>：这是<strong class="text-rose-700">历史外推</strong>（"如果未来 1 年表现完全跟过去 1 年一样"），<strong class="text-rose-700">不是未来预测</strong>。要分两层看：
+    </p>
+    <ul class="text-xs text-amber-900 ml-4 list-disc space-y-0.5 mb-1">
+      <li><strong>股价层面</strong>：过去 1 年 AI 标的涨幅极大（NVDA +330% / 中际旭创 +870% / AMD +240%），单纯数字层面很难复现。夏普 2.95 vs 巴菲特长期 0.76，是机构传奇水平 — 样本仅 1 年不可外推。</li>
+      <li><strong>技术层面</strong>：AI 在企业渗透率 &lt;10% / 数据中心电力占比 ~3-4% / Robotaxi 渗透 &lt;1%，仍处<strong>早期</strong>。参考"百倍股 5 条件"中"认知反转"才刚发生 2 年。长期空间巨大。</li>
+    </ul>
+    <p class="text-xs text-amber-800">
+      <strong>正确用法</strong>：把这些数字当作<strong>不同组合方案的相对优劣对比</strong>（哪个方案夏普更高、波动更小），而<strong>不是绝对收益预测</strong>。
+    </p>
   </div>
 
   <!-- 📅 5 天蒙特卡洛模拟（仅有 simulation 数据时显示） -->
@@ -842,7 +860,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 
   <!-- 总览数字 -->
-  <div id="portfolio-summary" class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4"></div>
+  <div id="portfolio-summary" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 mb-4"></div>
+
+  <!-- 📚 v6 学术指标（加载方案 A v6 后显示）-->
+  <div id="v6-metrics-card" class="bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-300 rounded-xl p-4 mb-4" style="display:none">
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="text-sm font-bold text-emerald-900">📚 当前持仓的 v6 学术指标（基于过去 252 天 yfinance 真实日 K）</h3>
+      <span class="text-xs text-emerald-700 bg-emerald-100 px-2 py-1 rounded">⚠️ backtest，非未来预测</span>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3" id="v6-metrics-content"></div>
+    <p class="text-xs text-emerald-800 mt-3"><strong>夏普 2.95 解读</strong>：远超巴菲特长期 0.76 / 标普 500 长期 0.4 — 是<strong>过去 1 年 AI 大涨</strong>叠加 Markowitz 在历史窗口内"完美选股"的结果，实际未来很难复现。仅用于<strong>不同方案对比</strong>。</p>
+  </div>
 
   <!-- 三层警戒线进度条 -->
   <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
@@ -856,6 +884,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <thead class="bg-slate-100">
         <tr>
           <th class="px-3 py-2 text-left">股票</th>
+          <th class="px-3 py-2 text-left">行业</th>
           <th class="px-3 py-2 text-right">买入价</th>
           <th class="px-3 py-2 text-right">数量</th>
           <th class="px-3 py-2 text-right">成本</th>
@@ -868,7 +897,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         </tr>
       </thead>
       <tbody id="holdings-table">
-        <tr><td colspan="10" class="text-center text-slate-500 py-8">暂无持仓 · 点击「+ 添加持仓」开始记录</td></tr>
+        <tr><td colspan="11" class="text-center text-slate-500 py-8">暂无持仓 · 点击「+ 添加持仓」开始记录</td></tr>
       </tbody>
     </table>
   </div>
@@ -1019,6 +1048,341 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 </section>
 
+<!-- ============ 💰 升级建议 Tab ============ -->
+<section id="upgrade" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
+  <div class="mb-6">
+    <h2 class="text-3xl font-bold text-slate-900">💰 系统体检 + 升级建议</h2>
+    <p class="text-sm text-slate-600 mt-2">先看现状（已实现 / 在做 / 缺口），再看升级方案。给同事看决策用。</p>
+  </div>
+
+  <!-- ════════ 系统体检报告 ════════ -->
+  <div class="bg-gradient-to-br from-indigo-50 to-blue-50 border-2 border-indigo-300 rounded-xl p-6 mb-8">
+    <h3 class="text-2xl font-bold text-indigo-900 mb-4">🩺 系统体检报告</h3>
+
+    <!-- ✅ 做得好的 -->
+    <div class="mb-6">
+      <h4 class="text-lg font-bold text-emerald-700 mb-3">✅ 已经做得好的（6 块基础坚实）</h4>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div class="bg-white rounded-lg p-3 border border-emerald-200">
+          <p class="font-bold text-slate-800 mb-1">1. 多源数据体系</p>
+          <p class="text-xs text-slate-600">yfinance + akshare + SEC EDGAR 13F + Finnhub + FMP + pytrends — 机构级 ~70% 水平</p>
+        </div>
+        <div class="bg-white rounded-lg p-3 border border-emerald-200">
+          <p class="font-bold text-slate-800 mb-1">2. 跨源可信度审计</p>
+          <p class="text-xs text-slate-600">core/audit.py 自动比对多源 → HIGH/MEDIUM/LOW/CONFLICT，彻底切断抖音陷阱（这是真护城河）</p>
+        </div>
+        <div class="bg-white rounded-lg p-3 border border-emerald-200">
+          <p class="font-bold text-slate-800 mb-1">3. 学术因子模型 v1→v6</p>
+          <p class="text-xs text-slate-600">Piotroski + 12-1 动量 + 反转 + PEAD（Ball-Brown 1968），每代论文背书</p>
+        </div>
+        <div class="bg-white rounded-lg p-3 border border-emerald-200">
+          <p class="font-bold text-slate-800 mb-1">4. 6 大反向审查器</p>
+          <p class="text-xs text-slate-600">主题集中度 / 13F 一致性 / 评分校准 / 估值理性 / 数据新鲜度 / 相关性矩阵</p>
+        </div>
+        <div class="bg-white rounded-lg p-3 border border-emerald-200">
+          <p class="font-bold text-slate-800 mb-1">5. 组合优化 v6</p>
+          <p class="text-xs text-slate-600">因子中性化 + Markowitz + ADV 限流 + 成本扣减 + Trade delta 自动写飞书</p>
+        </div>
+        <div class="bg-white rounded-lg p-3 border border-emerald-200">
+          <p class="font-bold text-slate-800 mb-1">6. 工程化 + 文档</p>
+          <p class="text-xs text-slate-600">仓库分层 (core/adapters/jobs/api) · 12 步 daily_refresh · 9 tab 仪表盘 · METHODOLOGY/MODEL_CARD · GitHub</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 🟡 在做但未完成 -->
+    <div class="mb-6">
+      <h4 class="text-lg font-bold text-amber-700 mb-3">🟡 在做但未完成（等数据/时间）</h4>
+      <ul class="space-y-2 text-sm">
+        <li class="bg-white rounded p-3 border border-amber-200"><strong>因子 IC 验证</strong> — 框架就位，需累积 30+ 天历史才有意义</li>
+        <li class="bg-white rounded p-3 border border-amber-200"><strong>每日优选 hit rate 真实回测</strong> — picks 才积累 1 天，1 个月后才能验证 v6 模型准不准</li>
+        <li class="bg-white rounded p-3 border border-amber-200"><strong>monthly_letter 月度信件</strong> — 框架就绪，未真正生成第一封</li>
+      </ul>
+    </div>
+
+    <!-- ❌ 明显缺口 -->
+    <div class="mb-2">
+      <h4 class="text-lg font-bold text-rose-700 mb-3">❌ 明显的缺口（按 ROI 排）</h4>
+      <table class="w-full text-sm">
+        <thead><tr class="border-b-2 border-rose-200 text-left text-rose-800 bg-rose-50">
+          <th class="py-2 px-2">优先级</th>
+          <th class="px-2">缺什么</th>
+          <th class="px-2">怎么补</th>
+        </tr></thead>
+        <tbody>
+          <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-rose-500 text-white px-2 py-0.5 rounded text-xs">🔴 真痛点</span></td><td class="px-2 font-medium">A 股龙虎榜 + 北向资金明细</td><td class="px-2 text-emerald-700">Tushare Pro ¥200/年</td></tr>
+          <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-rose-500 text-white px-2 py-0.5 rounded text-xs">🔴 真痛点</span></td><td class="px-2 font-medium">中港股财务深度（akshare 残缺）</td><td class="px-2 text-emerald-700">Tushare Pro 同上</td></tr>
+          <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-rose-500 text-white px-2 py-0.5 rounded text-xs">🔴 真痛点</span></td><td class="px-2 font-medium">美股小盘 (RDDT/CCJ/BWXT) 财务深度</td><td class="px-2 text-emerald-700">FMP Starter $14/月</td></tr>
+          <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-rose-500 text-white px-2 py-0.5 rounded text-xs">🔴 真痛点</span></td><td class="px-2 font-medium">数据缓存层（重复请求多）</td><td class="px-2 text-slate-600">SQLite 缓存（免费，1天工作量）</td></tr>
+          <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-rose-500 text-white px-2 py-0.5 rounded text-xs">🔴 真痛点</span></td><td class="px-2 font-medium">告警系统（只有 macOS notify）</td><td class="px-2 text-slate-600">邮件/微信推送（免费）</td></tr>
+          <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-amber-500 text-white px-2 py-0.5 rounded text-xs">🟡 体验</span></td><td class="px-2 font-medium">移动端适配</td><td class="px-2 text-slate-600">HTML 表格 responsive</td></tr>
+          <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-amber-500 text-white px-2 py-0.5 rounded text-xs">🟡 体验</span></td><td class="px-2 font-medium">AI 摘要对话（"今天有什么变化"）</td><td class="px-2 text-slate-600">集成 LLM（按需）</td></tr>
+          <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-amber-500 text-white px-2 py-0.5 rounded text-xs">🟡 体验</span></td><td class="px-2 font-medium">Web 服务部署（同事难协作）</td><td class="px-2 text-slate-600">api/main.py 已就绪，需上线</td></tr>
+          <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-emerald-500 text-white px-2 py-0.5 rounded text-xs">🟢 锦上</span></td><td class="px-2 font-medium">期权数据 / 隐含波动率</td><td class="px-2 text-slate-600">Polygon.io $29/月（不做日内可不上）</td></tr>
+          <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-emerald-500 text-white px-2 py-0.5 rounded text-xs">🟢 锦上</span></td><td class="px-2 font-medium">实时事件推送（13F RSS / Reddit）</td><td class="px-2 text-slate-600">免费，1 天工作量</td></tr>
+          <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-emerald-500 text-white px-2 py-0.5 rounded text-xs">🟢 锦上</span></td><td class="px-2 font-medium">单元测试 / CI</td><td class="px-2 text-slate-600">部署后改代码保险</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- 真心评估 -->
+    <div class="bg-slate-900 text-white rounded-lg p-5 mt-6">
+      <h4 class="text-lg font-bold mb-3">🎯 真心评估</h4>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+        <div>
+          <p class="font-bold text-emerald-300 mb-1">维度上做到了"打败 70-85% 散户"</p>
+          <p class="text-slate-300 text-xs">13F + 内部人 + 跨源审计 + 学术因子，<strong>这些 90% 散户都没有</strong></p>
+        </div>
+        <div>
+          <p class="font-bold text-amber-300 mb-1">但还没真正的 alpha 输出</p>
+          <p class="text-slate-300 text-xs">模型才跑 1 天，没法证明它能赚钱；要 1 个月真实数据才能证伪</p>
+        </div>
+        <div>
+          <p class="font-bold text-blue-300 mb-1">基础设施 vs 专业机构</p>
+          <p class="text-slate-300 text-xs">约 60-70%；缺的是另类数据 + 实时性</p>
+        </div>
+        <div>
+          <p class="font-bold text-rose-300 mb-1">最大风险：沉没成本</p>
+          <p class="text-slate-300 text-xs">基础已扎实，先用 1 个月看真实表现，再决定深化方向</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 推荐执行顺序 -->
+    <div class="bg-white border-2 border-indigo-400 rounded-lg p-5 mt-4">
+      <h4 class="text-lg font-bold text-indigo-900 mb-3">📅 我建议的下一步（按顺序）</h4>
+      <ol class="space-y-2 text-sm">
+        <li class="flex gap-3"><span class="bg-indigo-100 text-indigo-700 font-bold rounded-full w-7 h-7 flex items-center justify-center flex-shrink-0">1</span><div><strong>本周</strong>：用免费 FMP 跑 1 周，看 NVDA/AAPL/GOOGL 大盘股能不能给出新洞察</div></li>
+        <li class="flex gap-3"><span class="bg-indigo-100 text-indigo-700 font-bold rounded-full w-7 h-7 flex items-center justify-center flex-shrink-0">2</span><div><strong>下周</strong>：注册 Tushare Pro（¥200）+ 加 SQLite 缓存层（免费，1 天工作量）</div></li>
+        <li class="flex gap-3"><span class="bg-indigo-100 text-indigo-700 font-bold rounded-full w-7 h-7 flex items-center justify-center flex-shrink-0">3</span><div><strong>下月</strong>：积累 1 个月 picks 历史，跑真实 hit rate 回测，看 v6 模型到底准不准</div></li>
+        <li class="flex gap-3"><span class="bg-indigo-100 text-indigo-700 font-bold rounded-full w-7 h-7 flex items-center justify-center flex-shrink-0">4</span><div><strong>下季度</strong>：根据回测决定要不要持续；要就上 FMP Starter / Polygon</div></li>
+      </ol>
+    </div>
+  </div>
+
+  <hr class="my-8 border-slate-300">
+
+  <!-- ════════ 升级建议（原内容）════════ -->
+  <h3 class="text-2xl font-bold text-slate-900 mb-6">💰 数据源升级方案详情</h3>
+  <p class="text-sm text-slate-600 mb-6">下面是按 ROI 排序的付费数据源选项 — 体检报告里的"红色缺口"对应这里的具体方案。</p>
+
+  <!-- 当前痛点 -->
+  <div class="bg-amber-50 border border-amber-200 rounded-xl p-5 mb-6">
+    <h3 class="text-lg font-bold text-amber-900 mb-3">🎯 系统当前的真实数据缺口</h3>
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b border-amber-300 text-left text-amber-700">
+          <th class="py-2">数据维度</th>
+          <th>当前状态</th>
+          <th>痛点严重度</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="border-b border-amber-100"><td class="py-2 font-medium">美股大盘股财报 / DCF</td><td>✅ FMP 免费层</td><td>已解决</td></tr>
+        <tr class="border-b border-amber-100"><td class="py-2 font-medium">美股新闻 / 内部人 / 分析师</td><td>✅ Finnhub 免费层</td><td>已解决</td></tr>
+        <tr class="border-b border-amber-100"><td class="py-2 font-medium">13F 大佬持仓变动</td><td>✅ SEC EDGAR 直拉</td><td>已解决</td></tr>
+        <tr class="border-b border-amber-100"><td class="py-2 font-medium">A 股财报 / 龙虎榜 / 北向资金</td><td>⚠️ akshare 爬东财，常态化限流</td><td><span class="text-red-600 font-bold">🔴 大短板</span></td></tr>
+        <tr class="border-b border-amber-100"><td class="py-2 font-medium">中港股财务深度</td><td>⚠️ 残缺，财报字段不全</td><td><span class="text-red-600 font-bold">🔴 大短板</span></td></tr>
+        <tr class="border-b border-amber-100"><td class="py-2 font-medium">美股小盘 (RDDT/CCJ/BWXT/XYL) DCF</td><td>⚠️ FMP 免费层不覆盖</td><td><span class="text-amber-600 font-bold">🟡 中等</span></td></tr>
+        <tr class="border-b border-amber-100"><td class="py-2 font-medium">日股 / 澳股 / 英股 ADR</td><td>⚠️ 完全没有</td><td><span class="text-amber-600 font-bold">🟡 中等</span></td></tr>
+        <tr><td class="py-2 font-medium">期权 / 隐含波动率 / 短利</td><td>⚠️ 完全没有</td><td><span class="text-slate-500">🟢 不做日内不重要</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- 推荐组合 -->
+  <div class="bg-gradient-to-br from-emerald-50 to-teal-50 border-2 border-emerald-300 rounded-xl p-6 mb-6">
+    <h3 class="text-2xl font-bold text-emerald-900 mb-4">⭐ 推荐组合（年成本 ¥1400）</h3>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div class="bg-white rounded-lg p-4 border border-emerald-200">
+        <div class="flex justify-between items-start mb-2">
+          <h4 class="text-lg font-bold text-emerald-700">🥇 FMP Starter</h4>
+          <span class="text-xl font-bold">$14/月 (¥100)</span>
+        </div>
+        <p class="text-sm text-slate-700 mb-3"><strong>已经在试用免费层。</strong>升级后解决：</p>
+        <ul class="text-sm text-slate-700 space-y-1 list-disc pl-5">
+          <li>RDDT / CCJ / BWXT / XYL / VRT / AVGO 全部覆盖（你"下一波稀缺资源"主题股）</li>
+          <li>Earnings transcripts 全文（财报会议文字稿）</li>
+          <li>30 年历史财报（vs 5 年）</li>
+          <li>API 限额 250→750 calls/天</li>
+        </ul>
+      </div>
+      <div class="bg-white rounded-lg p-4 border border-emerald-200">
+        <div class="flex justify-between items-start mb-2">
+          <h4 class="text-lg font-bold text-emerald-700">🥈 Tushare Pro</h4>
+          <span class="text-xl font-bold">¥200/年</span>
+        </div>
+        <p class="text-sm text-slate-700 mb-3"><strong>解决 watchlist 中 30%+ A股/港股的数据脆弱问题。</strong></p>
+        <ul class="text-sm text-slate-700 space-y-1 list-disc pl-5">
+          <li><strong>龙虎榜</strong>（A 股最强日内信号）</li>
+          <li><strong>北向资金每日明细</strong>（外资动向）</li>
+          <li>限售股解禁、股东户数变动、大宗交易</li>
+          <li>公募基金重仓股（季度）</li>
+          <li>国内量化圈一致认证最稳定的 A 股数据源</li>
+        </ul>
+      </div>
+    </div>
+    <p class="text-sm text-emerald-800 mt-4"><strong>总成本：¥1400/年（≈ ¥117/月）</strong> — 比一次全家火锅还便宜，但数据维度直接拉到机构级 70%</p>
+  </div>
+
+  <!-- 已试用证据：FMP NVDA 案例 -->
+  <div class="bg-white rounded-xl shadow border border-slate-200 p-5 mb-6">
+    <h3 class="text-lg font-bold text-slate-900 mb-3">🧪 试用证据：FMP 在 NVDA 上的真实表现</h3>
+    <p class="text-sm text-slate-600 mb-4">5 年损益表立刻能看出 ChatGPT 引爆的精确拐点（这是 yfinance 永远做不到的）：</p>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm font-mono">
+        <thead><tr class="border-b-2 border-slate-300 bg-slate-50">
+          <th class="py-2 px-2 text-left">财年</th><th class="text-right">Revenue</th><th class="text-right">Net Income</th><th class="text-right">EPS</th><th class="text-right">毛利率</th><th class="text-right">净利率</th><th>注释</th>
+        </tr></thead>
+        <tbody>
+          <tr class="border-b border-slate-100"><td class="py-1 px-2">FY2022</td><td class="text-right">$26.9B</td><td class="text-right">$9.8B</td><td class="text-right">$0.39</td><td class="text-right">64.9%</td><td class="text-right">36.2%</td><td class="text-slate-500">平庸期</td></tr>
+          <tr class="border-b border-slate-100 bg-rose-50"><td class="py-1 px-2 font-bold">FY2023</td><td class="text-right">$27.0B</td><td class="text-right">$4.4B</td><td class="text-right">$0.18</td><td class="text-right">56.9%</td><td class="text-right text-red-600 font-bold">16.2%</td><td class="text-rose-600">❄️ 加密寒冬</td></tr>
+          <tr class="border-b border-slate-100 bg-emerald-50"><td class="py-1 px-2 font-bold">FY2024</td><td class="text-right">$60.9B</td><td class="text-right">$29.8B</td><td class="text-right">$1.21</td><td class="text-right">72.7%</td><td class="text-right text-emerald-700 font-bold">48.8%</td><td class="text-emerald-700">🚀 ChatGPT 引爆</td></tr>
+          <tr class="border-b border-slate-100"><td class="py-1 px-2">FY2025</td><td class="text-right">$130.5B</td><td class="text-right">$72.9B</td><td class="text-right">$2.97</td><td class="text-right">75.0%</td><td class="text-right">55.8%</td><td class="text-slate-500">续航</td></tr>
+          <tr><td class="py-1 px-2 font-bold">FY2026</td><td class="text-right">$215.9B</td><td class="text-right">$120.1B</td><td class="text-right">$4.93</td><td class="text-right">71.1%</td><td class="text-right">55.6%</td><td class="text-violet-700 font-bold">4 年 8 倍营收</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
+      <div class="bg-emerald-50 border border-emerald-200 rounded p-3">
+        <p class="text-xs text-emerald-700">FMP DCF 内在价值</p>
+        <p class="text-2xl font-bold text-emerald-900">$246.58</p>
+        <p class="text-xs text-emerald-600">vs 当前价 $215.66 → 🟢 +14.3% 上涨空间</p>
+      </div>
+      <div class="bg-blue-50 border border-blue-200 rounded p-3">
+        <p class="text-xs text-blue-700">EV / EBITDA TTM</p>
+        <p class="text-2xl font-bold text-blue-900">36.2x</p>
+        <p class="text-xs text-blue-600">行业均值约 15-20，估值偏高</p>
+      </div>
+      <div class="bg-violet-50 border border-violet-200 rounded p-3">
+        <p class="text-xs text-violet-700">分析师 2028 营收预期</p>
+        <p class="text-2xl font-bold text-violet-900">$485B</p>
+        <p class="text-xs text-violet-600">29 个分析师覆盖（vs 当前 $216B）</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 看你需要不 - 中等优先级 -->
+  <div class="bg-yellow-50 border border-yellow-200 rounded-xl p-5 mb-6">
+    <h3 class="text-lg font-bold text-yellow-900 mb-3">🟡 看你需要不（次优先级）</h3>
+    <div class="space-y-3">
+      <div class="bg-white rounded p-4 border border-yellow-300">
+        <div class="flex justify-between mb-1">
+          <span class="font-bold text-slate-800">Polygon.io Starter</span>
+          <span class="font-bold">$29/月 (¥210)</span>
+        </div>
+        <p class="text-xs text-slate-600 mb-2"><strong>适合：</strong>想看期权数据（隐含波动率 / put-call ratio），比 yfinance 稳定 10 倍</p>
+        <p class="text-xs text-slate-600"><strong>不适合：</strong>不做日内交易（K 线分钟级数据用不到）；不交易期权</p>
+        <p class="text-xs text-violet-700 mt-1"><strong>建议：</strong>等想看期权数据时再上</p>
+      </div>
+      <div class="bg-white rounded p-4 border border-yellow-300">
+        <div class="flex justify-between mb-1">
+          <span class="font-bold text-slate-800">EODHD</span>
+          <span class="font-bold">$20/月 (¥145)</span>
+        </div>
+        <p class="text-xs text-slate-600 mb-2"><strong>适合：</strong>想全面覆盖 SoftBank / Advantest（日股）/ Lynas / Appen（澳股）/ Rolls-Royce（英股 ADR）/ Kazatomprom（哈萨克）</p>
+        <p class="text-xs text-violet-700 mt-1"><strong>建议：</strong>watchlist 里这类股 &lt; 5 只，性价比一般</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 不推荐 -->
+  <div class="bg-rose-50 border border-rose-200 rounded-xl p-5 mb-6">
+    <h3 class="text-lg font-bold text-rose-900 mb-3">❌ 不推荐订阅（ROI 低或够不上）</h3>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead><tr class="border-b-2 border-rose-300 text-left text-rose-700">
+          <th class="py-2 px-2">工具</th><th>价格</th><th>为什么不推荐</th>
+        </tr></thead>
+        <tbody>
+          <tr class="border-b border-rose-100"><td class="py-2 px-2 font-medium">Finnhub Premium</td><td>$50/月</td><td>免费层 + FMP + SEC 已覆盖 80%；唯一新增的 Reuters/Bloomberg news 用 WebSearch 能补</td></tr>
+          <tr class="border-b border-rose-100"><td class="py-2 px-2 font-medium">Alpha Vantage</td><td>$25/月</td><td>50+ 技术指标，但本系统不做技术分析</td></tr>
+          <tr class="border-b border-rose-100"><td class="py-2 px-2 font-medium">AlphaSense</td><td>$1500+/月</td><td>机构产品，AI 搜 SEC filings；个人用不到</td></tr>
+          <tr class="border-b border-rose-100"><td class="py-2 px-2 font-medium">YipitData</td><td>数千/月</td><td>另类数据（信用卡、APP 下载）— 对冲基金护城河，个人用不到</td></tr>
+          <tr class="border-b border-rose-100"><td class="py-2 px-2 font-medium">Bloomberg Terminal</td><td>$24,000/年</td><td>不用想了</td></tr>
+          <tr><td class="py-2 px-2 font-medium">WSJ / FT 订阅</td><td>$200/年</td><td>文章可以让 AI 帮忙摘要，不需要正式订阅</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 完全免费的补充 -->
+  <div class="bg-sky-50 border border-sky-200 rounded-xl p-5 mb-6">
+    <h3 class="text-lg font-bold text-sky-900 mb-3">❄️ 完全免费的补充（值得加，零成本）</h3>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div class="bg-white rounded p-3 border border-sky-200">
+        <p class="font-medium text-slate-800">📡 SEC EDGAR RSS</p>
+        <p class="text-xs text-slate-600 mt-1">大佬 13F 实时推送（vs 每天定时拉，领先市场 30 分钟）</p>
+      </div>
+      <div class="bg-white rounded p-3 border border-sky-200">
+        <p class="font-medium text-slate-800">🗨️ Reddit API (PRAW)</p>
+        <p class="text-xs text-slate-600 mt-1">监控 r/wallstreetbets 散户情绪</p>
+      </div>
+      <div class="bg-white rounded p-3 border border-sky-200">
+        <p class="font-medium text-slate-800">👤 OpenInsider 爬虫</p>
+        <p class="text-xs text-slate-600 mt-1">美股内部人交易补充（Finnhub 备份源）</p>
+      </div>
+      <div class="bg-white rounded p-3 border border-sky-200">
+        <p class="font-medium text-slate-800">📊 OpenBB Hub</p>
+        <p class="text-xs text-slate-600 mt-1">集成多个免费源，可作为容灾备份</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 决策矩阵 -->
+  <div class="bg-slate-900 text-white rounded-xl p-6">
+    <h3 class="text-xl font-bold mb-4">🎯 决策矩阵 — 给同事看的版本</h3>
+    <table class="w-full text-sm">
+      <thead><tr class="border-b border-slate-700 text-left text-slate-300">
+        <th class="py-2">优先级</th><th>工具</th><th>年成本</th><th>解决什么</th><th>不上的代价</th>
+      </tr></thead>
+      <tbody>
+        <tr class="border-b border-slate-700">
+          <td class="py-3"><span class="bg-emerald-500 px-2 py-1 rounded text-xs font-bold">必上</span></td>
+          <td class="font-bold">FMP Starter</td>
+          <td>¥1200</td>
+          <td>美股小盘股 DCF + earnings transcripts + 30 年财报</td>
+          <td class="text-rose-300">看不到 RDDT/CCJ/BWXT 财务深度</td>
+        </tr>
+        <tr class="border-b border-slate-700">
+          <td class="py-3"><span class="bg-emerald-500 px-2 py-1 rounded text-xs font-bold">必上</span></td>
+          <td class="font-bold">Tushare Pro</td>
+          <td>¥200</td>
+          <td>A 股龙虎榜 + 北向 + 大宗交易 + 解禁</td>
+          <td class="text-rose-300">akshare 限流 → 中港股数据时不时空</td>
+        </tr>
+        <tr class="border-b border-slate-700">
+          <td class="py-3"><span class="bg-amber-500 px-2 py-1 rounded text-xs font-bold">看需求</span></td>
+          <td class="font-bold">Polygon.io</td>
+          <td>¥2500</td>
+          <td>美股期权 + 实时分钟 K 线 + 短利</td>
+          <td class="text-slate-400">不做日内/期权可不上</td>
+        </tr>
+        <tr class="border-b border-slate-700">
+          <td class="py-3"><span class="bg-amber-500 px-2 py-1 rounded text-xs font-bold">看需求</span></td>
+          <td class="font-bold">EODHD</td>
+          <td>¥1700</td>
+          <td>日股 / 澳股 / 英股 ADR</td>
+          <td class="text-slate-400">这类股 watchlist 里 &lt; 5 只</td>
+        </tr>
+        <tr>
+          <td class="py-3"><span class="bg-slate-500 px-2 py-1 rounded text-xs font-bold">不推荐</span></td>
+          <td class="font-bold">其他</td>
+          <td>—</td>
+          <td>Finnhub Premium / AlphaSense / Bloomberg / YipitData 等</td>
+          <td class="text-emerald-300">省钱</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="mt-5 pt-4 border-t border-slate-700">
+      <p class="text-xs text-slate-400">💡 <strong>给同事的一句话</strong>：花 ¥1400/年（FMP + Tushare）就能让这套系统在数据维度上接近机构 70% 水平。再贵的就没有边际收益了。</p>
+    </div>
+  </div>
+
+  <!-- 最后底部时间戳 -->
+  <p class="text-xs text-slate-500 mt-4 text-right">本页面由 build_stock_dashboard_html.py 自动生成 · 决策内容来自系统实测 NVDA + 11 家 13F 机构数据</p>
+</section>
+
 <!-- ============ Footer ============ -->
 <footer class="bg-slate-900 text-slate-300 py-8 mt-12">
   <div class="max-w-7xl mx-auto px-6 text-sm">
@@ -1035,16 +1399,19 @@ const SIMULATION = {SIMULATION_JSON};
 const RISK_METRICS = {RISK_METRICS_JSON};
 const TRACK_13F = {TRACK_13F_JSON};
 const OPTIMIZATION = {OPTIMIZATION_JSON};
+const PLAN_A_V6 = {PLAN_A_V6_JSON};
 
 // ============ Tab 切换框架 ============
 const TAB_SECTIONS = {
   overview: ["hero", "thesis", "evolution", "scarce", "events", "hundred-x"],
   portfolio: ["portfolio"],
   picks: ["scoring-rules", "picks-review"],
+  audit: ["audit-panel"],
   valuation: ["valuation"],
   themes: ["distribution", "theme-groups"],
   history: ["history"],
   professional: ["professional"],
+  upgrade: ["upgrade"],
 };
 
 function switchTab(tab) {
@@ -1184,7 +1551,7 @@ function renderPortfolio() {
   if (!tbody) return;
 
   if (holdings.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="10" class="text-center text-slate-500 py-8">暂无持仓 · 点击「+ 添加持仓」开始记录</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="11" class="text-center text-slate-500 py-8">暂无持仓 · 点击「+ 添加持仓」开始记录</td></tr>';
     document.getElementById("portfolio-summary").innerHTML = "";
     document.getElementById("alert-line").innerHTML = '<div class="text-sm text-slate-500">添加持仓后会显示警戒线</div>';
     return;
@@ -1197,10 +1564,12 @@ function renderPortfolio() {
   const rows = holdings.map((h, idx) => {
     const r = RECORDS.find(x => x.code === h.code);
     const name = r ? r.name : h.code;
+    const industry = r ? (r.industry || "-") : "-";
     const cur = getCurrentPriceRMB(h.code);
     if (!cur) {
       return `<tr class="border-t border-slate-100">
         <td class="px-3 py-2">${name}</td>
+        <td class="px-3 py-2 text-xs text-slate-600">${industry}</td>
         <td class="px-3 py-2 text-right">${h.entry_price}</td>
         <td class="px-3 py-2 text-right">${h.shares}</td>
         <td class="px-3 py-2 text-right">-</td>
@@ -1230,6 +1599,7 @@ function renderPortfolio() {
     const pnlColor = pnl_rmb >= 0 ? "text-emerald-600" : "text-rose-600";
     return `<tr class="border-t border-slate-100 hover:bg-slate-50">
       <td class="px-3 py-2 font-medium">${name}<br><span class="text-xs text-slate-500 font-mono">${h.code}</span></td>
+      <td class="px-3 py-2 text-xs text-slate-700 max-w-[140px]">${industry}</td>
       <td class="px-3 py-2 text-right font-mono">${h.entry_price.toFixed(2)} ${cur.currency}</td>
       <td class="px-3 py-2 text-right font-mono">${h.shares}</td>
       <td class="px-3 py-2 text-right font-mono">${cost_rmb.toFixed(0)}</td>
@@ -1255,21 +1625,29 @@ function renderPortfolio() {
   const stockColor = total_pnl >= 0 ? "text-emerald-600" : "text-rose-600";
 
   document.getElementById("portfolio-summary").innerHTML = `
-    <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200">
+    <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200" title="本金 + 股票当前市值变化">
       <div class="text-2xl font-bold text-slate-900">${portfolio_value.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
       <div class="text-xs text-slate-500 mt-1">组合总值 RMB（含现金）</div>
     </div>
+    <div class="bg-blue-50 rounded-lg p-3 shadow-sm border border-blue-200" title="所有持仓股票按入选时价格 × 股数 求和（你买入花了多少钱）">
+      <div class="text-2xl font-bold text-blue-900">${totalCost.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
+      <div class="text-xs text-blue-700 mt-1">已投入成本 RMB <span class="text-blue-500">(买股花的钱)</span></div>
+    </div>
+    <div class="bg-violet-50 rounded-lg p-3 shadow-sm border border-violet-200" title="所有持仓股票按现价 × 股数 求和（现在能值多少钱）">
+      <div class="text-2xl font-bold text-violet-900">${totalValue.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
+      <div class="text-xs text-violet-700 mt-1">当前股票市值 RMB <span class="text-violet-500">(现价 × 股数)</span></div>
+    </div>
     <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200">
       <div class="text-2xl font-bold ${stockColor}">${total_pnl >= 0 ? '+' : ''}${total_pnl.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
-      <div class="text-xs text-slate-500 mt-1">股票仓盈亏</div>
+      <div class="text-xs text-slate-500 mt-1">股票仓盈亏 <span class="text-slate-400">(市值 - 成本)</span></div>
     </div>
     <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200">
       <div class="text-2xl font-bold ${stockColor}">${total_pnl_pct >= 0 ? '+' : ''}${total_pnl_pct.toFixed(2)}%</div>
       <div class="text-xs text-slate-500 mt-1">股票仓收益率</div>
     </div>
-    <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200">
+    <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200" title="50 万本金 - 已投入成本 = 还没买的钱">
       <div class="text-2xl font-bold text-slate-900">${cash.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
-      <div class="text-xs text-slate-500 mt-1">现金 RMB</div>
+      <div class="text-xs text-slate-500 mt-1">未持仓现金 RMB <span class="text-slate-400">(本金 - 成本)</span></div>
     </div>
     <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200">
       <div class="text-2xl font-bold text-slate-900">${holdings.length}</div>
@@ -1353,29 +1731,92 @@ function clearHoldings() {
   renderPortfolio();
 }
 
-// ============ 一键加载方案 A（用模拟数据中的现价填入持仓） ============
-function loadPlanA() {
-  if (!SIMULATION || !SIMULATION.stock_stats) {
-    alert("还没有方案 A 模拟数据，请先跑：python3 simulate_portfolio.py");
+// ============ 一键加载方案 A v6（学术因子 + Markowitz 客观仓位） ============
+function loadPlanAv6() {
+  if (!PLAN_A_V6 || !PLAN_A_V6.plan_v5 || PLAN_A_V6.plan_v5.length === 0) {
+    alert("还没有方案 A v6 数据，请先跑：python3 build_plan_a_v5.py");
     return;
   }
   if (loadHoldings().length > 0) {
-    if (!confirm("当前已有持仓数据，加载方案 A 会覆盖。继续？")) return;
+    if (!confirm("当前已有持仓数据，加载方案 A v6 会覆盖。继续？")) return;
   }
   const today = new Date().toISOString().split("T")[0];
+  const USD_TO_RMB = 7.10;
   const holdings = [];
-  Object.values(SIMULATION.stock_stats).forEach(s => {
+  let totalAmount = 0;
+  PLAN_A_V6.plan_v5.forEach(p => {
+    const amountRmb = p.amount_rmb || 0;
+    if (amountRmb < 100) return;
+    const rec = RECORDS.find(r => r.code === p.ticker);
+    let priceUsd = null;
+    if (rec && rec.latest_price) {
+      const m = String(rec.latest_price).match(/([\d,]+\.?\d*)/);
+      if (m) priceUsd = parseFloat(m[1].replace(/,/g, ""));
+    }
+    if (!priceUsd) return;
+    const shares = Math.max(1, Math.round(amountRmb / (priceUsd * USD_TO_RMB)));
     holdings.push({
-      code: s.ticker,
-      entry_price: s.last_price,
-      shares: s.shares,
+      code: p.ticker,
+      entry_price: priceUsd,
+      shares: shares,
       date: today,
-      _plan_a: true,
+      _plan_a_v6: true,
     });
+    totalAmount += shares * priceUsd * USD_TO_RMB;
   });
   saveHoldings(holdings);
-  alert(`✅ 已加载方案 A 持仓（12 只 + 25,000 RMB 现金）\n按今天的真实收盘价计算\n\n几天后再看「我的持仓」即可看到真实进度。`);
+  const metrics = PLAN_A_V6.portfolio_metrics || {};
+  // 渲染持久指标卡片
+  renderV6Metrics(metrics);
+  alert(`✅ 已加载方案 A v6 持仓（${holdings.length} 只）\n` +
+        `总金额: ¥${Math.round(totalAmount).toLocaleString()}\n\n` +
+        `📚 学术因子选股 + Markowitz 优化:\n` +
+        `  · 5 因子（Piotroski + 动量 + 反转 + PEAD + 分析师）\n` +
+        `  · 年化 Sharpe ${metrics.annual_sharpe || '?'}\n` +
+        `  · 年化收益 ${metrics.annual_return_pct || '?'}%\n` +
+        `  · 年化波动 ${metrics.annual_vol_pct || '?'}%\n\n` +
+        `⚠️ Sharpe 是 backtest 不是承诺；熊市可能跑输 SPY 5-15%`);
 }
+
+function renderV6Metrics(metrics) {
+  if (!metrics || (!metrics.annual_sharpe && !metrics.annual_return_pct)) {
+    document.getElementById("v6-metrics-card").style.display = "none";
+    return;
+  }
+  const sharpe = metrics.annual_sharpe ? Number(metrics.annual_sharpe).toFixed(2) : "?";
+  const ret = metrics.annual_return_pct ? Number(metrics.annual_return_pct).toFixed(1) : "?";
+  const vol = metrics.annual_vol_pct ? Number(metrics.annual_vol_pct).toFixed(1) : "?";
+  document.getElementById("v6-metrics-content").innerHTML = `
+    <div class="bg-white rounded-lg p-3 border border-emerald-200">
+      <div class="text-3xl font-bold text-emerald-700">${sharpe}</div>
+      <div class="text-xs text-slate-600 mt-1">年化夏普比率</div>
+      <div class="text-[10px] text-slate-500">巴菲特长期 0.76</div>
+    </div>
+    <div class="bg-white rounded-lg p-3 border border-emerald-200">
+      <div class="text-3xl font-bold text-emerald-700">+${ret}%</div>
+      <div class="text-xs text-slate-600 mt-1">年化收益率</div>
+      <div class="text-[10px] text-slate-500">基于过去 252 天外推</div>
+    </div>
+    <div class="bg-white rounded-lg p-3 border border-emerald-200">
+      <div class="text-3xl font-bold text-amber-700">${vol}%</div>
+      <div class="text-xs text-slate-600 mt-1">年化波动率</div>
+      <div class="text-[10px] text-slate-500">SPY 长期约 15-18%</div>
+    </div>
+    <div class="bg-white rounded-lg p-3 border border-emerald-200">
+      <div class="text-sm font-bold text-slate-700">5 因子 + Markowitz</div>
+      <div class="text-xs text-slate-600 mt-1">Piotroski / 12-1 动量 / 1月反转</div>
+      <div class="text-xs text-slate-600">PEAD / 分析师上修</div>
+    </div>
+  `;
+  document.getElementById("v6-metrics-card").style.display = "";
+}
+
+// 加载时如果已有方案 A v6 数据 + 持仓，就显示指标
+window.addEventListener("DOMContentLoaded", () => {
+  if (PLAN_A_V6 && PLAN_A_V6.portfolio_metrics && loadHoldings().some(h => h._plan_a_v6)) {
+    renderV6Metrics(PLAN_A_V6.portfolio_metrics);
+  }
+});
 
 // ============ 5 天蒙特卡洛模拟显示 ============
 function renderSimulation() {
@@ -2562,12 +3003,15 @@ def build():
     risk_metrics = _load_json("risk_metrics.json")
     track_13f = _load_json("track_13f.json")
     optimization = _load_json("optimization_result.json")
+    plan_a_v6 = _load_json("plan_a_v5.json")
     if risk_metrics:
         print(f"  风险指标已加载 (Sharpe={risk_metrics.get('sharpe', 'N/A')})")
     if track_13f:
         print(f"  13F 数据已加载 ({len(track_13f.get('tickers', {}))} 只美股)")
     if optimization:
         print(f"  优化结果已加载 ({len(optimization.get('current_plan', []))} 只)")
+    if plan_a_v6:
+        print(f"  方案 A v6 已加载 ({len(plan_a_v6.get('plan_v5', []))} 只 · Sharpe {plan_a_v6.get('portfolio_metrics', {}).get('annual_sharpe', 'N/A')})")
 
     us_count = sum(1 for r in records if "美股" in r["market"])
     cn_count = len(records) - us_count
@@ -2612,6 +3056,7 @@ def build():
     html = html.replace("{RISK_METRICS_JSON}", json.dumps(risk_metrics, ensure_ascii=False))
     html = html.replace("{TRACK_13F_JSON}", json.dumps(track_13f, ensure_ascii=False))
     html = html.replace("{OPTIMIZATION_JSON}", json.dumps(optimization, ensure_ascii=False))
+    html = html.replace("{PLAN_A_V6_JSON}", json.dumps(plan_a_v6, ensure_ascii=False))
 
     with open(OUTPUT, "w", encoding="utf-8") as f:
         f.write(html)

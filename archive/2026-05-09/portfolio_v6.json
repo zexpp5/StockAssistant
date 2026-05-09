@@ -1,0 +1,96 @@
+{
+  "generated_at": "2026-05-09T19:48:11",
+  "method": "v6: factor neutralization + Markowitz Max Sharpe + ADV cap + cost",
+  "capital": 500000,
+  "constraints": {
+    "max_weight": 0.15,
+    "min_weight": 0.02,
+    "cash_pct": 0.05,
+    "max_adv_pct": 0.05,
+    "cost_bps": 5.0,
+    "impact_bps_per_pct_adv": 2.0,
+    "neutralize": true
+  },
+  "portfolio_metrics": {
+    "annual_sharpe": 2.19,
+    "annual_return_pct": 75.9,
+    "annual_vol_pct": 32.67,
+    "gross_alpha_pct": 75.9,
+    "total_cost_bps": 4.8,
+    "net_alpha_pct": 75.85,
+    "turnover": 0.475
+  },
+  "plan": [
+    {
+      "ticker": "CRM",
+      "target_weight": 0.08637979312246806,
+      "capped_weight": 0.08637979312246806,
+      "amount": 43189.89656123403,
+      "adv_dollars": 2371803207.276204
+    },
+    {
+      "ticker": "LRCX",
+      "target_weight": 0.14604557558779965,
+      "capped_weight": 0.14604557558779965,
+      "amount": 73022.78779389983,
+      "adv_dollars": 2774145998.1689453
+    },
+    {
+      "ticker": "CRWV",
+      "target_weight": 0.019717945913349803,
+      "capped_weight": 0.019717945913349803,
+      "amount": 9858.972956674901,
+      "adv_dollars": 3697084922.4200945
+    },
+    {
+      "ticker": "ETN",
+      "target_weight": 0.03874597813551889,
+      "capped_weight": 0.03874597813551889,
+      "amount": 19372.989067759445,
+      "adv_dollars": 1017857318.8232423
+    },
+    {
+      "ticker": "MRVL",
+      "target_weight": 0.1478845943501235,
+      "capped_weight": 0.1478845943501235,
+      "amount": 73942.29717506174,
+      "adv_dollars": 4706919927.2908535
+    },
+    {
+      "ticker": "RXRX",
+      "target_weight": 0.043896997754424995,
+      "capped_weight": 0.043896997754424995,
+      "amount": 21948.498877212496,
+      "adv_dollars": 39946748.26343378
+    },
+    {
+      "ticker": "MP",
+      "target_weight": 0.1126544908290295,
+      "capped_weight": 0.1126544908290295,
+      "amount": 56327.24541451475,
+      "adv_dollars": 410169049.78968304
+    },
+    {
+      "ticker": "MDB",
+      "target_weight": 0.146527262807849,
+      "capped_weight": 0.146527262807849,
+      "amount": 73263.6314039245,
+      "adv_dollars": 471043352.55340576
+    },
+    {
+      "ticker": "MOD",
+      "target_weight": 0.14071752918283661,
+      "capped_weight": 0.14071752918283661,
+      "amount": 70358.76459141831,
+      "adv_dollars": 251546750.0
+    },
+    {
+      "ticker": "SDGR",
+      "target_weight": 0.0674298323166,
+      "capped_weight": 0.0674298323166,
+      "amount": 33714.9161583,
+      "adv_dollars": 18938449.56506729
+    }
+  ],
+  "adv_warnings": []
+}

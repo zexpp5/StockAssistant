@@ -1,0 +1,2797 @@
+{
+  "date": "2026-05-09",
+  "factors": [
+    {
+      "ticker": "GOOGL",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 6,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": false,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": true,
+          "7_no_new_shares": true,
+          "8_dgm>0": true,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 111.12,
+        "reversal_1m": -25.84,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -14.67,
+        "method": "QoQ",
+        "qoq_now_pct": -3.46,
+        "qoq_prev_pct": 11.22,
+        "error": null
+      }
+    },
+    {
+      "ticker": "INTC",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 6,
+        "details": {
+          "1_roa>0": false,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": true,
+          "7_no_new_shares": false,
+          "8_dgm>0": true,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 203.89,
+        "reversal_1m": -102.4,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -0.86,
+        "method": "QoQ",
+        "qoq_now_pct": -0.71,
+        "qoq_prev_pct": 0.15,
+        "error": null
+      }
+    },
+    {
+      "ticker": "AAPL",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 8,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": false,
+          "5_dltd<0": true,
+          "6_dcr>0": true,
+          "7_no_new_shares": true,
+          "8_dgm>0": true,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 33.31,
+        "reversal_1m": -12.6,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -62.95,
+        "method": "QoQ",
+        "qoq_now_pct": -22.66,
+        "qoq_prev_pct": 40.3,
+        "error": null
+      }
+    },
+    {
+      "ticker": "TSLA",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 5,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": false,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": true,
+          "7_no_new_shares": false,
+          "8_dgm>0": true,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 25.12,
+        "reversal_1m": -23.94,
+        "error": null
+      },
+      "pead": {
+        "acceleration": 1.27,
+        "method": "QoQ",
+        "qoq_now_pct": -10.1,
+        "qoq_prev_pct": -11.37,
+        "error": null
+      }
+    },
+    {
+      "ticker": "KO",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 7,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": false,
+          "5_dltd<0": true,
+          "6_dcr>0": true,
+          "7_no_new_shares": true,
+          "8_dgm>0": true,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 11.11,
+        "reversal_1m": -0.31,
+        "error": null
+      },
+      "pead": {
+        "acceleration": 10.58,
+        "method": "QoQ",
+        "qoq_now_pct": 5.5,
+        "qoq_prev_pct": -5.08,
+        "error": null
+      }
+    },
+    {
+      "ticker": "MCD",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 6,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": false,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": false,
+          "7_no_new_shares": true,
+          "8_dgm>0": true,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": -0.45,
+        "reversal_1m": 10.92,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -4.39,
+        "method": "QoQ",
+        "qoq_now_pct": -0.97,
+        "qoq_prev_pct": 3.42,
+        "error": null
+      }
+    },
+    {
+      "ticker": "MRVL",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 8,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": false,
+          "5_dltd<0": true,
+          "6_dcr>0": true,
+          "7_no_new_shares": true,
+          "8_dgm>0": true,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 113.45,
+        "reversal_1m": -41.93,
+        "error": null
+      },
+      "pead": {
+        "acceleration": 3.54,
+        "method": "QoQ",
+        "qoq_now_pct": 6.95,
+        "qoq_prev_pct": 3.41,
+        "error": null
+      }
+    },
+    {
+      "ticker": "AVGO",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 8,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": true,
+          "7_no_new_shares": false,
+          "8_dgm>0": true,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 74.69,
+        "reversal_1m": -21.16,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -5.74,
+        "method": "QoQ",
+        "qoq_now_pct": 7.19,
+        "qoq_prev_pct": 12.93,
+        "error": null
+      }
+    },
+    {
+      "ticker": "NVDA",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 4,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": false,
+          "4_cfo>ni": false,
+          "5_dltd<0": true,
+          "6_dcr>0": false,
+          "7_no_new_shares": true,
+          "8_dgm>0": false,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 57.14,
+        "reversal_1m": -17.01,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -2.45,
+        "method": "QoQ",
+        "qoq_now_pct": 19.51,
+        "qoq_prev_pct": 21.96,
+        "error": null
+      }
+    },
+    {
+      "ticker": "TSM",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 9,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": true,
+          "7_no_new_shares": true,
+          "8_dgm>0": true,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 112.0,
+        "reversal_1m": -12.64,
+        "error": null
+      },
+      "pead": {
+        "acceleration": null,
+        "error": "insufficient valid quarters"
+      }
+    },
+    {
+      "ticker": "ETN",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 7,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": false,
+          "7_no_new_shares": true,
+          "8_dgm>0": false,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 33.68,
+        "reversal_1m": -0.54,
+        "error": null
+      },
+      "pead": {
+        "acceleration": 4.65,
+        "method": "QoQ",
+        "qoq_now_pct": 5.61,
+        "qoq_prev_pct": 0.96,
+        "error": null
+      }
+    },
+    {
+      "ticker": "EQIX",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 5,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": false,
+          "7_no_new_shares": false,
+          "8_dgm>0": true,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 20.98,
+        "reversal_1m": -3.93,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -3.5,
+        "method": "QoQ",
+        "qoq_now_pct": 0.99,
+        "qoq_prev_pct": 4.49,
+        "error": null
+      }
+    },
+    {
+      "ticker": "PATH",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 7,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": false,
+          "7_no_new_shares": true,
+          "8_dgm>0": true,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": -17.85,
+        "reversal_1m": -8.55,
+        "error": null
+      },
+      "pead": {
+        "acceleration": 3.37,
+        "method": "QoQ",
+        "qoq_now_pct": 17.03,
+        "qoq_prev_pct": 13.65,
+        "error": null
+      }
+    },
+    {
+      "ticker": "GEV",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 7,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": false,
+          "7_no_new_shares": true,
+          "8_dgm>0": true,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 138.48,
+        "reversal_1m": -7.45,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -24.67,
+        "method": "QoQ",
+        "qoq_now_pct": -14.77,
+        "qoq_prev_pct": 9.9,
+        "error": null
+      }
+    },
+    {
+      "ticker": "SYM",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 4,
+        "details": {
+          "1_roa>0": false,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": false,
+          "7_no_new_shares": false,
+          "8_dgm>0": true,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 138.6,
+        "reversal_1m": 2.43,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -2.58,
+        "method": "QoQ",
+        "qoq_now_pct": 1.86,
+        "qoq_prev_pct": 4.45,
+        "error": null
+      }
+    },
+    {
+      "ticker": "ORCL",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 5,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": false,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": true,
+          "7_no_new_shares": false,
+          "8_dgm>0": false,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": -6.78,
+        "reversal_1m": -42.14,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -0.53,
+        "method": "QoQ",
+        "qoq_now_pct": 7.05,
+        "qoq_prev_pct": 7.58,
+        "error": null
+      }
+    },
+    {
+      "ticker": "TEM",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 4,
+        "details": {
+          "1_roa>0": false,
+          "2_cfo>0": false,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": true,
+          "7_no_new_shares": false,
+          "8_dgm>0": true,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": -24.85,
+        "reversal_1m": -12.91,
+        "error": null
+      },
+      "pead": {
+        "acceleration": 3.66,
+        "method": "QoQ",
+        "qoq_now_pct": 9.88,
+        "qoq_prev_pct": 6.22,
+        "error": null
+      }
+    },
+    {
+      "ticker": "RXRX",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 4,
+        "details": {
+          "1_roa>0": false,
+          "2_cfo>0": false,
+          "3_droa>0": false,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": true,
+          "7_no_new_shares": false,
+          "8_dgm>0": false,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": -21.0,
+        "reversal_1m": -0.3,
+        "error": null
+      },
+      "pead": {
+        "acceleration": 683.35,
+        "method": "QoQ",
+        "qoq_now_pct": 609.43,
+        "qoq_prev_pct": -73.92,
+        "error": null
+      }
+    },
+    {
+      "ticker": "LRCX",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 8,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": false,
+          "7_no_new_shares": true,
+          "8_dgm>0": true,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 247.26,
+        "reversal_1m": -13.64,
+        "error": null
+      },
+      "pead": {
+        "acceleration": 8.91,
+        "method": "QoQ",
+        "qoq_now_pct": 9.29,
+        "qoq_prev_pct": 0.39,
+        "error": null
+      }
+    },
+    {
+      "ticker": "PWR",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 5,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": false,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": false,
+          "7_no_new_shares": false,
+          "8_dgm>0": true,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 80.05,
+        "reversal_1m": -27.99,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -2.34,
+        "method": "QoQ",
+        "qoq_now_pct": 0.42,
+        "qoq_prev_pct": 2.76,
+        "error": null
+      }
+    },
+    {
+      "ticker": "MTZ",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 8,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": true,
+          "7_no_new_shares": true,
+          "8_dgm>0": false,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 145.97,
+        "reversal_1m": -15.93,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -2.13,
+        "method": "QoQ",
+        "qoq_now_pct": -2.82,
+        "qoq_prev_pct": -0.68,
+        "error": null
+      }
+    },
+    {
+      "ticker": "XYL",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 7,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": false,
+          "7_no_new_shares": true,
+          "8_dgm>0": true,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 8.17,
+        "reversal_1m": 12.11,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -17.04,
+        "method": "QoQ",
+        "qoq_now_pct": -11.35,
+        "qoq_prev_pct": 5.69,
+        "error": null
+      }
+    },
+    {
+      "ticker": "MP",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 4,
+        "details": {
+          "1_roa>0": false,
+          "2_cfo>0": false,
+          "3_droa>0": true,
+          "4_cfo>ni": false,
+          "5_dltd<0": true,
+          "6_dcr>0": true,
+          "7_no_new_shares": false,
+          "8_dgm>0": true,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 128.2,
+        "reversal_1m": -25.1,
+        "error": null
+      },
+      "pead": {
+        "acceleration": 5.07,
+        "method": "QoQ",
+        "qoq_now_pct": -1.62,
+        "qoq_prev_pct": -6.69,
+        "error": null
+      }
+    },
+    {
+      "ticker": "BWXT",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 5,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": false,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": true,
+          "7_no_new_shares": true,
+          "8_dgm>0": false,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 115.11,
+        "reversal_1m": 10.84,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -5.15,
+        "method": "QoQ",
+        "qoq_now_pct": -2.89,
+        "qoq_prev_pct": 2.26,
+        "error": null
+      }
+    },
+    {
+      "ticker": "CCJ",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 9,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": true,
+          "7_no_new_shares": true,
+          "8_dgm>0": true,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 132.74,
+        "reversal_1m": -1.05,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -125.02,
+        "method": "QoQ",
+        "qoq_now_pct": -29.61,
+        "qoq_prev_pct": 95.41,
+        "error": null
+      }
+    },
+    {
+      "ticker": "NET",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 4,
+        "details": {
+          "1_roa>0": false,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": false,
+          "7_no_new_shares": false,
+          "8_dgm>0": false,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 58.61,
+        "reversal_1m": -1.6,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -0.37,
+        "method": "QoQ",
+        "qoq_now_pct": 9.34,
+        "qoq_prev_pct": 9.7,
+        "error": null
+      }
+    },
+    {
+      "ticker": "RDDT",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 6,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": false,
+          "7_no_new_shares": false,
+          "8_dgm>0": true,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 31.13,
+        "reversal_1m": -12.59,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -32.63,
+        "method": "QoQ",
+        "qoq_now_pct": -8.57,
+        "qoq_prev_pct": 24.05,
+        "error": null
+      }
+    },
+    {
+      "ticker": "VRT",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 6,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": false,
+          "7_no_new_shares": true,
+          "8_dgm>0": false,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 201.5,
+        "reversal_1m": -18.19,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -15.63,
+        "method": "QoQ",
+        "qoq_now_pct": -8.0,
+        "qoq_prev_pct": 7.63,
+        "error": null
+      }
+    },
+    {
+      "ticker": "CDNS",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 7,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": false,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": false,
+          "7_no_new_shares": true,
+          "8_dgm>0": true,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": -8.86,
+        "reversal_1m": -29.07,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -5.2,
+        "method": "QoQ",
+        "qoq_now_pct": 2.37,
+        "qoq_prev_pct": 7.56,
+        "error": null
+      }
+    },
+    {
+      "ticker": "CRWD",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 4,
+        "details": {
+          "1_roa>0": false,
+          "2_cfo>0": true,
+          "3_droa>0": false,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": true,
+          "7_no_new_shares": false,
+          "8_dgm>0": false,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": -6.59,
+        "reversal_1m": -33.72,
+        "error": null
+      },
+      "pead": {
+        "acceleration": 0.18,
+        "method": "QoQ",
+        "qoq_now_pct": 5.76,
+        "qoq_prev_pct": 5.59,
+        "error": null
+      }
+    },
+    {
+      "ticker": "SNOW",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 5,
+        "details": {
+          "1_roa>0": false,
+          "2_cfo>0": true,
+          "3_droa>0": false,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": false,
+          "7_no_new_shares": false,
+          "8_dgm>0": true,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": -22.47,
+        "reversal_1m": -15.28,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -0.07,
+        "method": "QoQ",
+        "qoq_now_pct": 5.86,
+        "qoq_prev_pct": 5.93,
+        "error": null
+      }
+    },
+    {
+      "ticker": "VST",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 5,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": false,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": false,
+          "7_no_new_shares": true,
+          "8_dgm>0": false,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 10.06,
+        "reversal_1m": 3.29,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -24.75,
+        "method": "QoQ",
+        "qoq_now_pct": -7.79,
+        "qoq_prev_pct": 16.96,
+        "error": null
+      }
+    },
+    {
+      "ticker": "MSFT",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 6,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": false,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": true,
+          "7_no_new_shares": true,
+          "8_dgm>0": false,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": -13.25,
+        "reversal_1m": -11.27,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -2.65,
+        "method": "QoQ",
+        "qoq_now_pct": 1.98,
+        "qoq_prev_pct": 4.63,
+        "error": null
+      }
+    },
+    {
+      "ticker": "META",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 5,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": false,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": false,
+          "7_no_new_shares": true,
+          "8_dgm>0": true,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 5.62,
+        "reversal_1m": 2.99,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -22.86,
+        "method": "QoQ",
+        "qoq_now_pct": -5.98,
+        "qoq_prev_pct": 16.88,
+        "error": null
+      }
+    },
+    {
+      "ticker": "AMZN",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 6,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": false,
+          "7_no_new_shares": false,
+          "8_dgm>0": true,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 23.81,
+        "reversal_1m": -16.7,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -33.37,
+        "method": "QoQ",
+        "qoq_now_pct": -14.93,
+        "qoq_prev_pct": 18.44,
+        "error": null
+      }
+    },
+    {
+      "ticker": "AMD",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 8,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": true,
+          "7_no_new_shares": true,
+          "8_dgm>0": true,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 135.79,
+        "reversal_1m": -92.36,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -9.24,
+        "method": "QoQ",
+        "qoq_now_pct": 11.08,
+        "qoq_prev_pct": 20.31,
+        "error": null
+      }
+    },
+    {
+      "ticker": "PLTR",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 7,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": true,
+          "7_no_new_shares": false,
+          "8_dgm>0": true,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 18.11,
+        "reversal_1m": -5.6,
+        "error": null
+      },
+      "pead": {
+        "acceleration": 1.44,
+        "method": "QoQ",
+        "qoq_now_pct": 19.11,
+        "qoq_prev_pct": 17.67,
+        "error": null
+      }
+    },
+    {
+      "ticker": "CRM",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 7,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": false,
+          "7_no_new_shares": true,
+          "8_dgm>0": true,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": -38.14,
+        "reversal_1m": -6.42,
+        "error": null
+      },
+      "pead": {
+        "acceleration": 8.96,
+        "method": "QoQ",
+        "qoq_now_pct": 9.18,
+        "qoq_prev_pct": 0.22,
+        "error": null
+      }
+    },
+    {
+      "ticker": "NOW",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 4,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": false,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": false,
+          "7_no_new_shares": false,
+          "8_dgm>0": false,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": -54.33,
+        "reversal_1m": -1.53,
+        "error": null
+      },
+      "pead": {
+        "acceleration": 0.94,
+        "method": "QoQ",
+        "qoq_now_pct": 5.66,
+        "qoq_prev_pct": 4.73,
+        "error": null
+      }
+    },
+    {
+      "ticker": "CRWV",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 5,
+        "details": {
+          "1_roa>0": false,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": true,
+          "7_no_new_shares": false,
+          "8_dgm>0": false,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 71.64,
+        "reversal_1m": -24.08,
+        "error": null
+      },
+      "pead": {
+        "acceleration": 2.66,
+        "method": "QoQ",
+        "qoq_now_pct": 15.19,
+        "qoq_prev_pct": 12.52,
+        "error": null
+      }
+    },
+    {
+      "ticker": "ARM",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 6,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": false,
+          "5_dltd<0": false,
+          "6_dcr>0": true,
+          "7_no_new_shares": false,
+          "8_dgm>0": true,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 20.62,
+        "reversal_1m": -42.37,
+        "error": null
+      },
+      "pead": {
+        "acceleration": 1.64,
+        "method": "QoQ",
+        "qoq_now_pct": 9.43,
+        "qoq_prev_pct": 7.79,
+        "error": null
+      }
+    },
+    {
+      "ticker": "OKLO",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 3,
+        "details": {
+          "1_roa>0": false,
+          "2_cfo>0": false,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": true,
+          "7_no_new_shares": false,
+          "8_dgm>0": false,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 76.07,
+        "reversal_1m": -51.85,
+        "error": null
+      },
+      "pead": {
+        "acceleration": null,
+        "error": "insufficient valid quarters"
+      }
+    },
+    {
+      "ticker": "ALAB",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 5,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": false,
+          "7_no_new_shares": false,
+          "8_dgm>0": false,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 82.11,
+        "reversal_1m": -54.33,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -2.79,
+        "method": "QoQ",
+        "qoq_now_pct": 17.35,
+        "qoq_prev_pct": 20.14,
+        "error": null
+      }
+    },
+    {
+      "ticker": "VEEV",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 6,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": true,
+          "7_no_new_shares": false,
+          "8_dgm>0": true,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": -34.09,
+        "reversal_1m": -5.9,
+        "error": null
+      },
+      "pead": {
+        "acceleration": 0.24,
+        "method": "QoQ",
+        "qoq_now_pct": 3.05,
+        "qoq_prev_pct": 2.81,
+        "error": null
+      }
+    },
+    {
+      "ticker": "SDGR",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 4,
+        "details": {
+          "1_roa>0": false,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": false,
+          "7_no_new_shares": false,
+          "8_dgm>0": false,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": -51.64,
+        "reversal_1m": -14.47,
+        "error": null
+      },
+      "pead": {
+        "acceleration": 61.38,
+        "method": "QoQ",
+        "qoq_now_pct": 60.58,
+        "qoq_prev_pct": -0.79,
+        "error": null
+      }
+    },
+    {
+      "ticker": "IONQ",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 3,
+        "details": {
+          "1_roa>0": false,
+          "2_cfo>0": false,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": true,
+          "7_no_new_shares": false,
+          "8_dgm>0": false,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": -3.64,
+        "reversal_1m": -75.36,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -37.4,
+        "method": "QoQ",
+        "qoq_now_pct": 55.25,
+        "qoq_prev_pct": 92.65,
+        "error": null
+      }
+    },
+    {
+      "ticker": "MOD",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 9,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": true,
+          "7_no_new_shares": true,
+          "8_dgm>0": true,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 164.53,
+        "reversal_1m": -13.03,
+        "error": null
+      },
+      "pead": {
+        "acceleration": 0.73,
+        "method": "QoQ",
+        "qoq_now_pct": 8.95,
+        "qoq_prev_pct": 8.22,
+        "error": null
+      }
+    },
+    {
+      "ticker": "UUUU",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 2,
+        "details": {
+          "1_roa>0": false,
+          "2_cfo>0": false,
+          "3_droa>0": true,
+          "4_cfo>ni": false,
+          "5_dltd<0": false,
+          "6_dcr>0": true,
+          "7_no_new_shares": false,
+          "8_dgm>0": false,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 285.68,
+        "reversal_1m": -16.7,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -20.8,
+        "method": "QoQ",
+        "qoq_now_pct": 32.23,
+        "qoq_prev_pct": 53.03,
+        "error": null
+      }
+    },
+    {
+      "ticker": "LEU",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 4,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": false,
+          "4_cfo>ni": false,
+          "5_dltd<0": false,
+          "6_dcr>0": true,
+          "7_no_new_shares": false,
+          "8_dgm>0": true,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 148.51,
+        "reversal_1m": -15.07,
+        "error": null
+      },
+      "pead": {
+        "acceleration": null,
+        "error": "insufficient valid quarters"
+      }
+    },
+    {
+      "ticker": "NNE",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 3,
+        "details": {
+          "1_roa>0": false,
+          "2_cfo>0": false,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": true,
+          "7_no_new_shares": false,
+          "8_dgm>0": false,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": -10.25,
+        "reversal_1m": -30.03,
+        "error": null
+      },
+      "pead": {
+        "acceleration": null,
+        "error": "insufficient valid quarters"
+      }
+    },
+    {
+      "ticker": "SMR",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 0,
+        "details": {
+          "1_roa>0": false,
+          "2_cfo>0": false,
+          "3_droa>0": false,
+          "4_cfo>ni": false,
+          "5_dltd<0": false,
+          "6_dcr>0": false,
+          "7_no_new_shares": false,
+          "8_dgm>0": false,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": -44.01,
+        "reversal_1m": -34.95,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -80.4,
+        "method": "QoQ",
+        "qoq_now_pct": -78.06,
+        "qoq_prev_pct": 2.33,
+        "error": null
+      }
+    },
+    {
+      "ticker": "RYCEY",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 7,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": false,
+          "5_dltd<0": true,
+          "6_dcr>0": false,
+          "7_no_new_shares": true,
+          "8_dgm>0": true,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 69.93,
+        "reversal_1m": 2.97,
+        "error": null
+      },
+      "pead": {
+        "acceleration": null,
+        "error": "not enough quarters"
+      }
+    },
+    {
+      "ticker": "MDB",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 5,
+        "details": {
+          "1_roa>0": false,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": false,
+          "7_no_new_shares": true,
+          "8_dgm>0": false,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 31.64,
+        "reversal_1m": -30.49,
+        "error": null
+      },
+      "pead": {
+        "acceleration": 4.39,
+        "method": "QoQ",
+        "qoq_now_pct": 10.63,
+        "qoq_prev_pct": 6.24,
+        "error": null
+      }
+    },
+    {
+      "ticker": "CFLT",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 6,
+        "details": {
+          "1_roa>0": false,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": false,
+          "7_no_new_shares": false,
+          "8_dgm>0": true,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": null,
+        "reversal_1m": null,
+        "error": "insufficient history"
+      },
+      "pead": {
+        "acceleration": -0.29,
+        "method": "QoQ",
+        "qoq_now_pct": 5.46,
+        "qoq_prev_pct": 5.75,
+        "error": null
+      }
+    },
+    {
+      "ticker": "DDOG",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 6,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": false,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": true,
+          "7_no_new_shares": false,
+          "8_dgm>0": false,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 2.79,
+        "reversal_1m": -83.67,
+        "error": null
+      },
+      "pead": {
+        "acceleration": 0.5,
+        "method": "QoQ",
+        "qoq_now_pct": 7.63,
+        "qoq_prev_pct": 7.12,
+        "error": null
+      }
+    }
+  ],
+  "signals": [
+    {
+      "ticker": "GOOGL",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 784016.0,
+        "sell_shares_6m": 1200.0,
+        "net_shares_6m": 782816.0,
+        "net_transactions_6m": 7.0,
+        "net_value_usd_approx": 313752643.2441406
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 38,
+        "raises": 29,
+        "lowers": 2,
+        "upgrades": 1,
+        "downgrades": 1,
+        "avg_target_raise_pct": 12.07
+      }
+    },
+    {
+      "ticker": "INTC",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 536541.0,
+        "sell_shares_6m": 60256.0,
+        "net_shares_6m": 476285.0,
+        "net_transactions_6m": 13.0,
+        "net_value_usd_approx": 59497521.32789612
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 26,
+        "raises": 22,
+        "lowers": 0,
+        "upgrades": 3,
+        "downgrades": 1,
+        "avg_target_raise_pct": 45.5
+      }
+    },
+    {
+      "ticker": "AAPL",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 346569.0,
+        "sell_shares_6m": 100237.0,
+        "net_shares_6m": 246332.0,
+        "net_transactions_6m": 19.0,
+        "net_value_usd_approx": 72254104.04418945
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 23,
+        "raises": 11,
+        "lowers": 1,
+        "upgrades": 1,
+        "downgrades": 0,
+        "avg_target_raise_pct": 3.8
+      }
+    },
+    {
+      "ticker": "TSLA",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 394750.0,
+        "sell_shares_6m": 199670.0,
+        "net_shares_6m": 195080.0,
+        "net_transactions_6m": 16.0,
+        "net_value_usd_approx": 83562519.19067383
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 19,
+        "raises": 2,
+        "lowers": 5,
+        "upgrades": 1,
+        "downgrades": 0,
+        "avg_target_raise_pct": 5.28
+      }
+    },
+    {
+      "ticker": "KO",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 1478835.0,
+        "sell_shares_6m": 1125955.0,
+        "net_shares_6m": 352880.0,
+        "net_transactions_6m": 32.0,
+        "net_value_usd_approx": 27672848.953857422
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 16,
+        "raises": 15,
+        "lowers": 1,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": 4.99
+      }
+    },
+    {
+      "ticker": "MCD",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 161895.0,
+        "sell_shares_6m": 105588.0,
+        "net_shares_6m": 56307.0,
+        "net_transactions_6m": 35.0,
+        "net_value_usd_approx": 15526655.25
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 26,
+        "raises": 13,
+        "lowers": 9,
+        "upgrades": 2,
+        "downgrades": 0,
+        "avg_target_raise_pct": 4.64
+      }
+    },
+    {
+      "ticker": "MRVL",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 1887066.0,
+        "sell_shares_6m": 229813.0,
+        "net_shares_6m": 1657253.0,
+        "net_transactions_6m": 27.0,
+        "net_value_usd_approx": 281948460.98205566
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 23,
+        "raises": 17,
+        "lowers": 2,
+        "upgrades": 4,
+        "downgrades": 0,
+        "avg_target_raise_pct": 16.28
+      }
+    },
+    {
+      "ticker": "AVGO",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 610271.0,
+        "sell_shares_6m": 1104183.0,
+        "net_shares_6m": -493912.0,
+        "net_transactions_6m": 37.0,
+        "net_value_usd_approx": -212382160.0
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 21,
+        "raises": 7,
+        "lowers": 3,
+        "upgrades": 0,
+        "downgrades": 1,
+        "avg_target_raise_pct": 7.62
+      }
+    },
+    {
+      "ticker": "NVDA",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 61528009.0,
+        "sell_shares_6m": 2747796.0,
+        "net_shares_6m": 58780213.0,
+        "net_transactions_6m": 37.0,
+        "net_value_usd_approx": 12649501658.217026
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 36,
+        "raises": 14,
+        "lowers": 1,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": 10.95
+      }
+    },
+    {
+      "ticker": "TSM",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 0,
+        "sell_shares_6m": 0,
+        "net_shares_6m": 0,
+        "net_transactions_6m": 0,
+        "net_value_usd_approx": null
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 5,
+        "raises": 2,
+        "lowers": 1,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": 10.76
+      }
+    },
+    {
+      "ticker": "ETN",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 54285.0,
+        "sell_shares_6m": 14201.0,
+        "net_shares_6m": 40084.0,
+        "net_transactions_6m": 31.0,
+        "net_value_usd_approx": 16094127.231445312
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 12,
+        "raises": 9,
+        "lowers": 2,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": 10.09
+      }
+    },
+    {
+      "ticker": "EQIX",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 79167.0,
+        "sell_shares_6m": 57381.0,
+        "net_shares_6m": 21786.0,
+        "net_transactions_6m": 78.0,
+        "net_value_usd_approx": 23356333.922607422
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 28,
+        "raises": 26,
+        "lowers": 0,
+        "upgrades": 0,
+        "downgrades": 1,
+        "avg_target_raise_pct": 10.35
+      }
+    },
+    {
+      "ticker": "PATH",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 10827171.0,
+        "sell_shares_6m": 1585048.0,
+        "net_shares_6m": 9242123.0,
+        "net_transactions_6m": 37.0,
+        "net_value_usd_approx": 99722506.81744099
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 11,
+        "raises": 0,
+        "lowers": 10,
+        "upgrades": 1,
+        "downgrades": 0,
+        "avg_target_raise_pct": null
+      }
+    },
+    {
+      "ticker": "GEV",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 233167.0,
+        "sell_shares_6m": 5300.0,
+        "net_shares_6m": 227867.0,
+        "net_transactions_6m": 12.0,
+        "net_value_usd_approx": 237015865.61315918
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 17,
+        "raises": 16,
+        "lowers": 0,
+        "upgrades": 1,
+        "downgrades": 1,
+        "avg_target_raise_pct": 33.68
+      }
+    },
+    {
+      "ticker": "SYM",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 1522371.0,
+        "sell_shares_6m": 3803459.0,
+        "net_shares_6m": -2281088.0,
+        "net_transactions_6m": 45.0,
+        "net_value_usd_approx": -119278093.60839844
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 4,
+        "raises": 3,
+        "lowers": 0,
+        "upgrades": 2,
+        "downgrades": 0,
+        "avg_target_raise_pct": 11.71
+      }
+    },
+    {
+      "ticker": "ORCL",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 32826.0,
+        "sell_shares_6m": 87223.0,
+        "net_shares_6m": -54397.0,
+        "net_transactions_6m": 9.0,
+        "net_value_usd_approx": -10659091.98399353
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 27,
+        "raises": 3,
+        "lowers": 15,
+        "upgrades": 3,
+        "downgrades": 0,
+        "avg_target_raise_pct": 6.23
+      }
+    },
+    {
+      "ticker": "TEM",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 752007.0,
+        "sell_shares_6m": 1343568.0,
+        "net_shares_6m": -591561.0,
+        "net_transactions_6m": 41.0,
+        "net_value_usd_approx": -29495231.82106018
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 12,
+        "raises": 2,
+        "lowers": 6,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": 5.68
+      }
+    },
+    {
+      "ticker": "RXRX",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 3265211.0,
+        "sell_shares_6m": 1485466.0,
+        "net_shares_6m": 1779745.0,
+        "net_transactions_6m": 43.0,
+        "net_value_usd_approx": 5908753.281189203
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 4,
+        "raises": 0,
+        "lowers": 2,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": null
+      }
+    },
+    {
+      "ticker": "LRCX",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 959928.0,
+        "sell_shares_6m": 358476.0,
+        "net_shares_6m": 601452.0,
+        "net_transactions_6m": 43.0,
+        "net_value_usd_approx": 176856953.25805664
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 16,
+        "raises": 13,
+        "lowers": 0,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": 7.82
+      }
+    },
+    {
+      "ticker": "PWR",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 160252.0,
+        "sell_shares_6m": 25653.0,
+        "net_shares_6m": 134599.0,
+        "net_transactions_6m": 13.0,
+        "net_value_usd_approx": 100276255.0
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 22,
+        "raises": 22,
+        "lowers": 0,
+        "upgrades": 1,
+        "downgrades": 0,
+        "avg_target_raise_pct": 22.1
+      }
+    },
+    {
+      "ticker": "MTZ",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 71966.0,
+        "sell_shares_6m": 10450.0,
+        "net_shares_6m": 61516.0,
+        "net_transactions_6m": 21.0,
+        "net_value_usd_approx": 25485464.165649414
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 23,
+        "raises": 23,
+        "lowers": 0,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": 25.54
+      }
+    },
+    {
+      "ticker": "XYL",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 0,
+        "sell_shares_6m": 0,
+        "net_shares_6m": 0,
+        "net_transactions_6m": 0,
+        "net_value_usd_approx": null
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 14,
+        "raises": 1,
+        "lowers": 13,
+        "upgrades": 0,
+        "downgrades": 1,
+        "avg_target_raise_pct": 0.76
+      }
+    },
+    {
+      "ticker": "MP",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 241522.0,
+        "sell_shares_6m": 1359294.0,
+        "net_shares_6m": -1117772.0,
+        "net_transactions_6m": 17.0,
+        "net_value_usd_approx": -75371366.30111694
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 5,
+        "raises": 1,
+        "lowers": 1,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": 11.11
+      }
+    },
+    {
+      "ticker": "BWXT",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 88998.0,
+        "sell_shares_6m": 23327.0,
+        "net_shares_6m": 65671.0,
+        "net_transactions_6m": 21.0,
+        "net_value_usd_approx": 13484226.550247192
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 4,
+        "raises": 2,
+        "lowers": 0,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": 6.57
+      }
+    },
+    {
+      "ticker": "CCJ",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 0,
+        "sell_shares_6m": 0,
+        "net_shares_6m": 0,
+        "net_transactions_6m": 0,
+        "net_value_usd_approx": null
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 3,
+        "raises": 2,
+        "lowers": 0,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": 38.93
+      }
+    },
+    {
+      "ticker": "NET",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 1922644.0,
+        "sell_shares_6m": 1703887.0,
+        "net_shares_6m": 218757.0,
+        "net_transactions_6m": 82.0,
+        "net_value_usd_approx": 42904811.478149414
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 15,
+        "raises": 9,
+        "lowers": 3,
+        "upgrades": 1,
+        "downgrades": 0,
+        "avg_target_raise_pct": 10.16
+      }
+    },
+    {
+      "ticker": "RDDT",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 978093.0,
+        "sell_shares_6m": 837952.0,
+        "net_shares_6m": 140141.0,
+        "net_transactions_6m": 96.0,
+        "net_value_usd_approx": 21833968.22767639
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 15,
+        "raises": 4,
+        "lowers": 8,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": 8.08
+      }
+    },
+    {
+      "ticker": "VRT",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 337484.0,
+        "sell_shares_6m": 495262.0,
+        "net_shares_6m": -157778.0,
+        "net_transactions_6m": 42.0,
+        "net_value_usd_approx": -53639786.8526001
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 17,
+        "raises": 15,
+        "lowers": 0,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": 21.99
+      }
+    },
+    {
+      "ticker": "CDNS",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 516433.0,
+        "sell_shares_6m": 108976.0,
+        "net_shares_6m": 407457.0,
+        "net_transactions_6m": 35.0,
+        "net_value_usd_approx": 147784658.87384033
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 16,
+        "raises": 8,
+        "lowers": 3,
+        "upgrades": 1,
+        "downgrades": 0,
+        "avg_target_raise_pct": 4.08
+      }
+    },
+    {
+      "ticker": "CRWD",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 483827.0,
+        "sell_shares_6m": 210626.0,
+        "net_shares_6m": 273201.0,
+        "net_transactions_6m": 55.0,
+        "net_value_usd_approx": 144187297.10595703
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 34,
+        "raises": 6,
+        "lowers": 18,
+        "upgrades": 6,
+        "downgrades": 0,
+        "avg_target_raise_pct": 7.36
+      }
+    },
+    {
+      "ticker": "SNOW",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 4495113.0,
+        "sell_shares_6m": 1107163.0,
+        "net_shares_6m": 3387950.0,
+        "net_transactions_6m": 66.0,
+        "net_value_usd_approx": 516492967.1607971
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 29,
+        "raises": 0,
+        "lowers": 27,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": null
+      }
+    },
+    {
+      "ticker": "VST",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 1284111.0,
+        "sell_shares_6m": 198931.0,
+        "net_shares_6m": 1085180.0,
+        "net_transactions_6m": 28.0,
+        "net_value_usd_approx": 160302790.92468262
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 5,
+        "raises": 2,
+        "lowers": 3,
+        "upgrades": 1,
+        "downgrades": 0,
+        "avg_target_raise_pct": 3.35
+      }
+    },
+    {
+      "ticker": "MSFT",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 17532.0,
+        "sell_shares_6m": 31762.0,
+        "net_shares_6m": -14230.0,
+        "net_transactions_6m": 17.0,
+        "net_value_usd_approx": -5907157.530517578
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 25,
+        "raises": 7,
+        "lowers": 13,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": 7.22
+      }
+    },
+    {
+      "ticker": "META",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 0,
+        "sell_shares_6m": 0,
+        "net_shares_6m": 0,
+        "net_transactions_6m": 0,
+        "net_value_usd_approx": null
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 0,
+        "raises": 0,
+        "lowers": 0,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": null
+      }
+    },
+    {
+      "ticker": "AMZN",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 2612269.0,
+        "sell_shares_6m": 269754.0,
+        "net_shares_6m": 2342515.0,
+        "net_transactions_6m": 51.0,
+        "net_value_usd_approx": 638756973.0429077
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 44,
+        "raises": 35,
+        "lowers": 3,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": 9.22
+      }
+    },
+    {
+      "ticker": "AMD",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 944454.0,
+        "sell_shares_6m": 516454.0,
+        "net_shares_6m": 428000.0,
+        "net_transactions_6m": 32.0,
+        "net_value_usd_approx": 194821321.04492188
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 35,
+        "raises": 28,
+        "lowers": 1,
+        "upgrades": 4,
+        "downgrades": 2,
+        "avg_target_raise_pct": 37.23
+      }
+    },
+    {
+      "ticker": "PLTR",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 1950625.0,
+        "sell_shares_6m": 4145323.0,
+        "net_shares_6m": -2194698.0,
+        "net_transactions_6m": 32.0,
+        "net_value_usd_approx": -302429391.09768677
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 20,
+        "raises": 4,
+        "lowers": 4,
+        "upgrades": 4,
+        "downgrades": 1,
+        "avg_target_raise_pct": 16.02
+      }
+    },
+    {
+      "ticker": "CRM",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 436833.0,
+        "sell_shares_6m": 138555.0,
+        "net_shares_6m": 298278.0,
+        "net_transactions_6m": 52.0,
+        "net_value_usd_approx": 54232908.14465332
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 33,
+        "raises": 1,
+        "lowers": 28,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": 1.52
+      }
+    },
+    {
+      "ticker": "NOW",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 454800.0,
+        "sell_shares_6m": 28674.0,
+        "net_shares_6m": 426126.0,
+        "net_transactions_6m": 75.0,
+        "net_value_usd_approx": 38854168.810043335
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 41,
+        "raises": 4,
+        "lowers": 26,
+        "upgrades": 0,
+        "downgrades": 1,
+        "avg_target_raise_pct": 3.92
+      }
+    },
+    {
+      "ticker": "CRWV",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 23125436.0,
+        "sell_shares_6m": 28145268.0,
+        "net_shares_6m": -5019831.0,
+        "net_transactions_6m": 245.0,
+        "net_value_usd_approx": -573013716.3096542
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 29,
+        "raises": 17,
+        "lowers": 5,
+        "upgrades": 1,
+        "downgrades": 0,
+        "avg_target_raise_pct": 18.84
+      }
+    },
+    {
+      "ticker": "ARM",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 0,
+        "sell_shares_6m": 0,
+        "net_shares_6m": 0,
+        "net_transactions_6m": 0,
+        "net_value_usd_approx": null
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 28,
+        "raises": 25,
+        "lowers": 0,
+        "upgrades": 3,
+        "downgrades": 1,
+        "avg_target_raise_pct": 31.41
+      }
+    },
+    {
+      "ticker": "OKLO",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 31905121.0,
+        "sell_shares_6m": 5018366.0,
+        "net_shares_6m": 26886755.0,
+        "net_transactions_6m": 52.0,
+        "net_value_usd_approx": 1949558662.4863052
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 11,
+        "raises": 0,
+        "lowers": 7,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": null
+      }
+    },
+    {
+      "ticker": "ALAB",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 846558.0,
+        "sell_shares_6m": 1457356.0,
+        "net_shares_6m": -610798.0,
+        "net_transactions_6m": 31.0,
+        "net_value_usd_approx": -122031328.31918335
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 14,
+        "raises": 9,
+        "lowers": 2,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": 26.67
+      }
+    },
+    {
+      "ticker": "VEEV",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 35775.0,
+        "sell_shares_6m": 3500.0,
+        "net_shares_6m": 32275.0,
+        "net_transactions_6m": 31.0,
+        "net_value_usd_approx": 5368623.38180542
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 19,
+        "raises": 3,
+        "lowers": 16,
+        "upgrades": 1,
+        "downgrades": 1,
+        "avg_target_raise_pct": 10.15
+      }
+    },
+    {
+      "ticker": "SDGR",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 647462.0,
+        "sell_shares_6m": 109950.0,
+        "net_shares_6m": 537512.0,
+        "net_transactions_6m": 25.0,
+        "net_value_usd_approx": 7057532.621513367
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 2,
+        "raises": 0,
+        "lowers": 2,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": null
+      }
+    },
+    {
+      "ticker": "IONQ",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 444989.0,
+        "sell_shares_6m": 136081.0,
+        "net_shares_6m": 308908.0,
+        "net_transactions_6m": 19.0,
+        "net_value_usd_approx": 15210630.438491821
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 0,
+        "raises": 0,
+        "lowers": 0,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": null
+      }
+    },
+    {
+      "ticker": "MOD",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 46072.0,
+        "sell_shares_6m": 65666.0,
+        "net_shares_6m": -19594.0,
+        "net_transactions_6m": 8.0,
+        "net_value_usd_approx": -5349162.0
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 4,
+        "raises": 1,
+        "lowers": 0,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": 3.92
+      }
+    },
+    {
+      "ticker": "UUUU",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 394441.0,
+        "sell_shares_6m": 534841.0,
+        "net_shares_6m": -140400.0,
+        "net_transactions_6m": 54.0,
+        "net_value_usd_approx": -3001751.882171631
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 3,
+        "raises": 2,
+        "lowers": 0,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": 4.15
+      }
+    },
+    {
+      "ticker": "LEU",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 0,
+        "sell_shares_6m": 0,
+        "net_shares_6m": 0,
+        "net_transactions_6m": 0,
+        "net_value_usd_approx": null
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 4,
+        "raises": 0,
+        "lowers": 4,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": null
+      }
+    },
+    {
+      "ticker": "NNE",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 1787500.0,
+        "sell_shares_6m": 3985664.0,
+        "net_shares_6m": -2198164.0,
+        "net_transactions_6m": 23.0,
+        "net_value_usd_approx": -60339603.47706604
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 0,
+        "raises": 0,
+        "lowers": 0,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": null
+      }
+    },
+    {
+      "ticker": "SMR",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 1002171.0,
+        "sell_shares_6m": 111663648.0,
+        "net_shares_6m": -110661478.0,
+        "net_transactions_6m": 23.0,
+        "net_value_usd_approx": -1388801570.0070019
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 10,
+        "raises": 0,
+        "lowers": 9,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": null
+      }
+    },
+    {
+      "ticker": "RYCEY",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 0,
+        "sell_shares_6m": 0,
+        "net_shares_6m": 0,
+        "net_transactions_6m": 0,
+        "net_value_usd_approx": null
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 0,
+        "raises": 0,
+        "lowers": 0,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": null
+      }
+    },
+    {
+      "ticker": "MDB",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 183246.0,
+        "sell_shares_6m": 127119.0,
+        "net_shares_6m": 56127.0,
+        "net_transactions_6m": 23.0,
+        "net_value_usd_approx": 16808352.758514404
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 29,
+        "raises": 2,
+        "lowers": 24,
+        "upgrades": 2,
+        "downgrades": 1,
+        "avg_target_raise_pct": 12.4
+      }
+    },
+    {
+      "ticker": "CFLT",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 1929229.0,
+        "sell_shares_6m": 1987312.0,
+        "net_shares_6m": -58083.0,
+        "net_transactions_6m": 50.0,
+        "net_value_usd_approx": null
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 0,
+        "raises": 0,
+        "lowers": 0,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": null
+      }
+    },
+    {
+      "ticker": "DDOG",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 3328570.0,
+        "sell_shares_6m": 1946029.0,
+        "net_shares_6m": 1382541.0,
+        "net_transactions_6m": 109.0,
+        "net_value_usd_approx": 276729411.62301636
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 40,
+        "raises": 17,
+        "lowers": 14,
+        "upgrades": 1,
+        "downgrades": 0,
+        "avg_target_raise_pct": 30.06
+      }
+    }
+  ]
+}

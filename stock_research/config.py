@@ -42,6 +42,11 @@ SEC_RATE_LIMIT_DELAY = 0.12  # SEC 限流 10 req/sec
 FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY")
 FINNHUB_BASE = "https://finnhub.io/api/v1"
 
+# Financial Modeling Prep — 财报 + DCF + 分析师预期
+# 免费注册：https://site.financialmodelingprep.com/developer/docs（250 calls/day）
+FMP_API_KEY = os.environ.get("FMP_API_KEY")
+FMP_BASE = "https://financialmodelingprep.com/api/v3"
+
 # ─────────── 跟踪机构（13F 监控）───────────
 INVESTORS_13F = {
     "Berkshire Hathaway (Buffett)":   "0001067983",
