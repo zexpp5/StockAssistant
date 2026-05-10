@@ -1,9 +1,9 @@
 #!/bin/bash
-# AI 股票看板每日自动刷新（19 步）
+# AI 股票看板每日自动刷新（20 步）
 # 流程：抓价格 → SEC 13F → 13F→json → enrichment → 跨源审计 → v1 优选 → picks 反向审查
 #       → 历史回顾 → v6 学术因子选股 → Markowitz 仓位优化 → 调整清单 → 写飞书
 #       → 风险指标 → 优化方法对比 → 实盘防御 → OpenBB 综合情报
-#       → [每周] 候选发现 → 重建 HTML
+#       → [每周] 候选发现 → DuckDB pipeline 同步 → 重建 HTML
 # 失败时弹 macOS 通知 + 写日志，不中断后续步骤
 #
 # 安装到 cron（每天早上 7:30 跑一次）：
@@ -57,31 +57,31 @@ echo "================================================"
 echo "  ⏰ $TIMESTAMP — 每日刷新开始"
 echo "================================================"
 
-run_step "1/19 抓价格" "fetch_stock_prices.py"
-run_step "2/19 SEC 13F 刷新" "-m stock_research.jobs.refresh_13f"
-run_step "3/19 SEC 13F → track_13f.json（dashboard 用）" "_build_track_13f_from_sec.py"
-run_step "4/19 多源 enrichment" "-m stock_research.jobs.enrich_watchlist --skip-trends"
-run_step "5/19 跨源审计" "-m stock_research.jobs.daily_audit"
-run_step "6/19 每日优选 v1（旧体系）" "daily_picks.py"
-run_step "7/19 picks 反向审查" "-m stock_research.jobs.audit_picks --fast"
-run_step "8/19 历史回顾" "weekly_review.py"
+run_step "1/20 抓价格" "fetch_stock_prices.py"
+run_step "2/20 SEC 13F 刷新" "-m stock_research.jobs.refresh_13f"
+run_step "3/20 SEC 13F → track_13f.json（dashboard 用）" "_build_track_13f_from_sec.py"
+run_step "4/20 多源 enrichment" "-m stock_research.jobs.enrich_watchlist --skip-trends"
+run_step "5/20 跨源审计" "-m stock_research.jobs.daily_audit"
+run_step "6/20 每日优选 v1（旧体系）" "daily_picks.py"
+run_step "7/20 picks 反向审查" "-m stock_research.jobs.audit_picks --fast"
+run_step "8/20 历史回顾" "weekly_review.py"
 
 # v6 学术因子流水线（Piotroski + 12-1 动量 + 1 月反转 + PEAD + 分析师）
-run_step "9/19 v6 学术因子选股 + 写飞书" "daily_picks_v5.py"
-run_step "10/19 Markowitz 仓位优化（方案 A v6）" "build_plan_a_v5.py"
-run_step "11/19 调整清单（卖/买/调）→ trade_delta.json" "trade_delta.py"
-run_step "12/19 写飞书（trade_delta → 每日优选表）" "write_trade_delta_to_feishu.py"
+run_step "9/20 v6 学术因子选股 + 写飞书" "daily_picks_v5.py"
+run_step "10/20 Markowitz 仓位优化（方案 A v6）" "build_plan_a_v5.py"
+run_step "11/20 调整清单（卖/买/调）→ trade_delta.json" "trade_delta.py"
+run_step "12/20 写飞书（trade_delta → 每日优选表）" "write_trade_delta_to_feishu.py"
 
 # 专业分析数据
-run_step "13/19 风险指标 (VaR/Sharpe/Calmar)" "risk_metrics.py"
-run_step "14/19 仓位优化方法对比" "optimize_portfolio_legacy.py"
-run_step "15/19 历史数据预拉（dashboard 历史 tab 用）" "_fetch_history_for_dashboard.py"
+run_step "13/20 风险指标 (VaR/Sharpe/Calmar)" "risk_metrics.py"
+run_step "14/20 仓位优化方法对比" "optimize_portfolio_legacy.py"
+run_step "15/20 历史数据预拉（dashboard 历史 tab 用）" "_fetch_history_for_dashboard.py"
 
 # v7 实盘防御（C 终极版：VIX + 200MA + 单股 -15% 止损 + 宏观 + PCR）
-run_step "16/19 实盘防御检查" "-m stock_research.jobs.realtime_defense"
+run_step "16/20 实盘防御检查" "-m stock_research.jobs.realtime_defense"
 
 # v7.5 OpenBB 综合情报（宏观 + 行业轮动 + 商品 + PCR + 内部人）
-run_step "17/19 OpenBB 综合情报" "-m stock_research.jobs.openbb_intelligence --quick"
+run_step "17/20 OpenBB 综合情报" "-m stock_research.jobs.openbb_intelligence --quick"
 
 # 候选发现：扫 SOXX/IGM/IRBO/BAI 找 watchlist 之外的因子高分股。
 # 每只股票要拉 yfinance 财报+价格+分析师，全跑一次 ~20-30 分钟，每周刷新一次足够。
@@ -95,14 +95,20 @@ if [ -f "$DISC_FILE" ]; then
     fi
 fi
 if [ "$DISC_STALE" = "1" ]; then
-    run_step "18/19 候选发现（每周）" "discover_candidates.py"
+    run_step "18/20 候选发现（每周）" "discover_candidates.py"
 else
     AGE_DAY=$(( AGE_SEC / 86400 ))
     echo ""
-    echo "[18/19 候选发现] 跳过 — 上次 $AGE_DAY 天前刚跑过（< 6 天，无需重跑）"
+    echo "[18/20 候选发现] 跳过 — 上次 $AGE_DAY 天前刚跑过（< 6 天，无需重跑）"
 fi
 
-run_step "19/19 重建 HTML" "build_stock_dashboard_html.py"
+# DuckDB pipeline 同步：把今天刷新过的根目录数据 JSON（risk_metrics / track_13f / plan_a_v5
+# / history_data / optimization_result / factor_scores_today / reverse_validation_*）
+# 增量插入到 stock_history.duckdb 的 snapshots(category='pipeline') 表，
+# 使「数据源切换 = DuckDB」的看板能拿到当天数据。脚本幂等，按 mtime 时间戳去重。
+run_step "19/20 DuckDB pipeline 同步" "migrate_pipeline_to_duckdb.py"
+
+run_step "20/20 重建 HTML" "build_stock_dashboard_html.py"
 
 DONE_TS=$(date '+%Y-%m-%d %H:%M:%S')
 echo ""
