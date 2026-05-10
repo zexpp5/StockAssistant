@@ -415,7 +415,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <a href="#valuation" data-tab="valuation" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">📈 估值视角</a>
     <a href="#themes" data-tab="themes" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">🗂 主题分组</a>
     <a href="#history" data-tab="history" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">📅 历史</a>
-    <a href="#backtest" data-tab="backtest" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">📈 实盘跟踪</a>
+    <a href="#backtest" data-tab="backtest" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">🤖 AI 方案模拟</a>
     <a href="#professional" data-tab="professional" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">📊 专业分析</a>
     <a href="#upgrade" data-tab="upgrade" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">💰 升级建议</a>
     <span class="ml-auto flex items-center gap-2 flex-shrink-0">
@@ -704,7 +704,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <p class="text-sm text-slate-600 mt-1">本地浏览器保存（localStorage）· 实时与 yfinance 数据计算盈亏 · <strong class="text-rose-600">不构成投资建议</strong></p>
     </div>
     <div class="flex gap-2">
-      <button onclick="loadPlanAv6()" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium">🎯 一键加载方案 A v6（学术因子）</button>
+      <button onclick="loadPlanAv6()" title="把方案推荐的 12 只批量抄进持仓 — 仅在你已经真下单后用，下一步要手动改成真实成交价" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-lg text-sm font-medium">📋 把方案抄进持仓（仅在你真下单后用）</button>
       <button onclick="addHolding()" class="bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-lg text-sm font-medium">+ 添加持仓</button>
     </div>
   </div>
@@ -923,11 +923,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 </section>
 
-<!-- ============ 📈 实盘跟踪 Tab ============ -->
+<!-- ============ 🤖 AI 方案模拟 Tab ============ -->
 <section id="backtest" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
   <div class="mb-6">
-    <h2 class="text-2xl font-bold text-slate-900">📈 方案实盘跟踪：从锁定日往后看每日营收</h2>
-    <p class="text-sm text-slate-600 mt-1">v6 plan 锁定日为基线（NAV=100），之后每个交易日实盘跟踪。基准 SPY · <strong class="text-rose-600">不是回测，是 forward 视角</strong>。每日 daily_refresh 自动累加。</p>
+    <h2 class="text-2xl font-bold text-slate-900">🤖 AI 方案模拟：v6 推荐 12 只从锁定日起的每日真实表现</h2>
+    <p class="text-sm text-slate-600 mt-1">⚠️ <strong>这不是你的真实账户</strong>，是"假设你 5-08 收盘按方案推荐买入了那 12 只、之后一直持有"的模拟跟踪。基线 NAV=100，按每日真实收盘价计算。基准 SPY · <strong class="text-rose-600">不是历史回测，是 forward 跟踪</strong>。每日 daily_refresh 自动累加。</p>
     <div id="backtest-inception-banner" class="mt-3 hidden bg-violet-50 border-l-4 border-violet-500 rounded-r-lg p-3 text-sm text-slate-800"></div>
   </div>
 
@@ -1151,7 +1151,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <div class="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-3 text-xs text-slate-700">
         <p class="font-semibold text-slate-800 mb-1">🔧 两条线公用的基础设施</p>
         SEC 13F 机构持仓抓取 · 多源 enrichment · 跨源审计 · 反向审查 · 风险指标（VaR/Sharpe/Calmar）·
-        仓位优化方法对比 · DuckDB 长期快照库（每天累加，将来做严肃回测）· 实盘跟踪（v6 plan 锁定日为基线，往后看每日真实表现）
+        仓位优化方法对比 · DuckDB 长期快照库（每天累加，将来做严肃回测）· AI 方案模拟（v6 plan 锁定日为基线，往后看每日真实表现）
       </div>
 
       <!-- ⚠️ 已规划未做 -->
@@ -1535,7 +1535,7 @@ const _DATA_DB = {
   OPTIMIZATION:  {OPTIMIZATION_JSON_DB},
   PLAN_A_V6:     {PLAN_A_V6_JSON_DB},
 };
-// 实盘跟踪数据：和其他源一样准备两份
+// AI 方案模拟数据：和其他源一样准备两份
 const _BACKTEST_FILE = {PLAN_BACKTEST_JSON_FILE};
 const _BACKTEST_DB   = {PLAN_BACKTEST_JSON_DB};
 
@@ -1936,6 +1936,12 @@ function loadPlanAv6() {
     alert("还没有方案 A v6 数据，请先跑：python3 build_plan_a_v5.py");
     return;
   }
+  if (!confirm(
+    "⚠️ 这个按钮会把方案 v6 推荐的 12 只股票批量抄进「我的持仓」，把今天的现价当作买入价。\n\n" +
+    "✅ 适用场景：你已经按方案在券商下单了，想快速录入再手动改成真实成交价\n" +
+    "❌ 不要用：你还没真买，只想看方案表现 → 请直接看顶部「🤖 AI 方案模拟」tab\n\n" +
+    "继续吗？"
+  )) return;
   if (loadHoldings().length > 0) {
     if (!confirm("当前已有持仓数据，加载方案 A v6 会覆盖。继续？")) return;
   }
@@ -1967,14 +1973,10 @@ function loadPlanAv6() {
   const metrics = PLAN_A_V6.portfolio_metrics || {};
   // 渲染持久指标卡片
   renderV6Metrics(metrics);
-  alert(`✅ 已加载方案 A v6 持仓（${holdings.length} 只）\n` +
-        `总金额: ¥${Math.round(totalAmount).toLocaleString()}\n\n` +
-        `📚 学术因子选股 + Markowitz 优化:\n` +
-        `  · 5 因子（Piotroski + 动量 + 反转 + PEAD + 分析师）\n` +
-        `  · 年化 Sharpe ${metrics.annual_sharpe || '?'}\n` +
-        `  · 年化收益 ${metrics.annual_return_pct || '?'}%\n` +
-        `  · 年化波动 ${metrics.annual_vol_pct || '?'}%\n\n` +
-        `⚠️ Sharpe 是 backtest 不是承诺；熊市可能跑输 SPY 5-15%`);
+  alert(`✅ 已加载 ${holdings.length} 只（总额 ¥${Math.round(totalAmount).toLocaleString()}）\n\n` +
+        `🚨 重要下一步：买入价现在 = 今天现价。请逐行点【编辑】改成你真实成交价和真实数量，否则盈亏算不准。\n\n` +
+        `📚 backtest 数据（参考，非未来承诺）:\n` +
+        `  · Sharpe ${metrics.annual_sharpe || '?'} | 年化收益 ${metrics.annual_return_pct || '?'}% | 波动 ${metrics.annual_vol_pct || '?'}%`);
 }
 
 function renderV6Metrics(metrics) {
@@ -2396,7 +2398,7 @@ function renderOptPane() {
   });
 }
 
-// ============ 实盘跟踪 Tab ============
+// ============ AI 方案模拟 Tab ============
 function renderPlanBacktest() {
   const data = (_DATA_SOURCE === 'db' ? _BACKTEST_DB : _BACKTEST_FILE) || {};
   const metricsEl = document.getElementById('backtest-metrics');
@@ -4303,7 +4305,7 @@ function toggleAuditSource() {{
     html = html.replace("{HISTORY_DATA_JSON_DB}", json.dumps(history_data_db, ensure_ascii=False))
     html = html.replace("{DISCOVERY_JSON}", json.dumps(discovery, ensure_ascii=False))
 
-    # 方案实盘跟踪：从 v6 锁定日往后看每日表现
+    # AI 方案模拟：从 v6 锁定日往后看每日表现
     backtest_file = compute_plan_forward_track(plan_a_v6, history_data)
     backtest_db = compute_plan_forward_track(plan_a_v6_db or plan_a_v6, history_data_db or history_data)
     for label, bt in (("JSON", backtest_file), ("DuckDB", backtest_db)):
@@ -4311,7 +4313,7 @@ function toggleAuditSource() {{
             m = bt["metrics"]
             inception = bt.get("inception_date") or "?"
             baseline = bt.get("baseline_date") or "?"
-            print(f"  方案实盘跟踪 [{label}]: 锁定 {inception} → 基线 {baseline} · 跟踪 {m['n_tracked_days']} 日"
+            print(f"  AI 方案模拟 [{label}]: 锁定 {inception} → 基线 {baseline} · 跟踪 {m['n_tracked_days']} 日"
                   f" · 累计 {m['cumulative_return_pct']}% (vs SPY {m['bench_cumulative_return_pct']}%)")
     html = html.replace("{PLAN_BACKTEST_JSON_FILE}", json.dumps(backtest_file, ensure_ascii=False))
     html = html.replace("{PLAN_BACKTEST_JSON_DB}", json.dumps(backtest_db, ensure_ascii=False))
