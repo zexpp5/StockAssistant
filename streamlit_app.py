@@ -40,11 +40,32 @@ st.set_page_config(
 )
 
 
-# ─────────── 工具：读快照 ───────────
+# ─────────── 工具：读快照（DuckDB 优先，文件 fallback）───────────
+#
+# 部署到 Streamlit Cloud 时，data/snapshots/ 因 .gitignore 不可用；
+# DuckDB 文件在仓库里（plan a 入库），所以走 DB 读路径。
 
 @st.cache_data(ttl=300)
 def load_latest_snapshot(name_prefix: str, dir_name: str = "audit") -> dict | None:
-    """读最新快照。"""
+    """读最新快照——优先 DuckDB snapshots 表，失败/缺数据再 fallback 到本地文件。"""
+    db_path = _REPO_ROOT / "stock_history.duckdb"
+    if db_path.exists():
+        try:
+            import duckdb
+            con = duckdb.connect(str(db_path), read_only=True)
+            row = con.execute(
+                "SELECT payload FROM snapshots "
+                "WHERE category=? AND name=? "
+                "ORDER BY taken_at DESC LIMIT 1",
+                [dir_name, name_prefix],
+            ).fetchone()
+            con.close()
+            if row:
+                payload = row[0]
+                return json.loads(payload) if isinstance(payload, str) else payload
+        except Exception:
+            pass
+    # fallback：本地 data/snapshots/<dir>/<prefix>_*.json
     snap_dir = _REPO_ROOT / "data" / "snapshots" / dir_name
     if not snap_dir.exists():
         return None
@@ -245,19 +266,38 @@ with tab_factors:
         else:
             st.info("先跑 jobs.audit_ic")
 
-    # alphalens tear sheet 快照
-    snap_dir = _REPO_ROOT / "data" / "snapshots" / "tearsheet"
-    if snap_dir.exists():
+    # alphalens tear sheet 快照（优先 DuckDB，缺则本地文件）
+    tearsheets = []
+    db_path = _REPO_ROOT / "stock_history.duckdb"
+    if db_path.exists():
+        try:
+            import duckdb
+            con = duckdb.connect(str(db_path), read_only=True)
+            rows = con.execute(
+                "SELECT payload FROM snapshots WHERE category='tearsheet' "
+                "AND name LIKE 'factor_tearsheet%' ORDER BY taken_at DESC LIMIT 3"
+            ).fetchall()
+            con.close()
+            for r in rows:
+                p = r[0]
+                tearsheets.append(json.loads(p) if isinstance(p, str) else p)
+        except Exception:
+            pass
+    if not tearsheets:
+        snap_dir = _REPO_ROOT / "data" / "snapshots" / "tearsheet"
+        if snap_dir.exists():
+            for f in sorted(snap_dir.glob("factor_tearsheet_*.json"), reverse=True)[:3]:
+                try:
+                    tearsheets.append(json.loads(f.read_text(encoding="utf-8")))
+                except Exception:
+                    pass
+    if tearsheets:
         st.subheader("Alphalens-style Tear Sheet")
-        for f in sorted(snap_dir.glob("factor_tearsheet_*.json"), reverse=True)[:3]:
-            try:
-                ts = json.loads(f.read_text(encoding="utf-8"))
-                with st.expander(f"📁 {ts.get('factor', '')} ({ts.get('generated_at', '')[:10]})"):
-                    summary = ts.get("ic_summary", {})
-                    df_ic = pd.DataFrame(summary).T
-                    st.dataframe(df_ic, use_container_width=True)
-            except Exception:
-                pass
+        for ts in tearsheets:
+            with st.expander(f"📁 {ts.get('factor', '')} ({ts.get('generated_at', '')[:10]})"):
+                summary = ts.get("ic_summary", {})
+                df_ic = pd.DataFrame(summary).T
+                st.dataframe(df_ic, use_container_width=True)
 
 
 # ───── Tab 5: OpenBB 情报 ─────
