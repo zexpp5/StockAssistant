@@ -96,6 +96,78 @@ OVERRIDES = {
         "source": "https://www.bwxt.com/",
         "reason": "SMR 小型模块化反应堆制造，AI 数据中心电力下一波受益",
     },
+
+    # ─── 2026-05-10 watchlist 补股 11 只（详见 docs/2026-05-10_watchlist补股清单.md）───
+
+    # 必补 5 只（机构主流 AI 配置标配）
+    "ASML": {
+        "score": 3,
+        "theme": "🔥 半导体设备（EUV 光刻机独家）",
+        "source": "https://www.asml.com/",
+        "reason": "全球唯一 EUV 光刻机厂商，7nm 以下制程必须；NVDA/TSM/三星造芯片必用",
+    },
+    "CEG": {
+        "score": 1,
+        "theme": "⚡ AI 电力链（核电运营）",
+        "source": "https://www.constellationenergy.com/",
+        "reason": "美最大核电运营商；2024-09 与 MSFT 签 20 年 PPA 重启 Three Mile Island 给 AI 数据中心专供",
+    },
+    "QCOM": {
+        "score": 2,
+        "theme": "📱 边缘 AI / 汽车 AI",
+        "source": "https://www.qualcomm.com/",
+        "reason": "手机 SoC 龙头 + 汽车数字座舱市占 70%+ + AI PC 处理器，端侧 AI 首选",
+    },
+    "SNPS": {
+        "score": 2,
+        "theme": "🛠 EDA 芯片设计软件",
+        "source": "https://www.synopsys.com/",
+        "reason": "EDA 双寡头之一，NVDA/AMD/苹果设计芯片必用；芯片复杂度↑→设计软件费率↑",
+    },
+    "AMAT": {
+        "score": 3,
+        "theme": "🔥 半导体设备（沉积/刻蚀全覆盖）",
+        "source": "https://www.appliedmaterials.com/",
+        "reason": "美国最大半导体设备公司，先进制程（GAA/3D NAND）必用其沉积设备",
+    },
+
+    # 选补 6 只
+    "WDC": {
+        "score": 2,
+        "theme": "💾 NAND/HDD 存储",
+        "source": "https://www.westerndigital.com/",
+        "reason": "AI 训练数据存储需求暴涨，HDD/NAND 双品类受益；与 SNDK 同源",
+    },
+    "DLR": {
+        "score": 1,
+        "theme": "🏢 数据中心 REIT",
+        "source": "https://www.digitalrealty.com/",
+        "reason": "全球第二大数据中心 REIT，AI capex 推升租金 + 单机柜功率密度从 5kW → 50kW+",
+    },
+    "000977": {
+        "score": 2,
+        "theme": "🇨🇳 AI 服务器集成（A 股）",
+        "source": "http://www.inspur.com/",
+        "reason": "浪潮信息，中国 AI 服务器市占率 50%+，把 NVDA/寒武纪/海光 芯片组装成机柜",
+    },
+    "RGTI": {
+        "score": 1,
+        "theme": "🔮 量子计算（投机）",
+        "source": "https://www.rigetti.com/",
+        "reason": "超导量子计算厂商；量子是 AI 后下一棒，但商业化 5-10 年后",
+    },
+    "QBTS": {
+        "score": 1,
+        "theme": "🔮 量子计算·退火（投机）",
+        "source": "https://www.dwavesys.com/",
+        "reason": "量子退火路线，擅长组合优化；与 IONQ/RGTI 路线不同",
+    },
+    "PANW": {
+        "score": 2,
+        "theme": "🛡 AI 安全 / 云安全",
+        "source": "https://www.paloaltonetworks.com/",
+        "reason": "网络安全行业第一；AI 时代攻击面剧增（prompt injection / 模型窃取），AI 安全市场 5 年 5x",
+    },
 }
 
 

@@ -761,14 +761,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <!-- 总览数字 -->
   <div id="portfolio-summary" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 mb-4"></div>
 
-  <!-- 📚 v6 学术指标（加载方案 A v6 后显示）-->
+  <!-- 📚 v6 Markowitz 模型预期（加载方案 A v6 后显示）-->
   <div id="v6-metrics-card" class="bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-300 rounded-xl p-4 mb-4" style="display:none">
     <div class="flex items-center justify-between mb-3">
-      <h3 class="text-sm font-bold text-emerald-900">📚 当前持仓的 v6 学术指标（基于过去 252 天 yfinance 真实日 K）</h3>
-      <span class="text-xs text-emerald-700 bg-emerald-100 px-2 py-1 rounded">⚠️ backtest，非未来预测</span>
+      <h3 class="text-sm font-bold text-emerald-900">📚 v6 Markowitz 模型预期（每日 rebalance 假设 · 基于过去 252 天均值）</h3>
+      <span class="text-xs text-emerald-700 bg-emerald-100 px-2 py-1 rounded">⚠️ 模型期望，非未来预测</span>
     </div>
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3" id="v6-metrics-content"></div>
-    <p class="text-xs text-emerald-800 mt-3"><strong>夏普 2.95 解读</strong>：远超巴菲特长期 0.76 / 标普 500 长期 0.4 — 是<strong>过去 1 年 AI 大涨</strong>叠加 Markowitz 在历史窗口内"完美选股"的结果，实际未来很难复现。仅用于<strong>不同方案对比</strong>。</p>
+    <p class="text-xs text-emerald-800 mt-3"><strong>⚠️ 注意</strong>：这是 Markowitz 优化器的"<strong>每日 rebalance 模型期望</strong>"（mean × 252，arithmetic）。「专业分析 → 风险指标」tab 用 <strong>buy-and-hold 复利</strong>口径会得到不同（通常更高）的数字 —— 两个都对，<strong>假设不同</strong>。仅用于<strong>不同方案的相对优劣对比</strong>，不是未来收益预测。</p>
   </div>
 
   <!-- 三层警戒线进度条 -->
@@ -926,8 +926,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <!-- ============ 🤖 AI 方案模拟 Tab ============ -->
 <section id="backtest" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
   <div class="mb-6">
-    <h2 class="text-2xl font-bold text-slate-900">🤖 AI 方案模拟：v6 推荐 12 只从锁定日起的每日真实表现</h2>
-    <p class="text-sm text-slate-600 mt-1">⚠️ <strong>这不是你的真实账户</strong>，是"假设你 5-08 收盘按方案推荐买入了那 12 只、之后一直持有"的模拟跟踪。基线 NAV=100，按每日真实收盘价计算。基准 SPY · <strong class="text-rose-600">不是历史回测，是 forward 跟踪</strong>。每日 daily_refresh 自动累加。</p>
+    <h2 class="text-2xl font-bold text-slate-900">🤖 AI 方案模拟：v6 锁定日推荐组合 buy-and-hold 跟踪</h2>
+    <p class="text-sm text-slate-600 mt-1">⚠️ <strong>这不是你的真实账户</strong>，是"假设你在 v6 plan 锁定那天按推荐买入并一直持有"的模拟。<strong>tickers 冻结在锁定日</strong>（已修复 look-ahead bias，未来 v6 换股不会回填）。基线 NAV=100，按每日真实收盘价计算。基准 SPY · <strong class="text-rose-600">不是历史回测，是 forward 跟踪</strong>。每日 daily_refresh 自动累加。</p>
     <div id="backtest-inception-banner" class="mt-3 hidden bg-violet-50 border-l-4 border-violet-500 rounded-r-lg p-3 text-sm text-slate-800"></div>
   </div>
 
@@ -1590,7 +1590,6 @@ function swapDataSource(src) {
   try { if (typeof render13FPane === 'function') render13FPane(); } catch (e) {}
   try { if (typeof renderOptPane === 'function') renderOptPane(); } catch (e) {}
   try { if (typeof renderSimulation === 'function') renderSimulation(); } catch (e) {}
-  try { if (typeof loadPlanAv6 === 'function') loadPlanAv6(); } catch (e) {}
   try { if (typeof initHistorySelect === 'function') initHistorySelect(); } catch (e) {}
   try { if (typeof renderPlanBacktest === 'function') renderPlanBacktest(); } catch (e) {}
 
@@ -1996,7 +1995,7 @@ function renderV6Metrics(metrics) {
     <div class="bg-white rounded-lg p-3 border border-emerald-200">
       <div class="text-3xl font-bold text-emerald-700">+${ret}%</div>
       <div class="text-xs text-slate-600 mt-1">年化收益率</div>
-      <div class="text-[10px] text-slate-500">基于过去 252 天外推</div>
+      <div class="text-[10px] text-slate-500">每日 rebalance 假设（≠ 实测）</div>
     </div>
     <div class="bg-white rounded-lg p-3 border border-emerald-200">
       <div class="text-3xl font-bold text-amber-700">${vol}%</div>
@@ -2575,6 +2574,7 @@ function renderPlanBacktest() {
       <tr class="border-b border-slate-100 hover:bg-slate-50">
         <td class="px-3 py-2 text-xs text-slate-500">${i + 1}</td>
         <td class="px-3 py-2 font-mono text-sm font-semibold">${r.ticker}</td>
+        <td class="px-3 py-2 text-sm text-slate-700">${r.name || '—'}</td>
         <td class="px-3 py-2 text-sm">${(r.weight * 100).toFixed(2)}%</td>
         <td class="px-3 py-2 text-sm">${r.close_first.toFixed(2)} → ${r.close_last.toFixed(2)}</td>
         <td class="px-3 py-2 text-sm font-semibold ${cls(r.return_pct)}">${fmtPct(r.return_pct)}</td>
@@ -2587,6 +2587,7 @@ function renderPlanBacktest() {
           <tr>
             <th class="px-3 py-2">#</th>
             <th class="px-3 py-2">代码</th>
+            <th class="px-3 py-2">公司名</th>
             <th class="px-3 py-2">权重</th>
             <th class="px-3 py-2">期初 → 期末</th>
             <th class="px-3 py-2">个股累计</th>
@@ -3746,6 +3747,32 @@ def _find_plan_inception_date() -> str | None:
         return None
 
 
+def _load_inception_plan_from_duckdb() -> dict | None:
+    """读 DuckDB plan_v6 最早一条 payload —— inception 那天的原始 plan。
+
+    用来给 compute_plan_forward_track() 提供"冻结在锁定日"的 tickers，
+    避免 look-ahead bias：之前用今天最新 plan_a_v5.json 的 tickers + 5-08 锚定，
+    会把后换入的股票回填到锁定日轨迹里（不可实操、用了未来信息）。
+    """
+    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_history.duckdb")
+    if not os.path.exists(db_path):
+        return None
+    try:
+        import duckdb
+        con = duckdb.connect(db_path, read_only=True)
+        row = con.execute(
+            "SELECT payload FROM snapshots "
+            "WHERE category='optimize' AND name='plan_v6' "
+            "ORDER BY taken_at ASC LIMIT 1"
+        ).fetchone()
+        con.close()
+        if row and row[0]:
+            return json.loads(row[0]) if isinstance(row[0], str) else row[0]
+    except Exception:
+        pass
+    return None
+
+
 def compute_plan_forward_track(plan: dict, history: dict, benchmark: str = "SPY",
                                 context_days: int = 30) -> dict:
     """从 plan 锁定日往后跟踪真实表现（forward 视角）。
@@ -3761,10 +3788,22 @@ def compute_plan_forward_track(plan: dict, history: dict, benchmark: str = "SPY"
     """
     if not plan or not isinstance(plan, dict):
         return {}
-    plan_list = plan.get("plan_v5") or plan.get("plan_v6") or plan.get("plan") or []
-    if not plan_list:
-        return {}
     if not history or "tickers" not in history:
+        return {}
+
+    # P0 修复 look-ahead bias（2026-05-10）：tickers 从 DuckDB inception 那天的 plan 读，
+    # 不再用传入的"今天最新 plan_a_v5.json"——避免把后换入的股票回填到锁定日轨迹。
+    inception_plan = _load_inception_plan_from_duckdb()
+    if inception_plan:
+        src_plan = inception_plan
+        tickers_source = "duckdb_inception"
+    else:
+        # fallback：DuckDB 还没数据时用传入的 plan（首次部署兜底）
+        src_plan = plan
+        tickers_source = "latest_plan_a_v5_fallback"
+
+    plan_list = src_plan.get("plan_v5") or src_plan.get("plan_v6") or src_plan.get("plan") or []
+    if not plan_list:
         return {}
 
     inception_date = _find_plan_inception_date()
@@ -3883,12 +3922,32 @@ def compute_plan_forward_track(plan: dict, history: dict, benchmark: str = "SPY"
 
     # 单股贡献：用 baseline → 最新收盘
     last_idx = len(common_dates) - 1
+
+    # 从最新 audit 快照取 ticker → 中文公司名（78 只 watchlist 全覆盖）
+    name_map: dict = {}
+    try:
+        audit_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 "data", "snapshots", "audit")
+        if os.path.isdir(audit_dir):
+            audit_files = sorted([f for f in os.listdir(audit_dir)
+                                   if f.startswith("audit_") and f.endswith(".json")],
+                                  reverse=True)
+            if audit_files:
+                with open(os.path.join(audit_dir, audit_files[0]), encoding="utf-8") as af:
+                    audit = json.load(af)
+                    if isinstance(audit, list):
+                        name_map = {r.get("ticker"): r.get("name") for r in audit
+                                    if r.get("ticker") and r.get("name")}
+    except Exception:
+        pass
+
     per_ticker = []
     for tkr, w, closes in aligned:
         first, last = closes[baseline_idx], closes[last_idx]
         tret = (last / first - 1.0) if first else 0.0
         per_ticker.append({
             "ticker": tkr,
+            "name": name_map.get(tkr, ""),
             "weight": round(w, 4),
             "close_first": round(first, 2),
             "close_last": round(last, 2),
@@ -3924,6 +3983,7 @@ def compute_plan_forward_track(plan: dict, history: dict, benchmark: str = "SPY"
         "per_ticker": per_ticker,
         "tickers_used": [t for t, *_ in aligned],
         "tickers_missing": missing,
+        "tickers_source": tickers_source,  # P0：标识 tickers 来源（duckdb_inception 或 latest_plan_a_v5_fallback）
     }
 
 

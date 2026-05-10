@@ -1,7 +1,8 @@
 """
-方案 A · 专业风险指标计算器
+方案 A v6 · 专业风险指标计算器
 ─────────────────────────────────────────
-基于过去 1 年（约 252 个交易日）的历史日收益，计算华尔街标准指标：
+读 plan_a_v5.json 里 v6 当前推荐的 12 只组合（不再用旧的硬编码持仓），
+基于过去 ~1 年历史日收益，计算华尔街标准指标：
 
   • 年化收益率
   • 年化波动率
@@ -22,27 +23,52 @@ from datetime import datetime, timedelta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import yfinance as yf
 
-# 方案 A v2（北方稀土版）
-PORTFOLIO = [
-    ("NVDA",       "NVDA",       60000, "USD", 0.12),
-    ("TSM",        "TSM",        50000, "USD", 0.10),
-    ("GOOGL",      "GOOGL",      50000, "USD", 0.10),
-    ("MSFT",       "MSFT",       50000, "USD", 0.10),
-    ("AMD",        "AMD",        40000, "USD", 0.08),
-    ("Vertiv",     "VRT",        50000, "USD", 0.10),
-    ("北方稀土",     "600111.SS",  40000, "CNY", 0.08),
-    ("Cameco",     "CCJ",        35000, "USD", 0.07),
-    ("Datadog",    "DDOG",       25000, "USD", 0.05),
-    ("中际旭创",     "300308.SZ",  25000, "CNY", 0.05),
-    ("阿里巴巴",     "9988.HK",    25000, "HKD", 0.05),
-    ("海光信息",     "688041.SS",  25000, "CNY", 0.05),
-]
-CASH_RMB = 25000
+# 运行时从 plan_a_v5.json 动态加载（v6 当前推荐组合）
+PORTFOLIO = []
+CASH_RMB = 25000  # 默认 5%，main() 会按 plan 的 cash_pct 重写
 TOTAL_CAPITAL = 500000
 
 FX_TO_RMB = {"USD": 7.10, "HKD": 0.91, "AUD": 4.60, "CNY": 1.0}
 RISK_FREE_RATE = 0.045  # 美国 10Y 国债收益率 ~4.5%
 TRADING_DAYS = 252
+
+
+def _ccy_from_ticker(ticker: str) -> str:
+    """根据 ticker 后缀推断币种。"""
+    if ticker.endswith((".SS", ".SZ", ".BJ")):
+        return "CNY"
+    if ticker.endswith(".HK"):
+        return "HKD"
+    if ticker.endswith(".AX"):
+        return "AUD"
+    return "USD"
+
+
+def load_portfolio_from_plan():
+    """读 plan_a_v5.json，返回 (portfolio, cash_pct)。
+
+    portfolio 格式与旧的硬编码 PORTFOLIO 兼容：
+      [(name, ticker, amount_rmb, ccy, weight), ...]
+    其中 name 用 ticker 顶替（plan_a_v5.json 无中文名字段），ccy 由后缀推断。
+    """
+    plan_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plan_a_v5.json")
+    if not os.path.exists(plan_file):
+        print(f"❌ {plan_file} 不存在 — 请先跑：python3 build_plan_a_v5.py")
+        sys.exit(1)
+    with open(plan_file, "r", encoding="utf-8") as f:
+        plan = json.load(f)
+    plan_list = plan.get("plan_v5") or plan.get("plan_v6") or plan.get("plan") or []
+    cash_pct = plan.get("constraints", {}).get("cash_pct", 0.05)
+    portfolio = []
+    for p in plan_list:
+        ticker = p.get("ticker")
+        amount_rmb = p.get("amount_rmb", 0)
+        weight = p.get("v5_weight") or p.get("v6_weight") or 0
+        if not ticker or amount_rmb < 100:
+            continue
+        ccy = _ccy_from_ticker(ticker)
+        portfolio.append((ticker, ticker, amount_rmb, ccy, weight))
+    return portfolio, cash_pct
 
 
 def fetch_history(ticker, lookback_days=400):
@@ -60,9 +86,19 @@ def fetch_history(ticker, lookback_days=400):
 
 
 def main():
+    global PORTFOLIO, CASH_RMB
+    PORTFOLIO, cash_pct = load_portfolio_from_plan()
+    CASH_RMB = int(TOTAL_CAPITAL * cash_pct)
+
     print("=" * 70)
-    print("  📊 方案 A · 华尔街标准风险指标")
+    print("  📊 方案 A v6 · 华尔街标准风险指标")
     print("=" * 70)
+    print(f"\n📋 组合：{len(PORTFOLIO)} 只（来自 plan_a_v5.json · v6 当前推荐）· 现金 ¥{CASH_RMB:,.0f} ({cash_pct*100:.0f}%)")
+    if PORTFOLIO:
+        tickers_preview = " / ".join(p[1] for p in PORTFOLIO[:6])
+        if len(PORTFOLIO) > 6:
+            tickers_preview += f" / ... ({len(PORTFOLIO) - 6} more)"
+        print(f"   {tickers_preview}")
 
     # 1) 拉所有标的历史
     print("\n[1/3] 拉过去 ~1 年历史...")
