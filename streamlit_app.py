@@ -136,14 +136,30 @@ st.divider()
 
 # ─────────── Tabs ───────────
 
-tab_overview, tab_picks, tab_audit, tab_factors, tab_intel, tab_stress = st.tabs([
+(tab_overview, tab_picks, tab_audit, tab_factors, tab_intel, tab_stress,
+ tab_a_share, tab_ipo) = st.tabs([
     "📌 概览",
     "⭐ 每日推荐",
     "🛡 反向审查",
     "📊 因子治理",
     "🌐 OpenBB 情报",
     "💀 Stress Test",
+    "🇨🇳 A 股优选",
+    "📈 IPO 打新",
 ])
+
+
+# ─────────── 工具：读 A 股闭环输出 ───────────
+
+@st.cache_data(ttl=300)
+def _load_json(rel: str) -> dict | None:
+    f = _REPO_ROOT / rel
+    if not f.exists():
+        return None
+    try:
+        return json.loads(f.read_text(encoding="utf-8"))
+    except Exception:
+        return None
 
 
 # ───── Tab 1: 概览 ─────
@@ -388,6 +404,125 @@ with tab_stress:
         st.info("📚 学术依据：Faber 2007 (200MA) + Whaley 2009 (VIX) + O'Neil 2002 (-15% 止损)")
     else:
         st.warning("无 stress test 快照；先跑 jobs.stress_test")
+
+
+# ───── Tab 7: A 股优选（v9.0 6 因子闭环）─────
+with tab_a_share:
+    st.header("🇨🇳 A 股每日优选（6 因子闭环 v9.0）")
+    a_pick = _load_json("data/a_share_picks.json")
+    if a_pick is None:
+        st.warning("无 a_share_picks.json — 先跑 `python3 -m stock_research.jobs.a_share_picks`")
+    else:
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("总扫描", a_pick.get("n_total", 0))
+        c2.metric("可买", a_pick.get("n_tradable", 0))
+        c3.metric("入选", a_pick.get("n_recommended", 0))
+        c4.metric("cutoff", f"{a_pick.get('cutoff', 0):.3f}")
+
+        st.caption(f"生成时间: {a_pick.get('generated_at', '?')[:16]} · "
+                   f"模式: {a_pick.get('mode', '?')}")
+
+        weights = a_pick.get("factor_weights", {})
+        if weights:
+            st.subheader("📊 因子权重")
+            st.bar_chart(pd.Series(weights))
+
+        tailwind = a_pick.get("policy_tailwind", {})
+        if tailwind:
+            st.subheader("🏛 当前政策受益主题（最近 14 天命中 ≥ 2 次）")
+            st.write(", ".join(f"**{t}** ({c} 次)"
+                                for t, c in sorted(tailwind.items(), key=lambda x: -x[1])))
+
+        selected = a_pick.get("selected", [])
+        if selected:
+            st.subheader(f"⭐ 入选 {len(selected)} 只")
+            rows = []
+            for e in selected:
+                f_norm = e.get("f_score_norm")
+                rows.append({
+                    "代码": e.get("code"),
+                    "名称": e.get("name"),
+                    "F-Score": f"{f_norm * 9:.0f}/9" if f_norm is not None else "?",
+                    "动量分位": f"{e.get('momentum_norm', 0):.2f}",
+                    "龙虎榜": f"{e.get('lhb_score', 0.5):.2f}",
+                    "北向": f"{e.get('north_score', 0.5):.2f}",
+                    "PEAD": f"{e.get('pead_score', 0.5):.2f}",
+                    "政策": f"+{e.get('policy_boost', 0):.2f}",
+                    "风险×": f"{e.get('event_risk_score', 1.0):.2f}",
+                    "综合": f"{e.get('composite', 0):.3f}",
+                    "可买": "✅" if e.get("tradable") else "❌",
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+        all_entries = a_pick.get("all_entries", [])
+        blocked = [e for e in all_entries if not e.get("tradable")]
+        if blocked:
+            with st.expander(f"❌ 被拦截的 {len(blocked)} 只（ST/涨停/停牌等）"):
+                rows = [{
+                    "代码": e.get("code"), "名称": e.get("name"),
+                    "综合分": f"{e.get('composite', 0):.3f}",
+                    "拦截原因": "; ".join(e.get("block_reasons") or []),
+                } for e in blocked]
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+        st.info(
+            "📚 因子说明：综合分 = "
+            "Piotroski(0.25) + 动量(0.15) + 反转(0.10) + 龙虎榜(0.15) + "
+            "北向(0.15) + PEAD(0.10) + 政策(0.10)，再 × 事件风险加权 (0-1)"
+        )
+
+
+# ───── Tab 8: IPO 打新 ─────
+with tab_ipo:
+    st.header("📈 IPO 打新日历")
+    ipo = _load_json("data/ipo_calendar.json")
+    if ipo is None:
+        st.warning("无 ipo_calendar.json — 先跑 `python3 -m stock_research.jobs.ipo_daily`")
+    else:
+        ups = ipo.get("upcoming_subscription", [])
+        await_l = ipo.get("awaiting_listing", [])
+        recent = ipo.get("recently_listed", [])
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("即将申购", len(ups))
+        c2.metric("已申购未上市", len(await_l))
+        c3.metric("近 30 日上市", len(recent))
+
+        st.caption(f"生成时间: {ipo.get('fetched_at', '?')[:16]}")
+
+        ai_only = st.checkbox("仅显示 AI 相关 (相关性 ≥ 2)", value=False)
+
+        def _to_table(entries):
+            rows = []
+            for e in entries:
+                if ai_only and e.get("ai_relevance", 0) < 2:
+                    continue
+                ai_flag = "🟢" if e.get("ai_relevance", 0) >= 2 else \
+                          "🟡" if e.get("ai_relevance", 0) == 1 else "⚪"
+                rows.append({
+                    "代码": e.get("code"),
+                    "申购代码": e.get("subscribe_code") or "-",
+                    "名称": e.get("name"),
+                    "板块": e.get("board"),
+                    "申购日": e.get("subscribe_date") or "-",
+                    "上市日": e.get("listing_date") or "-",
+                    "发行价": f"¥{e.get('issue_price'):.2f}" if e.get("issue_price") else "-",
+                    "PE": f"{e.get('pe_ratio'):.1f}" if e.get("pe_ratio") else "-",
+                    "AI": f"{ai_flag} {e.get('ai_relevance', 0)}",
+                    "主题": e.get("theme") or "-",
+                    "业务": (e.get("business_desc") or e.get("industry") or "")[:40],
+                })
+            return pd.DataFrame(rows)
+
+        if ups:
+            st.subheader(f"🚀 即将申购 ({len(ups)})")
+            st.dataframe(_to_table(ups), use_container_width=True, hide_index=True)
+        if await_l:
+            st.subheader(f"⏳ 已申购未上市 ({len(await_l)})")
+            st.dataframe(_to_table(await_l), use_container_width=True, hide_index=True)
+        if recent:
+            st.subheader(f"📊 近 30 日上市 ({len(recent)})")
+            st.dataframe(_to_table(recent), use_container_width=True, hide_index=True)
 
 
 # ─────────── 底部 ───────────

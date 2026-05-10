@@ -54,18 +54,82 @@ from early_signals import fetch_signals_for, score_analyst
 # iShares 公开 CSV（每天更新）。返回包含 Ticker / Name / Sector / Weight 的表。
 # slug 是 iShares fund-id，可以从 fund 页面 URL 拿到。
 ISHARES_ETFS = [
-    ("SOXX", "239705/ishares-semiconductor-etf"),                  # 半导体 (~45)
-    ("IGM",  "239769/ishares-expanded-tech-sector-etf"),           # 拓展科技 (~303)
-    ("IRBO", "297905/ishares-future-ai-tech-etf"),                 # 未来 AI (~88)
-    ("BAI",  "339081/ishares-a-i-innovation-and-tech-active-etf"), # AI Active (~66)
+    # 美股 + 全球科技
+    ("SOXX", "239705/ishares-semiconductor-etf",                   None),  # 半导体 (~45)
+    ("IGM",  "239769/ishares-expanded-tech-sector-etf",            None),  # 拓展科技 (~303)
+    ("IRBO", "297905/ishares-future-ai-tech-etf",                  None),  # 未来 AI (~88)
+    ("BAI",  "339081/ishares-a-i-innovation-and-tech-active-etf",  None),  # AI Active (~66)
+    # 中国全市场 → 只取 IT + Communication（剔除金融/消费/地产，~150 只 AI 相关）
+    ("MCHI", "239619/ishares-msci-china-etf",
+     {"Information Technology", "Communication"}),                         # 中国 (~150)
 ]
 
 
-def fetch_ishares_holdings(symbol: str, slug: str, timeout: int = 30) -> list[dict]:
+# ============================================================
+# Ticker → yfinance 格式映射（基于 iShares Location/Exchange）
+# ============================================================
+# iShares CSV 里境外 ticker 是裸代码（"1810" / "300308" / "2330"），
+# yfinance 需要带交易所后缀。
+EXCHANGE_SUFFIX = {
+    "China/Shanghai Stock Exchange":          ".SS",
+    "China/Shenzhen Stock Exchange":          ".SZ",
+    "China/Hong Kong Exchanges And Clearing Ltd": ".HK",
+    "Hong Kong":                              ".HK",
+    "Taiwan/Taiwan Stock Exchange":           ".TW",
+    "Taiwan/Gretai Securities Market":        ".TWO",
+    "Korea (South)/Korea Exchange (Stock Market)": ".KS",
+    "Japan/Tokyo Stock Exchange":             ".T",
+    "Australia/Asx - All Markets":            ".AX",
+    "United Kingdom":                         ".L",
+}
+
+
+def to_yfinance_ticker(raw_tk: str, location: str, exchange: str) -> str | None:
+    """把 iShares CSV 的裸 ticker 转成 yfinance 能识别的格式。
+
+    示例:
+      "300308" + "China/Shenzhen ..."  → "300308.SZ"
+      "1810"   + "China/Hong Kong ..." → "1810.HK"
+      "2330"   + "Taiwan/Taiwan ..."   → "2330.TW"
+      "AMD"    + "United States/..."   → "AMD"（美股不加后缀）
+    """
+    raw_tk = raw_tk.strip().strip('"')
+    if not raw_tk or raw_tk == "-":
+        return None
+    # 美股直接返回原 ticker（不加 . 后缀）
+    if location.startswith("United States"):
+        # 排除货币代码 / index futures
+        if not raw_tk.replace(".", "").replace("-", "").isalnum():
+            return None
+        if raw_tk.isalpha() and 1 <= len(raw_tk) <= 5:
+            return raw_tk
+        # 已经带 . 的 ADR（BRK.B 等），yfinance 接受
+        if raw_tk.replace(".", "").isalnum() and 1 <= len(raw_tk) <= 6:
+            return raw_tk
+        return None
+    # 境外：精确匹配，再降级到前缀匹配
+    key = f"{location}/{exchange}"
+    suffix = EXCHANGE_SUFFIX.get(key)
+    if not suffix:
+        for k, v in EXCHANGE_SUFFIX.items():
+            if key.startswith(k):
+                suffix = v
+                break
+    if not suffix:
+        return None
+    return f"{raw_tk}{suffix}"
+
+
+def fetch_ishares_holdings(
+    symbol: str, slug: str, sector_filter: set[str] | None = None, timeout: int = 30
+) -> list[dict]:
     """拉 iShares ETF holdings CSV 并解析出 ticker 列表。
 
     iShares CSV 前 9 行是元信息（Fund Name / Inception Date 等），
     第 10 行起是表头 + 数据。
+
+    sector_filter: 如果提供，只保留 sector ∈ filter 的标的（用于 MCHI 这种全市场 ETF
+                   只取 IT + Communication，剔除金融/消费等 AI 无关的）。
     """
     url = (
         f"https://www.ishares.com/us/products/{slug}"
@@ -76,7 +140,6 @@ def fetch_ishares_holdings(symbol: str, slug: str, timeout: int = 30) -> list[di
     text = r.text.lstrip("﻿")  # 去 BOM
 
     lines = text.splitlines()
-    # 找到 "Ticker," 开头的表头行
     header_idx = next((i for i, l in enumerate(lines) if l.startswith("Ticker,")), -1)
     if header_idx < 0:
         return []
@@ -84,12 +147,19 @@ def fetch_ishares_holdings(symbol: str, slug: str, timeout: int = 30) -> list[di
     reader = csv.DictReader(StringIO(body))
     out = []
     for row in reader:
-        ticker = (row.get("Ticker") or "").strip().strip('"')
-        if not ticker or ticker == "-":
+        raw_tk = (row.get("Ticker") or "").strip().strip('"')
+        if not raw_tk or raw_tk == "-":
             continue
-        # 排除现金 / 期货 / 货币市场基金等
         asset = (row.get("Asset Class") or "").strip().strip('"')
         if asset and asset != "Equity":
+            continue
+        sector = (row.get("Sector") or "").strip().strip('"')
+        if sector_filter and sector not in sector_filter:
+            continue
+        location = (row.get("Location") or "").strip().strip('"')
+        exchange = (row.get("Exchange") or "").strip().strip('"')
+        yf_ticker = to_yfinance_ticker(raw_tk, location, exchange)
+        if not yf_ticker:
             continue
         weight_str = (row.get("Weight (%)") or "0").replace(",", "").strip().strip('"')
         try:
@@ -97,9 +167,11 @@ def fetch_ishares_holdings(symbol: str, slug: str, timeout: int = 30) -> list[di
         except ValueError:
             weight = 0.0
         out.append({
-            "ticker": ticker,
+            "ticker": yf_ticker,        # yfinance 可识别的 ticker (300308.SZ 等)
+            "raw_ticker": raw_tk,        # iShares 裸代码 (300308)
             "name": (row.get("Name") or "").strip().strip('"'),
-            "sector": (row.get("Sector") or "").strip().strip('"'),
+            "sector": sector,
+            "location": location,
             "weight_pct": weight,
             "etf": symbol,
         })
@@ -110,30 +182,36 @@ def fetch_ishares_holdings(symbol: str, slug: str, timeout: int = 30) -> list[di
 # Universe 构建
 # ============================================================
 def build_universe(skip_codes: set[str]) -> list[dict]:
-    """合并多个 ETF 的成分股 → 去重 → 排除已知 watchlist。"""
+    """合并多个 ETF 的成分股 → 去重 → 排除已知 watchlist。
+
+    skip_codes 同时按 yfinance 格式（300308.SZ）和裸代码（300308）匹配，
+    保证不论 watchlist 用哪种写法都能正确排除。
+    """
     seen = {}
-    for symbol, slug in ISHARES_ETFS:
+    for symbol, slug, sector_filter in ISHARES_ETFS:
         try:
             print(f"  拉 {symbol} holdings...", end=" ", flush=True)
-            holdings = fetch_ishares_holdings(symbol, slug)
-            print(f"{len(holdings)} 只")
+            holdings = fetch_ishares_holdings(symbol, slug, sector_filter=sector_filter)
+            label = f"{len(holdings)} 只"
+            if sector_filter:
+                label += f"（已限定 sector: {', '.join(sector_filter)}）"
+            print(label)
         except Exception as e:
             print(f"❌ 失败: {e}")
             continue
         for h in holdings:
             tk = h["ticker"]
-            if tk in skip_codes:
-                continue
-            # 美股 ticker：1-5 个字母（含 . 的是境外 / ADR，先排除）
-            if not (tk.replace(".", "").isalpha() and 1 <= len(tk.replace(".", "")) <= 5):
-                continue
-            if "." in tk:  # ADR / 境外（BABA, BRK.B 等），先跳过保证 yfinance 财报齐全
+            raw = h.get("raw_ticker", tk)
+            # watchlist 排除（同时按 yfinance 格式和裸代码两种方式匹配）
+            if tk in skip_codes or raw in skip_codes:
                 continue
             if tk not in seen:
                 seen[tk] = {
                     "ticker": tk,
+                    "raw_ticker": raw,
                     "name": h["name"],
                     "sector": h["sector"],
+                    "location": h["location"],
                     "etfs": [],
                     "etf_weight_max": 0.0,
                 }
@@ -266,6 +344,7 @@ def main():
             "ticker": tk,
             "name": meta.get("name", ""),
             "sector": meta.get("sector", ""),
+            "location": meta.get("location", ""),
             "etfs": meta.get("etfs", []),
             "market_cap_usd": meta.get("market_cap_usd"),
             "f_score": None if row["f_score"] != row["f_score"] else float(row["f_score"]),
@@ -298,7 +377,7 @@ def main():
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "universe_size": len(universe),
         "watchlist_excluded": len(skip_codes),
-        "etf_sources": [s for s, _ in ISHARES_ETFS],
+        "etf_sources": [etf[0] for etf in ISHARES_ETFS],
         "method": "Piotroski F-Score + 12-1 momentum + PEAD + analyst (z-score 等权)",
         "min_market_cap_usd": args.min_cap_billion * 1e9,
         "candidates": candidates,

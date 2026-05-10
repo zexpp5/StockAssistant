@@ -15,10 +15,16 @@ v6 在 v5 基础上加了三个关键质量门：
      → 净 alpha = 总 alpha - 佣金 - 冲击
      → 高换手策略会被成本吃掉的部分明确暴露
 
+2026-05-10 P1 升级（默认开启）：
+  4. **风险感知优化**：核心 Markowitz 步从蒙特卡洛改用 portfolio_optimizer_pro
+     的 risk_aware_optimize（Ledoit-Wolf 协方差 + 相关性 < 0.7 剪枝 + 多级降风险）
+     - 加 --legacy-mc 开关回退到 20000 次蒙特卡洛（兼容老 review）
+
 CLI:
   python3 -m stock_research.jobs.optimize_portfolio
   python3 -m stock_research.jobs.optimize_portfolio --capital 1000000
   python3 -m stock_research.jobs.optimize_portfolio --no-neutralize  # 关闭中性化对比
+  python3 -m stock_research.jobs.optimize_portfolio --legacy-mc      # 用旧蒙特卡洛
 """
 from __future__ import annotations
 import argparse
@@ -37,7 +43,10 @@ sys.path.insert(0, str(_REPO_ROOT))
 from .. import config
 from ..core import neutralization as nz
 from ..core import portfolio_constraints as pc
+from ..core import portfolio_optimizer_pro as opt_pro
 from ..adapters import store, feishu  # noqa: F401
+
+import pandas as pd
 
 logger = logging.getLogger("stock_research.jobs.optimize_portfolio")
 
@@ -170,7 +179,9 @@ def run(capital: float = 500_000,
         max_adv_pct: float = 0.05,
         cost_bps: float = 5.0,
         impact_bps_per_pct_adv: float = 2.0,
-        skip_neutralize: bool = False) -> dict:
+        skip_neutralize: bool = False,
+        use_legacy_mc: bool = False,
+        max_corr: float = 0.7) -> dict:
     """完整 v6 流水线。返回结果 dict。"""
     print("=" * 92)
     print(f"  📊 方案 A v6（中性化 + Markowitz + ADV 约束 + 成本扣减）")
@@ -249,21 +260,73 @@ def run(capital: float = 500_000,
     mean_rets = matrix.mean(axis=1)
     cov = np.cov(matrix)
 
-    # ────── 5. Markowitz 优化 ──────
-    print(f"\n[4/5] Markowitz 蒙特卡洛 20000 次...")
-    weights, sharpe = markowitz_constrained(mean_rets, cov,
-                                            n_iter=20000, max_w=max_weight,
-                                            min_w=min_weight, cash_pct=cash_pct)
-    if weights is None:
-        return {"error": "Markowitz 优化失败"}
-    annual_sharpe = sharpe * np.sqrt(252)
-    annual_ret = (mean_rets @ weights) * 252
-    annual_vol = np.sqrt(weights @ cov @ weights) * np.sqrt(252)
+    # ────── 5. 核心组合优化 ──────
+    if use_legacy_mc:
+        print(f"\n[4/5] Markowitz 蒙特卡洛 20000 次（legacy）...")
+        weights, sharpe = markowitz_constrained(mean_rets, cov,
+                                                n_iter=20000, max_w=max_weight,
+                                                min_w=min_weight, cash_pct=cash_pct)
+        if weights is None:
+            return {"error": "Markowitz 优化失败"}
+        annual_sharpe = sharpe * np.sqrt(252)
+        annual_ret = (mean_rets @ weights) * 252
+        annual_vol = np.sqrt(weights @ cov @ weights) * np.sqrt(252)
+        target_w = {final_tickers[i]: float(weights[i]) for i in range(len(final_tickers))}
+        risk_aware_meta: dict = {"engine": "legacy_monte_carlo"}
+    else:
+        # 新路径：Ledoit-Wolf cov + 相关性剪枝 + 风险闸门多级降级
+        print(f"\n[4/5] risk_aware_optimize（Ledoit-Wolf + 相关性<{max_corr} + 风险闸门）...")
+        # final_tickers 已按 watchlist 顺序排，但传入 ranked_tickers 给剪枝
+        # 用因子 composite 排序（df 在第 [2/5] 步已 sort 过，按 df 顺序取交集）
+        ranked = [t for t in df["ticker"].tolist() if t in final_tickers]
+        rdf = pd.DataFrame({tk: aligned[tk] for tk in final_tickers})
+        out = opt_pro.risk_aware_optimize(
+            rdf, ranked_tickers=ranked,
+            max_weight=max_weight, min_weight=min_weight,
+            cash_pct=cash_pct, max_corr=max_corr,
+        )
+        if "error" in out and "weights" not in out:
+            print(f"  ⚠️ risk_aware 全级失败：{out['error']}；回退到 legacy MC")
+            weights, sharpe = markowitz_constrained(mean_rets, cov,
+                                                    n_iter=20000, max_w=max_weight,
+                                                    min_w=min_weight, cash_pct=cash_pct)
+            if weights is None:
+                return {"error": "Markowitz 优化失败（含 fallback）"}
+            annual_sharpe = sharpe * np.sqrt(252)
+            annual_ret = (mean_rets @ weights) * 252
+            annual_vol = np.sqrt(weights @ cov @ weights) * np.sqrt(252)
+            target_w = {final_tickers[i]: float(weights[i]) for i in range(len(final_tickers))}
+            risk_aware_meta = {"engine": "legacy_monte_carlo (fallback)",
+                               "stages": out.get("stages", [])}
+        else:
+            target_w = {t: float(w) for t, w in out["weights"].items()}
+            stage_metrics = out["stages"][out["risk_aware_stage"]].get("metrics") or {}
+            annual_ret = float(stage_metrics.get("annual_return", 0.0))
+            annual_vol = float(stage_metrics.get("annual_vol", 0.0))
+            annual_sharpe = (annual_ret - 0.045) / annual_vol if annual_vol > 0 else 0.0
+            risk_aware_meta = {
+                "engine": "risk_aware_optimize",
+                "stage": out["risk_aware_stage"],
+                "stage_label": out["stages"][out["risk_aware_stage"]].get("label"),
+                "pruned_dropped": out.get("pruned_dropped", []),
+                "selected_tickers": out.get("selected_tickers", []),
+                "warning": out.get("warning"),
+            }
+            if out.get("pruned_dropped"):
+                print(f"  相关性剪枝丢弃 {len(out['pruned_dropped'])} 只：")
+                for d in out["pruned_dropped"][:5]:
+                    print(f"    · {d['dropped']} vs {d['vs']} ρ={d['rho']}")
+            print(f"  最终采用 stage={out['risk_aware_stage']} "
+                  f"（{out['stages'][out['risk_aware_stage']].get('label')}）")
+            for s in out["stages"]:
+                m = s.get("metrics") or {}
+                br = s.get("breached") or s.get("error") or "—"
+                print(f"    [{s['stage']}] {s['label']}: vol={m.get('annual_vol', 0):.2%} "
+                      f"DD={m.get('max_drawdown', 0):.2%} → {br}")
+
     print(f"  组合年化 Sharpe = {annual_sharpe:.2f}")
     print(f"  组合年化收益   = {annual_ret*100:+.1f}%")
     print(f"  组合年化波动   = {annual_vol*100:.1f}%")
-
-    target_w = {final_tickers[i]: float(weights[i]) for i in range(len(final_tickers))}
 
     # ────── 6a. 行业敞口约束（≤ 25% / 行业）──────
     industries_map = {tk: _industry_for(tk, wl_lookup) for tk in final_tickers}
@@ -322,13 +385,18 @@ def run(capital: float = 500_000,
 
     result = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "method": "v6: factor neutralization + Markowitz Max Sharpe + ADV cap + cost",
+        "method": ("v6+: factor neutralization + risk_aware_optimize "
+                   "(Ledoit-Wolf + corr<0.7 + risk gate) + ADV cap + cost"
+                   if not use_legacy_mc else
+                   "v6: factor neutralization + Markowitz MC + ADV cap + cost"),
         "capital": capital,
         "constraints": {
             "max_weight": max_weight, "min_weight": min_weight,
             "cash_pct": cash_pct, "max_adv_pct": max_adv_pct,
             "cost_bps": cost_bps, "impact_bps_per_pct_adv": impact_bps_per_pct_adv,
             "neutralize": not skip_neutralize,
+            "max_corr": max_corr,
+            "use_legacy_mc": use_legacy_mc,
         },
         "portfolio_metrics": {
             "annual_sharpe": round(annual_sharpe, 2),
@@ -339,6 +407,7 @@ def run(capital: float = 500_000,
             "net_alpha_pct": round(net_alpha_pct, 2),
             "turnover": round(cost["turnover"], 4),
         },
+        "risk_aware": risk_aware_meta,
         "plan": plan,
         "adv_warnings": warns,
     }
@@ -357,11 +426,17 @@ def main() -> int:
     p.add_argument("--max-adv-pct", type=float, default=0.05, help="单日交易上限占 ADV 的比例")
     p.add_argument("--cost-bps", type=float, default=5.0, help="双边佣金（bps）")
     p.add_argument("--no-neutralize", action="store_true", help="跳过中性化（对照模式）")
+    p.add_argument("--legacy-mc", action="store_true",
+                   help="用旧蒙特卡洛 Markowitz（默认走 risk_aware_optimize）")
+    p.add_argument("--max-corr", type=float, default=0.7,
+                   help="选股层 pairwise 相关性上限（贪心剪枝阈值）")
     args = p.parse_args()
     r = run(capital=args.capital, top_n=args.top_n,
             max_weight=args.max_weight, min_weight=args.min_weight,
             max_adv_pct=args.max_adv_pct, cost_bps=args.cost_bps,
-            skip_neutralize=args.no_neutralize)
+            skip_neutralize=args.no_neutralize,
+            use_legacy_mc=args.legacy_mc,
+            max_corr=args.max_corr)
     return 0 if "error" not in r else 1
 
 

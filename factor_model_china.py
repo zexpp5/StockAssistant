@@ -150,6 +150,13 @@ def piotroski_a_share(code, retries=2):
 
 
 def momentum_a_share(code, as_of=None, retries=2):
+    """A 股 12-1 月动量 + 1 月反转因子。
+
+    ⚠️ 关键：使用前复权（qfq）价格序列。
+    A 股分红 / 送转股会在除权日"砍一刀"价格，akshare 默认 adjust="" 返回不复权价。
+    跨过除权日的动量会被严重低估（银行/公用事业类年分红 5-7%，1 年累计偏差 20-30%）。
+    前复权以最新价为基准回算历史价，序列连续 = total return 视角，对动量因子是正确选择。
+    """
     for attempt in range(retries + 1):
         try:
             sina_code = _normalize_a_share_code(code)
@@ -158,7 +165,8 @@ def momentum_a_share(code, as_of=None, retries=2):
             end = target + pd.Timedelta(days=2)
             df = ak.stock_zh_a_daily(symbol=sina_code,
                                     start_date=start.strftime("%Y%m%d"),
-                                    end_date=end.strftime("%Y%m%d"))
+                                    end_date=end.strftime("%Y%m%d"),
+                                    adjust="qfq")    # 前复权 — 见 docstring
             if df is None or len(df) < 252:
                 return {"momentum_12_1": None, "reversal_1m": None, "error": "insufficient history"}
 
@@ -176,6 +184,7 @@ def momentum_a_share(code, as_of=None, retries=2):
             return {
                 "momentum_12_1": round(mom, 2),
                 "reversal_1m": round(rev, 2),
+                "adjust": "qfq",
                 "error": None,
             }
         except Exception as e:

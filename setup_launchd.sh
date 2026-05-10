@@ -43,11 +43,11 @@ cat > "$PLIST" <<EOF
         <string>$DIR/daily_refresh.sh</string>
     </array>
 
-    <!-- 每天 07:30 触发；睡眠错过后醒来补跑 -->
+    <!-- 每天 08:30 触发；睡眠错过后醒来补跑 -->
     <key>StartCalendarInterval</key>
     <dict>
         <key>Hour</key>
-        <integer>7</integer>
+        <integer>8</integer>
         <key>Minute</key>
         <integer>30</integer>
     </dict>

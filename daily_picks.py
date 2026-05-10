@@ -1,6 +1,14 @@
 """
-每日优选生成器
+每日优选生成器  ⚠️ LEGACY — v1 启发式打分（"我编的"权重）
 ─────────────────────────────────────────
+**生产体系已迁移到 daily_picks_v5.py（学术因子）。本文件保留原因：**
+  1. daily_refresh.sh 第 6 步仍调，作为 v5 的对照基线（A/B 对比）
+  2. 提供 fetch_watchlist() 等基础函数，被 v5 / stock_research.jobs.a_share_picks 依赖
+  3. 历史看板字段保留旧分数兼容性
+
+**新需求请改 daily_picks_v5.py（美股）或 stock_research/jobs/a_share_picks.py（A 股）。**
+**修改本文件前请确认：是否真的要动 legacy？还是新逻辑应该进 v5？**
+
 从 watchlist 37 只里基于多维打分自动选出今日「优质标的」，写入「每日优选 · AI 投资」表。
 
 打分规则（满分 100）：

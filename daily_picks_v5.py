@@ -1,6 +1,10 @@
 """
-每日优选 v5 - 学术因子驱动版
+每日优选 v5 - 学术因子驱动版  ✅ PRODUCTION（美股）
 ─────────────────────────────────────────
+**这是当前美股选股的主流水线。** daily_refresh.sh 第 9 步调本文件。
+A 股不走这个 — A 股看 stock_research/jobs/a_share_picks.py（学术因子 + 龙虎榜 + 北向 + 政策）。
+v1 的 daily_picks.py 是 LEGACY，保留作对照基线。
+
 替换 daily_picks.py 中所有"我编的"打分，改用 4 个学术因子：
   1. Piotroski F-Score (Stanford 2000)
   2. 12-1 月动量 (Jegadeesh-Titman 1993)

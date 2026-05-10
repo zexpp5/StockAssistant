@@ -18,6 +18,7 @@ from typing import Any
 import requests
 
 from .. import config
+from ..adapters import fmp_cache
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,16 @@ def is_available() -> bool:
 
 
 def _get(path: str, params: dict | None = None) -> Any:
-    """带速率友好的 FMP HTTP 请求。Key 自动附加。"""
+    """带 24h 文件缓存 + 速率友好的 FMP HTTP 请求。Key 自动附加。
+
+    缓存命中直接返回；未命中走 HTTP，成功响应自动写缓存。429/null 不缓存。
+    清缓存：python3 -m stock_research.adapters.fmp_cache clear
+    """
+    cached = fmp_cache.get(path, params)
+    if cached is not None:
+        logger.debug("FMP cache HIT: %s %s", path, params)
+        return cached
+
     if not FMP_API_KEY:
         return None
     p = dict(params or {})
@@ -47,6 +57,7 @@ def _get(path: str, params: dict | None = None) -> Any:
         if isinstance(data, dict) and "Error Message" in data:
             logger.debug("FMP error for %s: %s", path, data.get("Error Message"))
             return None
+        fmp_cache.save(path, params, data)
         return data
     except Exception as e:
         logger.warning("FMP %s failed: %s", path, e)
@@ -116,6 +127,137 @@ def fetch_income_statement(ticker: str, years: int = 5) -> list[dict[str, Any]] 
             "net_margin": (r.get("netIncome") / r.get("revenue")) if r.get("revenue") else None,
         })
     return out
+
+
+def fetch_balance_sheet(ticker: str, years: int = 5, period: str = "annual") -> list[dict[str, Any]] | None:
+    """资产负债表（最近 N 年，新→旧）。period='quarter' 切季度。"""
+    params = {"symbol": ticker, "limit": years}
+    if period == "quarter":
+        params["period"] = "quarter"
+    raw = _get("/balance-sheet-statement", params)
+    if not raw or not isinstance(raw, list):
+        return None
+    out = []
+    for r in raw:
+        out.append({
+            "date": r.get("date"),
+            "fiscal_year": r.get("fiscalYear"),
+            "total_assets": r.get("totalAssets"),
+            "total_current_assets": r.get("totalCurrentAssets"),
+            "total_liabilities": r.get("totalLiabilities"),
+            "total_current_liabilities": r.get("totalCurrentLiabilities"),
+            "total_equity": r.get("totalStockholdersEquity") or r.get("totalEquity"),
+            "long_term_debt": r.get("longTermDebt"),
+            "short_term_debt": r.get("shortTermDebt"),
+            "cash_and_equivalents": r.get("cashAndCashEquivalents"),
+            "net_receivables": r.get("netReceivables"),
+            "inventory": r.get("inventory"),
+            "goodwill": r.get("goodwill"),
+            "intangible_assets": r.get("intangibleAssets"),
+            "ppe": r.get("propertyPlantEquipmentNet"),
+            "retained_earnings": r.get("retainedEarnings"),
+            "deferred_revenue": r.get("deferredRevenue") or r.get("deferredRevenueNonCurrent"),
+            "shares_outstanding": r.get("commonStock"),
+        })
+    return out
+
+
+def fetch_cash_flow(ticker: str, years: int = 5, period: str = "annual") -> list[dict[str, Any]] | None:
+    """现金流量表（最近 N 年，新→旧）。period='quarter' 切季度。"""
+    params = {"symbol": ticker, "limit": years}
+    if period == "quarter":
+        params["period"] = "quarter"
+    raw = _get("/cash-flow-statement", params)
+    if not raw or not isinstance(raw, list):
+        return None
+    out = []
+    for r in raw:
+        out.append({
+            "date": r.get("date"),
+            "fiscal_year": r.get("fiscalYear"),
+            "operating_cash_flow": r.get("operatingCashFlow") or r.get("netCashProvidedByOperatingActivities"),
+            "capex": r.get("capitalExpenditure"),
+            "free_cash_flow": r.get("freeCashFlow"),
+            "depreciation_amortization": r.get("depreciationAndAmortization"),
+            "stock_based_compensation": r.get("stockBasedCompensation"),
+            "change_in_working_capital": r.get("changeInWorkingCapital"),
+            "dividends_paid": r.get("dividendsPaid"),
+            "stock_repurchased": r.get("commonStockRepurchased"),
+            "stock_issued": r.get("commonStockIssued"),
+        })
+    return out
+
+
+def fetch_income_full(ticker: str, years: int = 5, period: str = "annual") -> list[dict[str, Any]] | None:
+    """完整版利润表（含 EBIT/EBITDA/SG&A/R&D/利息/税）。比 fetch_income_statement 更细。
+
+    period='annual' → 年报；period='quarter' → 季报（FY trend 用）。
+    """
+    params = {"symbol": ticker, "limit": years}
+    if period == "quarter":
+        params["period"] = "quarter"
+    raw = _get("/income-statement", params)
+    if not raw or not isinstance(raw, list):
+        return None
+    out = []
+    for r in raw:
+        out.append({
+            "date": r.get("date"),
+            "fiscal_year": r.get("fiscalYear"),
+            "revenue": r.get("revenue"),
+            "cost_of_revenue": r.get("costOfRevenue"),
+            "gross_profit": r.get("grossProfit"),
+            "rd_expense": r.get("researchAndDevelopmentExpenses"),
+            "sga_expense": r.get("sellingGeneralAndAdministrativeExpenses") or r.get("generalAndAdministrativeExpenses"),
+            "operating_expenses": r.get("operatingExpenses"),
+            "operating_income": r.get("operatingIncome"),
+            "ebitda": r.get("ebitda"),
+            "ebit": r.get("operatingIncome"),  # FMP 用 operating income 作 EBIT
+            "interest_expense": r.get("interestExpense"),
+            "income_before_tax": r.get("incomeBeforeTax"),
+            "income_tax_expense": r.get("incomeTaxExpense"),
+            "net_income": r.get("netIncome"),
+            "eps": r.get("eps"),
+            "eps_diluted": r.get("epsdiluted") or r.get("epsDiluted"),
+            "weighted_average_shares": r.get("weightedAverageShsOut"),
+            "weighted_average_shares_diluted": r.get("weightedAverageShsOutDil"),
+        })
+    return out
+
+
+def fetch_company_profile(ticker: str) -> dict[str, Any] | None:
+    """公司基本信息（行业 / 国家 / 描述 / CEO / 员工 / 上市日 / SIC / Sector / Industry）。"""
+    raw = _get("/profile", {"symbol": ticker})
+    if not raw or not isinstance(raw, list) or not raw:
+        return None
+    r = raw[0]
+    return {
+        "ticker": ticker,
+        "company_name": r.get("companyName"),
+        "sector": r.get("sector"),
+        "industry": r.get("industry"),
+        "country": r.get("country"),
+        "exchange": r.get("exchangeFullName") or r.get("exchange"),
+        "ceo": r.get("ceo"),
+        "employees": r.get("fullTimeEmployees"),
+        "ipo_date": r.get("ipoDate"),
+        "description": r.get("description"),
+        "website": r.get("website"),
+        "market_cap": r.get("marketCap"),
+        "is_etf": r.get("isEtf"),
+        "is_actively_trading": r.get("isActivelyTrading"),
+    }
+
+
+def fetch_peers(ticker: str) -> list[str] | None:
+    """同业列表（FMP 自动按 sector/industry/marketcap 推荐）。"""
+    raw = _get("/stock-peers", {"symbol": ticker})
+    if not raw or not isinstance(raw, list):
+        return None
+    # FMP 返回格式: [{"symbol":"AAPL","peersList":["MSFT","GOOG",...]}] 或直接 list of {"symbol":"..."}
+    if raw and isinstance(raw[0], dict) and "peersList" in raw[0]:
+        return raw[0].get("peersList") or []
+    return [r.get("symbol") for r in raw if isinstance(r, dict) and r.get("symbol")]
 
 
 def fetch_key_metrics(ticker: str) -> dict[str, Any] | None:

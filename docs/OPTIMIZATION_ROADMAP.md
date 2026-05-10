@@ -7,15 +7,22 @@
 
 ## 总览
 
-**当前评分**: **97 / 100** （v8.0，集成 6 个开源最佳实践库）
+**当前评分**: **89 / 100**（v9.1，加入个股深度新维度后的综合分；量化打分维度仍 97/100）
+
+> 评分口径在 v9 后扩展：从单一"量化打分质量"改为"量化 + 个股深度 + 数据效率"三维加权。
+> 详见 [docs/2026-05-10_B路线个股深度研究系统.md](2026-05-10_B路线个股深度研究系统.md)
 
 | 阶段 | 时间 | 评分 | 关键里程碑 |
 |---|---|---|---|
-| v1   | 上午    | 24 | 拍脑袋 4 维打分 |
-| v6.0 | 中午    | 77 | 5 因子学术 + Markowitz |
-| v7.0 | 下午    | 91 | + 反向审查 + 实盘防御 |
-| v7.5 | 傍晚    | 94 | + OpenBB（宏观 + 行业 + 商品 + PCR + 内部人）|
-| **v8.0** | **晚上** | **97** | **+ alphalens + PyPortfolioOpt + streamlit + pyfolio + De Prado + vectorbt** |
+| v1   | 2026-05-09 上午 | 24 | 拍脑袋 4 维打分 |
+| v6.0 | 2026-05-09 中午 | 77 | 5 因子学术 + Markowitz |
+| v7.0 | 2026-05-09 下午 | 91 | + 反向审查 + 实盘防御 |
+| v7.5 | 2026-05-09 傍晚 | 94 | + OpenBB（宏观 + 行业 + 商品 + PCR + 内部人）|
+| **v8.0** | 2026-05-09 晚上 | 97 | + alphalens + PyPortfolioOpt + streamlit + pyfolio + De Prado + vectorbt |
+| **v9.0** | 2026-05-10 白天 | **86**(综合) | **+ B 路线 Phase 1-4 代码落地**（个股深度新维度，从 30 → 75/100）|
+| **v9.1** | 2026-05-10 晚上 | **89**(综合) | **+ Forward 估值 + 自建 DCF + 8 季 trend + FMP 24h 缓存** |
+
+**当前等待激活**：Anthropic API（充值后跑 Phase 2C/4 LLM 研报）+ FMP Premium（解锁 Phase 3 电话会议）→ 详见 [docs/2026-05-10_付费数据源升级清单.md](2026-05-10_付费数据源升级清单.md)
 
 ---
 
@@ -169,6 +176,41 @@
 
 ---
 
+## 🆕 v9 — B 路线个股深度研究（2026-05-10 落地）
+
+> 触发：v8 触顶量化打分 97/100 后，用户问"系统能做财报分析吗"暴露另一半工种缺失。
+> v9 补的是 sell-side 卖方研报维度（对标萝卜投研 / 摩根士丹利），**不是替代 v8**。
+
+### v9.0 Phase 1-4 代码落地（基础架构）
+
+| 模块 | 文件 | 学术依据 |
+|---|---|---|
+| 杜邦五因子 + Beneish + Altman + 8 项盈利质量 | [`core/fundamental_deep.py`](../stock_research/core/fundamental_deep.py) | Beneish 1999 / Altman 1968 / Sloan 1996 |
+| 同业 12 项分位 + 三级回退（industry → sector → market cap） | [`core/peer_compare.py`](../stock_research/core/peer_compare.py) | — |
+| SEC 10-K/10-Q/8-K 全文 + 反向贪心章节切分 | [`core/sec_filings.py`](../stock_research/core/sec_filings.py) | — |
+| Claude API 客户端（HTTP + prompt cache） | [`core/claude_client.py`](../stock_research/core/claude_client.py) | — |
+| 端到端 LLM 研报生成（8 章节模板） | [`jobs/research_report.py`](../stock_research/jobs/research_report.py) | — |
+| 电话会议情绪（Larcker 规避词 + LM 词典） | [`core/earnings_call.py`](../stock_research/core/earnings_call.py) | Larcker-Zakolyukina 2012 / Loughran-McDonald 2011 |
+| 产业链 70%（10-K LLM 提取 + 新闻聚合） | [`core/supply_chain.py`](../stock_research/core/supply_chain.py) | — |
+| 端到端结构化报告（合成 Phase 1 全部） | [`jobs/fundamental_report.py`](../stock_research/jobs/fundamental_report.py) | — |
+
+### v9.1 修补 v9.0 NVDA 实测暴露的 3 个硬伤
+
+| 硬伤 | 修补 | 文件 |
+|---|---|---|
+| Trailing P/E 对成长股是反向信号（NVDA TTM 43 但 forward 25-28） | Forward P/E + EV/Sales + PEG (Lynch 1989) | [`core/forward_valuation.py`](../stock_research/core/forward_valuation.py) |
+| FMP 黑盒 DCF 假设全不知道 | 自建三档 DCF + 5×5 WACC×TGR 敏感度矩阵 | [`core/dcf_scenarios.py`](../stock_research/core/dcf_scenarios.py) |
+| 静态指标丢方向（ROE 101% 是涨上来还是跌下来？） | 8 季 10 指标 trend + improving/deteriorating 自动判定 | [`core/quarterly_trends.py`](../stock_research/core/quarterly_trends.py) |
+| FMP 免费档 250/day 跑 7-8 只就爆（v9.1 新模块更耗） | 24h 文件缓存层（透明接入 fmp_client._get） | [`adapters/fmp_cache.py`](../stock_research/adapters/fmp_cache.py) |
+
+### v9 实测产出
+
+- [data/reports/NVDA_v1.md](../data/reports/NVDA_v1.md) — Phase 1 端到端结构化报告（无 LLM）
+- 手工合成 NVDA 2200 字研报（Claude Code 直接读 SEC 10-K + Phase 1 JSON），10/10 事实层与 10-K 原文交叉核对通过，与 Wall Street 共识对比有判断差异（详见对话）
+- [docs/research_validation_log.md](research_validation_log.md) — NVDA #1 研报登记 5 条可证伪预测，等 5/20 财报开始回填
+
+---
+
 ## 📋 优化建议清单（含已实现状态）
 
 > 本节给 reviewer 看：**优化建议 → 是否已实现 → 在哪里看到证据**
@@ -238,13 +280,34 @@
 | **Streamlit Web 应用** | ✅ **已做 (v8)** | [`streamlit_app.py`](../streamlit_app.py) |
 | FastAPI 公网部署 | ⚠️ 雏形 | [`stock_research/api/main.py`](../stock_research/api/main.py) |
 | 持牌合规 | ❌ 不可行 | 需要金融牌照 |
+| **研报验证日志（hit rate 闭环）** | ✅ **已做 (v9.1)** | [`docs/research_validation_log.md`](research_validation_log.md) |
+
+### G. 个股深度研究（v9 新增维度）
+| 建议 | 状态 | 证据 |
+|---|---|---|
+| 杜邦五因子分解（ROE 归因） | ✅ 已做 (v9.0) | [`core/fundamental_deep.py`](../stock_research/core/fundamental_deep.py) |
+| Beneish M-Score 财务造假识别（含高增长假阳性 caveat） | ✅ 已做 (v9.0) | 同上 |
+| Altman Z-Score 破产预警（X4 cap） | ✅ 已做 (v9.0) | 同上 |
+| Sloan 1996 应计盈余 + 8 项盈利质量 | ✅ 已做 (v9.0) | 同上 |
+| 同业 12 项分位排名 + industry/sector/marketcap 三级回退 | ✅ 已做 (v9.0) | [`core/peer_compare.py`](../stock_research/core/peer_compare.py) |
+| SEC 10-K/8-K 全文 + 反向贪心章节切分 | ✅ 已做 (v9.0) | [`core/sec_filings.py`](../stock_research/core/sec_filings.py) |
+| Forward P/E + EV/Sales + PEG (Lynch 1989) | ✅ 已做 (v9.1) | [`core/forward_valuation.py`](../stock_research/core/forward_valuation.py) |
+| 自建 DCF 三档 + 5×5 WACC×TGR 敏感度 | ✅ 已做 (v9.1) | [`core/dcf_scenarios.py`](../stock_research/core/dcf_scenarios.py) |
+| 8 季 10 指标 trend + improving/deteriorating 判定 | ✅ 已做 (v9.1) | [`core/quarterly_trends.py`](../stock_research/core/quarterly_trends.py) |
+| 端到端 LLM 研报生成（8 章节，prompt cache） | ⏳ 代码就绪 | [`jobs/research_report.py`](../stock_research/jobs/research_report.py) — 等 Anthropic 充值 |
+| 电话会议规避词 + LM 情绪 + 8 季时序 | ⏳ 代码就绪 | [`core/earnings_call.py`](../stock_research/core/earnings_call.py) — 等 FMP Premium |
+| 产业链上下游 70%（10-K LLM + 新闻 + 电话会议交叉） | ⏳ 代码就绪 | [`core/supply_chain.py`](../stock_research/core/supply_chain.py) — 等 Anthropic 充值 |
+| FMP 24h 缓存层（解决批量 30 只爆额度） | ✅ 已做 (v9.1) | [`adapters/fmp_cache.py`](../stock_research/adapters/fmp_cache.py) |
+| A 股 10-K 等价物（巨潮年报）解析 | ❌ 未做 | A 股深度仅 yfinance 兜底，质量差 |
+| Barra 风格风险归因 | ❌ 未做 | 需 Barra 因子库（付费） |
 
 ---
 
-## 🎯 还能做但 ROI 已经低的（v8 → v9）
+## 🎯 还能做但 ROI 已经低的（v9.1 → v10）
 
-下面是诚实评估：剩下 3 分（97 → 100）需要的工作 ROI 已经很低，**建议把精力转到对外推广**。
+> **v8 → v9 的 ROI 排序已被 B 路线打破**。原"剩下 3 分"清单里的 Survivorship bias、Monthly rolling walk-forward 等还在；但 v9 把"个股深度"这个新维度补到 75/100，剩下提升空间转移到了 LLM 路径激活、产业链覆盖度、A 股深度这些新方向。
 
+### 量化打分维度（97/100 → 100，原 v8 残余）
 | 候选 | 加分 | 工作量 | ROI |
 |---|---|---|---|
 | Survivorship bias 修正 | +1 | 1 周 | 中 |
@@ -253,6 +316,26 @@
 | 实时 VIX 流（盘中监测）| +0.5 | 3 天 | 低 |
 | FastAPI 完整部署到云 | +0.5 | 1 周 | 低 |
 | 持牌合规体系 | +0.5 | **不可行（钱+牌照）** | - |
+
+### 个股深度维度（75/100 → 90，v9.1 新空间）
+| 候选 | 加分 | 工作量 | ROI |
+|---|---|---|---|
+| **充值 Anthropic API** → 跑通 LLM 研报端到端，5 只 watchlist 验证质量 | +5 | 半天（充值 + 验证） | **极高** |
+| **充值 FMP Starter $35/月** → 解锁电话会议时序 + 同业候选广 | +3 | 1 周观察 | **高** |
+| FMP peers 跨 sector 问题 → 三级回退已做（v9.1），需更稳健的 sector_etf 同业池 | +1 | 半天 | 中 |
+| A 股 10-K 等价物（巨潮年报）解析器 → A 股深度从 0 → 60 | +3 | 2-3 天 | 中（覆盖 A 股） |
+| research_report 加引用追溯（每条论断 footnote） | +1 | 2 天 | 中（合规友好） |
+| Streamlit "个股研究"tab — LLM 研报 Markdown 自动渲染 | +1 | 半天 | 低（依赖 LLM 跑通） |
+| 自建 DCF 终值 FCF margin 假设按行业/公司画像区分 | +0.5 | 半天 | 低 |
+| quarterly_trends 加 YoY 同期对比线（目前只绝对值序列） | +0.5 | 1-2h | 低 |
+
+### 数据效率维度（90/100 → 95，v9.1 新空间）
+| 候选 | 加分 | 工作量 | ROI |
+|---|---|---|---|
+| 缓存层加 force_refresh 参数（财报日强制刷新） | +1 | 1h | 中 |
+| 缓存命中率 metrics 接 streamlit | +1 | 2h | 低 |
+| FMP/Finnhub 调用配额监控 + 阈值告警 | +1 | 半天 | 低 |
+| 缓存层加 SQLite 后端选项（百万级 entries 时） | +1 | 1 天 | 低（远未到规模） |
 
 ---
 
@@ -285,46 +368,60 @@ python3 -m stock_research.jobs.stress_test
 
 ---
 
-## 📚 学术引用清单（v8 完整版）
+## 📚 学术引用清单（v9.1 完整版）
 
 | # | 文献 | 用途 |
 |---|---|---|
 | 1 | Markowitz (1952) JF | 组合优化基础 |
 | 2 | Kelly (1956) | 仓位上限 |
 | 3 | Ball & Brown (1968) JAR | PEAD 因子 |
-| 4 | Rosenberg & Marathe (1976) | Barra 风险模型 |
-| 5 | De Bondt & Thaler (1985) JF | 反转因子 |
-| 6 | Brinson, Hood & Beebower (1986) FAJ | 业绩归因 |
-| 7 | Lakonishok & Lee (2001) RFS | 内部人交易 |
-| 8 | Fama & French (1992) JF | Size 因子 + 中性化 |
-| 9 | Black & Litterman (1992) | 贝叶斯组合优化 |
-| 10 | Pardo (1992) | Walk-forward 方法 |
-| 11 | Jegadeesh & Titman (1993) JF | 12-1 动量 |
-| 12 | Grinold (1994) | IC 监测 |
-| 13 | Carhart (1997) | 四因子模型 |
-| 14 | Rockafellar & Uryasev (2000) | CVaR 起源 |
-| 15 | Piotroski (2000) JAR | F-Score |
-| 16 | Grinold & Kahn (2000) | IC 阈值标准 |
-| 17 | Almgren & Chriss (2001) | 冲击成本 |
-| 18 | O'Neil (2002) | 个股止损规则 |
-| 19 | Pan & Poteshman (2006) RFS | 期权 PCR 信号 |
-| 20 | Faber (2007) SSRN | 200MA 趋势过滤 |
-| 21 | Whaley (2009) | VIX 恐慌阈值 |
-| 22 | Asness, Moskowitz & Pedersen (2013) JF | 因子中性化 |
-| 23 | Lopez de Prado (2016) | HRP |
-| 24 | **Lopez de Prado (2018)** | **Triple Barrier + Purged K-Fold + Sample Uniqueness** ⭐ v8 |
-| 25 | Frazzini, Israel & Moskowitz (2018) | 实证交易成本 |
-| 26 | Mitchell et al. (2019) | Model Card 规范 |
+| 4 | **Altman (1968) JF** | **Z-Score 破产预警** ⭐ v9 |
+| 5 | Rosenberg & Marathe (1976) | Barra 风险模型 |
+| 6 | De Bondt & Thaler (1985) JF | 反转因子 |
+| 7 | Brinson, Hood & Beebower (1986) FAJ | 业绩归因 |
+| 8 | **Lynch (1989) "One Up on Wall Street"** | **PEG 估值阈值带** ⭐ v9.1 |
+| 9 | Lakonishok & Lee (2001) RFS | 内部人交易 |
+| 10 | Fama & French (1992) JF | Size 因子 + 中性化 |
+| 11 | Black & Litterman (1992) | 贝叶斯组合优化 |
+| 12 | Pardo (1992) | Walk-forward 方法 |
+| 13 | Jegadeesh & Titman (1993) JF | 12-1 动量 |
+| 14 | Grinold (1994) | IC 监测 |
+| 15 | **Sloan (1996) AR** | **应计盈余反向因子（盈利质量 8 项）** ⭐ v9 |
+| 16 | Carhart (1997) | 四因子模型 |
+| 17 | **Beneish (1999) FAJ** | **M-Score 财务造假识别** ⭐ v9 |
+| 18 | Rockafellar & Uryasev (2000) | CVaR 起源 |
+| 19 | Piotroski (2000) JAR | F-Score |
+| 20 | Grinold & Kahn (2000) | IC 阈值标准 |
+| 21 | Almgren & Chriss (2001) | 冲击成本 |
+| 22 | O'Neil (2002) | 个股止损规则 |
+| 23 | **Dechow & Dichev (2002) AR** | **应计质量（盈利质量补充）** ⭐ v9 |
+| 24 | Pan & Poteshman (2006) RFS | 期权 PCR 信号 |
+| 25 | **Beneish & Nichols (2007)** | **M-Score 高增长假阳性 caveat** ⭐ v9 |
+| 26 | Faber (2007) SSRN | 200MA 趋势过滤 |
+| 27 | Whaley (2009) | VIX 恐慌阈值 |
+| 28 | **Loughran & McDonald (2011) JF** | **金融文本情绪词典（电话会议负面/不确定）** ⭐ v9 |
+| 29 | **Larcker & Zakolyukina (2012) JAR** | **管理层规避词识别（电话会议）** ⭐ v9 |
+| 30 | **Penman (2013) Financial Statement Analysis** | **杜邦五因子分解（v9 杜邦归因）** ⭐ v9 |
+| 31 | Asness, Moskowitz & Pedersen (2013) JF | 因子中性化 |
+| 32 | Lopez de Prado (2016) | HRP |
+| 33 | Lopez de Prado (2018) | Triple Barrier + Purged K-Fold + Sample Uniqueness ⭐ v8 |
+| 34 | Frazzini, Israel & Moskowitz (2018) | 实证交易成本 |
+| 35 | Mitchell et al. (2019) | Model Card 规范 |
+
+> v9 / v9.1 新增 9 篇：Altman 1968 / Lynch 1989 / Sloan 1996 / Beneish 1999 / Dechow-Dichev 2002 / Beneish-Nichols 2007 / Loughran-McDonald 2011 / Larcker-Zakolyukina 2012 / Penman 2013。
 
 ---
 
-## 给 Reviewer 的 5 个关键审查点
+## 给 Reviewer 的 5 个关键审查点（v9.1 更新）
 
-1. **学术规范完整**：26 篇引用 + 每个因子/约束都有论文出处
-2. **多源数据交叉**：5 数据源（SEC + akshare + Finnhub + yfinance + OpenBB）+ 自动 audit
-3. **诚实暴露弱点**：[`STRESS_TEST_REPORT.md`](STRESS_TEST_REPORT.md) 主动披露 v6 在 2008/2022 跑输 SPY
-4. **可重现**：所有代码 + 学术引用 + 月报公开（git 时间戳）
-5. **保守边界**：不给买卖建议、不自动交易、不接交易接口
+1. **学术规范完整**：35 篇引用（v9 新增 9 篇覆盖个股深度）+ 每个因子/约束都有论文出处
+2. **多源数据交叉**：6 数据源（SEC + akshare + Finnhub + yfinance + OpenBB + FMP）+ 自动 audit
+3. **诚实暴露弱点**：
+   - [`STRESS_TEST_REPORT.md`](STRESS_TEST_REPORT.md) 主动披露 v6 在 2008/2022 跑输 SPY
+   - v9.1 模块均带 caveat：Beneish 高增长假阳性、Altman X4 cap、forward EBITDA 免费层不可得、产业链 70% 而非机构级
+   - [`research_validation_log.md`](research_validation_log.md) 每份研报登记可证伪预测，定期回填胜率
+4. **可重现**：所有代码 + 学术引用 + 月报公开（git 时间戳）+ FMP 24h 缓存让结果可重现
+5. **保守边界**：不给买卖建议、不自动交易、不接交易接口；v9 LLM 研报模板明确禁止"买/卖"评级，仅给"是否值得跟踪"判断
 
 ---
 
