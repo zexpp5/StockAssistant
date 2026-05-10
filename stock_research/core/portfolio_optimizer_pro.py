@@ -75,11 +75,22 @@ def _build_cov(returns_df: pd.DataFrame, method: str = "ledoit_wolf",
 
 def prune_correlated(returns_df: pd.DataFrame,
                      ranked_tickers: list[str],
-                     max_corr: float = 0.7) -> tuple[list[str], list[dict]]:
-    """按 ranked 顺序贪心保留：后来者若与已保留任一股 |ρ| > max_corr 则丢弃。
+                     max_corr: float = 0.7,
+                     min_history: int = 126,
+                     industries: dict[str, str] | None = None,
+                     industry_cap: int = 1) -> tuple[list[str], list[dict]]:
+    """按 ranked 顺序贪心剪枝。
 
-    ranked_tickers 应已按因子合成分降序排好（高分先入选）。
-    返回 (kept, dropped)；dropped 元素含 vs/rho 用于审计。
+    要求 returns_df 是**复权后**收益率（A 股前复权 qfq、美股 adjusted close）。
+    不复权数据会让分红 / 拆股事件污染 corr 矩阵。
+
+    剪枝逻辑（三档退化）：
+      1. 样本 ≥ min_history(126) 天：用相关性矩阵，|ρ| > max_corr 则丢
+      2. 30 ≤ 样本 < 126：用相关性但 logger.warning 提示噪音；阈值不变
+      3. 样本 < 30：相关性不可信。若提供 industries → 退化到行业 cap（每行业最多 industry_cap 只）；否则按原顺序保留全部
+
+    ranked_tickers 已按因子合成分降序排好（高分先入选）。
+    返回 (kept, dropped)；dropped 元素含 vs/rho/method 用于审计。
     """
     available = [t for t in ranked_tickers if t in returns_df.columns]
     if len(available) <= 1:
@@ -87,9 +98,40 @@ def prune_correlated(returns_df: pd.DataFrame,
 
     # 用对齐后的子矩阵算相关性，避免 NaN
     sub = returns_df[available].dropna()
-    if len(sub) < 30:
-        logger.warning("prune_correlated: 样本仅 %d 天 (<30)，结果不稳；按原顺序保留", len(sub))
+    n_hist = len(sub)
+
+    # 档位 3：样本太短 → 行业 fallback（如果给了 industries）
+    if n_hist < 30:
+        if industries:
+            logger.warning(
+                "prune_correlated: 样本仅 %d 天 (<30)，相关性不可信，退化到行业 cap=%d",
+                n_hist, industry_cap)
+            kept: list[str] = []
+            dropped: list[dict] = []
+            ind_counts: dict[str, int] = {}
+            for tk in available:
+                ind = industries.get(tk) or "_unknown_"
+                if ind_counts.get(ind, 0) >= industry_cap:
+                    dropped.append({"dropped": tk, "industry": ind,
+                                    "method": "industry_fallback",
+                                    "threshold": industry_cap})
+                else:
+                    kept.append(tk)
+                    ind_counts[ind] = ind_counts.get(ind, 0) + 1
+            return kept, dropped
+        logger.warning(
+            "prune_correlated: 样本仅 %d 天 (<30) 且无 industries fallback；按原顺序保留全部",
+            n_hist)
         return available, []
+
+    # 档位 2：警告但仍用 corr
+    if n_hist < min_history:
+        logger.warning(
+            "prune_correlated: 样本 %d 天 < %d (推荐最小)，corr 估计偏噪音；"
+            "若 watchlist 有较多新股，建议传 industries 参数启用行业 fallback",
+            n_hist, min_history)
+
+    # 档位 1：正常 corr 剪枝
     corr = sub.corr().abs()
 
     kept: list[str] = []
@@ -105,7 +147,9 @@ def prune_correlated(returns_df: pd.DataFrame,
         if worst_rho > max_corr:
             dropped.append({"dropped": tk, "vs": worst_kept,
                             "rho": round(worst_rho, 3),
-                            "threshold": max_corr})
+                            "threshold": max_corr,
+                            "method": "corr",
+                            "n_history": n_hist})
         else:
             kept.append(tk)
     return kept, dropped
@@ -118,6 +162,9 @@ def optimize_max_sharpe(returns_df: pd.DataFrame,
                         min_weight: float = 0.02,
                         cov_method: str = "ledoit_wolf") -> dict[str, Any]:
     """精确 Max Sharpe 优化（PyPortfolioOpt cvxpy 求解）。
+
+    ⚠️ returns_df 必须基于**复权后**价格（A 股前复权 qfq、美股 adjusted close）。
+       不复权数据会让分红 / 拆股事件污染协方差和均值估计。
 
     比蒙特卡洛 20000 次更快、更精确。
     cov_method 默认 ledoit_wolf 收缩估计（小样本鲁棒）。
@@ -169,26 +216,35 @@ def optimize_min_volatility(returns_df: pd.DataFrame,
     }
 
 
-def optimize_hrp(returns_df: pd.DataFrame) -> dict[str, Any]:
+def optimize_hrp(returns_df: pd.DataFrame,
+                 cov_method: str = "ledoit_wolf") -> dict[str, Any]:
     """Hierarchical Risk Parity（HRP, Lopez de Prado 2016）。
 
     优势：
       - 无需协方差矩阵稳定性（对小样本鲁棒）
       - 在 out-of-sample 测试中常 > Markowitz
       - 自动按层级聚类决定权重
+
+    cov_method: 与其他优化器一致（默认 ledoit_wolf）。HRP 内部用 corr 做聚类，
+                仍受协方差噪音影响，传 shrinkage cov 让聚类更稳。
     """
     from pypfopt import HRPOpt
 
-    hrp = HRPOpt(returns=returns_df)
-    weights = hrp.optimize()
+    # HRP 内部用相关矩阵做层次聚类。即使 HRP 对协方差不敏感，
+    # 距离矩阵的稳定性仍受协方差噪音影响 — 一致性上传 ledoit_wolf 的 cov 更稳。
+    cov = _build_cov(returns_df, method=cov_method)
+    hrp = HRPOpt(returns=returns_df, cov_matrix=cov)
+    hrp.optimize()
+    weights = hrp.clean_weights()
     perf = hrp.portfolio_performance(verbose=False, risk_free_rate=0.045)
 
     return {
-        "method": "Hierarchical Risk Parity (Lopez de Prado 2016)",
+        "method": f"Hierarchical Risk Parity (Lopez de Prado 2016, cov={cov_method})",
         "weights": dict(weights),
         "annual_return": round(perf[0] * 100, 2),
         "annual_volatility": round(perf[1] * 100, 2),
         "sharpe_ratio": round(perf[2], 3),
+        "cov_method": cov_method,
     }
 
 
@@ -294,6 +350,13 @@ def discrete_allocation(weights: dict[str, float], latest_prices: dict[str, floa
 
 # ─────────────────── 风险反馈（Item 3） ───────────────────
 
+# DEFAULT_RISK_LIMITS — 中等风险偏好（成长 + 价值混合）的实务基线。
+# 风险偏好不同请按需覆盖（risk_limits=... 传入 risk_aware_optimize）：
+#   保守（防御 / 退休账户）：max_drawdown=-0.15, annual_vol=0.20, cvar_95_daily=-0.025
+#   中等（默认）           ：max_drawdown=-0.25, annual_vol=0.30, cvar_95_daily=-0.040
+#   激进（成长 / 高 Beta）  ：max_drawdown=-0.40, annual_vol=0.40, cvar_95_daily=-0.060
+# 依据：S&P 500 历史滚动 5Y max DD ≈ -56%（2008）、典型成长股组合 vol 30-35%、
+#       SPY 日 95% CVaR 约 -2.5%（平静期）至 -5%（危机期）。
 DEFAULT_RISK_LIMITS: dict[str, float] = {
     # 历史样本内的最大回撤底线（更低 = 更严格）
     "max_drawdown": -0.25,
@@ -352,15 +415,25 @@ def _which_breached(metrics: dict[str, float] | None,
     return bad
 
 
-def _scale_for_cash(result: dict[str, Any], cash_pct: float) -> dict[str, Any]:
-    """把权重等比缩到 (1 - cash_pct)，给现金留缓冲。"""
-    if cash_pct <= 0:
-        return result
-    invest = max(0.0, 1.0 - cash_pct)
-    w = {t: float(v) * invest for t, v in result["weights"].items()}
+def _attach_cash_meta(result: dict[str, Any], cash_pct: float) -> dict[str, Any]:
+    """把建议 cash_pct 作元数据附到结果上（不缩放 weights）。
+
+    ⚠️ 重要约定（与 PyPortfolioOpt 一致）：
+      - weights 始终 sum=1，代表"如果 100% 资金投向股票"的配置
+      - cash_pct 是建议留出的现金缓冲（元数据）
+      - 调用方决定是否真的把权重缩到 (1 - cash_pct)：
+            real_weights = {t: w * (1 - cash_pct) for t, w in weights.items()}
+            real_weights["$CASH"] = cash_pct  # 想显式 cash 行就这样
+      - stage_metrics 里的 annual_ret/vol 也是 100% 投资视角，
+        实盘乘以 (1 - cash_pct) 才是真实组合数字
+
+    旧版本 _scale_for_cash 隐式把 weights 缩到 sum=0.95，导致：
+      1. weights.sum() ≠ 1 — sum-to-1 检查失败 / discrete_allocation 资金分配异常
+      2. annual_ret/vol 计算在 unscaled 上，与 weights 不一致
+      3. cash 缓冲不可见 — 字典里没有 $CASH 键
+    """
     out = dict(result)
-    out["weights"] = w
-    out["cash_pct"] = cash_pct
+    out["cash_pct"] = float(cash_pct)
     return out
 
 
@@ -375,11 +448,17 @@ def risk_aware_optimize(returns_df: pd.DataFrame,
                         risk_limits: dict[str, float] | None = None) -> dict[str, Any]:
     """风险闸门反馈到优化的多级流水。
 
+    ⚠️ returns_df 必须基于**复权后**价格（A 股前复权 qfq、美股 adjusted close）。
+       不复权数据会让分红 / 拆股事件污染 corr / cov 矩阵 → 银行股相关性虚高、剪枝错误。
+
+    ⚠️ 返回的 weights 始终 sum=1（"100% 投资"基线视角）。cash_pct 是元数据 / 建议值，
+       由调用方自行决定缩放：real_target = {t: w * (1 - cash_pct) for ...}
+
     逻辑（凡命中 risk_limits 任一项视为「破线」）：
-      Stage 0: max_sharpe（Ledoit-Wolf）→ 算样本内 vol/DD/CVaR → 通过则返回
-      Stage 1: 收紧 max_weight（×0.6）+ 提高 cash_pct（+10pp）再 max_sharpe
-      Stage 2: 切换 min_cvar（尾部风险敏感）
-      Stage 3: 兜底 min_volatility（最防御）
+      Stage 0: max_sharpe（Ledoit-Wolf）, cash 建议 cash_pct (默认 5%)
+      Stage 1: 收紧 max_weight (×0.6), cash 建议 +10pp (15%)
+      Stage 2: min_cvar（尾部风险敏感）, cash 建议 +20pp (25%)
+      Stage 3: min_volatility 兜底, cash 建议 +25pp (30%, 上限)
 
     返回 dict 里 risk_aware_stage 标记最终用了哪一级，stages 里有每级 trace。
 
@@ -410,43 +489,51 @@ def risk_aware_optimize(returns_df: pd.DataFrame,
                        "metrics": m, "breached": breached})
         return res, breached
 
+    # 每级 stage 的 cash 建议（破线越多 → cash 越高）。上限 30%。
+    # weights 始终 sum=1，以下 cash_pct 仅作元数据，调用方自己决定是否缩放。
+    cash_by_stage = {
+        0: cash_pct,                         # 默认 5%
+        1: min(0.30, cash_pct + 0.10),       # 15%
+        2: min(0.30, cash_pct + 0.20),       # 25%
+        3: min(0.30, cash_pct + 0.25),       # 30%
+    }
+
     # Stage 0: max_sharpe
     res, bad = _try(0, "max_sharpe(ledoit_wolf)",
                     lambda: optimize_max_sharpe(returns_df, max_weight=max_weight,
                                                 min_weight=min_weight,
                                                 cov_method=cov_method))
     if res is not None and not bad:
-        out = _scale_for_cash(res, cash_pct)
+        out = _attach_cash_meta(res, cash_by_stage[0])
         out.update({"risk_aware_stage": 0, "stages": stages,
                     "pruned_dropped": pruned_log,
                     "selected_tickers": list(returns_df.columns),
                     "risk_limits": limits})
         return out
 
-    # Stage 1: 收紧 + 加 cash
+    # Stage 1: 收紧 max_weight + 提高建议 cash
     # 注意 tighter_max 必须满足 N*tighter_max ≥ 1（权重和=1 的可行性下界），
     # 否则 cvxpy 直接报 infeasible；这里加 1.05/N 缓冲。
     n_assets = max(1, len(returns_df.columns))
     tighter_max = max(0.05, max_weight * 0.6, 1.05 / n_assets)
     tighter_min = min(min_weight, tighter_max * 0.5)
-    higher_cash = min(0.30, cash_pct + 0.10)
-    res, bad = _try(1, f"max_sharpe(max_w={tighter_max:.2f}, cash={higher_cash:.2f})",
+    res, bad = _try(1, f"max_sharpe(max_w={tighter_max:.2f}, cash={cash_by_stage[1]:.2f})",
                     lambda: optimize_max_sharpe(returns_df, max_weight=tighter_max,
                                                 min_weight=tighter_min,
                                                 cov_method=cov_method))
     if res is not None and not bad:
-        out = _scale_for_cash(res, higher_cash)
+        out = _attach_cash_meta(res, cash_by_stage[1])
         out.update({"risk_aware_stage": 1, "stages": stages,
                     "pruned_dropped": pruned_log,
                     "selected_tickers": list(returns_df.columns),
                     "risk_limits": limits})
         return out
 
-    # Stage 2: min_cvar
-    res, bad = _try(2, f"min_cvar(max_w={tighter_max:.2f})",
+    # Stage 2: min_cvar — 尾部风险敏感
+    res, bad = _try(2, f"min_cvar(max_w={tighter_max:.2f}, cash={cash_by_stage[2]:.2f})",
                     lambda: optimize_min_cvar(returns_df, max_weight=tighter_max, beta=0.95))
     if res is not None and not bad:
-        out = _scale_for_cash(res, higher_cash)
+        out = _attach_cash_meta(res, cash_by_stage[2])
         out.update({"risk_aware_stage": 2, "stages": stages,
                     "pruned_dropped": pruned_log,
                     "selected_tickers": list(returns_df.columns),
@@ -454,13 +541,13 @@ def risk_aware_optimize(returns_df: pd.DataFrame,
         return out
 
     # Stage 3: min_volatility 兜底
-    res, bad = _try(3, f"min_volatility(max_w={tighter_max:.2f})",
+    res, bad = _try(3, f"min_volatility(max_w={tighter_max:.2f}, cash={cash_by_stage[3]:.2f})",
                     lambda: optimize_min_volatility(returns_df, max_weight=tighter_max,
                                                    cov_method=cov_method))
     if res is None:
         return {"error": "all stages failed", "stages": stages,
                 "pruned_dropped": pruned_log}
-    out = _scale_for_cash(res, higher_cash)
+    out = _attach_cash_meta(res, cash_by_stage[3])
     out.update({"risk_aware_stage": 3, "stages": stages,
                 "pruned_dropped": pruned_log,
                 "selected_tickers": list(returns_df.columns),

@@ -299,15 +299,25 @@ def run(capital: float = 500_000,
             risk_aware_meta = {"engine": "legacy_monte_carlo (fallback)",
                                "stages": out.get("stages", [])}
         else:
-            target_w = {t: float(w) for t, w in out["weights"].items()}
+            # risk_aware_optimize 现在返回 weights sum=1（100% 投资视角）+ cash_pct 元数据。
+            # 调用方按 stage 实际建议的 cash 缩股票权重，结果 sum = 1 - effective_cash，
+            # 与 legacy MC 路径（markowitz_constrained 内部已缩）保持一致。
+            effective_cash = float(out.get("cash_pct", cash_pct))
+            deployed = max(0.0, 1.0 - effective_cash)
+            target_w = {t: float(w) * deployed for t, w in out["weights"].items()}
+            # stage_metrics 是 100% 投资基线；下游显示用，乘 deployed 才是实盘组合的年化数字
+            # （cash 部分按 rf=4.5% 计入收益；vol 假设 cash 零方差）
             stage_metrics = out["stages"][out["risk_aware_stage"]].get("metrics") or {}
-            annual_ret = float(stage_metrics.get("annual_return", 0.0))
-            annual_vol = float(stage_metrics.get("annual_vol", 0.0))
+            stock_ret = float(stage_metrics.get("annual_return", 0.0))
+            stock_vol = float(stage_metrics.get("annual_vol", 0.0))
+            annual_ret = stock_ret * deployed + 0.045 * effective_cash
+            annual_vol = stock_vol * deployed
             annual_sharpe = (annual_ret - 0.045) / annual_vol if annual_vol > 0 else 0.0
             risk_aware_meta = {
                 "engine": "risk_aware_optimize",
                 "stage": out["risk_aware_stage"],
                 "stage_label": out["stages"][out["risk_aware_stage"]].get("label"),
+                "effective_cash_pct": effective_cash,
                 "pruned_dropped": out.get("pruned_dropped", []),
                 "selected_tickers": out.get("selected_tickers", []),
                 "warning": out.get("warning"),
