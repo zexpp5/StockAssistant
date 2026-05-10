@@ -24,6 +24,7 @@ env/
 # 数据快照（运行时生成）
 data/
 prices_*.json
+review_*.json
 13f_snapshots/
 # stock_history.duckdb 入库做事实来源；只忽略 WAL 与临时备份
 *.duckdb.wal

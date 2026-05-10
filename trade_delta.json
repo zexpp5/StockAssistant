@@ -1,0 +1,186 @@
+{
+  "generated_at": "2026-05-10T10:56:57.324004",
+  "total_capital_rmb": 500000,
+  "sells": [
+    {
+      "ticker": "NVDA",
+      "name": "NVDA",
+      "current_weight": 0.12,
+      "current_amount": 60000.0
+    },
+    {
+      "ticker": "GOOGL",
+      "name": "GOOGL",
+      "current_weight": 0.1,
+      "current_amount": 50000.0
+    },
+    {
+      "ticker": "MSFT",
+      "name": "MSFT",
+      "current_weight": 0.1,
+      "current_amount": 50000.0
+    },
+    {
+      "ticker": "AMD",
+      "name": "AMD",
+      "current_weight": 0.08,
+      "current_amount": 40000.0
+    },
+    {
+      "ticker": "600111.SS",
+      "name": "北方稀土",
+      "current_weight": 0.08,
+      "current_amount": 40000.0
+    },
+    {
+      "ticker": "CCJ",
+      "name": "Cameco",
+      "current_weight": 0.07,
+      "current_amount": 35000.0
+    },
+    {
+      "ticker": "DDOG",
+      "name": "Datadog",
+      "current_weight": 0.05,
+      "current_amount": 25000.0
+    },
+    {
+      "ticker": "300308.SZ",
+      "name": "中际旭创",
+      "current_weight": 0.05,
+      "current_amount": 25000.0
+    },
+    {
+      "ticker": "9988.HK",
+      "name": "阿里巴巴",
+      "current_weight": 0.05,
+      "current_amount": 25000.0
+    },
+    {
+      "ticker": "688041.SS",
+      "name": "海光信息",
+      "current_weight": 0.05,
+      "current_amount": 25000.0
+    }
+  ],
+  "buys": [
+    {
+      "ticker": "MU",
+      "v6_weight": 0.11605047469881943,
+      "amount_rmb": 58025.24,
+      "price_usd": 746.8099975585938,
+      "shares_estimate": 10,
+      "f_score": "7",
+      "composite_z": 1.0410111555727493
+    },
+    {
+      "ticker": "LRCX",
+      "v6_weight": 0.14927308777799342,
+      "amount_rmb": 74636.54,
+      "price_usd": 294.04998779296875,
+      "shares_estimate": 35,
+      "f_score": "8",
+      "composite_z": 0.9278481522652845
+    },
+    {
+      "ticker": "MTZ",
+      "v6_weight": 0.11836872621986912,
+      "amount_rmb": 59184.36,
+      "price_usd": 414.2900085449219,
+      "shares_estimate": 20,
+      "f_score": "8",
+      "composite_z": 0.8129210520197147
+    },
+    {
+      "ticker": "SNDK",
+      "v6_weight": 0.1416891388770159,
+      "amount_rmb": 70844.57,
+      "price_usd": 1562.3399658203125,
+      "shares_estimate": 6,
+      "f_score": "5",
+      "composite_z": 0.806687235284399
+    },
+    {
+      "ticker": "MOD",
+      "v6_weight": 0.028730135220136815,
+      "amount_rmb": 14365.07,
+      "price_usd": 273.0,
+      "shares_estimate": 7,
+      "f_score": "9",
+      "composite_z": 0.6690201168876345
+    },
+    {
+      "ticker": "GEV",
+      "v6_weight": 0.021828489501697718,
+      "amount_rmb": 10914.24,
+      "price_usd": 1040.1500244140625,
+      "shares_estimate": 1,
+      "f_score": "7",
+      "composite_z": 0.6284952368128488
+    },
+    {
+      "ticker": "ETN",
+      "v6_weight": 0.02529247300239598,
+      "amount_rmb": 12646.24,
+      "price_usd": 401.510009765625,
+      "shares_estimate": 4,
+      "f_score": "7",
+      "composite_z": 0.4644600224257539
+    },
+    {
+      "ticker": "KO",
+      "v6_weight": 0.14213905126032345,
+      "amount_rmb": 71069.53,
+      "price_usd": 78.41999816894531,
+      "shares_estimate": 127,
+      "f_score": "7",
+      "composite_z": 0.45306276690401354
+    },
+    {
+      "ticker": "AVGO",
+      "v6_weight": 0.01990307837039913,
+      "amount_rmb": 9951.54,
+      "price_usd": 430.0,
+      "shares_estimate": 3,
+      "f_score": "8",
+      "composite_z": 0.44407362937382755
+    },
+    {
+      "ticker": "MRVL",
+      "v6_weight": 0.1169679727844191,
+      "amount_rmb": 58483.99,
+      "price_usd": 170.1300048828125,
+      "shares_estimate": 48,
+      "f_score": "8",
+      "composite_z": 0.41188799160906625
+    }
+  ],
+  "adjusts": [
+    {
+      "ticker": "VRT",
+      "name": "Vertiv",
+      "cur_weight": 0.1,
+      "new_weight": 0.037761444414917876,
+      "delta_pct": -0.06223855558508213,
+      "delta_amount": -31119.277792541066,
+      "shares_to_trade": 12,
+      "action": "减仓"
+    },
+    {
+      "ticker": "TSM",
+      "name": "TSM",
+      "cur_weight": 0.1,
+      "new_weight": 0.03199592787201199,
+      "delta_pct": -0.06800407212798801,
+      "delta_amount": -34002.036063994005,
+      "shares_to_trade": 11,
+      "action": "减仓"
+    }
+  ],
+  "summary": {
+    "total_sell_rmb": 375000.0,
+    "total_buy_rmb": 440121.32,
+    "total_adjust_rmb": -65121.31,
+    "net_cash_need_rmb": 0.01
+  }
+}

@@ -1,5 +1,5 @@
 {
-  "date": "2026-05-09",
+  "date": "2026-05-10",
   "factors": [
     {
       "ticker": "GOOGL",
@@ -456,10 +456,10 @@
         "error": null
       },
       "pead": {
-        "acceleration": -2.58,
+        "acceleration": 5.52,
         "method": "QoQ",
-        "qoq_now_pct": 1.86,
-        "qoq_prev_pct": 4.45,
+        "qoq_now_pct": 7.38,
+        "qoq_prev_pct": 1.86,
         "error": null
       }
     },
@@ -549,10 +549,10 @@
         "error": null
       },
       "pead": {
-        "acceleration": 683.35,
+        "acceleration": -691.61,
         "method": "QoQ",
-        "qoq_now_pct": 609.43,
-        "qoq_prev_pct": -73.92,
+        "qoq_now_pct": -82.18,
+        "qoq_prev_pct": 609.43,
         "error": null
       }
     },
@@ -704,11 +704,8 @@
         "error": null
       },
       "pead": {
-        "acceleration": 5.07,
-        "method": "QoQ",
-        "qoq_now_pct": -1.62,
-        "qoq_prev_pct": -6.69,
-        "error": null
+        "acceleration": null,
+        "error": "insufficient valid quarters"
       }
     },
     {
@@ -797,11 +794,8 @@
         "error": null
       },
       "pead": {
-        "acceleration": -0.37,
-        "method": "QoQ",
-        "qoq_now_pct": 9.34,
-        "qoq_prev_pct": 9.7,
-        "error": null
+        "acceleration": null,
+        "error": "insufficient valid quarters"
       }
     },
     {
@@ -983,10 +977,10 @@
         "error": null
       },
       "pead": {
-        "acceleration": -24.75,
+        "acceleration": 30.82,
         "method": "QoQ",
-        "qoq_now_pct": -7.79,
-        "qoq_prev_pct": 16.96,
+        "qoq_now_pct": 23.04,
+        "qoq_prev_pct": -7.79,
         "error": null
       }
     },
@@ -1138,10 +1132,10 @@
         "error": null
       },
       "pead": {
-        "acceleration": 1.44,
+        "acceleration": -3.06,
         "method": "QoQ",
-        "qoq_now_pct": 19.11,
-        "qoq_prev_pct": 17.67,
+        "qoq_now_pct": 16.05,
+        "qoq_prev_pct": 19.11,
         "error": null
       }
     },
@@ -1231,28 +1225,25 @@
         "error": null
       },
       "pead": {
-        "acceleration": 2.66,
-        "method": "QoQ",
-        "qoq_now_pct": 15.19,
-        "qoq_prev_pct": 12.52,
-        "error": null
+        "acceleration": null,
+        "error": "insufficient valid quarters"
       }
     },
     {
       "ticker": "ARM",
       "as_of": null,
       "piotroski": {
-        "f_score": 6,
+        "f_score": 2,
         "details": {
-          "1_roa>0": true,
+          "1_roa>0": false,
           "2_cfo>0": true,
-          "3_droa>0": true,
+          "3_droa>0": false,
           "4_cfo>ni": false,
           "5_dltd<0": false,
           "6_dcr>0": true,
           "7_no_new_shares": false,
-          "8_dgm>0": true,
-          "9_dat>0": true
+          "8_dgm>0": false,
+          "9_dat>0": false
         },
         "data_quality": "full"
       },
@@ -1262,11 +1253,8 @@
         "error": null
       },
       "pead": {
-        "acceleration": 1.64,
-        "method": "QoQ",
-        "qoq_now_pct": 9.43,
-        "qoq_prev_pct": 7.79,
-        "error": null
+        "acceleration": null,
+        "error": "insufficient valid quarters"
       }
     },
     {
@@ -1321,10 +1309,10 @@
         "error": null
       },
       "pead": {
-        "acceleration": -2.79,
+        "acceleration": -3.39,
         "method": "QoQ",
-        "qoq_now_pct": 17.35,
-        "qoq_prev_pct": 20.14,
+        "qoq_now_pct": 13.96,
+        "qoq_prev_pct": 17.35,
         "error": null
       }
     },
@@ -1684,10 +1672,72 @@
         "error": null
       },
       "pead": {
-        "acceleration": 0.5,
+        "acceleration": -2.04,
         "method": "QoQ",
-        "qoq_now_pct": 7.63,
-        "qoq_prev_pct": 7.12,
+        "qoq_now_pct": 5.58,
+        "qoq_prev_pct": 7.63,
+        "error": null
+      }
+    },
+    {
+      "ticker": "SNDK",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 5,
+        "details": {
+          "1_roa>0": false,
+          "2_cfo>0": true,
+          "3_droa>0": false,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": true,
+          "7_no_new_shares": false,
+          "8_dgm>0": true,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 2335.14,
+        "reversal_1m": -83.47,
+        "error": null
+      },
+      "pead": {
+        "acceleration": 65.63,
+        "method": "QoQ",
+        "qoq_now_pct": 96.69,
+        "qoq_prev_pct": 31.07,
+        "error": null
+      }
+    },
+    {
+      "ticker": "MU",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 7,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": false,
+          "7_no_new_shares": false,
+          "8_dgm>0": true,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 411.4,
+        "reversal_1m": -77.17,
+        "error": null
+      },
+      "pead": {
+        "acceleration": 54.31,
+        "method": "QoQ",
+        "qoq_now_pct": 74.89,
+        "qoq_prev_pct": 20.57,
         "error": null
       }
     }
@@ -2057,11 +2107,11 @@
       "ticker": "LRCX",
       "as_of": null,
       "insider": {
-        "buy_shares_6m": 959928.0,
-        "sell_shares_6m": 358476.0,
-        "net_shares_6m": 601452.0,
-        "net_transactions_6m": 43.0,
-        "net_value_usd_approx": 176856953.25805664
+        "buy_shares_6m": 939006.0,
+        "sell_shares_6m": 358446.0,
+        "net_shares_6m": 580560.0,
+        "net_transactions_6m": 30.0,
+        "net_value_usd_approx": 170713660.91308594
       },
       "analyst": {
         "window_days": 90,
@@ -2077,11 +2127,11 @@
       "ticker": "PWR",
       "as_of": null,
       "insider": {
-        "buy_shares_6m": 160252.0,
-        "sell_shares_6m": 25653.0,
-        "net_shares_6m": 134599.0,
-        "net_transactions_6m": 13.0,
-        "net_value_usd_approx": 100276255.0
+        "buy_shares_6m": 159752.0,
+        "sell_shares_6m": 4000.0,
+        "net_shares_6m": 155752.0,
+        "net_transactions_6m": 10.0,
+        "net_value_usd_approx": 116035240.0
       },
       "analyst": {
         "window_days": 90,
@@ -2237,11 +2287,11 @@
       "ticker": "VRT",
       "as_of": null,
       "insider": {
-        "buy_shares_6m": 337484.0,
+        "buy_shares_6m": 331891.0,
         "sell_shares_6m": 495262.0,
-        "net_shares_6m": -157778.0,
-        "net_transactions_6m": 42.0,
-        "net_value_usd_approx": -53639786.8526001
+        "net_shares_6m": -163371.0,
+        "net_transactions_6m": 41.0,
+        "net_value_usd_approx": -55541239.06942749
       },
       "analyst": {
         "window_days": 90,
@@ -2377,11 +2427,11 @@
       "ticker": "AMZN",
       "as_of": null,
       "insider": {
-        "buy_shares_6m": 2612269.0,
+        "buy_shares_6m": 1599141.0,
         "sell_shares_6m": 269754.0,
-        "net_shares_6m": 2342515.0,
-        "net_transactions_6m": 51.0,
-        "net_value_usd_approx": 638756973.0429077
+        "net_shares_6m": 1329387.0,
+        "net_transactions_6m": 50.0,
+        "net_value_usd_approx": 362497237.4232788
       },
       "analyst": {
         "window_days": 90,
@@ -2777,10 +2827,10 @@
       "ticker": "DDOG",
       "as_of": null,
       "insider": {
-        "buy_shares_6m": 3328570.0,
-        "sell_shares_6m": 1946029.0,
+        "buy_shares_6m": 3316070.0,
+        "sell_shares_6m": 1933529.0,
         "net_shares_6m": 1382541.0,
-        "net_transactions_6m": 109.0,
+        "net_transactions_6m": 107.0,
         "net_value_usd_approx": 276729411.62301636
       },
       "analyst": {
@@ -2791,6 +2841,46 @@
         "upgrades": 1,
         "downgrades": 0,
         "avg_target_raise_pct": 30.06
+      }
+    },
+    {
+      "ticker": "SNDK",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 21401.0,
+        "sell_shares_6m": 4771.0,
+        "net_shares_6m": 16630.0,
+        "net_transactions_6m": 10.0,
+        "net_value_usd_approx": 25981713.631591797
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 17,
+        "raises": 15,
+        "lowers": 0,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": 36.14
+      }
+    },
+    {
+      "ticker": "MU",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 23676.0,
+        "sell_shares_6m": 216806.0,
+        "net_shares_6m": -193130.0,
+        "net_transactions_6m": 17.0,
+        "net_value_usd_approx": -144231414.8284912
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 32,
+        "raises": 27,
+        "lowers": 1,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": 25.59
       }
     }
   ]

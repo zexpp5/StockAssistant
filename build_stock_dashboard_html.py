@@ -410,10 +410,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <a href="#overview" data-tab="overview" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">📌 概览</a>
     <a href="#portfolio" data-tab="portfolio" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">💼 我的持仓</a>
     <a href="#picks" data-tab="picks" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">⭐ 每日优选</a>
+    <a href="#discovery" data-tab="discovery" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">🔍 候选发现</a>
     <a href="#audit" data-tab="audit" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">🛡 反向审查</a>
     <a href="#valuation" data-tab="valuation" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">📈 估值视角</a>
     <a href="#themes" data-tab="themes" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">🗂 主题分组</a>
     <a href="#history" data-tab="history" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">📅 历史</a>
+    <a href="#backtest" data-tab="backtest" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">📈 方案回测</a>
     <a href="#professional" data-tab="professional" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">📊 专业分析</a>
     <a href="#upgrade" data-tab="upgrade" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">💰 升级建议</a>
     <span class="ml-auto flex items-center gap-2 flex-shrink-0">
@@ -560,6 +562,47 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 </section>
 
 {AUDIT_PANEL}
+
+<!-- ============ 🔍 候选发现 Tab ============ -->
+<section id="discovery" class="max-w-7xl mx-auto px-6 py-10 bg-gradient-to-br from-sky-50 to-indigo-50 rounded-2xl my-6">
+  <div class="flex items-center gap-3 mb-2">
+    <span class="text-3xl">🔍</span>
+    <h2 class="text-2xl font-bold text-slate-900">候选发现 — watchlist 之外的因子高分股</h2>
+  </div>
+  <p class="text-slate-700 mb-3 max-w-3xl">
+    扫描 SOXX / IGM / IRBO / BAI 四个 ETF 的所有成分股（半导体 + 拓展科技 + AI 主题），
+    跑同一套学术因子模型（Piotroski + 12-1 动量 + PEAD + 分析师上修），
+    找出 <strong>不在你 watchlist 里</strong> 但综合得分前列的标的。
+    <strong class="text-rose-600">仅缩小搜索空间，研究判断仍需你来做</strong>。
+  </p>
+  <div id="discovery-meta" class="text-xs text-slate-500 mb-4"></div>
+  <div id="discovery-empty" class="hidden text-center py-12 text-slate-500 bg-white rounded-xl">
+    暂无候选发现数据（运行 <code class="text-xs bg-slate-200 px-1.5 py-0.5 rounded">python3 discover_candidates.py</code> 生成）
+  </div>
+  <div id="discovery-table-wrap" class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="bg-slate-50 text-slate-600 text-xs uppercase tracking-wide">
+        <tr>
+          <th class="px-3 py-2 text-left">排名</th>
+          <th class="px-3 py-2 text-left">代码</th>
+          <th class="px-3 py-2 text-left">名称</th>
+          <th class="px-3 py-2 text-left">行业</th>
+          <th class="px-3 py-2 text-right">综合 z</th>
+          <th class="px-3 py-2 text-right">F-Score</th>
+          <th class="px-3 py-2 text-right">12-1 动量</th>
+          <th class="px-3 py-2 text-right">分析师</th>
+          <th class="px-3 py-2 text-right">市值 ($B)</th>
+          <th class="px-3 py-2 text-left">来源</th>
+        </tr>
+      </thead>
+      <tbody id="discovery-table-body" class="divide-y divide-slate-100"></tbody>
+    </table>
+  </div>
+  <p class="text-xs text-slate-500 mt-4">
+    💡 <strong>怎么用</strong>：对感兴趣的标的去飞书 watchlist 表手动调研（业务 / AI 关联 / 风险），
+    通过的加入 watchlist —— 下次 daily_picks 会自动把它纳入排序池。
+  </p>
+</section>
 
 <!-- ============ 估值视角 ============ -->
 <section id="valuation" class="max-w-7xl mx-auto px-6 py-10 bg-gradient-to-br from-cyan-50 to-blue-50 rounded-2xl my-6">
@@ -877,6 +920,42 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <p class="text-xs text-slate-600">每天 daily_refresh 自动写入。累积越久 = 你自己的历史数据库（不依赖 yfinance），未来可做严肃回测。</p>
     <p class="text-xs text-slate-500 mt-1 font-mono">stock_history.duckdb</p>
   </div>
+</section>
+
+<!-- ============ 📈 方案回测 Tab ============ -->
+<section id="backtest" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
+  <div class="mb-6">
+    <h2 class="text-2xl font-bold text-slate-900">📈 方案实盘跟踪：从锁定日往后看每日营收</h2>
+    <p class="text-sm text-slate-600 mt-1">v6 plan 锁定日为基线（NAV=100），之后每个交易日实盘跟踪。基准 SPY · <strong class="text-rose-600">不是回测，是 forward 视角</strong>。每日 daily_refresh 自动累加。</p>
+    <div id="backtest-inception-banner" class="mt-3 hidden bg-violet-50 border-l-4 border-violet-500 rounded-r-lg p-3 text-sm text-slate-800"></div>
+  </div>
+
+  <!-- 关键指标卡 -->
+  <div id="backtest-metrics" class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4"></div>
+
+  <!-- NAV 曲线 -->
+  <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="text-sm font-semibold text-slate-700">📈 NAV 曲线（起点 = 100，组合 vs SPY）</h3>
+      <span id="backtest-coverage" class="text-xs text-slate-500"></span>
+    </div>
+    <div id="backtest-nav-chart" style="height:380px"></div>
+  </div>
+
+  <!-- 最近 60 天每日 P&L -->
+  <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
+    <h3 class="text-sm font-semibold text-slate-700 mb-3">📅 最近 60 天每日 P&amp;L（红 = 涨 / 绿 = 跌）</h3>
+    <div id="backtest-daily-chart" style="height:280px"></div>
+  </div>
+
+  <!-- 持仓贡献表 -->
+  <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
+    <h3 class="text-sm font-semibold text-slate-700 mb-3">💼 单股贡献度（按贡献排序）</h3>
+    <div id="backtest-contrib-table" class="overflow-x-auto"></div>
+  </div>
+
+  <!-- 缺数据提示 -->
+  <div id="backtest-missing-warning" class="hidden bg-amber-50 border border-amber-300 rounded-lg p-3 text-xs text-amber-800"></div>
 </section>
 
 <!-- ============ 📊 专业分析 Tab ============ -->
@@ -1415,6 +1494,7 @@ const _DATA_FILE = {
   OPTIMIZATION:  {OPTIMIZATION_JSON_FILE},
   PLAN_A_V6:     {PLAN_A_V6_JSON_FILE},
 };
+const DISCOVERY = {DISCOVERY_JSON};
 const _DATA_DB = {
   RECORDS:       {RECORDS_JSON},
   PICKS:         {PICKS_JSON},
@@ -1425,6 +1505,10 @@ const _DATA_DB = {
   OPTIMIZATION:  {OPTIMIZATION_JSON_DB},
   PLAN_A_V6:     {PLAN_A_V6_JSON_DB},
 };
+// 方案回测数据：和其他源一样准备两份
+const _BACKTEST_FILE = {PLAN_BACKTEST_JSON_FILE};
+const _BACKTEST_DB   = {PLAN_BACKTEST_JSON_DB};
+
 let _DATA_SOURCE = 'file';
 let RECORDS       = _DATA_FILE.RECORDS;
 let PICKS         = _DATA_FILE.PICKS;
@@ -1478,6 +1562,7 @@ function swapDataSource(src) {
   try { if (typeof renderSimulation === 'function') renderSimulation(); } catch (e) {}
   try { if (typeof loadPlanAv6 === 'function') loadPlanAv6(); } catch (e) {}
   try { if (typeof initHistorySelect === 'function') initHistorySelect(); } catch (e) {}
+  try { if (typeof renderPlanBacktest === 'function') renderPlanBacktest(); } catch (e) {}
 
   console.log('[swapDataSource] →', src);
 }
@@ -1491,6 +1576,7 @@ const TAB_SECTIONS = {
   valuation: ["valuation"],
   themes: ["distribution", "theme-groups"],
   history: ["history"],
+  backtest: ["backtest"],
   professional: ["professional"],
   upgrade: ["upgrade"],
 };
@@ -1520,6 +1606,7 @@ function switchTab(tab) {
   // tab 特定的延迟初始化
   if (tab === "portfolio") setTimeout(renderPortfolio, 50);
   if (tab === "history") setTimeout(initHistorySelect, 50);
+  if (tab === "backtest") setTimeout(renderPlanBacktest, 100);
   if (tab === "professional") setTimeout(renderProfessional, 50);
 }
 
@@ -2278,6 +2365,207 @@ function renderOptPane() {
   });
 }
 
+// ============ 方案回测 Tab ============
+function renderPlanBacktest() {
+  const data = (_DATA_SOURCE === 'db' ? _BACKTEST_DB : _BACKTEST_FILE) || {};
+  const metricsEl = document.getElementById('backtest-metrics');
+  const navEl = document.getElementById('backtest-nav-chart');
+  const dailyEl = document.getElementById('backtest-daily-chart');
+  const tableEl = document.getElementById('backtest-contrib-table');
+  const warnEl = document.getElementById('backtest-missing-warning');
+  const covEl = document.getElementById('backtest-coverage');
+  const bannerEl = document.getElementById('backtest-inception-banner');
+  if (!metricsEl) return;
+
+  if (!data.dates || data.dates.length === 0) {
+    metricsEl.innerHTML = '<div class="col-span-5 text-slate-500 p-4 bg-white rounded-lg">暂无数据 — 请先跑：<code>python3 build_plan_a_v5.py && python3 _fetch_history_for_dashboard.py</code></div>';
+    if (navEl) navEl.innerHTML = '';
+    if (dailyEl) dailyEl.innerHTML = '';
+    if (tableEl) tableEl.innerHTML = '';
+    return;
+  }
+  const m = data.metrics || {};
+  const fmtPct = (v) => (v == null) ? '-' : (Number(v).toFixed(2) + '%');
+  const cls = (v) => (v >= 0) ? 'text-emerald-600' : 'text-rose-600';
+  const nTracked = m.n_tracked_days || 0;
+
+  // 顶部 inception banner
+  if (bannerEl) {
+    if (data.inception_date) {
+      bannerEl.classList.remove('hidden');
+      const daysWord = nTracked === 0
+        ? '<span class="text-rose-600 font-semibold">还没有交易日</span>（等下一个开盘日 daily_refresh 跑完后会出现第 1 个数据点）'
+        : `已跟踪 <strong class="text-violet-700">${nTracked}</strong> 个交易日（${m.tracked_start} → ${m.tracked_end}）`;
+      bannerEl.innerHTML = `📍 v6 plan 锁定日：<strong class="font-mono text-violet-700">${data.inception_date}</strong> · 基线日（最近交易日）：<strong class="font-mono">${data.baseline_date}</strong> · ${daysWord}`;
+    } else {
+      bannerEl.classList.add('hidden');
+    }
+  }
+
+  // 数据少时（<2 天 tracked）特殊态：不显示百分比指标，只显示状态
+  if (nTracked < 1) {
+    metricsEl.innerHTML = `
+      <div class="col-span-5 bg-amber-50 border border-amber-300 rounded-lg p-4">
+        <div class="text-base font-semibold text-amber-900">⏳ 锁定日刚定，还没有完整交易日数据</div>
+        <div class="text-sm text-amber-800 mt-1">基线日 <span class="font-mono">${data.baseline_date}</span> 收盘 = NAV 100。下一个交易日开盘后跑 daily_refresh，曲线就会出现第 1 个 forward 数据点。</div>
+        <div class="text-xs text-amber-700 mt-2">下方曲线显示的是锁定日之前 30 天的市场上下文（灰色），不是组合表现。</div>
+      </div>
+    `;
+  } else {
+    metricsEl.innerHTML = `
+      <div class="bg-white rounded-lg p-3 shadow-sm">
+        <div class="text-2xl font-bold ${cls(m.cumulative_return_pct)}">${fmtPct(m.cumulative_return_pct)}</div>
+        <div class="text-xs text-slate-600 mt-1">实盘累计收益<br/>vs SPY ${fmtPct(m.bench_cumulative_return_pct)}（α ${fmtPct(m.alpha_pct)}）</div>
+      </div>
+      <div class="bg-white rounded-lg p-3 shadow-sm">
+        <div class="text-2xl font-bold ${cls(m.annual_return_pct)}">${fmtPct(m.annual_return_pct)}</div>
+        <div class="text-xs text-slate-600 mt-1">年化（${nTracked} 日推算）<br/>样本太短仅供参考</div>
+      </div>
+      <div class="bg-white rounded-lg p-3 shadow-sm">
+        <div class="text-2xl font-bold text-slate-900">${(m.sharpe || 0).toFixed(2)}</div>
+        <div class="text-xs text-slate-600 mt-1">Sharpe Ratio<br/>年化波动 ${fmtPct(m.annual_vol_pct)}</div>
+      </div>
+      <div class="bg-white rounded-lg p-3 shadow-sm">
+        <div class="text-2xl font-bold text-rose-600">${fmtPct(m.max_drawdown_pct)}</div>
+        <div class="text-xs text-slate-600 mt-1">最大回撤<br/>跟踪期内最差</div>
+      </div>
+      <div class="bg-white rounded-lg p-3 shadow-sm">
+        <div class="text-2xl font-bold text-slate-900">${(m.win_rate_pct || 0).toFixed(1)}%</div>
+        <div class="text-xs text-slate-600 mt-1">胜率<br/>${m.win_days || 0} / ${m.total_days || 0} 天</div>
+      </div>
+    `;
+  }
+
+  if (covEl) {
+    covEl.textContent = `锁定日 ${data.baseline_date || '?'} · 跟踪 ${nTracked} 个交易日 · ${(data.tickers_used || []).length} 只成分股`
+      + ((data.tickers_missing && data.tickers_missing.length) ? ` · 缺数据 ${data.tickers_missing.length} 只` : '');
+  }
+  if (warnEl) {
+    if (data.tickers_missing && data.tickers_missing.length) {
+      warnEl.classList.remove('hidden');
+      warnEl.innerHTML = `⚠️ 历史数据缺失：${data.tickers_missing.join(', ')} — 已剔除（权重已重归一化）。`;
+    } else {
+      warnEl.classList.add('hidden');
+    }
+  }
+
+  // NAV chart：context 段灰色虚线，tracked 段紫色实线 + 锁定日竖线
+  if (navEl && typeof echarts !== 'undefined') {
+    let navChart = echarts.getInstanceByDom(navEl);
+    if (!navChart) navChart = echarts.init(navEl);
+    const baselineIdx = data.baseline_idx_in_window != null ? data.baseline_idx_in_window : 0;
+    const navPct = data.nav.map(v => +(v * 100).toFixed(2));
+    const benchPct = (data.bench_nav || []).map(v => +(v * 100).toFixed(2));
+    // 拆成 context（含 baseline 那点）+ tracked（baseline 之后），用 null 隔开避免重叠
+    const ctxNav = navPct.map((v, i) => i <= baselineIdx ? v : null);
+    const trkNav = navPct.map((v, i) => i >= baselineIdx ? v : null);
+    const ctxBench = benchPct.map((v, i) => i <= baselineIdx ? v : null);
+    const trkBench = benchPct.map((v, i) => i >= baselineIdx ? v : null);
+    const baselineDate = data.baseline_date || (data.dates[baselineIdx] || '');
+
+    const series = [
+      {
+        name: '组合（锁定前·上下文）', type: 'line', smooth: true, showSymbol: false,
+        data: ctxNav,
+        lineStyle: { width: 1.2, color: '#cbd5e1', type: 'dashed' },
+      },
+      {
+        name: '组合（锁定后·实盘）', type: 'line', smooth: true, showSymbol: true, symbolSize: 6,
+        data: trkNav,
+        lineStyle: { width: 2.5, color: '#7c3aed' },
+        areaStyle: { color: 'rgba(124,58,237,0.08)' },
+        markLine: {
+          symbol: ['none', 'none'], silent: true,
+          data: [{ xAxis: baselineDate, label: { formatter: '📍 锁定日 ' + baselineDate, fontSize: 10, color: '#7c3aed', position: 'insideEndTop' }, lineStyle: { color: '#7c3aed', width: 1.5, type: 'dashed' } }]
+        }
+      },
+    ];
+    if (benchPct.length) {
+      series.push({
+        name: 'SPY（锁定前·上下文）', type: 'line', smooth: true, showSymbol: false,
+        data: ctxBench,
+        lineStyle: { width: 1, color: '#fda4af', type: 'dashed' },
+      });
+      series.push({
+        name: 'SPY（锁定后·实盘）', type: 'line', smooth: true, showSymbol: true, symbolSize: 5,
+        data: trkBench,
+        lineStyle: { width: 1.8, color: '#f43f5e' },
+      });
+    }
+    navChart.setOption({
+      tooltip: { trigger: 'axis' },
+      legend: { top: 0, textStyle: { fontSize: 10 } },
+      xAxis: { type: 'category', data: data.dates, boundaryGap: false, axisLabel: { fontSize: 10 } },
+      yAxis: { type: 'value', scale: true, axisLabel: { formatter: '{value}', fontSize: 10 }, splitLine: { lineStyle: { type: 'dashed', color: '#e2e8f0' } } },
+      grid: { left: 50, right: 30, top: 50, bottom: 30 },
+      series: series,
+    });
+    requestAnimationFrame(() => navChart.resize());
+    setTimeout(() => navChart.resize(), 200);
+    if (!window._BACKTEST_NAV_RESIZE_HOOKED) {
+      window._BACKTEST_NAV_RESIZE_HOOKED = true;
+      window.addEventListener('resize', () => navChart.resize());
+    }
+  }
+
+  // Daily P&L last 60 days
+  if (dailyEl && typeof echarts !== 'undefined' && data.daily_returns) {
+    const N = Math.min(60, data.daily_returns.length);
+    const slice = data.daily_returns.slice(-N);
+    const dates = data.dates.slice(-N);
+    let dailyChart = echarts.getInstanceByDom(dailyEl);
+    if (!dailyChart) dailyChart = echarts.init(dailyEl);
+    dailyChart.setOption({
+      tooltip: { trigger: 'axis', formatter: p => p[0].axisValue + '<br/>' + p[0].value.toFixed(2) + '%' },
+      xAxis: { type: 'category', data: dates, axisLabel: { fontSize: 10, rotate: 30 } },
+      yAxis: { type: 'value', axisLabel: { formatter: '{value}%', fontSize: 10 } },
+      grid: { left: 50, right: 20, top: 20, bottom: 50 },
+      series: [{
+        type: 'bar',
+        data: slice.map(v => ({
+          value: v,
+          itemStyle: { color: v >= 0 ? '#10b981' : '#f43f5e' }
+        })),
+      }],
+    });
+    requestAnimationFrame(() => dailyChart.resize());
+    setTimeout(() => dailyChart.resize(), 200);
+    if (!window._BACKTEST_DAILY_RESIZE_HOOKED) {
+      window._BACKTEST_DAILY_RESIZE_HOOKED = true;
+      window.addEventListener('resize', () => dailyChart.resize());
+    }
+  }
+
+  // Contribution table
+  if (tableEl && data.per_ticker) {
+    const rows = data.per_ticker.map((r, i) => `
+      <tr class="border-b border-slate-100 hover:bg-slate-50">
+        <td class="px-3 py-2 text-xs text-slate-500">${i + 1}</td>
+        <td class="px-3 py-2 font-mono text-sm font-semibold">${r.ticker}</td>
+        <td class="px-3 py-2 text-sm">${(r.weight * 100).toFixed(2)}%</td>
+        <td class="px-3 py-2 text-sm">${r.close_first.toFixed(2)} → ${r.close_last.toFixed(2)}</td>
+        <td class="px-3 py-2 text-sm font-semibold ${cls(r.return_pct)}">${fmtPct(r.return_pct)}</td>
+        <td class="px-3 py-2 text-sm font-bold ${cls(r.contribution_pct)}">${fmtPct(r.contribution_pct)}</td>
+      </tr>
+    `).join('');
+    tableEl.innerHTML = `
+      <table class="w-full text-left">
+        <thead class="bg-slate-50 text-xs text-slate-600">
+          <tr>
+            <th class="px-3 py-2">#</th>
+            <th class="px-3 py-2">代码</th>
+            <th class="px-3 py-2">权重</th>
+            <th class="px-3 py-2">期初 → 期末</th>
+            <th class="px-3 py-2">个股累计</th>
+            <th class="px-3 py-2">组合贡献</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+}
+
 // ============ 历史 Tab ============
 let historyInited = false;
 let HISTORY_PERIOD = "3mo";  // 默认 90 天
@@ -2633,6 +2921,45 @@ function pickRow(p) {
 }
 document.getElementById("picks-top").innerHTML = sortedPicks.slice(0, 5).map(pickRow).join("") || '<div class="text-slate-500 text-sm">暂无数据</div>';
 document.getElementById("picks-bottom").innerHTML = sortedPicks.slice(-5).reverse().map(pickRow).join("") || '<div class="text-slate-500 text-sm">暂无数据</div>';
+
+// ============ 🔍 候选发现 ============
+(function renderDiscovery() {
+  const wrap = document.getElementById("discovery-table-wrap");
+  const empty = document.getElementById("discovery-empty");
+  const meta = document.getElementById("discovery-meta");
+  const tbody = document.getElementById("discovery-table-body");
+  const cands = (DISCOVERY && DISCOVERY.candidates) || [];
+  if (!cands.length) {
+    if (wrap) wrap.classList.add("hidden");
+    if (empty) empty.classList.remove("hidden");
+    return;
+  }
+  meta.innerHTML = `生成于 <strong>${DISCOVERY.generated_at || "?"}</strong> · `
+    + `universe ${DISCOVERY.universe_size || "?"} 只（已排除 watchlist ${DISCOVERY.watchlist_excluded || "?"} 只）· `
+    + `数据源 ${(DISCOVERY.etf_sources || []).join(" / ")} · `
+    + `市值门槛 $${((DISCOVERY.min_market_cap_usd || 0) / 1e9).toFixed(0)}B`;
+  tbody.innerHTML = cands.map(c => {
+    const cap = c.market_cap_usd ? (c.market_cap_usd / 1e9).toFixed(1) : "-";
+    const f = c.f_score == null ? "-" : Math.round(c.f_score);
+    const fColor = c.f_score >= 7 ? "text-emerald-600" : (c.f_score >= 4 ? "text-amber-600" : "text-rose-600");
+    const mom = c.momentum_12_1 == null ? "-" : (c.momentum_12_1 > 0 ? "+" : "") + c.momentum_12_1.toFixed(1) + "%";
+    const momColor = (c.momentum_12_1 || 0) > 0 ? "text-emerald-600" : "text-rose-600";
+    const zColor = c.composite_z > 0 ? "text-emerald-600 font-bold" : "text-rose-600";
+    const etfs = (c.etfs || []).map(e => `<span class="inline-block px-1.5 py-0.5 mr-1 text-xs bg-indigo-100 text-indigo-700 rounded">${e}</span>`).join("");
+    return `<tr class="hover:bg-slate-50">
+      <td class="px-3 py-2 font-mono text-slate-500">${c.rank}</td>
+      <td class="px-3 py-2 font-mono font-semibold text-slate-900">${c.ticker}</td>
+      <td class="px-3 py-2 text-slate-700">${c.name || ""}</td>
+      <td class="px-3 py-2 text-xs text-slate-500">${c.sector || ""}</td>
+      <td class="px-3 py-2 text-right font-mono ${zColor}">${c.composite_z >= 0 ? "+" : ""}${c.composite_z.toFixed(2)}</td>
+      <td class="px-3 py-2 text-right font-mono ${fColor}">${f}</td>
+      <td class="px-3 py-2 text-right font-mono ${momColor}">${mom}</td>
+      <td class="px-3 py-2 text-right font-mono text-slate-700">${c.analyst_score || 0}</td>
+      <td class="px-3 py-2 text-right font-mono text-slate-700">${cap}</td>
+      <td class="px-3 py-2">${etfs}</td>
+    </tr>`;
+  }).join("");
+})();
 
 // ============ 估值视角 ============
 const validForVal = RECORDS.filter(r => r.forward_pe != null && r.forward_pe !== "" && r.ytd_pct != null && r.ytd_pct !== "");
@@ -3350,6 +3677,214 @@ def scoring_rules_panel_html(calib):
 </section>'''
 
 
+def _find_plan_inception_date() -> str | None:
+    """DuckDB 里最早的 v6 plan snapshot 日期（YYYY-MM-DD）—— 即 v6 方向定下来那天。"""
+    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_history.duckdb")
+    if os.path.exists(db_path):
+        try:
+            import duckdb
+            con = duckdb.connect(db_path, read_only=True)
+            row = con.execute(
+                "SELECT MIN(taken_at) FROM snapshots "
+                "WHERE category='optimize' AND name='plan_v6'"
+            ).fetchone()
+            con.close()
+            if row and row[0]:
+                return str(row[0])[:10]
+        except Exception:
+            pass
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "plan_a_v5.json")) as f:
+            return (json.load(f).get("generated_at") or "")[:10] or None
+    except Exception:
+        return None
+
+
+def compute_plan_forward_track(plan: dict, history: dict, benchmark: str = "SPY",
+                                context_days: int = 30) -> dict:
+    """从 plan 锁定日往后跟踪真实表现（forward 视角）。
+
+    思路：
+      • inception_date = v6 plan 第一次落库的日期（方向定下来那天）
+      • baseline_date  = history 中 ≤ inception_date 的最后一个交易日 → NAV=100 锚点
+      • context window = baseline_date 之前 N 个交易日（仅作视觉上下文，灰色虚线）
+      • tracked window = baseline_date 之后的所有交易日（真实实盘营收）
+
+    指标只在 tracked 段算；context 仅供图表参考。
+    刚锁定时 tracked = 0 天，曲线只有 context + 锁定基线点；每日 daily_refresh 自动累加。
+    """
+    if not plan or not isinstance(plan, dict):
+        return {}
+    plan_list = plan.get("plan_v5") or plan.get("plan_v6") or plan.get("plan") or []
+    if not plan_list:
+        return {}
+    if not history or "tickers" not in history:
+        return {}
+
+    inception_date = _find_plan_inception_date()
+    tickers_data = history["tickers"]
+
+    raw = [(p.get("ticker"), float(p.get("v5_weight") or p.get("weight") or p.get("target_weight") or 0.0))
+           for p in plan_list if p.get("ticker")]
+    total_w = sum(w for _, w in raw) or 1.0
+    weights = [(t, w / total_w) for t, w in raw if w > 0]
+
+    used: list[tuple[str, float, list[str], list[float]]] = []
+    missing = []
+    for tkr, w in weights:
+        d = tickers_data.get(tkr)
+        if not d or not d.get("ts") or not d.get("close"):
+            missing.append(tkr)
+            continue
+        used.append((tkr, w, d["ts"], [float(c) for c in d["close"]]))
+
+    if not used:
+        return {"tickers_missing": missing, "tickers_used": [], "inception_date": inception_date}
+
+    common = set(used[0][2])
+    for _, _, ts, _ in used[1:]:
+        common &= set(ts)
+    common_dates = sorted(common)
+    if not common_dates:
+        return {"tickers_missing": missing, "tickers_used": [t for t, *_ in used], "inception_date": inception_date}
+
+    aligned = []
+    for tkr, w, ts, close in used:
+        ts_to_close = dict(zip(ts, close))
+        aligned_close = [ts_to_close[d] for d in common_dates]
+        aligned.append((tkr, w, aligned_close))
+
+    # 找 baseline_date：最后一个 <= inception 的交易日
+    baseline_idx = None
+    if inception_date:
+        for i, d in enumerate(common_dates):
+            if d <= inception_date:
+                baseline_idx = i
+            else:
+                break
+    if baseline_idx is None:
+        # plan 锁定在 history 最早日期之前 → 用最早日期
+        baseline_idx = 0
+
+    # window：[baseline-context_days, end]
+    win_start = max(0, baseline_idx - context_days)
+    win_dates = common_dates[win_start:]
+    rel_baseline = baseline_idx - win_start  # 在 win_dates 中的位置
+
+    # NAV：以 baseline 那天的收盘为锚点（NAV[baseline]=1.0）
+    nav = []
+    for i in range(win_start, len(common_dates)):
+        v = sum(w * (closes[i] / closes[baseline_idx]) for _, w, closes in aligned)
+        nav.append(v)
+
+    # 基准 SPY，同样锚到 baseline 日期
+    bench_nav = []
+    bench_d = tickers_data.get(benchmark)
+    if bench_d and bench_d.get("ts") and bench_d.get("close"):
+        bts_to_close = dict(zip(bench_d["ts"], [float(c) for c in bench_d["close"]]))
+        baseline_date = common_dates[baseline_idx]
+        b_anchor = bts_to_close.get(baseline_date)
+        if b_anchor:
+            for d in win_dates:
+                if d in bts_to_close:
+                    bench_nav.append(bts_to_close[d] / b_anchor)
+                else:
+                    bench_nav.append(None)
+            # 把 None 用前值填充（防止图断线）
+            last = 1.0
+            bench_nav = [(last := v) if v is not None else last for v in bench_nav]
+
+    # 仅 tracked 段（baseline 之后）算指标
+    tracked_nav = nav[rel_baseline:]
+    tracked_bench = bench_nav[rel_baseline:] if bench_nav else []
+    tracked_dates = win_dates[rel_baseline:]
+
+    def _daily_rets(curve):
+        return [0.0] + [
+            (curve[i] / curve[i - 1] - 1.0) if curve[i - 1] else 0.0
+            for i in range(1, len(curve))
+        ]
+
+    daily_rets_full = _daily_rets(nav)
+    daily_rets_tracked = _daily_rets(tracked_nav)
+
+    def _max_dd(curve):
+        if not curve: return 0.0
+        peak = curve[0]; mdd = 0.0
+        for v in curve:
+            if v > peak: peak = v
+            dd = (v - peak) / peak if peak else 0.0
+            if dd < mdd: mdd = dd
+        return mdd
+
+    n_tracked = max(0, len(tracked_dates) - 1)  # 锁定日不算 1 天，从锁定日次日起算
+    days_per_year = 252
+    cumret = (tracked_nav[-1] - 1.0) if len(tracked_nav) > 1 else 0.0
+    bench_cumret = (tracked_bench[-1] - 1.0) if len(tracked_bench) > 1 else 0.0
+    import math
+    if n_tracked > 0:
+        r_avg = sum(daily_rets_tracked[1:]) / n_tracked
+        r_var = sum((r - r_avg) ** 2 for r in daily_rets_tracked[1:]) / max(1, n_tracked - 1) if n_tracked >= 2 else 0
+        r_std = math.sqrt(r_var)
+        annvol = r_std * math.sqrt(days_per_year)
+        sharpe = (r_avg * days_per_year) / annvol if annvol > 1e-9 else 0.0
+        win_days = sum(1 for r in daily_rets_tracked[1:] if r > 0)
+        win_rate = win_days / n_tracked
+        annret = (1 + cumret) ** (days_per_year / n_tracked) - 1.0 if n_tracked > 0 else 0.0
+    else:
+        annvol = sharpe = win_rate = annret = 0.0
+        win_days = 0
+
+    # 单股贡献：用 baseline → 最新收盘
+    last_idx = len(common_dates) - 1
+    per_ticker = []
+    for tkr, w, closes in aligned:
+        first, last = closes[baseline_idx], closes[last_idx]
+        tret = (last / first - 1.0) if first else 0.0
+        per_ticker.append({
+            "ticker": tkr,
+            "weight": round(w, 4),
+            "close_first": round(first, 2),
+            "close_last": round(last, 2),
+            "return_pct": round(tret * 100, 2),
+            "contribution_pct": round(w * tret * 100, 2),
+        })
+    per_ticker.sort(key=lambda x: -x["contribution_pct"])
+
+    return {
+        "inception_date": inception_date,
+        "baseline_date": common_dates[baseline_idx],
+        "baseline_idx_in_window": rel_baseline,
+        "dates": win_dates,
+        "nav": [round(v, 6) for v in nav],
+        "bench_nav": [round(v, 6) for v in bench_nav] if bench_nav else [],
+        "daily_returns": [round(r * 100, 4) for r in daily_rets_full],
+        "benchmark": benchmark if bench_nav else None,
+        "metrics": {
+            "n_tracked_days": n_tracked,
+            "tracked_start": tracked_dates[0] if tracked_dates else None,
+            "tracked_end": tracked_dates[-1] if tracked_dates else None,
+            "cumulative_return_pct": round(cumret * 100, 2),
+            "bench_cumulative_return_pct": round(bench_cumret * 100, 2),
+            "alpha_pct": round((cumret - bench_cumret) * 100, 2),
+            "annual_return_pct": round(annret * 100, 2),
+            "annual_vol_pct": round(annvol * 100, 2),
+            "sharpe": round(sharpe, 2),
+            "max_drawdown_pct": round(_max_dd(tracked_nav) * 100, 2),
+            "win_rate_pct": round(win_rate * 100, 1),
+            "win_days": win_days,
+            "total_days": n_tracked,
+        },
+        "per_ticker": per_ticker,
+        "tickers_used": [t for t, *_ in aligned],
+        "tickers_missing": missing,
+    }
+
+
+# 兼容旧调用名（一段时间后清理）
+compute_plan_backtest = compute_plan_forward_track
+
+
 def load_audit_snapshot():
     """读最新一次 picks 反向审查快照（JSON 文件路径）。"""
     audit_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -3596,6 +4131,7 @@ def build():
     optimization = _load_json("optimization_result.json")
     plan_a_v6 = _load_json("plan_a_v5.json")
     history_data = _load_json("history_data.json")
+    discovery = _load_json("data/discovery_candidates.json")
 
     # DuckDB 源
     risk_metrics_db = _load_pipeline_db("risk_metrics")
@@ -3614,6 +4150,8 @@ def build():
         print(f"  方案 A v6 已加载 ({len(plan_a_v6.get('plan_v5', []))} 只 · Sharpe {plan_a_v6.get('portfolio_metrics', {}).get('annual_sharpe', 'N/A')})")
     if history_data:
         print(f"  历史数据已加载 ({len(history_data.get('tickers', {}))} 只 × 2 年日K)")
+    if discovery:
+        print(f"  候选发现已加载 ({len(discovery.get('candidates', []))} 只 · universe {discovery.get('universe_size', 0)})")
     print(f"  [DuckDB 镜像] risk={'✓' if risk_metrics_db else '✗'} 13f={'✓' if track_13f_db else '✗'} "
           f"opt={'✓' if optimization_db else '✗'} plan={'✓' if plan_a_v6_db else '✗'} "
           f"hist={'✓' if history_data_db else '✗'}")
@@ -3719,6 +4257,20 @@ function toggleAuditSource() {{
     html = html.replace("{PLAN_A_V6_JSON_DB}", json.dumps(plan_a_v6_db, ensure_ascii=False))
     html = html.replace("{HISTORY_DATA_JSON_FILE}", json.dumps(history_data, ensure_ascii=False))
     html = html.replace("{HISTORY_DATA_JSON_DB}", json.dumps(history_data_db, ensure_ascii=False))
+    html = html.replace("{DISCOVERY_JSON}", json.dumps(discovery, ensure_ascii=False))
+
+    # 方案实盘跟踪：从 v6 锁定日往后看每日表现
+    backtest_file = compute_plan_forward_track(plan_a_v6, history_data)
+    backtest_db = compute_plan_forward_track(plan_a_v6_db or plan_a_v6, history_data_db or history_data)
+    for label, bt in (("JSON", backtest_file), ("DuckDB", backtest_db)):
+        if bt and bt.get("metrics"):
+            m = bt["metrics"]
+            inception = bt.get("inception_date") or "?"
+            baseline = bt.get("baseline_date") or "?"
+            print(f"  方案实盘跟踪 [{label}]: 锁定 {inception} → 基线 {baseline} · 跟踪 {m['n_tracked_days']} 日"
+                  f" · 累计 {m['cumulative_return_pct']}% (vs SPY {m['bench_cumulative_return_pct']}%)")
+    html = html.replace("{PLAN_BACKTEST_JSON_FILE}", json.dumps(backtest_file, ensure_ascii=False))
+    html = html.replace("{PLAN_BACKTEST_JSON_DB}", json.dumps(backtest_db, ensure_ascii=False))
 
     with open(OUTPUT, "w", encoding="utf-8") as f:
         f.write(html)

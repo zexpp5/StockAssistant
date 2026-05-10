@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-09T16:18:26.578658",
+  "generated_at": "2026-05-10T10:22:42.354498",
   "method": "v5 factor selection + Markowitz Max Sharpe with constraints",
   "constraints": {
     "max_weight": 0.15,
@@ -9,105 +9,105 @@
     "lookback_days": 252
   },
   "portfolio_metrics": {
-    "annual_sharpe": 2.95,
-    "annual_return_pct": 95.36,
-    "annual_vol_pct": 30.9
+    "annual_sharpe": 4.17,
+    "annual_return_pct": 156.93,
+    "annual_vol_pct": 36.64
   },
   "plan_v5": [
     {
+      "ticker": "MU",
+      "f_score": "7",
+      "composite_z": 1.0410111555727493,
+      "v5_weight": 0.11605047469881943,
+      "amount_rmb": 58025.24,
+      "current_weight": 0
+    },
+    {
       "ticker": "LRCX",
       "f_score": "8",
-      "composite_z": 1.0968090988913843,
-      "v5_weight": 0.08034239980604714,
-      "amount_rmb": 40171.2,
+      "composite_z": 0.9278481522652845,
+      "v5_weight": 0.14927308777799342,
+      "amount_rmb": 74636.54,
       "current_weight": 0
     },
     {
       "ticker": "MTZ",
       "f_score": "8",
-      "composite_z": 0.8993753507192078,
-      "v5_weight": 0.14662281206737932,
-      "amount_rmb": 73311.41,
+      "composite_z": 0.8129210520197147,
+      "v5_weight": 0.11836872621986912,
+      "amount_rmb": 59184.36,
+      "current_weight": 0
+    },
+    {
+      "ticker": "SNDK",
+      "f_score": "5",
+      "composite_z": 0.806687235284399,
+      "v5_weight": 0.1416891388770159,
+      "amount_rmb": 70844.57,
       "current_weight": 0
     },
     {
       "ticker": "MOD",
       "f_score": "9",
-      "composite_z": 0.7715954631391997,
-      "v5_weight": 0.07808429789444633,
-      "amount_rmb": 39042.15,
+      "composite_z": 0.6690201168876345,
+      "v5_weight": 0.028730135220136815,
+      "amount_rmb": 14365.07,
+      "current_weight": 0
+    },
+    {
+      "ticker": "GEV",
+      "f_score": "7",
+      "composite_z": 0.6284952368128488,
+      "v5_weight": 0.021828489501697718,
+      "amount_rmb": 10914.24,
       "current_weight": 0
     },
     {
       "ticker": "VRT",
       "f_score": "6",
-      "composite_z": 0.6865129340675415,
-      "v5_weight": 0.1412712091044972,
-      "amount_rmb": 70635.6,
+      "composite_z": 0.6083948571614954,
+      "v5_weight": 0.037761444414917876,
+      "amount_rmb": 18880.72,
       "current_weight": 0.1
-    },
-    {
-      "ticker": "GEV",
-      "f_score": "7",
-      "composite_z": 0.6544104908325963,
-      "v5_weight": 0.09394686807427927,
-      "amount_rmb": 46973.43,
-      "current_weight": 0
     },
     {
       "ticker": "TSM",
       "f_score": "9",
-      "composite_z": 0.5793431566938368,
-      "v5_weight": 0.03918500708390878,
-      "amount_rmb": 19592.5,
+      "composite_z": 0.5136044560870363,
+      "v5_weight": 0.03199592787201199,
+      "amount_rmb": 15997.96,
       "current_weight": 0.1
     },
     {
       "ticker": "ETN",
       "f_score": "7",
-      "composite_z": 0.5003952005730541,
-      "v5_weight": 0.023772482576452647,
-      "amount_rmb": 11886.24,
+      "composite_z": 0.4644600224257539,
+      "v5_weight": 0.02529247300239598,
+      "amount_rmb": 12646.24,
       "current_weight": 0
     },
     {
       "ticker": "KO",
       "f_score": "7",
-      "composite_z": 0.490227234948319,
-      "v5_weight": 0.13050382939904145,
-      "amount_rmb": 65251.91,
-      "current_weight": 0
-    },
-    {
-      "ticker": "MRVL",
-      "f_score": "8",
-      "composite_z": 0.4710999688998482,
-      "v5_weight": 0.13357031330806896,
-      "amount_rmb": 66785.16,
+      "composite_z": 0.45306276690401354,
+      "v5_weight": 0.14213905126032345,
+      "amount_rmb": 71069.53,
       "current_weight": 0
     },
     {
       "ticker": "AVGO",
       "f_score": "8",
-      "composite_z": 0.46885861030133924,
-      "v5_weight": 0.019874607950023257,
-      "amount_rmb": 9937.3,
+      "composite_z": 0.44407362937382755,
+      "v5_weight": 0.01990307837039913,
+      "amount_rmb": 9951.54,
       "current_weight": 0
     },
     {
-      "ticker": "SYM",
-      "f_score": "4",
-      "composite_z": 0.3954067396525149,
-      "v5_weight": 0.027023030724142607,
-      "amount_rmb": 13511.52,
-      "current_weight": 0
-    },
-    {
-      "ticker": "BWXT",
-      "f_score": "5",
-      "composite_z": 0.3296233587641458,
-      "v5_weight": 0.03580314201171307,
-      "amount_rmb": 17901.57,
+      "ticker": "MRVL",
+      "f_score": "8",
+      "composite_z": 0.41188799160906625,
+      "v5_weight": 0.1169679727844191,
+      "amount_rmb": 58483.99,
       "current_weight": 0
     }
   ],

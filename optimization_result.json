@@ -1,145 +1,145 @@
 {
-  "generated_at": "2026-05-09T19:36:38.079045",
-  "lookback_days": 217,
+  "generated_at": "2026-05-10T10:22:53.658326",
+  "lookback_days": 216,
   "current_plan": [
     {
       "name": "NVDA",
       "ticker": "NVDA",
       "current_pct": 0.12,
-      "kelly_full_pct": 3.221254139391758,
-      "kelly_half_norm_pct": 0.07120093464707138,
-      "risk_parity_pct": 0.1050215135363931,
-      "markowitz_pct": 0.052963435945082425,
-      "daily_mean_pct": 0.16627558587015184,
-      "daily_vol_pct": 2.151465727236998
+      "kelly_full_pct": 3.2078229225026837,
+      "kelly_half_norm_pct": 0.0709190098088608,
+      "risk_parity_pct": 0.10497027373419705,
+      "markowitz_pct": 0.04307395678565564,
+      "daily_mean_pct": 0.16634098977990575,
+      "daily_vol_pct": 2.1564632319741333
     },
     {
       "name": "TSM",
       "ticker": "TSM",
       "current_pct": 0.1,
-      "kelly_full_pct": 5.468533544956798,
-      "kelly_half_norm_pct": 0.1208736357645184,
-      "risk_parity_pct": 0.09901816679749711,
-      "markowitz_pct": 0.11466533818201172,
-      "daily_mean_pct": 0.30129675479209117,
-      "daily_vol_pct": 2.281906384494058
+      "kelly_full_pct": 5.558315150886262,
+      "kelly_half_norm_pct": 0.12288402952083854,
+      "risk_parity_pct": 0.09903477346182726,
+      "markowitz_pct": 0.07644857833595042,
+      "daily_mean_pct": 0.30690464850868765,
+      "daily_vol_pct": 2.2857076140564683
     },
     {
       "name": "GOOGL",
       "ticker": "GOOGL",
       "current_pct": 0.1,
-      "kelly_full_pct": 11.13969800320525,
-      "kelly_half_norm_pct": 0.24622612038430897,
-      "risk_parity_pct": 0.12319903718586526,
-      "markowitz_pct": 0.20333019517224316,
-      "daily_mean_pct": 0.3908308499966314,
-      "daily_vol_pct": 1.8340255910865977
+      "kelly_full_pct": 11.36377400515297,
+      "kelly_half_norm_pct": 0.2512319475254472,
+      "risk_parity_pct": 0.12337964035162502,
+      "markowitz_pct": 0.31374401067950985,
+      "daily_mean_pct": 0.3986046530204926,
+      "daily_vol_pct": 1.834699267342082
     },
     {
       "name": "MSFT",
       "ticker": "MSFT",
       "current_pct": 0.1,
-      "kelly_full_pct": -3.5023608584142614,
+      "kelly_full_pct": -3.556247776703464,
       "kelly_half_norm_pct": 0.0,
-      "risk_parity_pct": 0.14483529956873867,
-      "markowitz_pct": 0.015733627282962594,
-      "daily_mean_pct": -0.06698887699567606,
-      "daily_vol_pct": 1.560049157000366
+      "risk_parity_pct": 0.14478290934535867,
+      "markowitz_pct": 0.006620413707193901,
+      "daily_mean_pct": -0.0686713017876505,
+      "daily_vol_pct": 1.5634755288560767
     },
     {
       "name": "AMD",
       "ticker": "AMD",
       "current_pct": 0.08,
-      "kelly_full_pct": 3.4180383058793393,
-      "kelly_half_norm_pct": 0.07555055003640739,
-      "risk_parity_pct": 0.05381436199996179,
-      "markowitz_pct": 0.044637201121178936,
-      "daily_mean_pct": 0.6176481657419771,
-      "daily_vol_pct": 4.198696753039024
+      "kelly_full_pct": 3.456839113557807,
+      "kelly_half_norm_pct": 0.07642429551902882,
+      "risk_parity_pct": 0.0538149878325168,
+      "markowitz_pct": 0.028744975999375432,
+      "daily_mean_pct": 0.6266564621879317,
+      "daily_vol_pct": 4.206347429874899
     },
     {
       "name": "Vertiv",
       "ticker": "VRT",
       "current_pct": 0.1,
-      "kelly_full_pct": 3.6815598196150128,
-      "kelly_half_norm_pct": 0.08137529321582442,
-      "risk_parity_pct": 0.060978786192748144,
-      "markowitz_pct": 0.060674629125247015,
-      "daily_mean_pct": 0.521002811438827,
-      "daily_vol_pct": 3.7053900397738184
+      "kelly_full_pct": 3.649278837505496,
+      "kelly_half_norm_pct": 0.08067878057009671,
+      "risk_parity_pct": 0.06095123345105155,
+      "markowitz_pct": 0.0899626836715598,
+      "daily_mean_pct": 0.5188638441693567,
+      "daily_vol_pct": 3.713863082686323
     },
     {
       "name": "北方稀土",
       "ticker": "600111.SS",
       "current_pct": 0.08,
-      "kelly_full_pct": 3.1986917807953947,
-      "kelly_half_norm_pct": 0.0707022279476345,
-      "risk_parity_pct": 0.06333913280439864,
-      "markowitz_pct": 0.02248374803835195,
-      "daily_mean_pct": 0.4230367656993158,
-      "daily_vol_pct": 3.5673078710104305
+      "kelly_full_pct": 3.146983896095187,
+      "kelly_half_norm_pct": 0.0695739718766583,
+      "risk_parity_pct": 0.06332101162203703,
+      "markowitz_pct": 0.037966842547457844,
+      "daily_mean_pct": 0.4181707154946258,
+      "daily_vol_pct": 3.5748723837393097
     },
     {
       "name": "Cameco",
       "ticker": "CCJ",
       "current_pct": 0.07,
-      "kelly_full_pct": 2.1095488177132817,
-      "kelly_half_norm_pct": 0.046628375472781355,
-      "risk_parity_pct": 0.06456057464814909,
-      "markowitz_pct": 0.017130257832434454,
-      "daily_mean_pct": 0.2750590785544779,
-      "daily_vol_pct": 3.499816849950918
+      "kelly_full_pct": 2.061539770167854,
+      "kelly_half_norm_pct": 0.04557681727263995,
+      "risk_parity_pct": 0.0645422052566615,
+      "markowitz_pct": 0.017973692658950817,
+      "daily_mean_pct": 0.2702665872407329,
+      "daily_vol_pct": 3.5072327457341195
     },
     {
       "name": "Datadog",
       "ticker": "DDOG",
       "current_pct": 0.05,
-      "kelly_full_pct": 1.443653844201648,
-      "kelly_half_norm_pct": 0.0319097775481334,
-      "risk_parity_pct": 0.05338789803583217,
-      "markowitz_pct": 0.10096110955189064,
-      "daily_mean_pct": 0.27525021555979184,
-      "daily_vol_pct": 4.232236055528091
+      "kelly_full_pct": 1.4008270803535792,
+      "kelly_half_norm_pct": 0.03096968624895478,
+      "risk_parity_pct": 0.05337598617809734,
+      "markowitz_pct": 0.06333812426591416,
+      "daily_mean_pct": 0.2686378878596313,
+      "daily_vol_pct": 4.240943389837431
     },
     {
       "name": "中际旭创",
       "ticker": "300308.SZ",
       "current_pct": 0.05,
-      "kelly_full_pct": 4.948240543820186,
-      "kelly_half_norm_pct": 0.10937334849496087,
-      "risk_parity_pct": 0.04953698496367298,
-      "markowitz_pct": 0.27406959131262376,
-      "daily_mean_pct": 1.042591012639038,
-      "daily_vol_pct": 4.561242214515125
+      "kelly_full_pct": 4.87971917517593,
+      "kelly_half_norm_pct": 0.1078815322445525,
+      "risk_parity_pct": 0.04954257367986351,
+      "markowitz_pct": 0.12263044780181047,
+      "daily_mean_pct": 1.0318600151786326,
+      "daily_vol_pct": 4.569091166332796
     },
     {
       "name": "阿里巴巴",
       "ticker": "9988.HK",
       "current_pct": 0.05,
-      "kelly_full_pct": 1.511860339171115,
-      "kelly_half_norm_pct": 0.03341737861923169,
-      "risk_parity_pct": 0.07602446305410883,
-      "markowitz_pct": 0.0045631511739927,
-      "daily_mean_pct": 0.15078756342449307,
-      "daily_vol_pct": 2.9720721188821937
+      "kelly_full_pct": 1.4332645433131965,
+      "kelly_half_norm_pct": 0.0316868183380331,
+      "risk_parity_pct": 0.07602630933109943,
+      "markowitz_pct": 0.12616874776666095,
+      "daily_mean_pct": 0.14433078468511917,
+      "daily_vol_pct": 2.9774500136817643
     },
     {
       "name": "海光信息",
       "ticker": "688041.SS",
       "current_pct": 0.05,
-      "kelly_full_pct": 2.838573412033713,
-      "kelly_half_norm_pct": 0.06274235786912775,
-      "risk_parity_pct": 0.05628378121263428,
-      "markowitz_pct": 0.038787715261980715,
-      "daily_mean_pct": 0.47321520028698716,
-      "daily_vol_pct": 4.01448129688533
+      "kelly_full_pct": 2.812226671055647,
+      "kelly_half_norm_pct": 0.0621731110748893,
+      "risk_parity_pct": 0.05625809575566484,
+      "markowitz_pct": 0.02332752577996074,
+      "daily_mean_pct": 0.47104863758823634,
+      "daily_vol_pct": 4.023679307262413
     }
   ],
   "method_comparison": {
     "current": {
-      "annual_return": 84.21,
-      "annual_vol": 23.38,
-      "sharpe": 3.41
+      "annual_return": 84.13,
+      "annual_vol": 23.44,
+      "sharpe": 3.4
     }
   }
 }
