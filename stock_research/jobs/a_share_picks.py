@@ -46,6 +46,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "scripts" / "lib"))  # 2026-05-11 lib 迁移
 
 from stock_research.core.a_share_filters import (
     fetch_spot_snapshot, filter_tradable, _strip_code,

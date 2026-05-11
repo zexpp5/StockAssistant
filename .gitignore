@@ -45,3 +45,7 @@ daily_refresh.log*
 
 # 飞书开发者工具临时文件
 .feishu/
+
+# 2026-05-11 Phase 5 整理
+.env.bak
+logs/

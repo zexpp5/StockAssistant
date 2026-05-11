@@ -27,8 +27,9 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-_REPO_ROOT = Path(__file__).resolve().parent
+_REPO_ROOT = Path(__file__).resolve().parents[2]  # repo root (was parent before 5.11 move)
 sys.path.insert(0, str(_REPO_ROOT))
+sys.path.insert(0, str(_REPO_ROOT / "scripts" / "lib"))  # 2026-05-11 lib 迁移
 
 
 # ─────────── 页面配置 ───────────

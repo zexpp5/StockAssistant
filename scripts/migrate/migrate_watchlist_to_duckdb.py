@@ -13,7 +13,8 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root（让 feishu_auth / stock_db 可 import）
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "lib"))  # 2026-05-11 lib 迁移
 
 import requests
 

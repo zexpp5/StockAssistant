@@ -41,6 +41,8 @@ import csv
 import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))  # repo root
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "scripts", "lib"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "scripts", "pipeline"))  # sibling: daily_picks  # 2026-05-11 lib 迁移
 
 from feishu_auth import feishu_token
 from daily_picks import fetch_watchlist

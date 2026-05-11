@@ -36,9 +36,11 @@ from pathlib import Path
 
 import numpy as np
 
-# 让本 job 能 import 主目录的 factor_model + early_signals + build_plan_a_v5 helpers
+# 让本 job 能 import 根目录的 factor_model + early_signals + build_plan_a_v5 helpers
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
+sys.path.insert(0, str(_REPO_ROOT / "scripts" / "lib"))  # 2026-05-11 lib 迁移
+sys.path.insert(0, str(_REPO_ROOT / "scripts" / "pipeline"))  # build_plan_a_v5 等 sibling
 
 from .. import config
 from ..core import neutralization as nz

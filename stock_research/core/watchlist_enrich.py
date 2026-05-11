@@ -19,6 +19,7 @@ from typing import Any
 _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
+sys.path.insert(0, str(_REPO / "scripts" / "lib"))  # 2026-05-11 lib 迁移
 
 
 def _infer_market(code: str) -> str:

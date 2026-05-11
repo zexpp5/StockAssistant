@@ -17,6 +17,9 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
+# 让 stock_research package 可 import
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 import duckdb
 
 from stock_research import config

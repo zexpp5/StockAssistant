@@ -20,6 +20,7 @@
 import sys, os, json
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
 sys.path.insert(0, _REPO)
+sys.path.insert(0, os.path.join(_REPO, "scripts", "lib"))  # 2026-05-11 lib 迁移
 import numpy as np
 from datetime import datetime, timedelta
 

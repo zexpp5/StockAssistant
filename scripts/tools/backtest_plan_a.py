@@ -13,6 +13,7 @@ import numpy as np
 from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))  # repo root
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "scripts", "lib"))  # 2026-05-11 lib 迁移
 import yfinance as yf
 
 PORTFOLIO = [

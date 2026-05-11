@@ -16,6 +16,7 @@ from datetime import datetime
 
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/migrate/X.py → repo root
 sys.path.insert(0, _REPO)
+sys.path.insert(0, os.path.join(_REPO, "scripts", "lib"))  # 2026-05-11 lib 迁移
 from feishu_auth import feishu_token, FEISHU_APP_TOKEN  # noqa: E402
 from stock_db import upsert_picks, upsert_prices, stats  # noqa: E402
 

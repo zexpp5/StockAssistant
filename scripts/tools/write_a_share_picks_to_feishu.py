@@ -19,6 +19,7 @@ import requests
 
 REPO = Path(__file__).resolve().parents[2]  # repo root
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "scripts" / "lib"))  # 2026-05-11 lib 迁移
 
 from feishu_auth import feishu_token, FEISHU_APP_TOKEN
 

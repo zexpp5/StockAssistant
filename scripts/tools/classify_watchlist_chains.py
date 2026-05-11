@@ -8,6 +8,10 @@
                   应用层 / 基础设施 / 服务 / 对照
   • layman_intro 不超过 60 字
 """
+import os, sys
+_REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, _REPO)
+sys.path.insert(0, os.path.join(_REPO, "scripts", "lib"))  # 2026-05-11 lib 迁移
 from stock_db import get_db
 
 CLASSIFICATIONS = [

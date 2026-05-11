@@ -14,7 +14,8 @@
 
 set -e
 
-DIR="$(cd "$(dirname "$0")" && pwd)"
+# 2026-05-11 起 setup_launchd.sh 在 scripts/，daily_refresh.sh 仍在 repo root（脚本目录的父目录）
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
 LABEL="com.linearview.stockassistant.daily_refresh"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 

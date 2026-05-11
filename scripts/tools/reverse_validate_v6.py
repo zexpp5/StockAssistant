@@ -6,6 +6,8 @@ import sys, os, json
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))  # repo root
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "scripts", "lib"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "archive", "legacy"))  # archived v1-v5  # 2026-05-11 lib 迁移
 from reverse_validate import fetch_data_at, VALIDATION_DATE
 from factor_model import combine_factors
 from early_signals import score_analyst
