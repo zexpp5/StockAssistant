@@ -40,8 +40,11 @@ PCR_EXTREME_BULLISH = 0.7    # 过度乐观（contrarian 谨慎）
 
 # ─────────── 数据获取 ───────────
 
-def spy_put_call_ratio(symbol: str = "SPY") -> dict[str, Any]:
-    """拉某个 ticker 的当前期权链，算 PCR。
+def spy_put_call_ratio(symbol: str = "SPY", n_expirations: int = 8) -> dict[str, Any]:
+    """拉某个 ticker 的当前期权链，算 PCR。直接用 yfinance（OpenBB 在此原本也是
+    `provider="yfinance"` 的包装，去掉一层间接降低依赖体积）。
+
+    汇总最近 `n_expirations` 个到期日的 puts/calls volume + open interest。
 
     返回 {
       "pcr_volume": float,    # 成交量 PCR
@@ -55,28 +58,47 @@ def spy_put_call_ratio(symbol: str = "SPY") -> dict[str, Any]:
     }
     """
     try:
-        from openbb import obb
-        r = obb.derivatives.options.chains(symbol, provider="yfinance")
-        df = r.to_df()
+        import yfinance as yf
+        tkr = yf.Ticker(symbol)
+        expirations = list(tkr.options or ())
     except Exception as e:
-        logger.warning("OpenBB options chains failed for %s: %s", symbol, str(e)[:80])
+        logger.warning("yfinance options chain failed for %s: %s", symbol, str(e)[:80])
         return {"error": str(e)[:80]}
 
-    if df is None or len(df) == 0:
-        return {"error": "no options data"}
+    if not expirations:
+        return {"error": "no options expirations"}
 
-    puts = df[df["option_type"] == "put"]
-    calls = df[df["option_type"] == "call"]
+    put_vol = call_vol = put_oi = call_oi = 0.0
+    n_contracts = 0
+    for exp in expirations[:n_expirations]:
+        try:
+            chain = tkr.option_chain(exp)
+        except Exception as e:
+            logger.debug("chain fetch failed for %s exp=%s: %s", symbol, exp, str(e)[:80])
+            continue
+        puts_df, calls_df = chain.puts, chain.calls
+        if puts_df is not None and len(puts_df):
+            put_vol += float(puts_df["volume"].fillna(0).sum())
+            put_oi += float(puts_df["openInterest"].fillna(0).sum())
+            n_contracts += len(puts_df)
+        if calls_df is not None and len(calls_df):
+            call_vol += float(calls_df["volume"].fillna(0).sum())
+            call_oi += float(calls_df["openInterest"].fillna(0).sum())
+            n_contracts += len(calls_df)
 
-    put_vol = float(puts["volume"].fillna(0).sum())
-    call_vol = float(calls["volume"].fillna(0).sum())
-    put_oi = float(puts["open_interest"].fillna(0).sum())
-    call_oi = float(calls["open_interest"].fillna(0).sum())
+    if n_contracts == 0:
+        return {"error": "no options contracts returned"}
 
     pcr_vol = (put_vol / call_vol) if call_vol > 0 else None
     pcr_oi = (put_oi / call_oi) if call_oi > 0 else None
 
-    underlying = float(df["underlying_price"].iloc[0]) if "underlying_price" in df.columns else None
+    underlying = None
+    try:
+        hist = tkr.history(period="1d")
+        if hist is not None and len(hist):
+            underlying = float(hist["Close"].iloc[-1])
+    except Exception:
+        pass
 
     return {
         "symbol": symbol,
@@ -87,7 +109,8 @@ def spy_put_call_ratio(symbol: str = "SPY") -> dict[str, Any]:
         "put_oi": int(put_oi),
         "call_oi": int(call_oi),
         "underlying_price": underlying,
-        "n_contracts": len(df),
+        "n_contracts": n_contracts,
+        "n_expirations_used": min(len(expirations), n_expirations),
     }
 
 

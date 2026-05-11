@@ -73,6 +73,119 @@ def _is_a_share(ticker: str) -> bool:
 
 
 # ────────────────────────────────────────────────────────
+# Sparkline helpers — 把 60d 价格画成 Unicode 缩略线
+# ────────────────────────────────────────────────────────
+
+_SPARK_BARS = "▁▂▃▄▅▆▇█"
+
+
+def _load_history() -> dict:
+    """读 history_data.json 的 tickers map，缺则返回空 dict。"""
+    d = _load_json(REPO / "history_data.json")
+    if not isinstance(d, dict):
+        return {}
+    return d.get("tickers") or {}
+
+
+def _sparkline(values: list[float], length: int = 10) -> str:
+    """价格序列降采样到 length 个点，渲染成 8 级 Unicode 缩略线。"""
+    if not values or len(values) < 2:
+        return "—"
+    n = len(values)
+    if n > length:
+        step = n / length
+        sampled = [values[min(n - 1, int(i * step))] for i in range(length)]
+    else:
+        sampled = list(values)
+    lo, hi = min(sampled), max(sampled)
+    if hi == lo:
+        return _SPARK_BARS[3] * len(sampled)
+    span = hi - lo
+    return "".join(_SPARK_BARS[min(7, int((v - lo) / span * 7))] for v in sampled)
+
+
+def _ticker_sparkline(history: dict, ticker: str, window: int = 60) -> tuple[str, float | None]:
+    """返回 (sparkline, window 天涨跌%)。缺数据时返回 ('—', None)。"""
+    if not history or ticker not in history:
+        return "—", None
+    closes = history[ticker].get("close") or []
+    if len(closes) < 2:
+        return "—", None
+    recent = closes[-window:]
+    pct = ((recent[-1] - recent[0]) / recent[0] * 100) if recent[0] else None
+    return _sparkline(recent, length=10), pct
+
+
+# ────────────────────────────────────────────────────────
+# Section 0: 今天 / 3 天内会发生什么（持仓 earnings + 高相关政策）
+# ────────────────────────────────────────────────────────
+
+def section_calendar(plan: dict | None) -> str:
+    """读 event_calendar.json + policy_events.json，挑出今天到 +3d 关键事件。
+
+    - 持仓 earnings：仅列持仓股（A 股）next 3d 内的财报日
+    - 政策事件：relevance_score ≥ 4 的近 3d 政策
+    - 都空则返回 ""（整 section 不显示，避免占版面）
+    """
+    events_data = _load_json(REPO / "data" / "event_calendar.json")
+    policy_data = _load_json(REPO / "data" / "policy_events.json")
+    today = date.today()
+    horizon = today + timedelta(days=3)
+
+    held_codes: set[str] = set()
+    if plan:
+        for e in (plan.get("plan_v5") or []):
+            t = e.get("ticker", "")
+            if _is_a_share(t):
+                held_codes.add(t.split(".")[0])
+
+    earnings: list[tuple[date, dict]] = []
+    for ev in (events_data or {}).get("events", []) or []:
+        try:
+            ed = datetime.strptime(ev.get("event_date", ""), "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if today <= ed <= horizon and ev.get("code", "") in held_codes:
+            earnings.append((ed, ev))
+
+    policies: list[tuple[date, dict]] = []
+    for ev in (policy_data or {}).get("events", []) or []:
+        if (ev.get("relevance_score") or 0) < 4:
+            continue
+        try:
+            ed = datetime.strptime(ev.get("date", ""), "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if today <= ed <= horizon:
+            policies.append((ed, ev))
+
+    if not earnings and not policies:
+        return ""
+
+    def _day_label(d: date) -> str:
+        if d == today:
+            return "🔥今天"
+        if d == today + timedelta(days=1):
+            return "明天"
+        return d.strftime("%m-%d")
+
+    lines = ["#### 0. 今天 / 3 天内会发生什么"]
+    if earnings:
+        lines.append(f"📅 **持仓事件**（{len(earnings)} 个 earnings）")
+        for ed, ev in sorted(earnings)[:5]:
+            lines.append(f"• {_day_label(ed)} · {ev.get('code')} · {ev.get('description','')[:60]}")
+    if policies:
+        if earnings:
+            lines.append("")
+        lines.append(f"📰 **高相关政策**（{len(policies)} 条 · relevance≥4）")
+        for ed, ev in sorted(policies, key=lambda x: (-int(x[1].get('relevance_score') or 0), x[0]))[:3]:
+            themes = "/".join(ev.get('matched_themes') or [])
+            theme_str = f" · {themes}" if themes else ""
+            lines.append(f"• {_day_label(ed)}{theme_str} · {ev.get('title','')[:60]}")
+    return "\n".join(lines) + "\n"
+
+
+# ────────────────────────────────────────────────────────
 # Section 1: regime gate — 今天能不能动手
 # ────────────────────────────────────────────────────────
 
@@ -119,7 +232,9 @@ def section_regime(defense: dict | None) -> str:
         lines.append("**具体告警：**")
         for a in alerts[:5]:
             kind = a.get("kind") or a.get("type") or "alert"
-            msg = a.get("message") or a.get("detail") or json.dumps(a, ensure_ascii=False)
+            # fallback 顺序：人类可读 message/detail > suggested_action > trigger > 最后才 json
+            msg = (a.get("message") or a.get("detail") or a.get("suggested_action")
+                   or a.get("trigger") or json.dumps(a, ensure_ascii=False))
             lines.append(f"• {kind} · {msg}")
     return "\n".join(lines) + "\n"
 
@@ -128,8 +243,8 @@ def section_regime(defense: dict | None) -> str:
 # Section 2: 今天的候选（A 股 + 美股）
 # ────────────────────────────────────────────────────────
 
-def _humanize_picks(plan: list[dict], a_share: bool) -> list[str]:
-    """把 plan_v5 entry 排成一句话/只。ticker 加粗、不用反引号。"""
+def _humanize_picks(plan: list[dict], a_share: bool, history: dict | None = None) -> list[str]:
+    """把 plan_v5 entry 排成一句话/只。ticker 加粗、不用反引号；附 60d sparkline。"""
     out = []
     for entry in plan:
         ticker = entry.get("ticker", "?")
@@ -140,13 +255,15 @@ def _humanize_picks(plan: list[dict], a_share: bool) -> list[str]:
         weight = entry.get("v5_weight") or entry.get("weight") or 0
         f_score = entry.get("f_score", "?")
         z = entry.get("composite_z", entry.get("composite", 0))
+        spark, pct60 = _ticker_sparkline(history or {}, ticker)
+        spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
         out.append(
-            f"• **{ticker}** {weight*100:.1f}% · F-Score {f_score} · 综合 {z:+.2f}"
+            f"• **{ticker}** {weight*100:.1f}% · F-Score {f_score} · 综合 {z:+.2f}{spark_str}"
         )
     return out
 
 
-def section_picks(plan: dict | None, a_share_picks: dict | None) -> str:
+def section_picks(plan: dict | None, a_share_picks: dict | None, history: dict | None = None) -> str:
     """美股从 plan_v5 取，A 股优先从 a_share_picks 取（盘后），否则也从 plan_v5。"""
     if not plan:
         return (
@@ -167,7 +284,7 @@ def section_picks(plan: dict | None, a_share_picks: dict | None) -> str:
     lines = [head]
 
     # 美股
-    us_lines = _humanize_picks(plan_v5, a_share=False)
+    us_lines = _humanize_picks(plan_v5, a_share=False, history=history)
     if us_lines:
         lines.append(f"**🇺🇸 美股 ({len(us_lines)} 只)**")
         lines.extend(us_lines)
@@ -180,9 +297,11 @@ def section_picks(plan: dict | None, a_share_picks: dict | None) -> str:
             ticker = entry.get("ticker", entry.get("code", "?"))
             name = entry.get("name", "")
             score = entry.get("composite", 0)
-            lines.append(f"• **{ticker}** {name} · 综合 {score:.3f}")
+            spark, pct60 = _ticker_sparkline(history or {}, ticker)
+            spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
+            lines.append(f"• **{ticker}** {name} · 综合 {score:.3f}{spark_str}")
     else:
-        a_lines = _humanize_picks(plan_v5, a_share=True)
+        a_lines = _humanize_picks(plan_v5, a_share=True, history=history)
         if a_lines:
             lines.append(f"**🇨🇳 A 股 ({len(a_lines)} 只 · 盘前数据，16:30 后更准)**")
             lines.extend(a_lines)
@@ -371,15 +490,20 @@ def build_brief(share_mode: bool = False) -> str:
     events = _load_json(REPO / "data" / "event_calendar.json")
     a_share_picks = _load_json(REPO / "data" / "a_share_picks.json")
     defense = _latest_defense_snapshot()
+    history = _load_history()
 
-    parts = [
+    parts: list[str] = []
+    cal = section_calendar(plan)
+    if cal:
+        parts.extend([cal, "\n"])
+    parts.extend([
         section_regime(defense),
         "\n",
-        section_picks(plan, a_share_picks),
+        section_picks(plan, a_share_picks, history=history),
         "\n",
         section_ai_alpha(risk_metrics),
         "\n",
-    ]
+    ])
     red_flags = section_red_flags(plan, events, factor_scores, defense)
     if red_flags:
         parts.append(red_flags)
@@ -533,8 +657,10 @@ def _build_card_payload() -> dict:
     risk_metrics = _load_json(REPO / "risk_metrics.json")
     factor_scores = _load_json(REPO / "factor_scores_today.json")
     events = _load_json(REPO / "data" / "event_calendar.json")
+    policy_events = _load_json(REPO / "data" / "policy_events.json")
     a_share_picks = _load_json(REPO / "data" / "a_share_picks.json")
     defense = _latest_defense_snapshot()
+    history = _load_history()
 
     today = date.today()
     weekday_cn = "一二三四五六日"[today.weekday()]
@@ -544,6 +670,49 @@ def _build_card_payload() -> dict:
     header_template = {"NONE": "blue", "LOW": "yellow", "HIGH": "orange", "CRITICAL": "red"}.get(severity, "grey")
 
     blocks: list[dict] = []
+
+    # ─── Section 0: 今天 / 3 天内会发生什么（持仓 earnings + 高相关政策）───
+    horizon = today + timedelta(days=3)
+    held_codes: set[str] = set()
+    if plan:
+        for e in (plan.get("plan_v5") or []):
+            t = e.get("ticker", "")
+            if _is_a_share(t):
+                held_codes.add(t.split(".")[0])
+    earnings_soon: list[tuple[date, dict]] = []
+    for ev in (events or {}).get("events", []) or []:
+        ed_p = _safe_parse_date(ev.get("event_date", ""))
+        if ed_p and today <= ed_p <= horizon and ev.get("code", "") in held_codes:
+            earnings_soon.append((ed_p, ev))
+    policy_soon: list[tuple[date, dict]] = []
+    for ev in (policy_events or {}).get("events", []) or []:
+        if (ev.get("relevance_score") or 0) < 4:
+            continue
+        ed_p = _safe_parse_date(ev.get("date", ""))
+        if ed_p and today <= ed_p <= horizon:
+            policy_soon.append((ed_p, ev))
+    if earnings_soon or policy_soon:
+        def _day_label(d: date) -> str:
+            if d == today:
+                return "🔥今天"
+            if d == today + timedelta(days=1):
+                return "明天"
+            return d.strftime("%m-%d")
+        sec0_lines: list[str] = ["**📅 今天 / 3 天内会发生什么**"]
+        if earnings_soon:
+            sec0_lines.append(f"**持仓事件**（{len(earnings_soon)} 个 earnings）")
+            for ed, ev in sorted(earnings_soon)[:5]:
+                sec0_lines.append(f"• {_day_label(ed)} · {ev.get('code')} · {ev.get('description','')[:60]}")
+        if policy_soon:
+            if earnings_soon:
+                sec0_lines.append("")
+            sec0_lines.append(f"**高相关政策**（{len(policy_soon)} 条 · relevance≥4）")
+            for ed, ev in sorted(policy_soon, key=lambda x: (-int(x[1].get('relevance_score') or 0), x[0]))[:3]:
+                themes = "/".join(ev.get('matched_themes') or [])
+                theme_str = f" · {themes}" if themes else ""
+                sec0_lines.append(f"• {_day_label(ed)}{theme_str} · {ev.get('title','')[:60]}")
+        blocks.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(sec0_lines)}})
+        blocks.append({"tag": "hr"})
 
     # ─── Section 1: regime（白底；自带新人能看懂的灯色对照 + 三道闸门解释）───
     advice = {
@@ -575,7 +744,7 @@ def _build_card_payload() -> dict:
                 ("波动", f"{pm.get('annual_vol_pct', '?')}%"),
             ]))
         plan_v5 = plan.get("plan_v5") or []
-        us_lines = _humanize_picks(plan_v5, a_share=False)
+        us_lines = _humanize_picks(plan_v5, a_share=False, history=history)
         if us_lines:
             section2.append({"tag": "div", "text": {"tag": "lark_md",
                 "content": f"**🇺🇸 美股 ({len(us_lines)} 只)**"}})
@@ -583,10 +752,14 @@ def _build_card_payload() -> dict:
             section2.append(_two_col_lines(us_lines[:half], us_lines[half:]))
         if a_share_picks and a_share_picks.get("selected"):
             sel = a_share_picks["selected"][:10]
-            a_lines = [
-                f"• **{e.get('ticker', e.get('code','?'))}** {e.get('name','')} · {e.get('composite', 0):.2f}"
-                for e in sel
-            ]
+            a_lines = []
+            for e in sel:
+                t = e.get("ticker", e.get("code", "?"))
+                spark, pct60 = _ticker_sparkline(history or {}, t)
+                spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
+                a_lines.append(
+                    f"• **{t}** {e.get('name','')} · {e.get('composite', 0):.2f}{spark_str}"
+                )
             section2.append({"tag": "div", "text": {"tag": "lark_md",
                 "content": f"**🇨🇳 A 股 ({len(sel)} 只 · 6 因子 + 龙虎榜+北向)**"}})
             if len(a_lines) >= 4:
@@ -595,7 +768,7 @@ def _build_card_payload() -> dict:
             else:
                 section2.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(a_lines)}})
         else:
-            a_lines_pre = _humanize_picks(plan_v5, a_share=True)
+            a_lines_pre = _humanize_picks(plan_v5, a_share=True, history=history)
             if a_lines_pre:
                 section2.append({"tag": "div", "text": {"tag": "lark_md",
                     "content": f"**🇨🇳 A 股 ({len(a_lines_pre)} 只 · 盘前 · 16:30 后更准)**"}})
