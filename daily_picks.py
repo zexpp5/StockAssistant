@@ -78,8 +78,54 @@ def safe_float(v):
         return None
 
 
-def fetch_watchlist(token):
-    """拉所有 watchlist 记录，提取关键字段"""
+def fetch_watchlist(token=None):
+    """拉 watchlist 记录。
+
+    2026-05-11 起优先从 DuckDB 读（single source of truth）；
+    DuckDB 表空时 fallback 到飞书表（向后兼容）。
+    token 参数保留只是为了 backward compatibility，DuckDB 模式忽略。
+    """
+    # 优先 DuckDB
+    try:
+        from stock_db import fetch_all_watchlist, get_db
+        from stock_db import latest_price as _latest_price_query
+        db_rows = fetch_all_watchlist()
+        if db_rows:
+            # 注入 prices 表的最新价格 / YTD 等行情字段，供下游 daily_picks 等用
+            conn = get_db()
+            out = []
+            for r in db_rows:
+                code = r.get("code")
+                px = _latest_price_query(code, conn=conn) if code else None
+                px = px or {}
+                out.append({
+                    "name": r.get("name"),
+                    "code": code,
+                    "market": r.get("market"),
+                    "ai_relevance": r.get("ai_relevance"),
+                    "ai_logic": r.get("ai_logic"),
+                    "industry": r.get("industry"),
+                    "conclusion": r.get("conclusion"),
+                    "risks": r.get("risks"),
+                    "credibility": r.get("credibility"),
+                    "latest_price": f"{px.get('price')} {px.get('currency') or ''}".strip() if px.get("price") else "",
+                    "ytd_pct": px.get("ytd_pct"),
+                    "one_year_pct": px.get("one_year_pct"),
+                    "one_month_pct": px.get("one_month_pct"),
+                    "one_week_pct": px.get("one_week_pct"),
+                    "forward_pe": px.get("forward_pe"),
+                    "peg": px.get("peg_ratio"),
+                    "earnings_growth_pct": px.get("earnings_growth_pct"),
+                })
+            conn.close()
+            return out
+    except Exception as e:
+        print(f"  ⚠️ DuckDB watchlist 读取失败 ({e}), fallback 到飞书表")
+
+    # Fallback 飞书表
+    if token is None:
+        from feishu_auth import feishu_token as _ft
+        token = _ft()
     all_items = []
     page_token = None
     while True:

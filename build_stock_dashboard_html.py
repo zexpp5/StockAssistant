@@ -446,8 +446,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     <hr class="my-4 border-slate-200">
 
-    <!-- 次级：升级建议（视觉权重降低）-->
+    <!-- ⚙️ 管理：watchlist 编辑入口（DuckDB 权威 · 飞书已废） -->
     <div class="mb-4">
+      <div class="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 px-2">⚙️ 管理</div>
+      <a href="#watchlist-edit" data-tab="watchlist-edit" class="tab-link block px-3 py-1.5 text-sm text-slate-700 hover:text-violet-600 hover:bg-violet-50 rounded transition">✏️ Watchlist 编辑</a>
       <a href="#upgrade" data-tab="upgrade" class="tab-link block px-3 py-1.5 text-sm text-slate-500 hover:text-violet-600 hover:bg-violet-50 rounded transition">💰 升级建议</a>
     </div>
 
@@ -1175,6 +1177,144 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 </section>
 
+<!-- ============ ✏️ Watchlist 编辑 Tab（DuckDB 权威 · 通过 FastAPI 增删改）============ -->
+<section id="watchlist-edit" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
+  <div class="mb-6">
+    <div class="flex items-center gap-3 mb-2">
+      <span class="text-3xl">✏️</span>
+      <h2 class="text-2xl font-bold text-slate-900">Watchlist 编辑</h2>
+    </div>
+    <p class="text-sm text-slate-600">
+      DuckDB 是权威数据源（2026-05-11 起飞书表已废弃为只读快照）。
+      所有增删改保存到 <code class="text-xs bg-slate-200 px-1 rounded">stock_history.duckdb · watchlist</code>。
+      <strong class="text-amber-700">需先启动本地 API：</strong>
+      <code class="text-xs bg-amber-100 px-1 rounded">uvicorn stock_research.api.main:app --port 8765</code>
+    </p>
+  </div>
+
+  <!-- API 连接状态 + 操作按钮条 -->
+  <div class="flex items-center gap-3 mb-4 flex-wrap">
+    <span class="text-sm text-slate-600">API: </span>
+    <code class="text-xs font-mono bg-slate-100 px-2 py-1 rounded" id="watchlist-api-base">http://127.0.0.1:8765</code>
+    <span id="watchlist-api-status" class="text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-500">检测中…</span>
+    <button onclick="loadWatchlistTable()" class="text-xs px-3 py-1 bg-slate-600 hover:bg-slate-700 text-white rounded">🔄 刷新</button>
+    <button onclick="openWatchlistEditor()" class="text-xs px-3 py-1 bg-violet-600 hover:bg-violet-700 text-white rounded">➕ 添加新股</button>
+    <span id="watchlist-count" class="ml-auto text-xs text-slate-500"></span>
+  </div>
+
+  <!-- 链条 / 层级 / 角色 多重筛选 -->
+  <div class="flex items-center gap-2 mb-3 flex-wrap text-xs">
+    <span class="text-slate-500">筛选:</span>
+    <select id="wl-filter-chain" onchange="loadWatchlistTable()" class="px-2 py-1 border border-slate-300 rounded">
+      <option value="">全部链条</option>
+    </select>
+    <select id="wl-filter-tier" onchange="loadWatchlistTable()" class="px-2 py-1 border border-slate-300 rounded">
+      <option value="">全部层级</option>
+      <option value="核心">核心</option>
+      <option value="一线">一线</option>
+      <option value="二线">二线</option>
+      <option value="三线">三线</option>
+      <option value="N/A">N/A</option>
+    </select>
+    <select id="wl-filter-role" onchange="loadWatchlistTable()" class="px-2 py-1 border border-slate-300 rounded">
+      <option value="">全部角色</option>
+    </select>
+    <input id="wl-filter-keyword" oninput="loadWatchlistTable()" type="text" placeholder="搜代码/名称/一句话…" class="px-2 py-1 border border-slate-300 rounded w-48">
+  </div>
+
+  <!-- 主表格 -->
+  <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+    <table class="w-full text-sm">
+      <thead class="bg-slate-50 text-xs text-slate-600">
+        <tr>
+          <th class="px-3 py-2 text-left">代码</th>
+          <th class="px-3 py-2 text-left">名称</th>
+          <th class="px-3 py-2 text-left">链条</th>
+          <th class="px-3 py-2 text-left">层级</th>
+          <th class="px-3 py-2 text-left">角色</th>
+          <th class="px-3 py-2 text-left">一句话解释(新手向)</th>
+          <th class="px-3 py-2 text-left">市场</th>
+          <th class="px-3 py-2 text-left">状态</th>
+          <th class="px-3 py-2 text-right">操作</th>
+        </tr>
+      </thead>
+      <tbody id="watchlist-table-body" class="divide-y divide-slate-100"></tbody>
+    </table>
+  </div>
+
+  <!-- 编辑 / 添加 Modal -->
+  <div id="watchlist-modal" class="hidden fixed inset-0 bg-slate-900/50 z-[100] flex items-center justify-center p-4" onclick="if(event.target===this)closeWatchlistEditor()">
+    <div class="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+      <div class="px-6 py-4 border-b border-slate-200 flex items-center justify-between sticky top-0 bg-white">
+        <h3 class="text-lg font-bold text-slate-900" id="watchlist-modal-title">添加新股</h3>
+        <button onclick="closeWatchlistEditor()" class="text-slate-400 hover:text-slate-700 text-xl">×</button>
+      </div>
+      <div class="px-6 py-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <label class="text-xs text-slate-500 block mb-1">代码 *</label>
+          <input id="wl-code" type="text" class="w-full px-3 py-2 border border-slate-300 rounded text-sm font-mono" placeholder="如 NVDA / 600519.SS">
+        </div>
+        <div>
+          <label class="text-xs text-slate-500 block mb-1">名称</label>
+          <input id="wl-name" type="text" class="w-full px-3 py-2 border border-slate-300 rounded text-sm" placeholder="如 NVIDIA">
+        </div>
+        <div>
+          <label class="text-xs text-slate-500 block mb-1">市场</label>
+          <input id="wl-market" type="text" class="w-full px-3 py-2 border border-slate-300 rounded text-sm" placeholder="美股 / A股·沪深 / 港股 …">
+        </div>
+        <div>
+          <label class="text-xs text-slate-500 block mb-1">行业归类</label>
+          <input id="wl-industry" type="text" class="w-full px-3 py-2 border border-slate-300 rounded text-sm" placeholder="半导体 / SaaS / …">
+        </div>
+        <div>
+          <label class="text-xs text-slate-500 block mb-1">主营业务</label>
+          <input id="wl-business" type="text" class="w-full px-3 py-2 border border-slate-300 rounded text-sm">
+        </div>
+        <div>
+          <label class="text-xs text-slate-500 block mb-1">AI 关联度</label>
+          <input id="wl-ai-relevance" type="text" class="w-full px-3 py-2 border border-slate-300 rounded text-sm" placeholder="🟢 直接 / 🟡 间接 / 🔴 无关">
+        </div>
+        <div class="md:col-span-2">
+          <label class="text-xs text-slate-500 block mb-1">AI 关联逻辑</label>
+          <textarea id="wl-ai-logic" rows="2" class="w-full px-3 py-2 border border-slate-300 rounded text-sm"></textarea>
+        </div>
+        <div>
+          <label class="text-xs text-slate-500 block mb-1">研究状态</label>
+          <input id="wl-status" type="text" class="w-full px-3 py-2 border border-slate-300 rounded text-sm" placeholder="持仓 / 关注 / 待研究 …">
+        </div>
+        <div>
+          <label class="text-xs text-slate-500 block mb-1">数据可信度</label>
+          <input id="wl-credibility" type="text" class="w-full px-3 py-2 border border-slate-300 rounded text-sm" placeholder="HIGH / MEDIUM / LOW">
+        </div>
+        <div class="md:col-span-2">
+          <label class="text-xs text-slate-500 block mb-1">研究结论</label>
+          <textarea id="wl-conclusion" rows="2" class="w-full px-3 py-2 border border-slate-300 rounded text-sm"></textarea>
+        </div>
+        <div class="md:col-span-2">
+          <label class="text-xs text-slate-500 block mb-1">关键风险</label>
+          <textarea id="wl-risks" rows="2" class="w-full px-3 py-2 border border-slate-300 rounded text-sm"></textarea>
+        </div>
+        <div>
+          <label class="text-xs text-slate-500 block mb-1">可比公司</label>
+          <input id="wl-peers" type="text" class="w-full px-3 py-2 border border-slate-300 rounded text-sm" placeholder="逗号分隔 ticker">
+        </div>
+        <div>
+          <label class="text-xs text-slate-500 block mb-1">跟踪节奏</label>
+          <input id="wl-rhythm" type="text" class="w-full px-3 py-2 border border-slate-300 rounded text-sm" placeholder="日 / 周 / 月">
+        </div>
+        <div class="md:col-span-2">
+          <label class="text-xs text-slate-500 block mb-1">备注</label>
+          <textarea id="wl-notes" rows="2" class="w-full px-3 py-2 border border-slate-300 rounded text-sm"></textarea>
+        </div>
+      </div>
+      <div class="px-6 py-4 border-t border-slate-200 flex items-center justify-end gap-2 sticky bottom-0 bg-white">
+        <button onclick="closeWatchlistEditor()" class="px-4 py-2 text-sm border border-slate-300 hover:bg-slate-50 rounded">取消</button>
+        <button onclick="saveWatchlistItem()" class="px-4 py-2 text-sm bg-violet-600 hover:bg-violet-700 text-white rounded font-medium">保存</button>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- ============ 💰 升级建议 Tab ============ -->
 <section id="upgrade" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
   <div class="mb-6">
@@ -1671,6 +1811,163 @@ const DISCOVERY    = {DISCOVERY_JSON};
 const _BACKTEST    = {PLAN_BACKTEST_JSON_DB};
 const _DYNAMIC     = {PLAN_DYNAMIC_JSON_DB};
 
+// ============ Watchlist CRUD（调本地 FastAPI · DuckDB 是权威）============
+const WATCHLIST_API_BASE = "http://127.0.0.1:8765";
+let _watchlistCache = [];
+let _watchlistEditCode = null;  // null = 新增模式；非空 = 编辑该 code
+
+async function _watchlistApiCall(method, path, body) {
+  const opts = { method, headers: {"Content-Type": "application/json"} };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const r = await fetch(WATCHLIST_API_BASE + path, opts);
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    throw new Error(`HTTP ${r.status}: ${err.detail || r.statusText}`);
+  }
+  return r.json();
+}
+
+async function _checkApiStatus() {
+  const el = document.getElementById("watchlist-api-status");
+  if (!el) return;
+  try {
+    await _watchlistApiCall("GET", "/health");
+    el.textContent = "✓ 已连接";
+    el.className = "text-xs px-2 py-0.5 rounded bg-emerald-100 text-emerald-700";
+    return true;
+  } catch (e) {
+    el.textContent = "✗ 未启动";
+    el.className = "text-xs px-2 py-0.5 rounded bg-rose-100 text-rose-700";
+    return false;
+  }
+}
+
+function _esc(s) {
+  return (s || "").toString().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+async function loadWatchlistTable() {
+  const ok = await _checkApiStatus();
+  const tbody = document.getElementById("watchlist-table-body");
+  const countEl = document.getElementById("watchlist-count");
+  if (!ok) {
+    tbody.innerHTML = `<tr><td colspan="8" class="px-3 py-8 text-center text-rose-700 text-sm">
+      ⚠️ 本地 API 未启动 — 请在 terminal 跑：<br>
+      <code class="text-xs bg-rose-50 px-2 py-1 mt-2 inline-block rounded">uvicorn stock_research.api.main:app --port 8765</code>
+    </td></tr>`;
+    countEl.textContent = "";
+    return;
+  }
+  try {
+    _watchlistCache = await _watchlistApiCall("GET", "/api/watchlist");
+    countEl.textContent = `共 ${_watchlistCache.length} 条`;
+    if (_watchlistCache.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="8" class="px-3 py-8 text-center text-slate-500 text-sm">暂无记录，点右上「➕ 添加新股」开始</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = _watchlistCache.map(r => `
+      <tr class="hover:bg-slate-50">
+        <td class="px-3 py-2 font-mono text-sm font-bold text-slate-900">${_esc(r.code)}</td>
+        <td class="px-3 py-2 text-sm text-slate-800">${_esc(r.name)}</td>
+        <td class="px-3 py-2 text-xs text-slate-500">${_esc(r.market)}</td>
+        <td class="px-3 py-2 text-xs text-slate-500">${_esc(r.industry)}</td>
+        <td class="px-3 py-2 text-xs">${_esc(r.ai_relevance)}</td>
+        <td class="px-3 py-2 text-xs">${_esc(r.status)}</td>
+        <td class="px-3 py-2 text-xs">${_esc(r.credibility)}</td>
+        <td class="px-3 py-2 text-right space-x-1 whitespace-nowrap">
+          <button onclick="openWatchlistEditor('${_esc(r.code)}')" class="text-xs px-2 py-1 bg-slate-100 hover:bg-violet-100 text-slate-700 rounded">✏️</button>
+          <button onclick="deleteWatchlistItem('${_esc(r.code)}')" class="text-xs px-2 py-1 bg-rose-100 hover:bg-rose-200 text-rose-700 rounded">🗑️</button>
+        </td>
+      </tr>
+    `).join("");
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="8" class="px-3 py-8 text-center text-rose-700 text-sm">加载失败：${_esc(e.message)}</td></tr>`;
+  }
+}
+
+function openWatchlistEditor(code) {
+  _watchlistEditCode = code || null;
+  const title = code ? `编辑 · ${code}` : "添加新股";
+  document.getElementById("watchlist-modal-title").textContent = title;
+  const fields = ["code", "name", "market", "industry", "business", "ai-relevance", "ai-logic", "status", "credibility", "conclusion", "risks", "peers", "rhythm", "notes"];
+  fields.forEach(f => {
+    const el = document.getElementById("wl-" + f);
+    if (el) el.value = "";
+  });
+  if (code) {
+    const row = _watchlistCache.find(r => r.code === code) || {};
+    document.getElementById("wl-code").value = row.code || "";
+    document.getElementById("wl-code").disabled = true;  // 编辑模式 code 不可改
+    document.getElementById("wl-name").value = row.name || "";
+    document.getElementById("wl-market").value = row.market || "";
+    document.getElementById("wl-industry").value = row.industry || "";
+    document.getElementById("wl-business").value = row.business || "";
+    document.getElementById("wl-ai-relevance").value = row.ai_relevance || "";
+    document.getElementById("wl-ai-logic").value = row.ai_logic || "";
+    document.getElementById("wl-status").value = row.status || "";
+    document.getElementById("wl-credibility").value = row.credibility || "";
+    document.getElementById("wl-conclusion").value = row.conclusion || "";
+    document.getElementById("wl-risks").value = row.risks || "";
+    document.getElementById("wl-peers").value = row.peers || "";
+    document.getElementById("wl-rhythm").value = row.rhythm || "";
+    document.getElementById("wl-notes").value = row.notes || "";
+  } else {
+    document.getElementById("wl-code").disabled = false;
+  }
+  document.getElementById("watchlist-modal").classList.remove("hidden");
+}
+
+function closeWatchlistEditor() {
+  document.getElementById("watchlist-modal").classList.add("hidden");
+  _watchlistEditCode = null;
+}
+
+async function saveWatchlistItem() {
+  const code = document.getElementById("wl-code").value.trim();
+  if (!code) {
+    alert("代码必填");
+    return;
+  }
+  const item = {
+    code,
+    name: document.getElementById("wl-name").value.trim() || null,
+    market: document.getElementById("wl-market").value.trim() || null,
+    industry: document.getElementById("wl-industry").value.trim() || null,
+    business: document.getElementById("wl-business").value.trim() || null,
+    ai_relevance: document.getElementById("wl-ai-relevance").value.trim() || null,
+    ai_logic: document.getElementById("wl-ai-logic").value.trim() || null,
+    status: document.getElementById("wl-status").value.trim() || null,
+    credibility: document.getElementById("wl-credibility").value.trim() || null,
+    conclusion: document.getElementById("wl-conclusion").value.trim() || null,
+    risks: document.getElementById("wl-risks").value.trim() || null,
+    peers: document.getElementById("wl-peers").value.trim() || null,
+    rhythm: document.getElementById("wl-rhythm").value.trim() || null,
+    notes: document.getElementById("wl-notes").value.trim() || null,
+  };
+  try {
+    if (_watchlistEditCode) {
+      await _watchlistApiCall("PUT", "/api/watchlist/" + encodeURIComponent(_watchlistEditCode), item);
+    } else {
+      await _watchlistApiCall("POST", "/api/watchlist", item);
+    }
+    closeWatchlistEditor();
+    await loadWatchlistTable();
+  } catch (e) {
+    alert("保存失败：" + e.message);
+  }
+}
+
+async function deleteWatchlistItem(code) {
+  if (!confirm(`确定删除 ${code} 吗？`)) return;
+  try {
+    await _watchlistApiCall("DELETE", "/api/watchlist/" + encodeURIComponent(code));
+    await loadWatchlistTable();
+  } catch (e) {
+    alert("删除失败：" + e.message);
+  }
+}
+
+
 // ============ Tab 切换框架 ============
 const TAB_SECTIONS = {
   overview: ["hero", "stress-test", "thesis", "evolution", "scarce", "events", "hundred-x"],
@@ -1684,6 +1981,7 @@ const TAB_SECTIONS = {
   backtest: ["backtest"],
   professional: ["professional"],
   upgrade: ["upgrade"],
+  "watchlist-edit": ["watchlist-edit"],
 };
 
 function switchTab(tab) {
@@ -1713,6 +2011,7 @@ function switchTab(tab) {
   if (tab === "history") setTimeout(initHistorySelect, 50);
   if (tab === "backtest") setTimeout(renderPlanBacktest, 100);
   if (tab === "professional") setTimeout(renderProfessional, 50);
+  if (tab === "watchlist-edit") setTimeout(loadWatchlistTable, 50);
 }
 
 function getTabFromHash() {

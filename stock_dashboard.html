@@ -78,8 +78,10 @@
 
     <hr class="my-4 border-slate-200">
 
-    <!-- 次级：升级建议（视觉权重降低）-->
+    <!-- ⚙️ 管理：watchlist 编辑入口（DuckDB 权威 · 飞书已废） -->
     <div class="mb-4">
+      <div class="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 px-2">⚙️ 管理</div>
+      <a href="#watchlist-edit" data-tab="watchlist-edit" class="tab-link block px-3 py-1.5 text-sm text-slate-700 hover:text-violet-600 hover:bg-violet-50 rounded transition">✏️ Watchlist 编辑</a>
       <a href="#upgrade" data-tab="upgrade" class="tab-link block px-3 py-1.5 text-sm text-slate-500 hover:text-violet-600 hover:bg-violet-50 rounded transition">💰 升级建议</a>
     </div>
 
@@ -91,7 +93,7 @@
         <span title="数据源">数据源</span>
         <span class="text-[10px] font-mono px-2 py-0.5 rounded border border-emerald-300 bg-emerald-50 text-emerald-800" title="2026-05-11 起 DuckDB 是 single source of truth · 飞书仅作通知">DuckDB</span>
       </div>
-      <div class="text-[10px] text-slate-400">2026-05-11 11:10</div>
+      <div class="text-[10px] text-slate-400">2026-05-11 11:35</div>
       <div class="text-[10px] text-slate-400 leading-snug pt-2 border-t border-slate-100">⚠️ 不构成投资建议<br>崩盘期 alpha = -9.77%</div>
     </div>
   </div>
@@ -102,7 +104,7 @@
   <div class="max-w-7xl mx-auto px-6 py-10">
     <div class="flex items-center gap-3 mb-3">
       <span class="bg-violet-500/20 text-violet-300 text-xs font-bold px-3 py-1 rounded-full">AI 投资研究 · 资深分析员视角</span>
-      <span class="text-slate-400 text-sm">数据更新 2026-05-11 11:10</span>
+      <span class="text-slate-400 text-sm">数据更新 2026-05-11 11:35</span>
     </div>
     <h1 class="text-4xl md:text-5xl font-bold mb-3 leading-tight">AI 主线已轮动到「下一波稀缺资源」拐点</h1>
     <p class="text-lg text-slate-300 max-w-4xl mb-6">算力（NVDA）→ 网络（COHR）→ 电力（GEV/VST）→ 内存（SK Hynix）→ 存储（SanDisk）都已发生。下一波最可能的「百倍候选」在：水冷、稀土、铀、SMR、AI 数据。</p>
@@ -3942,6 +3944,123 @@
   </div>
 </section>
 
+<!-- ============ ✏️ Watchlist 编辑 Tab（DuckDB 权威 · 通过 FastAPI 增删改）============ -->
+<section id="watchlist-edit" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
+  <div class="mb-6">
+    <div class="flex items-center gap-3 mb-2">
+      <span class="text-3xl">✏️</span>
+      <h2 class="text-2xl font-bold text-slate-900">Watchlist 编辑</h2>
+    </div>
+    <p class="text-sm text-slate-600">
+      DuckDB 是权威数据源（2026-05-11 起飞书表已废弃为只读快照）。
+      所有增删改保存到 <code class="text-xs bg-slate-200 px-1 rounded">stock_history.duckdb · watchlist</code>。
+      <strong class="text-amber-700">需先启动本地 API：</strong>
+      <code class="text-xs bg-amber-100 px-1 rounded">uvicorn stock_research.api.main:app --port 8765</code>
+    </p>
+  </div>
+
+  <!-- API 连接状态 + 操作按钮条 -->
+  <div class="flex items-center gap-3 mb-4 flex-wrap">
+    <span class="text-sm text-slate-600">API: </span>
+    <code class="text-xs font-mono bg-slate-100 px-2 py-1 rounded" id="watchlist-api-base">http://127.0.0.1:8765</code>
+    <span id="watchlist-api-status" class="text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-500">检测中…</span>
+    <button onclick="loadWatchlistTable()" class="text-xs px-3 py-1 bg-slate-600 hover:bg-slate-700 text-white rounded">🔄 刷新</button>
+    <button onclick="openWatchlistEditor()" class="text-xs px-3 py-1 bg-violet-600 hover:bg-violet-700 text-white rounded">➕ 添加新股</button>
+    <span id="watchlist-count" class="ml-auto text-xs text-slate-500"></span>
+  </div>
+
+  <!-- 主表格 -->
+  <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+    <table class="w-full text-sm">
+      <thead class="bg-slate-50 text-xs text-slate-600">
+        <tr>
+          <th class="px-3 py-2 text-left">代码</th>
+          <th class="px-3 py-2 text-left">名称</th>
+          <th class="px-3 py-2 text-left">市场</th>
+          <th class="px-3 py-2 text-left">行业</th>
+          <th class="px-3 py-2 text-left">AI 关联</th>
+          <th class="px-3 py-2 text-left">研究状态</th>
+          <th class="px-3 py-2 text-left">数据可信度</th>
+          <th class="px-3 py-2 text-right">操作</th>
+        </tr>
+      </thead>
+      <tbody id="watchlist-table-body" class="divide-y divide-slate-100"></tbody>
+    </table>
+  </div>
+
+  <!-- 编辑 / 添加 Modal -->
+  <div id="watchlist-modal" class="hidden fixed inset-0 bg-slate-900/50 z-[100] flex items-center justify-center p-4" onclick="if(event.target===this)closeWatchlistEditor()">
+    <div class="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+      <div class="px-6 py-4 border-b border-slate-200 flex items-center justify-between sticky top-0 bg-white">
+        <h3 class="text-lg font-bold text-slate-900" id="watchlist-modal-title">添加新股</h3>
+        <button onclick="closeWatchlistEditor()" class="text-slate-400 hover:text-slate-700 text-xl">×</button>
+      </div>
+      <div class="px-6 py-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <label class="text-xs text-slate-500 block mb-1">代码 *</label>
+          <input id="wl-code" type="text" class="w-full px-3 py-2 border border-slate-300 rounded text-sm font-mono" placeholder="如 NVDA / 600519.SS">
+        </div>
+        <div>
+          <label class="text-xs text-slate-500 block mb-1">名称</label>
+          <input id="wl-name" type="text" class="w-full px-3 py-2 border border-slate-300 rounded text-sm" placeholder="如 NVIDIA">
+        </div>
+        <div>
+          <label class="text-xs text-slate-500 block mb-1">市场</label>
+          <input id="wl-market" type="text" class="w-full px-3 py-2 border border-slate-300 rounded text-sm" placeholder="美股 / A股·沪深 / 港股 …">
+        </div>
+        <div>
+          <label class="text-xs text-slate-500 block mb-1">行业归类</label>
+          <input id="wl-industry" type="text" class="w-full px-3 py-2 border border-slate-300 rounded text-sm" placeholder="半导体 / SaaS / …">
+        </div>
+        <div>
+          <label class="text-xs text-slate-500 block mb-1">主营业务</label>
+          <input id="wl-business" type="text" class="w-full px-3 py-2 border border-slate-300 rounded text-sm">
+        </div>
+        <div>
+          <label class="text-xs text-slate-500 block mb-1">AI 关联度</label>
+          <input id="wl-ai-relevance" type="text" class="w-full px-3 py-2 border border-slate-300 rounded text-sm" placeholder="🟢 直接 / 🟡 间接 / 🔴 无关">
+        </div>
+        <div class="md:col-span-2">
+          <label class="text-xs text-slate-500 block mb-1">AI 关联逻辑</label>
+          <textarea id="wl-ai-logic" rows="2" class="w-full px-3 py-2 border border-slate-300 rounded text-sm"></textarea>
+        </div>
+        <div>
+          <label class="text-xs text-slate-500 block mb-1">研究状态</label>
+          <input id="wl-status" type="text" class="w-full px-3 py-2 border border-slate-300 rounded text-sm" placeholder="持仓 / 关注 / 待研究 …">
+        </div>
+        <div>
+          <label class="text-xs text-slate-500 block mb-1">数据可信度</label>
+          <input id="wl-credibility" type="text" class="w-full px-3 py-2 border border-slate-300 rounded text-sm" placeholder="HIGH / MEDIUM / LOW">
+        </div>
+        <div class="md:col-span-2">
+          <label class="text-xs text-slate-500 block mb-1">研究结论</label>
+          <textarea id="wl-conclusion" rows="2" class="w-full px-3 py-2 border border-slate-300 rounded text-sm"></textarea>
+        </div>
+        <div class="md:col-span-2">
+          <label class="text-xs text-slate-500 block mb-1">关键风险</label>
+          <textarea id="wl-risks" rows="2" class="w-full px-3 py-2 border border-slate-300 rounded text-sm"></textarea>
+        </div>
+        <div>
+          <label class="text-xs text-slate-500 block mb-1">可比公司</label>
+          <input id="wl-peers" type="text" class="w-full px-3 py-2 border border-slate-300 rounded text-sm" placeholder="逗号分隔 ticker">
+        </div>
+        <div>
+          <label class="text-xs text-slate-500 block mb-1">跟踪节奏</label>
+          <input id="wl-rhythm" type="text" class="w-full px-3 py-2 border border-slate-300 rounded text-sm" placeholder="日 / 周 / 月">
+        </div>
+        <div class="md:col-span-2">
+          <label class="text-xs text-slate-500 block mb-1">备注</label>
+          <textarea id="wl-notes" rows="2" class="w-full px-3 py-2 border border-slate-300 rounded text-sm"></textarea>
+        </div>
+      </div>
+      <div class="px-6 py-4 border-t border-slate-200 flex items-center justify-end gap-2 sticky bottom-0 bg-white">
+        <button onclick="closeWatchlistEditor()" class="px-4 py-2 text-sm border border-slate-300 hover:bg-slate-50 rounded">取消</button>
+        <button onclick="saveWatchlistItem()" class="px-4 py-2 text-sm bg-violet-600 hover:bg-violet-700 text-white rounded font-medium">保存</button>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- ============ 💰 升级建议 Tab ============ -->
 <section id="upgrade" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
   <div class="mb-6">
@@ -4418,7 +4537,7 @@
   <div class="max-w-7xl mx-auto px-6 text-sm">
     <p class="mb-2"><strong class="text-white">免责声明</strong>：本看板由 Claude AI 基于公开信息生成，仅作研究学习参考，<strong class="text-rose-300">绝不构成任何投资建议</strong>。</p>
     <p class="mb-2">投资有风险，所有交易决策需自行判断、自负盈亏。本看板的数据可能滞后、错误或解读偏差。</p>
-    <p class="text-slate-500">数据源：飞书「股票研究 Watchlist」表 · WebSearch 抓取的最新公司财报 · 数据更新时间 2026-05-11 11:10</p>
+    <p class="text-slate-500">数据源：飞书「股票研究 Watchlist」表 · WebSearch 抓取的最新公司财报 · 数据更新时间 2026-05-11 11:35</p>
   </div>
 </footer>
 
@@ -4438,6 +4557,163 @@ const DISCOVERY    = {"generated_at": "2026-05-10T18:39:51", "universe_size": 29
 const _BACKTEST    = {"inception_date": "2026-05-09", "baseline_date": "2026-05-08", "baseline_idx_in_window": 30, "dates": ["2026-03-26", "2026-03-27", "2026-03-30", "2026-03-31", "2026-04-01", "2026-04-02", "2026-04-06", "2026-04-07", "2026-04-08", "2026-04-09", "2026-04-10", "2026-04-13", "2026-04-14", "2026-04-15", "2026-04-16", "2026-04-17", "2026-04-20", "2026-04-21", "2026-04-22", "2026-04-23", "2026-04-24", "2026-04-27", "2026-04-28", "2026-04-29", "2026-04-30", "2026-05-01", "2026-05-04", "2026-05-05", "2026-05-06", "2026-05-07", "2026-05-08"], "nav": [0.809364, 0.798317, 0.770142, 0.80583, 0.822315, 0.82783, 0.835125, 0.829983, 0.859113, 0.860623, 0.867798, 0.887085, 0.89603, 0.911498, 0.914274, 0.929744, 0.951457, 0.949506, 0.96991, 0.94605, 0.945195, 0.947384, 0.934303, 0.932679, 0.961974, 0.971124, 0.974218, 0.987005, 1.014003, 0.99344, 1.0], "bench_nav": [0.874556, 0.859643, 0.856769, 0.881673, 0.888316, 0.889116, 0.893319, 0.893712, 0.916475, 0.921762, 0.921152, 0.930154, 0.941487, 0.948917, 0.951249, 0.962745, 0.96082, 0.954529, 0.964196, 0.960454, 0.967897, 0.969564, 0.964846, 0.964697, 0.974296, 0.976994, 0.973414, 0.981223, 0.994862, 0.991812, 1.0], "daily_returns": [0.0, -1.3648, -3.5293, 4.6339, 2.0458, 0.6706, 0.8813, -0.6157, 3.5096, 0.1758, 0.8338, 2.2225, 1.0083, 1.7263, 0.3045, 1.692, 2.3354, -0.2051, 2.1489, -2.4601, -0.0903, 0.2315, -1.3808, -0.1738, 3.1409, 0.9512, 0.3187, 1.3125, 2.7354, -2.0279, 0.6603], "benchmark": "SPY", "metrics": {"n_tracked_days": 0, "tracked_start": "2026-05-08", "tracked_end": "2026-05-08", "cumulative_return_pct": 0.0, "bench_cumulative_return_pct": 0.0, "alpha_pct": 0.0, "annual_return_pct": 0.0, "annual_vol_pct": 0.0, "sharpe": 0.0, "max_drawdown_pct": 0.0, "win_rate_pct": 0.0, "win_days": 0, "total_days": 0}, "per_ticker": [{"ticker": "SDGR", "name": "Schrödinger", "weight": 0.0639, "close_first": 13.13, "close_last": 13.13, "return_pct": 0.0, "contribution_pct": 0.0}, {"ticker": "KO", "name": "Coca-Cola（可口可乐）", "weight": 0.1323, "close_first": 78.42, "close_last": 78.42, "return_pct": 0.0, "contribution_pct": 0.0}, {"ticker": "CRM", "name": "Salesforce", "weight": 0.0246, "close_first": 181.82, "close_last": 181.82, "return_pct": 0.0, "contribution_pct": 0.0}, {"ticker": "LRCX", "name": "Lam Research", "weight": 0.1333, "close_first": 294.05, "close_last": 294.05, "return_pct": 0.0, "contribution_pct": 0.0}, {"ticker": "MP", "name": "MP Materials", "weight": 0.1574, "close_first": 67.43, "close_last": 67.43, "return_pct": 0.0, "contribution_pct": 0.0}, {"ticker": "ETN", "name": "Eaton", "weight": 0.1144, "close_first": 401.51, "close_last": 401.51, "return_pct": 0.0, "contribution_pct": 0.0}, {"ticker": "MDB", "name": "MongoDB", "weight": 0.1107, "close_first": 299.47, "close_last": 299.47, "return_pct": 0.0, "contribution_pct": 0.0}, {"ticker": "TEM", "name": "Tempus AI", "weight": 0.0379, "close_first": 49.86, "close_last": 49.86, "return_pct": 0.0, "contribution_pct": 0.0}, {"ticker": "MRVL", "name": "Marvell Technology", "weight": 0.1423, "close_first": 170.13, "close_last": 170.13, "return_pct": 0.0, "contribution_pct": 0.0}, {"ticker": "PATH", "name": "UiPath", "weight": 0.0623, "close_first": 10.79, "close_last": 10.79, "return_pct": 0.0, "contribution_pct": 0.0}, {"ticker": "CRWV", "name": "CoreWeave", "weight": 0.021, "close_first": 114.15, "close_last": 114.15, "return_pct": 0.0, "contribution_pct": 0.0}], "tickers_used": ["SDGR", "KO", "CRM", "LRCX", "MP", "ETN", "MDB", "TEM", "MRVL", "PATH", "CRWV"], "tickers_missing": [], "tickers_source": "duckdb_inception"};
 const _DYNAMIC     = {"dates": ["2026-03-26", "2026-03-27", "2026-03-30", "2026-03-31", "2026-04-01", "2026-04-02", "2026-04-06", "2026-04-07", "2026-04-08", "2026-04-09", "2026-04-10", "2026-04-13", "2026-04-14", "2026-04-15", "2026-04-16", "2026-04-17", "2026-04-20", "2026-04-21", "2026-04-22", "2026-04-23", "2026-04-24", "2026-04-27", "2026-04-28", "2026-04-29", "2026-04-30", "2026-05-01", "2026-05-04", "2026-05-05", "2026-05-06", "2026-05-07", "2026-05-08"], "nav": [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 1.0], "bench_nav": [0.874556, 0.859643, 0.856769, 0.881673, 0.888316, 0.889116, 0.893319, 0.893712, 0.916475, 0.921762, 0.921152, 0.930154, 0.941487, 0.948917, 0.951249, 0.962745, 0.96082, 0.954529, 0.964196, 0.960454, 0.967897, 0.969564, 0.964846, 0.964697, 0.974296, 0.976994, 0.973414, 0.981223, 0.994862, 0.991812, 1.0], "benchmark": "SPY", "inception_date": "2026-05-09", "baseline_date": "2026-05-08", "baseline_idx_in_window": 30, "rebalance_dates": [], "rebalance_log": [], "total_commission": 0.0, "total_commission_pct": 0.0, "commission_per_movement_bps": 5.0, "rebalance_freq": "weekly_monday", "tickers_universe": ["CRM", "CRWV", "ETN", "KO", "LRCX", "MDB", "MP", "MRVL", "PATH", "SDGR", "TEM"], "metrics": {"n_tracked_days": 0, "tracked_start": null, "tracked_end": "2026-05-08", "cumulative_return_pct": -0.0, "bench_cumulative_return_pct": 0.0, "alpha_pct": -0.0, "annual_return_pct": 0.0, "annual_vol_pct": 0.0, "sharpe": 0.0, "max_drawdown_pct": 0.0, "win_rate_pct": 0.0, "win_days": 0, "total_days": 0, "n_rebalances": 0}};
 
+// ============ Watchlist CRUD（调本地 FastAPI · DuckDB 是权威）============
+const WATCHLIST_API_BASE = "http://127.0.0.1:8765";
+let _watchlistCache = [];
+let _watchlistEditCode = null;  // null = 新增模式；非空 = 编辑该 code
+
+async function _watchlistApiCall(method, path, body) {
+  const opts = { method, headers: {"Content-Type": "application/json"} };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const r = await fetch(WATCHLIST_API_BASE + path, opts);
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    throw new Error(`HTTP ${r.status}: ${err.detail || r.statusText}`);
+  }
+  return r.json();
+}
+
+async function _checkApiStatus() {
+  const el = document.getElementById("watchlist-api-status");
+  if (!el) return;
+  try {
+    await _watchlistApiCall("GET", "/health");
+    el.textContent = "✓ 已连接";
+    el.className = "text-xs px-2 py-0.5 rounded bg-emerald-100 text-emerald-700";
+    return true;
+  } catch (e) {
+    el.textContent = "✗ 未启动";
+    el.className = "text-xs px-2 py-0.5 rounded bg-rose-100 text-rose-700";
+    return false;
+  }
+}
+
+function _esc(s) {
+  return (s || "").toString().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+async function loadWatchlistTable() {
+  const ok = await _checkApiStatus();
+  const tbody = document.getElementById("watchlist-table-body");
+  const countEl = document.getElementById("watchlist-count");
+  if (!ok) {
+    tbody.innerHTML = `<tr><td colspan="8" class="px-3 py-8 text-center text-rose-700 text-sm">
+      ⚠️ 本地 API 未启动 — 请在 terminal 跑：<br>
+      <code class="text-xs bg-rose-50 px-2 py-1 mt-2 inline-block rounded">uvicorn stock_research.api.main:app --port 8765</code>
+    </td></tr>`;
+    countEl.textContent = "";
+    return;
+  }
+  try {
+    _watchlistCache = await _watchlistApiCall("GET", "/api/watchlist");
+    countEl.textContent = `共 ${_watchlistCache.length} 条`;
+    if (_watchlistCache.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="8" class="px-3 py-8 text-center text-slate-500 text-sm">暂无记录，点右上「➕ 添加新股」开始</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = _watchlistCache.map(r => `
+      <tr class="hover:bg-slate-50">
+        <td class="px-3 py-2 font-mono text-sm font-bold text-slate-900">${_esc(r.code)}</td>
+        <td class="px-3 py-2 text-sm text-slate-800">${_esc(r.name)}</td>
+        <td class="px-3 py-2 text-xs text-slate-500">${_esc(r.market)}</td>
+        <td class="px-3 py-2 text-xs text-slate-500">${_esc(r.industry)}</td>
+        <td class="px-3 py-2 text-xs">${_esc(r.ai_relevance)}</td>
+        <td class="px-3 py-2 text-xs">${_esc(r.status)}</td>
+        <td class="px-3 py-2 text-xs">${_esc(r.credibility)}</td>
+        <td class="px-3 py-2 text-right space-x-1 whitespace-nowrap">
+          <button onclick="openWatchlistEditor('${_esc(r.code)}')" class="text-xs px-2 py-1 bg-slate-100 hover:bg-violet-100 text-slate-700 rounded">✏️</button>
+          <button onclick="deleteWatchlistItem('${_esc(r.code)}')" class="text-xs px-2 py-1 bg-rose-100 hover:bg-rose-200 text-rose-700 rounded">🗑️</button>
+        </td>
+      </tr>
+    `).join("");
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="8" class="px-3 py-8 text-center text-rose-700 text-sm">加载失败：${_esc(e.message)}</td></tr>`;
+  }
+}
+
+function openWatchlistEditor(code) {
+  _watchlistEditCode = code || null;
+  const title = code ? `编辑 · ${code}` : "添加新股";
+  document.getElementById("watchlist-modal-title").textContent = title;
+  const fields = ["code", "name", "market", "industry", "business", "ai-relevance", "ai-logic", "status", "credibility", "conclusion", "risks", "peers", "rhythm", "notes"];
+  fields.forEach(f => {
+    const el = document.getElementById("wl-" + f);
+    if (el) el.value = "";
+  });
+  if (code) {
+    const row = _watchlistCache.find(r => r.code === code) || {};
+    document.getElementById("wl-code").value = row.code || "";
+    document.getElementById("wl-code").disabled = true;  // 编辑模式 code 不可改
+    document.getElementById("wl-name").value = row.name || "";
+    document.getElementById("wl-market").value = row.market || "";
+    document.getElementById("wl-industry").value = row.industry || "";
+    document.getElementById("wl-business").value = row.business || "";
+    document.getElementById("wl-ai-relevance").value = row.ai_relevance || "";
+    document.getElementById("wl-ai-logic").value = row.ai_logic || "";
+    document.getElementById("wl-status").value = row.status || "";
+    document.getElementById("wl-credibility").value = row.credibility || "";
+    document.getElementById("wl-conclusion").value = row.conclusion || "";
+    document.getElementById("wl-risks").value = row.risks || "";
+    document.getElementById("wl-peers").value = row.peers || "";
+    document.getElementById("wl-rhythm").value = row.rhythm || "";
+    document.getElementById("wl-notes").value = row.notes || "";
+  } else {
+    document.getElementById("wl-code").disabled = false;
+  }
+  document.getElementById("watchlist-modal").classList.remove("hidden");
+}
+
+function closeWatchlistEditor() {
+  document.getElementById("watchlist-modal").classList.add("hidden");
+  _watchlistEditCode = null;
+}
+
+async function saveWatchlistItem() {
+  const code = document.getElementById("wl-code").value.trim();
+  if (!code) {
+    alert("代码必填");
+    return;
+  }
+  const item = {
+    code,
+    name: document.getElementById("wl-name").value.trim() || null,
+    market: document.getElementById("wl-market").value.trim() || null,
+    industry: document.getElementById("wl-industry").value.trim() || null,
+    business: document.getElementById("wl-business").value.trim() || null,
+    ai_relevance: document.getElementById("wl-ai-relevance").value.trim() || null,
+    ai_logic: document.getElementById("wl-ai-logic").value.trim() || null,
+    status: document.getElementById("wl-status").value.trim() || null,
+    credibility: document.getElementById("wl-credibility").value.trim() || null,
+    conclusion: document.getElementById("wl-conclusion").value.trim() || null,
+    risks: document.getElementById("wl-risks").value.trim() || null,
+    peers: document.getElementById("wl-peers").value.trim() || null,
+    rhythm: document.getElementById("wl-rhythm").value.trim() || null,
+    notes: document.getElementById("wl-notes").value.trim() || null,
+  };
+  try {
+    if (_watchlistEditCode) {
+      await _watchlistApiCall("PUT", "/api/watchlist/" + encodeURIComponent(_watchlistEditCode), item);
+    } else {
+      await _watchlistApiCall("POST", "/api/watchlist", item);
+    }
+    closeWatchlistEditor();
+    await loadWatchlistTable();
+  } catch (e) {
+    alert("保存失败：" + e.message);
+  }
+}
+
+async function deleteWatchlistItem(code) {
+  if (!confirm(`确定删除 ${code} 吗？`)) return;
+  try {
+    await _watchlistApiCall("DELETE", "/api/watchlist/" + encodeURIComponent(code));
+    await loadWatchlistTable();
+  } catch (e) {
+    alert("删除失败：" + e.message);
+  }
+}
+
+
 // ============ Tab 切换框架 ============
 const TAB_SECTIONS = {
   overview: ["hero", "stress-test", "thesis", "evolution", "scarce", "events", "hundred-x"],
@@ -4451,6 +4727,7 @@ const TAB_SECTIONS = {
   backtest: ["backtest"],
   professional: ["professional"],
   upgrade: ["upgrade"],
+  "watchlist-edit": ["watchlist-edit"],
 };
 
 function switchTab(tab) {
@@ -4480,6 +4757,7 @@ function switchTab(tab) {
   if (tab === "history") setTimeout(initHistorySelect, 50);
   if (tab === "backtest") setTimeout(renderPlanBacktest, 100);
   if (tab === "professional") setTimeout(renderProfessional, 50);
+  if (tab === "watchlist-edit") setTimeout(loadWatchlistTable, 50);
 }
 
 function getTabFromHash() {

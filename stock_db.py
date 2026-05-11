@@ -93,6 +93,44 @@ CREATE TABLE IF NOT EXISTS reviews (
     theme          VARCHAR,
     PRIMARY KEY (review_date, pick_date, code)
 );
+
+-- 2026-05-11 起 watchlist 从飞书迁移到 DuckDB，dashboard 提供 CRUD UI
+-- 2026-05-11 PM: 增加 chain / chain_tier / chain_role / layman_intro 四字段
+--   chain        产业链名（"HBM"、"AI 算力"、"数据中心电力"...），多链用逗号分隔
+--   chain_tier   链条层级："核心" / "一线" / "二线" / "三线" / "N/A"
+--   chain_role   链条角色："IDM" / "GPU" / "设备" / "材料" / "封测" / "EDA" /
+--                "网络芯片" / "服务器" / "应用层" / "基础设施" / "服务" / "对照"
+--   layman_intro 新手 1 句话解释，<60 字
+CREATE TABLE IF NOT EXISTS watchlist (
+    code           VARCHAR    PRIMARY KEY,
+    name           VARCHAR,
+    market         VARCHAR,
+    business       VARCHAR,
+    industry       VARCHAR,
+    ai_relevance   VARCHAR,
+    ai_logic       VARCHAR,
+    theme          VARCHAR,
+    conclusion     VARCHAR,
+    risks          VARCHAR,
+    peers          VARCHAR,
+    rhythm         VARCHAR,
+    status         VARCHAR,
+    source         VARCHAR,
+    credibility    VARCHAR,
+    notes          VARCHAR,
+    chain          VARCHAR,
+    chain_tier     VARCHAR,
+    chain_role     VARCHAR,
+    layman_intro   VARCHAR,
+    created_at     TIMESTAMP  DEFAULT CURRENT_TIMESTAMP,
+    updated_at     TIMESTAMP  DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 幂等 ALTER：兼容 schema 升级前已存在的库
+ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS chain        VARCHAR;
+ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS chain_tier   VARCHAR;
+ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS chain_role   VARCHAR;
+ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS layman_intro VARCHAR;
 """
 
 
@@ -308,6 +346,90 @@ def upsert_reviews(
         )
         n += 1
     if own_conn:
+        conn.close()
+    return n
+
+
+# ============================================================
+# Watchlist CRUD（2026-05-11 起：从飞书迁移到 DuckDB，权威源）
+# ============================================================
+
+WATCHLIST_COLS = [
+    "code", "name", "market", "business", "industry",
+    "ai_relevance", "ai_logic", "theme", "conclusion", "risks",
+    "peers", "rhythm", "status", "source", "credibility", "notes",
+    "chain", "chain_tier", "chain_role", "layman_intro",
+]
+
+
+def fetch_all_watchlist(*, conn: duckdb.DuckDBPyConnection | None = None) -> list[dict]:
+    """读全部 watchlist 记录，按 code 升序。"""
+    own = conn is None
+    if own:
+        conn = get_db()
+    rows = conn.execute(
+        f"SELECT {','.join(WATCHLIST_COLS)}, created_at, updated_at "
+        "FROM watchlist ORDER BY code"
+    ).fetchall()
+    cols = WATCHLIST_COLS + ["created_at", "updated_at"]
+    out = [dict(zip(cols, r)) for r in rows]
+    if own:
+        conn.close()
+    return out
+
+
+def get_watchlist_item(code: str, *, conn: duckdb.DuckDBPyConnection | None = None) -> dict | None:
+    own = conn is None
+    if own:
+        conn = get_db()
+    row = conn.execute(
+        f"SELECT {','.join(WATCHLIST_COLS)}, created_at, updated_at "
+        "FROM watchlist WHERE code = ?", [code]
+    ).fetchone()
+    if own:
+        conn.close()
+    if not row:
+        return None
+    return dict(zip(WATCHLIST_COLS + ["created_at", "updated_at"], row))
+
+
+def upsert_watchlist(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> int:
+    """新增 / 更新 watchlist 记录（按 code 主键）。
+
+    rows 字段同 WATCHLIST_COLS；缺失字段以 None 兜底；自动维护 updated_at = now()。
+    """
+    own = conn is None
+    if own:
+        conn = get_db()
+    n = 0
+    now = datetime.now()
+    for r in rows:
+        values = [r.get(c) for c in WATCHLIST_COLS] + [now]
+        placeholders = ",".join(["?"] * (len(WATCHLIST_COLS) + 1))
+        update_set = ",".join(f"{c}=excluded.{c}" for c in WATCHLIST_COLS if c != "code")
+        conn.execute(
+            f"INSERT INTO watchlist ({','.join(WATCHLIST_COLS)}, updated_at) "
+            f"VALUES ({placeholders}) "
+            f"ON CONFLICT (code) DO UPDATE SET {update_set}, updated_at=excluded.updated_at",
+            values,
+        )
+        n += 1
+    if own:
+        conn.close()
+    return n
+
+
+def delete_watchlist_item(code: str, *, conn: duckdb.DuckDBPyConnection | None = None) -> int:
+    own = conn is None
+    if own:
+        conn = get_db()
+    cur = conn.execute("DELETE FROM watchlist WHERE code = ?", [code])
+    n = cur.rowcount if hasattr(cur, "rowcount") else 0
+    if own:
         conn.close()
     return n
 
