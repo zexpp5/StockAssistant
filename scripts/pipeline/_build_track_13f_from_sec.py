@@ -67,7 +67,7 @@ def main():
         }
 
     # 4. 写到根目录
-    out_path = Path(_REPO) / "track_13f.json"
+    out_path = Path(_REPO) / "data" / "latest" / "track_13f.json"
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
     print(f"✅ Wrote {out_path}: {out_path.stat().st_size:,} bytes")

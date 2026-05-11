@@ -41,18 +41,22 @@ logger = logging.getLogger("migrate_pipeline")
 REPO = Path(__file__).resolve().parents[2]  # repo root
 
 ROOT_FILES = [
-    "factor_scores_today.json",
-    "history_data.json",
-    "risk_metrics.json",
-    "track_13f.json",
-    "optimization_result.json",
-    "plan_a_v5.json",
+    # 2026-05-11 起 latest JSON 集中到 data/latest/
+    "data/latest/factor_scores_today.json",
+    "data/latest/history_data.json",
+    "data/latest/risk_metrics.json",
+    "data/latest/track_13f.json",
+    "data/latest/optimization_result.json",
+    "data/latest/plan_a_v5.json",
+    "data/latest/trade_delta.json",
+    "data/latest/plan_a_v5_constrained.json",
+    # 历史遗留（不一定存在，存在则归档）
     "simulation_plan_a.json",
-    "reverse_validation.json",
-    "reverse_validation_v3.json",
-    "reverse_validation_v4.json",
-    "reverse_validation_v5.json",
-    "reverse_validation_v6.json",
+    "archive/legacy/reverse_validation.json",
+    "archive/legacy/reverse_validation_v3.json",
+    "archive/legacy/reverse_validation_v4.json",
+    "archive/legacy/reverse_validation_v5.json",
+    "archive/legacy/reverse_validation_v6.json",
     "data/factor_weights.json",
 ]
 

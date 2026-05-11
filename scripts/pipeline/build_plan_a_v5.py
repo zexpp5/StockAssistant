@@ -102,7 +102,7 @@ def main():
     # ============================================================
     # 1. 从 v5 daily_picks 缓存里拿 Top N 美股
     # ============================================================
-    cache_file = os.path.join(_REPO, "factor_scores_today.json")
+    cache_file = os.path.join(_REPO, "data", "latest", "factor_scores_today.json")
     if not os.path.exists(cache_file):
         print(f"❌ 找不到 {cache_file}，先运行 daily_picks_v5.py")
         return
@@ -248,7 +248,7 @@ def main():
         "plan_v5": plan_v5,
         "out_of_v5": [{"name": n, "ticker": t, "current_weight": w} for n, t, w in out_of_v5],
     }
-    out_file = os.path.join(_REPO, "plan_a_v5.json")
+    out_file = os.path.join(_REPO, "data", "latest", "plan_a_v5.json")
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2, default=str)
     print(f"\n✅ {out_file}")

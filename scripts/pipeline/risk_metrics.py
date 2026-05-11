@@ -53,7 +53,7 @@ def load_portfolio_from_plan():
       [(name, ticker, amount_rmb, ccy, weight), ...]
     其中 name 用 ticker 顶替（plan_a_v5.json 无中文名字段），ccy 由后缀推断。
     """
-    plan_file = os.path.join(_REPO, "plan_a_v5.json")
+    plan_file = os.path.join(_REPO, "data", "latest", "plan_a_v5.json")
     if not os.path.exists(plan_file):
         print(f"❌ {plan_file} 不存在 — 请先跑：python3 build_plan_a_v5.py")
         sys.exit(1)
@@ -305,7 +305,7 @@ def main():
         "daily_values": [{"date": str(d), "value": float(v)} for d, v in portfolio_values],
     }
 
-    out_file = os.path.join(_REPO, "risk_metrics.json")
+    out_file = os.path.join(_REPO, "data", "latest", "risk_metrics.json")
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
     print(f"\n✅ 完整数据：{out_file}")

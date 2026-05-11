@@ -228,7 +228,7 @@ with tab_picks:
 @st.cache_data(ttl=300)
 def load_history_data() -> dict:
     """读 history_data.json 的 tickers map，缺则返回空 dict。"""
-    p = _REPO_ROOT / "history_data.json"
+    p = _REPO_ROOT / "data" / "latest" / "history_data.json"
     if not p.exists():
         return {}
     try:

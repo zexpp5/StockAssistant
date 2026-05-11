@@ -63,8 +63,8 @@ def is_a_share(ticker: str) -> bool:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", default=str(REPO / "plan_a_v5.json"))
-    parser.add_argument("--output", default=str(REPO / "plan_a_v5_constrained.json"))
+    parser.add_argument("--input", default=str(REPO / "data" / "latest" / "plan_a_v5.json"))
+    parser.add_argument("--output", default=str(REPO / "data" / "latest" / "plan_a_v5_constrained.json"))
     parser.add_argument("--max-volume-pct", type=float, default=None,
                         help="单日成交占 20 日均成交额上限（默认按板块：主板 1.5%% / 创业科创北交 1.0%%）")
     parser.add_argument("--followup-pending-out",

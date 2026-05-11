@@ -38,7 +38,7 @@ def run(plan_path: str | None = None, base_currency: str = "CNY") -> dict:
     if plan_path:
         candidates = [Path(plan_path)]
     else:
-        candidates = [repo / "plan_a_v5_constrained.json", repo / "plan_a_v5.json"]
+        candidates = [repo / "data" / "latest" / "plan_a_v5_constrained.json", repo / "data" / "latest" / "plan_a_v5.json"]
     for p in candidates:
         if p.exists():
             try:

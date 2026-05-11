@@ -57,7 +57,7 @@ logger = logging.getLogger("stock_research.jobs.optimize_portfolio")
 
 def _load_factor_scores() -> dict | None:
     """读 daily_picks_v5 / build_plan_a_v5 共享的 factor_scores_today.json 缓存。"""
-    cache = _REPO_ROOT / "factor_scores_today.json"
+    cache = _REPO_ROOT / "data" / "latest" / "factor_scores_today.json"
     if not cache.exists():
         logger.error("缓存 %s 不存在，先跑 daily_picks_v5.py", cache)
         return None

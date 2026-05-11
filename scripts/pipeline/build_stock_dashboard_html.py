@@ -4309,7 +4309,7 @@ def _find_plan_inception_date() -> str | None:
         except Exception:
             pass
     try:
-        with open(os.path.join(_REPO, "plan_a_v5.json")) as f:
+        with open(os.path.join(_REPO, "data", "latest", "plan_a_v5.json")) as f:
             return (json.load(f).get("generated_at") or "")[:10] or None
     except Exception:
         return None
@@ -5081,11 +5081,11 @@ def build():
             return {}
 
     # 文件源
-    risk_metrics = _load_json("risk_metrics.json")
-    track_13f = _load_json("track_13f.json")
-    optimization = _load_json("optimization_result.json")
-    plan_a_v6 = _load_json("plan_a_v5.json")
-    history_data = _load_json("history_data.json")
+    risk_metrics = _load_json("data/latest/risk_metrics.json")
+    track_13f = _load_json("data/latest/track_13f.json")
+    optimization = _load_json("data/latest/optimization_result.json")
+    plan_a_v6 = _load_json("data/latest/plan_a_v5.json")
+    history_data = _load_json("data/latest/history_data.json")
     discovery = _load_json("data/discovery_candidates.json")
 
     # DuckDB 源

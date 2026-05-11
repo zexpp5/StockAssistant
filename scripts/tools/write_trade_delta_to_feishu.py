@@ -31,17 +31,18 @@ def main():
         print("    应急写飞书：FEISHU_WRITE_TABLES=1 python3 write_trade_delta_to_feishu.py")
         return
 
-    delta_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_delta.json")
+    _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    delta_file = os.path.join(_REPO, "data", "latest", "trade_delta.json")
     if not os.path.exists(delta_file):
         print(f"❌ {delta_file} 不存在，先运行 trade_delta.py")
         return
     delta = json.load(open(delta_file, encoding="utf-8"))
 
-    plan_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plan_a_v5.json")
+    plan_file = os.path.join(_REPO, "data", "latest", "plan_a_v5.json")
     plan = json.load(open(plan_file, encoding="utf-8"))
     metrics = plan["portfolio_metrics"]
 
-    cache_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "factor_scores_today.json")
+    cache_file = os.path.join(_REPO, "data", "latest", "factor_scores_today.json")
     cache = json.load(open(cache_file, encoding="utf-8"))
     factor_map = {f["ticker"]: f for f in cache["factors"]}
 

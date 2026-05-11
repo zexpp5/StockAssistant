@@ -50,7 +50,7 @@ def fetch_price(ticker):
 
 def main():
     # 1. 读 v6 plan
-    plan_file = os.path.join(_REPO, "plan_a_v5.json")
+    plan_file = os.path.join(_REPO, "data", "latest", "plan_a_v5.json")
     if not os.path.exists(plan_file):
         print(f"❌ {plan_file} 不存在，先跑 build_plan_a_v5.py")
         return
@@ -181,7 +181,7 @@ def main():
     print(f"  3. 在熊市这套组合可能比 SPY 多跌 5-15%（已用 walk-forward 验证）")
     print(f"  4. 建议分批建仓（3-5 个交易日内分批买入）减少冲击成本")
 
-    out_file = os.path.join(_REPO, "trade_delta.json")
+    out_file = os.path.join(_REPO, "data", "latest", "trade_delta.json")
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump({
             "generated_at": datetime.now().isoformat(),

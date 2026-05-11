@@ -245,7 +245,7 @@ def main():
         },
     }
 
-    out_file = os.path.join(_REPO, "optimization_result.json")
+    out_file = os.path.join(_REPO, "data", "latest", "optimization_result.json")
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2, default=str)
     print(f"\n✅ 完整数据：{out_file}")

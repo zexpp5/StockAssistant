@@ -79,7 +79,7 @@ def _is_a_share(ticker: str) -> bool:
 
 def _load_history() -> dict:
     """读 history_data.json 的 tickers map，缺则返回空 dict。"""
-    d = _load_json(REPO / "history_data.json")
+    d = _load_json(REPO / "data" / "latest" / "history_data.json")
     if not isinstance(d, dict):
         return {}
     return d.get("tickers") or {}
@@ -535,11 +535,11 @@ def build_brief(share_mode: bool = False) -> str:
       - 红旗 section 为空时整段省略
       - 免责声明放最末一行（每天看一遍即可）
     """
-    plan_constrained = _load_json(REPO / "plan_a_v5_constrained.json")
-    plan = plan_constrained or _load_json(REPO / "plan_a_v5.json")
-    trade_delta = _load_json(REPO / "trade_delta.json")
-    risk_metrics = _load_json(REPO / "risk_metrics.json")
-    factor_scores = _load_json(REPO / "factor_scores_today.json")
+    plan_constrained = _load_json(REPO / "data" / "latest" / "plan_a_v5_constrained.json")
+    plan = plan_constrained or _load_json(REPO / "data" / "latest" / "plan_a_v5.json")
+    trade_delta = _load_json(REPO / "data" / "latest" / "trade_delta.json")
+    risk_metrics = _load_json(REPO / "data" / "latest" / "risk_metrics.json")
+    factor_scores = _load_json(REPO / "data" / "latest" / "factor_scores_today.json")
     events = _load_json(REPO / "data" / "event_calendar.json")
     a_share_picks = _load_json(REPO / "data" / "a_share_picks.json")
     defense = _latest_defense_snapshot()
@@ -704,11 +704,11 @@ def _build_card_payload() -> dict:
       红旗    → carmine 红粉（警示，仅非空时）
       调仓    → turquoise 青绿（最醒目 · 用户最关心的"今天做什么"）
     """
-    plan_constrained = _load_json(REPO / "plan_a_v5_constrained.json")
-    plan = plan_constrained or _load_json(REPO / "plan_a_v5.json")
-    trade_delta = _load_json(REPO / "trade_delta.json")
-    risk_metrics = _load_json(REPO / "risk_metrics.json")
-    factor_scores = _load_json(REPO / "factor_scores_today.json")
+    plan_constrained = _load_json(REPO / "data" / "latest" / "plan_a_v5_constrained.json")
+    plan = plan_constrained or _load_json(REPO / "data" / "latest" / "plan_a_v5.json")
+    trade_delta = _load_json(REPO / "data" / "latest" / "trade_delta.json")
+    risk_metrics = _load_json(REPO / "data" / "latest" / "risk_metrics.json")
+    factor_scores = _load_json(REPO / "data" / "latest" / "factor_scores_today.json")
     events = _load_json(REPO / "data" / "event_calendar.json")
     policy_events = _load_json(REPO / "data" / "policy_events.json")
     a_share_picks = _load_json(REPO / "data" / "a_share_picks.json")

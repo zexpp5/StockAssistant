@@ -181,7 +181,7 @@ def main():
             failed.append(f"{s['feishu_code']}({s['yf_ticker']})")
 
     print(f"\n[3/3] 写文件...")
-    out_path = Path(_REPO) / "history_data.json"
+    out_path = Path(_REPO) / "data" / "latest" / "history_data.json"
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
     size_kb = out_path.stat().st_size / 1024
