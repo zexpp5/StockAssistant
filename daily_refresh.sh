@@ -207,6 +207,19 @@ run_step "24/25 DuckDB pipeline 同步" "scripts/migrate/migrate_pipeline_to_duc
 
 run_step "25/25 重建 HTML" "scripts/pipeline/build_stock_dashboard_html.py"
 
+# 25b 周一专属：walk-forward OOS 校验（验证近 12 个月因子组合月度表现）
+# 学术依据：Bailey & Lopez de Prado (2014) JPM — walk-forward 是减少 backtest overfit 的金标准
+# DOW=1 表示周一（date +%u 输出 1=Mon...7=Sun）；其他日子跳过
+if [ "$DOW" = "1" ]; then
+    WF_START=$($PYTHON -c "from datetime import date; d=date.today(); y=d.year-1; print(f'{y}-{d.month:02d}')")
+    WF_END=$(date '+%Y-%m')
+    run_step "25b/25 walk-forward OOS 校验（每周一）" \
+        "-m stock_research.jobs.walk_forward_backtest --start $WF_START --end $WF_END --top-k 5"
+else
+    echo ""
+    echo "[25b/25 walk-forward OOS] 跳过 — 仅周一执行（今天 weekday=$DOW，1=Mon）"
+fi
+
 # 26 早安简报 — 这是真正的"主入口"，把所有 JSON 拼成一份每天能读完的 markdown。
 # 设了 FEISHU_BRIEF_WEBHOOK 还会自动推送到飞书群机器人。
 run_step "26 早安简报（主入口 · 每天打开看这一份）" "-m stock_research.jobs.morning_brief"

@@ -38,11 +38,19 @@ from stock_research.core.a_share_filters import (
     fetch_spot_snapshot, filter_tradable, _strip_code, _classify_board,
 )
 from stock_research.core.event_calendar import build_calendar
+from stock_research.core import portfolio_constraints as pc
 
 
 # v2 收紧后的 ADV 上限（Almgren-Chriss 2001 经验值）
 ADV_CAP_MAIN = 0.015          # 主板：1.5%
 ADV_CAP_GROWTH = 0.010        # 创业板/科创板/北交所：1.0%（流动性差 + 个股波动大）
+
+# A 股交易成本（双边平均，单位 bps）
+#   印花税 10 bps（卖出收）/2 = 5  +  券商佣金 2.5（双边）+ 过户费 0.1（沪市过户）
+#   双边汇总约 12-13 bps；冲击成本 30 bps / 1% ADV（小盘 conservative）
+A_SHARE_COST_BPS = 13.0
+A_SHARE_IMPACT_BPS_PER_PCT_ADV = 30.0
+A_SHARE_NOTIONAL_YUAN = 500_000.0  # 与 ADV cap 段用同一假定
 
 
 def _adv_cap_for_board(code: str) -> float:
@@ -207,6 +215,25 @@ def main():
                 "composite_z": p.get("composite_z"),
             })
 
+    # ── 约束 5: A 股调仓交易成本扣减（印花税 + 佣金 + 过户费 + 冲击）──
+    # 用 portfolio_constraints.apply_transaction_cost，参数走 A 股专属常量
+    prev_a_weights = {p["ticker"]: p.get("current_weight", 0.0) for p in a_share_entries}
+    new_a_weights = {a["ticker"]: a["v5_weight"] for a in adjusted}
+    adv_dict_yuan: dict[str, float] = {}
+    if snapshot is not None:
+        for p in a_share_entries:
+            code6 = _strip_code(p["ticker"])
+            st = snapshot.by_code.get(code6)
+            if st and st.amount:
+                adv_dict_yuan[p["ticker"]] = float(st.amount)
+
+    a_cost = pc.apply_transaction_cost(
+        new_a_weights, prev_a_weights, A_SHARE_NOTIONAL_YUAN,
+        adv_dollars=adv_dict_yuan,
+        cost_bps=A_SHARE_COST_BPS,
+        impact_bps_per_pct_adv=A_SHARE_IMPACT_BPS_PER_PCT_ADV,
+    )
+
     # 重新组合：调整后的 A 股 + 原始美股 + 现金（含 spillover）
     constraints_summary = {
         "n_a_share_blocked": sum(1 for a in adjusted if a["v5_weight"] == 0 and a["original_weight"] > 0),
@@ -215,6 +242,14 @@ def main():
         "spillover_to_cash": round(spillover, 4),
         "t1_locked_tickers": t1_locked_tickers,
         "n_followup_pending": len(followup_pending),
+        "a_share_cost": {
+            "total_cost_yuan": round(a_cost["total_cost_dollars"], 2),
+            "total_cost_bps_of_portfolio": round(a_cost["total_cost_bps_of_portfolio"], 2),
+            "single_side_turnover": round(a_cost["turnover"], 4),
+            "cost_bps": A_SHARE_COST_BPS,
+            "impact_bps_per_pct_adv": A_SHARE_IMPACT_BPS_PER_PCT_ADV,
+            "notional_yuan": A_SHARE_NOTIONAL_YUAN,
+        },
     }
 
     print(f"\n  汇总：")
@@ -222,6 +257,9 @@ def main():
     print(f"    A 股部分降权：  {constraints_summary['n_a_share_reduced']}")
     print(f"    流动性 cap 截：{constraints_summary['n_adv_capped']}")
     print(f"    转入现金的权重：{spillover*100:.2f}pp")
+    print(f"    A 股调仓成本：  ¥{a_cost['total_cost_dollars']:,.2f} "
+          f"({a_cost['total_cost_bps_of_portfolio']:.1f} bps) · "
+          f"单边换手 {a_cost['turnover']:.1%}")
     if t1_locked_tickers:
         print(f"    ⚠️ T+1 锁仓（明日不可卖）：{', '.join(t1_locked_tickers)}")
     if followup_pending:

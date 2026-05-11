@@ -232,6 +232,72 @@ def section_calendar(plan: dict | None) -> str:
 # Section 1: regime gate — 今天能不能动手
 # ────────────────────────────────────────────────────────
 
+def section_holdings_stoploss(history: dict | None = None,
+                              stop_pct: float = 0.15,
+                              watch_pct: float = 0.10) -> str:
+    """读 holdings 表 + 最新收盘价，告警触发 -stop_pct 止损线的持仓。
+
+    生产实时监控（vs apply_stop_loss 的回测语义）：每天早上扫一遍，
+    破线→红色清仓建议；接近线（回撤 ≥ watch_pct）→ 黄色观察。
+    空持仓 / 无告警时返回 "" → build_brief 整段省略。
+    """
+    try:
+        sys.path.insert(0, str(REPO / "scripts" / "lib"))
+        import stock_db  # type: ignore
+        from stock_research.core.portfolio_constraints import (
+            check_stop_loss_breach, volatility_adaptive_stop_pct,
+        )
+        holdings = stock_db.fetch_all_holdings()
+    except Exception:
+        return ""
+
+    if not holdings:
+        return ""
+
+    history = history or {}
+    breached: list[dict] = []
+    watched: list[dict] = []
+
+    for h in holdings:
+        code = h.get("code")
+        entry = h.get("entry_price")
+        if not code or entry is None:
+            continue
+        closes = (history.get(code) or {}).get("close") or []
+        if not closes:
+            continue
+        current = closes[-1]
+        # 动态止损：按个股波动率算 stop_pct（close-only ATR proxy）
+        dyn_stop = volatility_adaptive_stop_pct(closes, fallback=stop_pct)
+        dyn_watch = max(0.05, dyn_stop - 0.05)  # 观察线 = 止损线再宽 5pp
+        triggered, dd = check_stop_loss_breach(entry, current, stop_pct=dyn_stop)
+        row = {"code": code, "entry": float(entry),
+               "current": float(current), "dd_pct": dd * 100,
+               "stop_pct": dyn_stop * 100}
+        if triggered:
+            breached.append(row)
+        elif dd <= -dyn_watch:
+            watched.append(row)
+
+    if not breached and not watched:
+        return ""
+
+    lines = ["#### 1.5 持仓止损告警（ATR-proxy 动态止损 · 跨标的可比）"]
+    if breached:
+        lines.append(f"🔴 **{len(breached)} 只破各自动态止损线**（建议清仓或减半）：")
+        for r in breached[:10]:
+            lines.append(f"• **{r['code']}** {r['dd_pct']:+.1f}% (止损线 -{r['stop_pct']:.0f}%) · "
+                         f"entry {r['entry']:.2f} → now {r['current']:.2f}")
+    if watched:
+        if breached:
+            lines.append("")
+        lines.append(f"🟡 **{len(watched)} 只接近各自止损线**（留意）：")
+        for r in watched[:10]:
+            lines.append(f"• {r['code']} {r['dd_pct']:+.1f}% (止损线 -{r['stop_pct']:.0f}%) · "
+                         f"entry {r['entry']:.2f} → now {r['current']:.2f}")
+    return "\n".join(lines) + "\n"
+
+
 def section_regime(defense: dict | None) -> str:
     """读 realtime_defense 输出，告诉用户 regime 状态。
 
@@ -625,6 +691,12 @@ def build_brief(share_mode: bool = False) -> str:
     parts.extend([
         section_regime(defense),
         "\n",
+    ])
+    # 1.5 持仓止损告警（无告警时整段省略，避免空版面）
+    stoploss_warn = section_holdings_stoploss(history)
+    if stoploss_warn:
+        parts.extend([stoploss_warn, "\n"])
+    parts.extend([
         section_picks(plan, a_share_picks, history=history),
         "\n",
     ])

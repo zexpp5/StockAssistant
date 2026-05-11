@@ -183,7 +183,8 @@ def run(capital: float = 500_000,
         impact_bps_per_pct_adv: float = 2.0,
         skip_neutralize: bool = False,
         use_legacy_mc: bool = False,
-        max_corr: float = 0.7) -> dict:
+        max_corr: float = 0.7,
+        kelly_fraction: float = 0.5) -> dict:
     """完整 v6 流水线。返回结果 dict。"""
     print("=" * 92)
     print(f"  📊 方案 A v6（中性化 + Markowitz + ADV 约束 + 成本扣减）")
@@ -340,6 +341,23 @@ def run(capital: float = 500_000,
     print(f"  组合年化收益   = {annual_ret*100:+.1f}%")
     print(f"  组合年化波动   = {annual_vol*100:.1f}%")
 
+    # ────── 5pre/6. 半 Kelly 单股上限（破产保护 / Thorp 2006）──────
+    # 个股层 cap，先于行业/ADV 组合层约束。kelly_fraction=0 时禁用。
+    kelly_clipped: list[str] = []
+    if kelly_fraction > 0:
+        cap_val = max_weight * kelly_fraction
+        kelly_capped = pc.kelly_cap(target_w, max_single_pct=max_weight,
+                                    kelly_fraction=kelly_fraction)
+        kelly_clipped = [tk for tk, w in target_w.items()
+                         if kelly_capped[tk] < w - 1e-9]
+        if kelly_clipped:
+            print(f"\n[5/6] ⚠️ 半 Kelly 单股上限触发（≤ {cap_val:.1%}）：")
+            for tk in kelly_clipped[:5]:
+                print(f"    · {tk}: {target_w[tk]*100:+.1f}% → {kelly_capped[tk]*100:+.1f}%")
+        else:
+            print(f"\n[5/6] 🟢 半 Kelly 单股上限检查通过（≤ {cap_val:.1%}）")
+        target_w = kelly_capped  # 进入组合层 cap
+
     # ────── 6a. 行业敞口约束（≤ 25% / 行业）──────
     industries_map = {tk: _industry_for(tk, wl_lookup) for tk in final_tickers}
     industry_capped, industry_summary = pc.cap_by_industry(
@@ -408,8 +426,10 @@ def run(capital: float = 500_000,
             "cost_bps": cost_bps, "impact_bps_per_pct_adv": impact_bps_per_pct_adv,
             "neutralize": not skip_neutralize,
             "max_corr": max_corr,
+            "kelly_fraction": kelly_fraction,
             "use_legacy_mc": use_legacy_mc,
         },
+        "kelly_clipped": kelly_clipped,
         "portfolio_metrics": {
             "annual_sharpe": round(annual_sharpe, 2),
             "annual_return_pct": round(annual_ret * 100, 2),
@@ -442,13 +462,16 @@ def main() -> int:
                    help="用旧蒙特卡洛 Markowitz（默认走 risk_aware_optimize）")
     p.add_argument("--max-corr", type=float, default=0.7,
                    help="选股层 pairwise 相关性上限（贪心剪枝阈值）")
+    p.add_argument("--kelly-fraction", type=float, default=0.5,
+                   help="半 Kelly 系数（Thorp 2006，默认 0.5；传 0 禁用单股 cap）")
     args = p.parse_args()
     r = run(capital=args.capital, top_n=args.top_n,
             max_weight=args.max_weight, min_weight=args.min_weight,
             max_adv_pct=args.max_adv_pct, cost_bps=args.cost_bps,
             skip_neutralize=args.no_neutralize,
             use_legacy_mc=args.legacy_mc,
-            max_corr=args.max_corr)
+            max_corr=args.max_corr,
+            kelly_fraction=args.kelly_fraction)
     return 0 if "error" not in r else 1
 
 

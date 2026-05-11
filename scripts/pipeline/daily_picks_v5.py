@@ -41,11 +41,30 @@ from early_signals import fetch_signals_for, score_analyst, score_insider
 from gics_classifier import classify, score_to_label
 from daily_picks import fetch_watchlist
 from stock_db import upsert_picks
+from stock_research.core import fundamental_deep  # Altman Z / Beneish M 软红旗
 
 
 # 美股代码识别（yfinance 财报齐全的市场）
 def is_us_ticker(code):
     return code.isalpha() and 1 <= len(code) <= 5
+
+
+def _build_risk_flags(altman: dict | None, beneish: dict | None) -> list[str]:
+    """Altman Z / Beneish M 生成软红旗清单（参考二审意见：不淘汰，只标注）。
+
+    Beneish 优先用 m_score_adjusted（已 growth-adjusted）规避高增长伪阳性。
+    A 股 / 港股 FMP 无数据时 altman/beneish 含 error，本函数返回空列表。
+    """
+    flags: list[str] = []
+    if altman and not altman.get("error"):
+        z = altman.get("z_score")
+        if z is not None and z < 1.81:
+            flags.append(f"🚨 Altman Z={z:.2f}<1.81 破产警示")
+    if beneish and not beneish.get("error"):
+        if beneish.get("risk_level") == "high":
+            m_adj = beneish.get("m_score_adjusted")
+            flags.append(f"🚨 Beneish M={m_adj:.2f}>-1.78 造假风险")
+    return flags
 
 
 def main():
@@ -120,9 +139,10 @@ def main():
         print(f"\n[2/5] 使用今日因子缓存（{cache_file}）")
         factor_results = cached["factors"]
         signal_results = cached["signals"]
+        fundamentals_results = cached.get("fundamentals", [])  # 旧 cache 无此字段
     else:
-        print(f"\n[2/5] 拉因子（Piotroski + 动量 + 反转 + 分析师 + 内部人）...")
-        factor_results, signal_results = [], []
+        print(f"\n[2/5] 拉因子（Piotroski + 动量 + 反转 + 分析师 + 内部人 + Z/M-Score）...")
+        factor_results, signal_results, fundamentals_results = [], [], []
         for r in us_records:
             tk = r["code"]
             print(f"  · {tk:8} ", end="", flush=True)
@@ -136,14 +156,26 @@ def main():
                 s = fetch_signals_for(tk, as_of=None, lookback_days=90)
                 signal_results.append(s)
                 ana_ok = s.get("analyst") and "error" not in (s.get("analyst") or {})
-                print(f"分析师={'OK' if ana_ok else '-'}")
+                print(f"分析师={'OK' if ana_ok else '-'}", end=" ")
                 time.sleep(1.0)
+                # Altman Z + Beneish M 软红旗 — 失败不影响主流程（FMP 24h 缓存）
+                try:
+                    altman = fundamental_deep.altman_z_score(tk)
+                    beneish = fundamental_deep.beneish_m_score(tk)
+                    fundamentals_results.append({"ticker": tk, "altman": altman, "beneish": beneish})
+                    z_val = altman.get("z_score") if not altman.get("error") else None
+                    m_val = beneish.get("m_score_adjusted") if not beneish.get("error") else None
+                    print(f"Z={z_val if z_val is not None else '-'} M={m_val if m_val is not None else '-'}")
+                except Exception as fe:
+                    fundamentals_results.append({"ticker": tk, "error": str(fe)})
+                    print(f"Z/M 跳过: {fe}")
             except Exception as e:
                 print(f" 失败: {e}")
 
-        # 写缓存
+        # 写缓存（增加 fundamentals 字段，旧版可向后兼容读取）
         with open(cache_file, "w", encoding="utf-8") as cf:
-            json.dump({"date": today, "factors": factor_results, "signals": signal_results},
+            json.dump({"date": today, "factors": factor_results, "signals": signal_results,
+                       "fundamentals": fundamentals_results},
                      cf, ensure_ascii=False, indent=2, default=str)
 
     # ============================================================
@@ -151,6 +183,7 @@ def main():
     # ============================================================
     print(f"\n[3/5] 4 因子合成 + 决策模式：{args.mode}")
     sig_map = {s["ticker"]: s for s in signal_results}
+    fundamental_by_code = {x["ticker"]: x for x in fundamentals_results}
     analyst_scores = {tk: score_analyst(s.get("analyst"))[0] for tk, s in sig_map.items()}
     insider_scores = {tk: score_insider(s.get("insider"))[0] for tk, s in sig_map.items()}
 
@@ -190,6 +223,10 @@ def main():
               f"{int(r['analyst']):>7}{ins_score:>7}{r['composite']:>+7.2f}    {flag}")
 
         if rec:
+            fd = fundamental_by_code.get(tk) or {}
+            altman = fd.get("altman") if fd.get("altman") and not fd.get("altman", {}).get("error") else None
+            beneish = fd.get("beneish") if fd.get("beneish") and not fd.get("beneish", {}).get("error") else None
+            risk_flags = _build_risk_flags(fd.get("altman"), fd.get("beneish"))
             selected.append({
                 "code": tk,
                 "name": name,
@@ -201,6 +238,9 @@ def main():
                 "insider_score": int(ins_score),
                 "composite_z": float(r["composite"]),
                 "rank": int(r["rank"]),
+                "altman_z": (altman or {}).get("z_score"),
+                "beneish_m": (beneish or {}).get("m_score_adjusted"),
+                "risk_flags": risk_flags,
             })
 
     # 限制写入数量
@@ -228,6 +268,10 @@ def main():
             grade_label = "⭐⭐ 推荐（z ≥ 0.5）"
         else:
             grade_label = "⭐ 关注"
+
+        # 软红旗追加（Z/M-Score 不淘汰，只挂在评级后）
+        if s.get("risk_flags"):
+            grade_label = grade_label + " · " + "｜".join(s["risk_flags"])
 
         db_rows.append({
             "code": s["code"],

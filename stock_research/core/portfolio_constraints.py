@@ -130,6 +130,65 @@ def apply_stop_loss(price_path, entry_price: float | None = None,
     return capped, triggered_at
 
 
+def check_stop_loss_breach(entry_price: float | None,
+                           current_price: float | None,
+                           stop_pct: float = 0.15) -> tuple[bool, float]:
+    """生产实时监控版：单点判断 (entry, current) 是否破止损线。
+
+    与 apply_stop_loss（回测处理价格序列）共用阈值语义；
+    morning_brief 每天读 holdings + 最新收盘价调用此函数生成告警。
+
+    返回 (breached, drawdown_ratio)：
+      breached       是否破 -stop_pct 止损线
+      drawdown_ratio (current - entry) / entry，负值表示亏损
+    """
+    if entry_price is None or current_price is None or entry_price <= 0:
+        return False, 0.0
+    drawdown = (current_price - entry_price) / entry_price
+    return drawdown <= -stop_pct, drawdown
+
+
+def volatility_proxy_atr(closes: list[float], lookback: int = 14) -> float | None:
+    """用收盘价序列估算 ATR-style 日均绝对涨跌幅（fraction，0.025 = ±2.5%/日）。
+
+    真 ATR = EMA(True Range, 14)，需要 high/low；本函数仅用 close 做近似。
+    morning_brief 的 history_data.json 仅含 close，故用此 proxy；
+    后续若 history 补 high/low 可升级到真 ATR。
+    """
+    if not closes or len(closes) < lookback + 1:
+        return None
+    recent = closes[-(lookback + 1):]
+    abs_returns = [abs(recent[i] / recent[i - 1] - 1)
+                   for i in range(1, len(recent))
+                   if recent[i - 1] > 0]
+    if not abs_returns:
+        return None
+    return sum(abs_returns) / len(abs_returns)
+
+
+def volatility_adaptive_stop_pct(closes: list[float],
+                                 multiplier: float = 2.5,
+                                 lookback: int = 14,
+                                 holding_days: int = 21,
+                                 min_stop: float = 0.07,
+                                 max_stop: float = 0.25,
+                                 fallback: float = 0.15) -> float:
+    """按个股波动率算动态止损百分比，替代跨标的不可比的固定 -15%。
+
+    模型：proxy_atr × multiplier × sqrt(holding_days)
+    - 高波动股 (proxy=4%) → -23%（避免日内噪声震出）
+    - 低波动股 (proxy=1%) → -11%（小幅破位即出）
+    - cap 在 [min_stop, max_stop]，缺数据时 fallback 到固定 -15%
+
+    holding_days=21 假设月度调仓，stop_pct 反映"持有一个月可能的累积波动"。
+    """
+    proxy = volatility_proxy_atr(closes, lookback=lookback)
+    if proxy is None:
+        return fallback
+    scaled = proxy * multiplier * (holding_days ** 0.5)
+    return max(min_stop, min(max_stop, scaled))
+
+
 # ─────────── Kelly 仓位上限（破产保护）───────────
 
 def kelly_cap(weights: dict[str, float],
