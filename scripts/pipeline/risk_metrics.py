@@ -28,7 +28,11 @@ import yfinance as yf
 # 运行时从 plan_a_v5.json 动态加载（v6 当前推荐组合）
 PORTFOLIO = []
 CASH_RMB = 25000  # 默认 5%，main() 会按 plan 的 cash_pct 重写
-TOTAL_CAPITAL = 500000
+try:
+    import stock_db
+    TOTAL_CAPITAL = stock_db.get_config("total_capital")
+except Exception:
+    TOTAL_CAPITAL = 500000
 
 FX_TO_RMB = {"USD": 7.10, "HKD": 0.91, "AUD": 4.60, "CNY": 1.0}
 RISK_FREE_RATE = 0.045  # 美国 10Y 国债收益率 ~4.5%

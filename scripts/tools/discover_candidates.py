@@ -387,6 +387,20 @@ def main():
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
     print(f"\n✅ {out_path}")
+
+    # 2026-05-11 PM: 同时落 DuckDB discovery_history 表(永不覆盖累积),
+    # 给推荐准确度评估留下时间序列数据。
+    try:
+        import sys
+        _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        sys.path.insert(0, os.path.join(_REPO, "scripts", "lib"))
+        from stock_db import upsert_discovery_history
+        from datetime import date as _date
+        n = upsert_discovery_history(candidates, generated_date=_date.today())
+        print(f"✅ 已落 DuckDB discovery_history 表({n} 条 @ {_date.today()})")
+    except Exception as e:
+        print(f"⚠️ 落 DuckDB discovery_history 失败: {e}")
+
     print(f"\n💡 下一步：在飞书 watchlist 表里手动研究这些标的（行业 / 业务 / 风险），")
     print("    通过的就加入 watchlist；通不过的就丢掉。")
     print("    模型只是缩小搜索空间，不替代你的研究判断。")

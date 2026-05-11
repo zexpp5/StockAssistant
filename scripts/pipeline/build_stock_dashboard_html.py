@@ -46,7 +46,7 @@ def fetch_records(token, base_url=None):
 
 
 def extract_picks(items):
-    """提取每日优选记录关键字段。"""
+    """提取自选股·今日 Top记录关键字段。"""
     out = []
     for item in items:
         f = item.get("fields", {})
@@ -261,7 +261,7 @@ THEMES = [
         "judgment": "不应作为 AI 配置",
         "judgment_color": "stone",
         "logic": (
-            "**KO/MCD 不是 AI 故事股**，放进 watchlist 是为了在 AI 板块回调时提供对照。"
+            "**KO/MCD 不是 AI 故事股**，放进自选股 是为了在 AI 板块回调时提供对照。"
             "如果你的组合 100% 是 AI 主题，加 5-10% 这种防御资产能降低波动。"
         ),
         "tickers": ["KO", "MCD"],
@@ -406,54 +406,50 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <body class="bg-gradient-to-b from-slate-50 to-white" style="padding-left: 14rem;">
 
 <!-- ============ 左侧 sidebar 导航（4 主入口 + 子项展开 + 次级 + 工具） ============ -->
-<!-- 信息架构：所有 tab 全列出，分 4 组 + 次级（投资观点/升级建议）+ 底部工具 -->
+<!-- 信息架构：why（投资框架）+ what（今天/发现/验证）两层 · 产业链地图取代原 主题分组 + 产业链全景 -->
 <aside id="tab-nav" class="fixed left-0 top-0 h-screen w-56 bg-white border-r border-slate-200 shadow-sm overflow-y-auto z-50">
   <div class="p-4">
     <div class="text-base font-bold text-slate-900 mb-6 flex items-center gap-2">
       <span>📊</span><span>AI 投资</span>
     </div>
 
-    <!-- 📌 投资观点（顶部独立 · 方法论开屏第一眼）-->
+    <!-- 📚 投资框架（why · 方法论开屏第一眼 · 原"投资观点"）-->
     <div class="mb-4">
-      <a href="#overview" data-tab="overview" class="tab-link block px-3 py-1.5 text-sm text-slate-700 hover:text-violet-600 hover:bg-violet-50 rounded transition font-medium">📌 投资观点</a>
+      <a href="#overview" data-tab="overview" class="tab-link block px-2 py-1 text-base font-bold text-slate-800 hover:text-violet-600 hover:bg-violet-50 rounded transition">📚 投资框架</a>
     </div>
 
-    <!-- 🏠 今天 = 我的持仓 + AI 方案模拟 + 每日优选 -->
+    <!-- 🗂️ 我的池子 = 持仓 + 自选股 + 今日 Top -->
     <div class="mb-4">
-      <div class="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 px-2">🏠 今天</div>
-      <a href="#portfolio" data-tab="portfolio" class="tab-link block px-3 py-1.5 text-sm text-slate-700 hover:text-violet-600 hover:bg-violet-50 rounded transition">💼 我的持仓</a>
-      <a href="#backtest" data-tab="backtest" class="tab-link block px-3 py-1.5 text-sm text-slate-700 hover:text-violet-600 hover:bg-violet-50 rounded transition">🤖 AI 方案模拟</a>
-      <a href="#picks" data-tab="picks" class="tab-link block px-3 py-1.5 text-sm text-slate-700 hover:text-violet-600 hover:bg-violet-50 rounded transition">⭐ 每日优选</a>
+      <div class="text-base font-bold text-slate-800 mb-2 px-2">🗂️ 我的池子</div>
+      <a href="#portfolio" data-tab="portfolio" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">💼 我的持仓</a>
+      <a href="#watchlist-edit" data-tab="init-config" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">⭐ 自选股</a>
+      <a href="#picks" data-tab="picks" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🔝 自选股·今日 Top</a>
     </div>
 
-    <!-- 🔍 发现 = 候选发现 + 估值视角 + 主题分组 -->
+    <!-- 🧠 AI 助手 = AI 推荐(个股) + AI 组合方案(组合层 含模拟回测) -->
     <div class="mb-4">
-      <div class="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 px-2">🔍 发现</div>
-      <a href="#discovery" data-tab="discovery" class="tab-link block px-3 py-1.5 text-sm text-slate-700 hover:text-violet-600 hover:bg-violet-50 rounded transition">🔍 候选发现</a>
-      <a href="#valuation" data-tab="valuation" class="tab-link block px-3 py-1.5 text-sm text-slate-700 hover:text-violet-600 hover:bg-violet-50 rounded transition">📈 估值视角</a>
-      <a href="#themes" data-tab="themes" class="tab-link block px-3 py-1.5 text-sm text-slate-700 hover:text-violet-600 hover:bg-violet-50 rounded transition">🗂 主题分组</a>
-      <a href="#chain-overview" data-tab="chain-overview" class="tab-link block px-3 py-1.5 text-sm text-violet-700 font-medium hover:text-violet-800 hover:bg-violet-50 rounded transition">🌳 产业链全景</a>
+      <div class="text-base font-bold text-slate-800 mb-2 px-2">🧠 AI 助手</div>
+      <a href="#discovery" data-tab="discovery" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🤖 AI 推荐</a>
+      <a href="#backtest" data-tab="backtest" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🎼 AI 组合方案</a>
     </div>
 
-    <!-- 🛡️ 验证 = 反向审查 + 专业分析 -->
+    <!-- 🔬 深度研究 = 估值 + 产业链 + 反向审查 + 专业分析 -->
     <div class="mb-4">
-      <div class="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 px-2">🛡️ 验证</div>
-      <a href="#audit" data-tab="audit" class="tab-link block px-3 py-1.5 text-sm text-slate-700 hover:text-violet-600 hover:bg-violet-50 rounded transition">🛡 反向审查</a>
-      <a href="#professional" data-tab="professional" class="tab-link block px-3 py-1.5 text-sm text-slate-700 hover:text-violet-600 hover:bg-violet-50 rounded transition">📊 专业分析</a>
-    </div>
-
-    <!-- 📅 历史（独立）-->
-    <div class="mb-4">
-      <a href="#history" data-tab="history" class="tab-link block px-3 py-1.5 text-sm text-slate-700 hover:text-violet-600 hover:bg-violet-50 rounded transition font-medium">📅 历史</a>
+      <div class="text-base font-bold text-slate-800 mb-2 px-2">🔬 深度研究</div>
+      <a href="#valuation" data-tab="valuation" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">📈 估值视角</a>
+      <a href="#chain" data-tab="chain" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🌳 产业链地图</a>
+      <a href="#audit" data-tab="audit" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🛡 反向审查</a>
+      <a href="#professional" data-tab="professional" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">📊 专业分析</a>
     </div>
 
     <hr class="my-4 border-slate-200">
 
-    <!-- ⚙️ 管理：watchlist 编辑入口（DuckDB 权威 · 飞书已废） -->
+    <!-- ⚙️ 管理：自选股编辑入口（DuckDB 权威 · 飞书已废） -->
     <div class="mb-4">
-      <div class="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 px-2">⚙️ 管理</div>
-      <a href="#watchlist-edit" data-tab="watchlist-edit" class="tab-link block px-3 py-1.5 text-sm text-slate-700 hover:text-violet-600 hover:bg-violet-50 rounded transition">✏️ Watchlist 编辑</a>
-      <a href="#upgrade" data-tab="upgrade" class="tab-link block px-3 py-1.5 text-sm text-slate-500 hover:text-violet-600 hover:bg-violet-50 rounded transition">💰 升级建议</a>
+      <div class="text-base font-bold text-slate-800 mb-2 px-2">⚙️ 管理</div>
+      <a href="#init-config" data-tab="init-config" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🛠️ 初始化配置</a>
+      <a href="#upgrade" data-tab="upgrade" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-500 hover:text-violet-600 hover:bg-violet-50 rounded transition">💰 升级建议</a>
+      <a href="#about" data-tab="about" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-500 hover:text-violet-600 hover:bg-violet-50 rounded transition">🧭 系统介绍</a>
     </div>
 
     <hr class="my-4 border-slate-200">
@@ -548,6 +544,146 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 </section>
 
 <!-- ============ 我的核心观点 ============ -->
+<!-- ============ 🧭 系统介绍（新人入口 · 资金分配方法论） ============ -->
+<section id="about" class="max-w-7xl mx-auto px-6 py-10">
+  <div class="flex items-center gap-3 mb-2">
+    <span class="text-3xl">🧭</span>
+    <h2 class="text-3xl font-bold text-slate-900">系统介绍</h2>
+  </div>
+  <p class="text-slate-600 mb-8 max-w-3xl">这是一份给"完全新人"的方法论说明。先讲<strong>钱怎么分</strong>，<strong>怎么推荐</strong>留待后续补充。</p>
+
+  <!-- 一、两条资金线 -->
+  <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 mb-6">
+    <h3 class="text-xl font-bold text-slate-800 mb-4">一、两条资金线分别代表什么</h3>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div class="bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 rounded-xl p-5">
+        <div class="text-xs font-bold text-emerald-700 uppercase tracking-wider mb-1">进场本金</div>
+        <div class="text-3xl font-bold text-emerald-900 mb-2" data-cfg="total_capital">¥500,000</div>
+        <div class="text-sm text-slate-700 leading-relaxed">
+          代码里叫 <code class="text-xs bg-slate-100 px-1.5 py-0.5 rounded font-mono">TOTAL_CAPITAL</code>。
+          整个组合按这个数算每只股票该买多少 —— 系统给出的所有金额建议，都是 50 万的某个百分比。
+        </div>
+      </div>
+      <div class="bg-gradient-to-br from-rose-50 to-pink-50 border border-rose-200 rounded-xl p-5">
+        <div class="text-xs font-bold text-rose-700 uppercase tracking-wider mb-1">撤退红线</div>
+        <div class="text-3xl font-bold text-rose-900 mb-2" data-cfg="stoploss_line">¥300,000</div>
+        <div class="text-sm text-slate-700 leading-relaxed">
+          代码里叫 <code class="text-xs bg-slate-100 px-1.5 py-0.5 rounded font-mono">STOPLOSS_LINE</code>。
+          组合市值跌到这条线就<strong>强制清仓</strong>，最大亏损封顶在 -40%，避免"赌不上头"越扛越深。
+        </div>
+      </div>
+    </div>
+    <div class="mt-4 text-sm text-slate-600 bg-slate-50 border-l-4 border-slate-400 p-3 rounded">
+      💡 朴素理解：拿 50 万进场，最坏情况只允许自己亏 20 万；亏到 30 万剩下的就必须落袋，不再扛。这是<strong>硬规则</strong>。
+    </div>
+  </div>
+
+  <!-- 二、每只股票怎么分配 -->
+  <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 mb-6">
+    <h3 class="text-xl font-bold text-slate-800 mb-4">二、每只股票分多少钱 —— 拆成 3 步</h3>
+
+    <!-- Step 1 -->
+    <div class="border-l-4 border-violet-400 pl-4 mb-5">
+      <div class="flex items-baseline gap-2 mb-2">
+        <span class="text-xs font-bold text-violet-700 bg-violet-100 px-2 py-0.5 rounded">STEP 1</span>
+        <span class="font-bold text-slate-800">先选谁进组合（选股层）</span>
+      </div>
+      <p class="text-sm text-slate-700 leading-relaxed">
+        系统先用 <strong>F-Score 因子打分</strong>，从几百只候选里挑出 <code class="text-xs bg-slate-100 px-1.5 py-0.5 rounded font-mono">TOP_N = 12</code> 只股票。这一步<strong>不分钱</strong>，只是把 12 个名字交给下一步。
+      </p>
+    </div>
+
+    <!-- Step 2 -->
+    <div class="border-l-4 border-amber-400 pl-4 mb-5">
+      <div class="flex items-baseline gap-2 mb-2">
+        <span class="text-xs font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded">STEP 2</span>
+        <span class="font-bold text-slate-800">在 12 只里"切蛋糕"（仓位层 · 核心）</span>
+      </div>
+      <p class="text-sm text-slate-700 leading-relaxed mb-3">
+        采用 <strong>Markowitz 最大夏普比组合优化</strong>（1952 诺奖理论），并叠加几条工程上的硬约束：
+      </p>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mb-3 text-sm">
+        <div class="bg-slate-50 rounded px-3 py-2"><strong>现金底线 5%</strong> · 留 <span data-cfg-pct="0.05">¥25,000</span> 应急/加仓</div>
+        <div class="bg-slate-50 rounded px-3 py-2"><strong>单只下限 2%</strong> · 不到 2% 就不买（避免散碎仓位）</div>
+        <div class="bg-slate-50 rounded px-3 py-2"><strong>单只上限 15%</strong> · 最多 <span data-cfg-pct="0.15">¥75,000</span>（避免单票爆雷干翻账户）</div>
+        <div class="bg-slate-50 rounded px-3 py-2"><strong>流动性约束</strong> · 单日交易额 ≤ 该票日均成交量的 5%</div>
+      </div>
+      <p class="text-sm text-slate-700 leading-relaxed mb-2"><strong>"最优"的标准是什么？</strong> 用<strong>夏普比</strong>衡量：</p>
+      <div class="bg-slate-900 text-slate-100 rounded-lg px-4 py-3 font-mono text-xs leading-relaxed">
+              组合预期收益 − 无风险利率(4.5%)<br>
+夏普比 = ────────────────────────────────────<br>
+                    组合波动率
+      </div>
+      <p class="text-sm text-slate-700 leading-relaxed mt-3">
+        翻译成人话：<strong>每承担 1 单位风险，能换来多少超额收益</strong>。系统跑 <strong>20,000 次蒙特卡洛模拟</strong>（用 Dirichlet 分布随机生成 20000 套权重组合），挑出夏普比最高的那一套就是最终分配。
+      </p>
+    </div>
+
+    <!-- Step 3 -->
+    <div class="border-l-4 border-cyan-400 pl-4">
+      <div class="flex items-baseline gap-2 mb-2">
+        <span class="text-xs font-bold text-cyan-700 bg-cyan-100 px-2 py-0.5 rounded">STEP 3</span>
+        <span class="font-bold text-slate-800">把权重换成钱</span>
+      </div>
+      <p class="text-sm text-slate-700 leading-relaxed mb-3">假设第 2 步算出来：AAPL 12%、NVDA 10%、TSM 8%、…、现金 5%，那实际金额就是：</p>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm">
+        <div class="bg-cyan-50 border border-cyan-200 rounded px-3 py-2"><strong>AAPL</strong> = 500,000 × 12% = <strong class="text-cyan-700">¥60,000</strong></div>
+        <div class="bg-cyan-50 border border-cyan-200 rounded px-3 py-2"><strong>NVDA</strong> = 500,000 × 10% = <strong class="text-cyan-700">¥50,000</strong></div>
+        <div class="bg-cyan-50 border border-cyan-200 rounded px-3 py-2"><strong>现金</strong> = 500,000 × 5% = <strong class="text-cyan-700">¥25,000</strong></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 三、背后的理论 -->
+  <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 mb-6">
+    <h3 class="text-xl font-bold text-slate-800 mb-4">三、背后用了哪些理论模型</h3>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b-2 border-slate-200 text-left text-slate-600">
+            <th class="py-2 pr-4">用到的东西</th>
+            <th class="py-2 pr-4">解决什么问题</th>
+            <th class="py-2">出处</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          <tr><td class="py-2.5 pr-4 font-medium">Markowitz 均值-方差优化</td><td class="py-2.5 pr-4 text-slate-700">同样的收益，怎么把风险压到最低</td><td class="py-2.5 text-slate-500 text-xs">Markowitz 1952（诺奖）</td></tr>
+          <tr><td class="py-2.5 pr-4 font-medium">最大夏普比</td><td class="py-2.5 pr-4 text-slate-700">风险调整后收益最大化</td><td class="py-2.5 text-slate-500 text-xs">Sharpe 1966</td></tr>
+          <tr><td class="py-2.5 pr-4 font-medium">Ledoit-Wolf 协方差收缩</td><td class="py-2.5 pr-4 text-slate-700">历史数据少时，避免相关性估计跑偏</td><td class="py-2.5 text-slate-500 text-xs">Ledoit & Wolf 2003</td></tr>
+          <tr><td class="py-2.5 pr-4 font-medium">蒙特卡洛随机搜索</td><td class="py-2.5 pr-4 text-slate-700">解上面这个带约束的非凸优化</td><td class="py-2.5 text-slate-500 text-xs">工程惯例</td></tr>
+          <tr><td class="py-2.5 pr-4 font-medium">15% 单票硬顶</td><td class="py-2.5 pr-4 text-slate-700">不用 Kelly 公式那种激进满仓</td><td class="py-2.5 text-slate-500 text-xs">风控经验值</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 四、新手必须知道的 3 个坑 -->
+  <div class="bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-200 rounded-2xl p-6 mb-6">
+    <h3 class="text-xl font-bold text-amber-900 mb-4">⚠️ 四、新手必须知道的 3 个坑</h3>
+    <ol class="space-y-3 text-sm text-slate-800">
+      <li class="flex gap-3">
+        <span class="font-bold text-amber-700 flex-shrink-0">1.</span>
+        <div><strong>这不是预测，是"如果历史重演的最优分法"</strong> —— μ 和 Σ 都是用过去 252 个交易日估的，遇到 2020 年 3 月那种黑天鹅会失灵。</div>
+      </li>
+      <li class="flex gap-3">
+        <span class="font-bold text-amber-700 flex-shrink-0">2.</span>
+        <div><strong>15% 上限不是拍脑袋</strong> —— 哪怕系统说某只票期望收益爆表，最多也只能给它 <span data-cfg-pct="0.15">¥75,000</span>，因为单只满仓爆雷会让你直接撞到止损线。</div>
+      </li>
+      <li class="flex gap-3">
+        <span class="font-bold text-amber-700 flex-shrink-0">3.</span>
+        <div><strong>每周一才 rebalance</strong> —— 不是每天换仓，避免交易成本（4.8 bps）吃掉收益。</div>
+      </li>
+    </ol>
+  </div>
+
+  <!-- 五、推荐逻辑预留位 -->
+  <div class="bg-slate-50 border border-dashed border-slate-300 rounded-2xl p-6 text-center text-slate-500">
+    <div class="text-2xl mb-2">🚧</div>
+    <div class="font-medium">五、系统是怎么"推荐"股票的</div>
+    <div class="text-sm mt-1">（待补充：F-Score 因子打分 / 防御信号 / AI 主线匹配 等推荐逻辑）</div>
+  </div>
+</section>
+
 <section id="thesis" class="max-w-7xl mx-auto px-6 py-10">
   <h2 class="text-2xl font-bold text-slate-800 mb-6">📌 我的核心观点（5 条）</h2>
   <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">
@@ -604,13 +740,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <!-- ============ 打分规则说明（动态由 scoring_rules_panel_html 渲染） ============ -->
 {SCORING_RULES_PANEL}
 
-<!-- ============ 每日优选回顾 ============ -->
+<!-- ============ 自选股·今日 Top回顾 ============ -->
 <section id="picks-review" class="max-w-7xl mx-auto px-6 py-10 bg-gradient-to-br from-amber-50 to-orange-50 rounded-2xl my-6">
   <div class="flex items-start justify-between mb-4 gap-4">
     <div class="flex-1">
       <div class="flex items-center gap-3 mb-1">
         <span class="text-3xl">⭐</span>
-        <h2 class="text-2xl font-bold text-slate-900">每日优选 · watchlist 内</h2>
+        <h2 class="text-2xl font-bold text-slate-900">自选股·今日 Top</h2>
       </div>
       <p class="text-slate-700 text-sm">
         <strong class="text-violet-700">顶部 = 今日 top picks</strong>（系统综合评分最高的几只 · 飞书早安简报也会推送一份）·
@@ -668,47 +804,106 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
 {AUDIT_PANEL}
 
-<!-- ============ 🔍 候选发现 Tab ============ -->
+<!-- ============ 🔍 AI 推荐 Tab ============ -->
 <section id="discovery" class="max-w-7xl mx-auto px-6 py-10 bg-gradient-to-br from-sky-50 to-indigo-50 rounded-2xl my-6">
   <div class="flex items-center gap-3 mb-2">
     <span class="text-3xl">🔍</span>
-    <h2 class="text-2xl font-bold text-slate-900">候选发现 — watchlist 之外的因子高分股</h2>
+    <h2 class="text-2xl font-bold text-slate-900">AI 推荐 — 自选股之外的因子高分股</h2>
   </div>
   <p class="text-slate-700 mb-3 max-w-3xl">
     扫描 SOXX / IGM / IRBO / BAI 四个 ETF 的所有成分股（半导体 + 拓展科技 + AI 主题），
     跑同一套学术因子模型（Piotroski + 12-1 动量 + PEAD + 分析师上修），
-    找出 <strong>不在你 watchlist 里</strong> 但综合得分前列的标的。
+    找出 <strong>不在你 自选股里</strong> 但综合得分前列的标的。
     <strong class="text-rose-600">仅缩小搜索空间，研究判断仍需你来做</strong>。
   </p>
   <div id="discovery-meta" class="text-xs text-slate-500 mb-4"></div>
-  <div id="discovery-empty" class="hidden text-center py-12 text-slate-500 bg-white rounded-xl">
-    暂无候选发现数据（运行 <code class="text-xs bg-slate-200 px-1.5 py-0.5 rounded">python3 discover_candidates.py</code> 生成）
+
+  <!-- 2026-05-11 PM: 算法准确度面板(基于历史推荐回测) -->
+  <div id="discovery-accuracy" class="mb-6"></div>
+
+  <!-- 2026-05-11 PM: 顶部 sub-tab 切换(今日候选 / 推荐历史) -->
+  <div class="flex items-center gap-1 mb-4 border-b border-slate-200">
+    <button onclick="switchDiscoveryView('today')" id="disc-tab-today"
+      class="px-4 py-2 text-sm font-medium border-b-2 border-violet-500 text-violet-600 transition">
+      🔍 今日候选
+    </button>
+    <button onclick="switchDiscoveryView('history')" id="disc-tab-history"
+      class="px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-600 hover:text-violet-600 transition">
+      📅 推荐历史
+    </button>
+    <span class="ml-auto text-xs text-slate-400" id="disc-tab-count"></span>
   </div>
-  <div id="discovery-table-wrap" class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
-    <table class="w-full text-sm">
-      <thead class="bg-slate-50 text-slate-600 text-xs uppercase tracking-wide">
-        <tr>
-          <th class="px-3 py-2 text-left">排名</th>
-          <th class="px-3 py-2 text-left">代码</th>
-          <th class="px-3 py-2 text-left">名称</th>
-          <th class="px-3 py-2 text-left">市场</th>
-          <th class="px-3 py-2 text-left">行业</th>
-          <th class="px-3 py-2 text-right">综合 z</th>
-          <th class="px-3 py-2 text-right">F-Score</th>
-          <th class="px-3 py-2 text-right">12-1 动量</th>
-          <th class="px-3 py-2 text-right">分析师</th>
-          <th class="px-3 py-2 text-right">市值 ($B)</th>
-          <th class="px-3 py-2 text-left">来源</th>
-        </tr>
-      </thead>
-      <tbody id="discovery-table-body" class="divide-y divide-slate-100"></tbody>
-    </table>
+
+  <!-- 今日候选 view -->
+  <div id="disc-view-today">
+    <div id="discovery-empty" class="hidden text-center py-12 text-slate-500 bg-white rounded-xl">
+      暂无AI 推荐数据(运行 <code class="text-xs bg-slate-200 px-1.5 py-0.5 rounded">python3 scripts/tools/discover_candidates.py</code> 生成)
+    </div>
+    <div id="discovery-table-wrap" class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="bg-slate-50 text-slate-600 text-xs uppercase tracking-wide">
+          <tr>
+            <th class="px-3 py-2 text-left">排名</th>
+            <th class="px-3 py-2 text-left">代码</th>
+            <th class="px-3 py-2 text-left">名称</th>
+            <th class="px-3 py-2 text-left">市场</th>
+            <th class="px-3 py-2 text-left">行业</th>
+            <th class="px-3 py-2 text-right">综合 z</th>
+            <th class="px-3 py-2 text-right">F-Score</th>
+            <th class="px-3 py-2 text-right">12-1 动量</th>
+            <th class="px-3 py-2 text-right">分析师</th>
+            <th class="px-3 py-2 text-right">市值 ($B)</th>
+            <th class="px-3 py-2 text-right" title="入选后 5 天涨幅 - 同期 SPY 涨幅">5d α</th>
+            <th class="px-3 py-2 text-right" title="入选后 20 天涨幅 - 同期 SPY 涨幅">20d α</th>
+            <th class="px-3 py-2 text-left">来源</th>
+            <th class="px-3 py-2 text-center">操作</th>
+          </tr>
+        </thead>
+        <tbody id="discovery-table-body" class="divide-y divide-slate-100"></tbody>
+      </table>
+    </div>
+    <p class="text-xs text-slate-500 mt-4">
+      💡 <strong>怎么用</strong>:对感兴趣的标的去自选股管理页手动调研(业务 / AI 关联 / 风险),
+      通过的加自选 —— 下次 daily_picks 会自动把它纳入排序池。
+      <strong class="text-violet-700">α 列</strong>显示推荐后 5/20 交易日相对 SPY 的超额收益,
+      数据来自 <code class="text-xs bg-slate-100 px-1 rounded">discovery_tracking</code> 表(每日刷新)。
+    </p>
   </div>
-  <p class="text-xs text-slate-500 mt-4">
-    💡 <strong>怎么用</strong>：对感兴趣的标的去飞书 watchlist 表手动调研（业务 / AI 关联 / 风险），
-    通过的加入 watchlist —— 下次 daily_picks 会自动把它纳入排序池。
-  </p>
+
+  <!-- 推荐历史 view(默认隐藏,切换 sub-tab 后显示) -->
+  <div id="disc-view-history" style="display:none">
+    <div class="flex items-center gap-3 mb-4">
+      <span class="text-xs text-slate-500">按推荐日倒序 · 点击展开查看当日 20 只候选 + 各自 alpha</span>
+    </div>
+    <div id="discovery-history-list" class="space-y-2"></div>
+  </div>
 </section>
+
+<script>
+// AI 推荐 sub-tab 切换(2026-05-11 PM)
+function switchDiscoveryView(view) {
+  const today = document.getElementById("disc-view-today");
+  const history = document.getElementById("disc-view-history");
+  const btnT = document.getElementById("disc-tab-today");
+  const btnH = document.getElementById("disc-tab-history");
+  if (!today || !history) return;
+  if (view === "history") {
+    today.style.display = "none";
+    history.style.display = "";
+    btnH.classList.add("border-violet-500", "text-violet-600");
+    btnH.classList.remove("border-transparent", "text-slate-600");
+    btnT.classList.remove("border-violet-500", "text-violet-600");
+    btnT.classList.add("border-transparent", "text-slate-600");
+  } else {
+    today.style.display = "";
+    history.style.display = "none";
+    btnT.classList.add("border-violet-500", "text-violet-600");
+    btnT.classList.remove("border-transparent", "text-slate-600");
+    btnH.classList.remove("border-violet-500", "text-violet-600");
+    btnH.classList.add("border-transparent", "text-slate-600");
+  }
+}
+</script>
 
 <!-- ============ 估值视角 ============ -->
 <section id="valuation" class="max-w-7xl mx-auto px-6 py-10 bg-gradient-to-br from-cyan-50 to-blue-50 rounded-2xl my-6">
@@ -771,8 +966,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 </section>
 
-<!-- ============ 全局分布图表 ============ -->
-<section id="distribution" class="max-w-7xl mx-auto px-6 py-10">
+<!-- ============ 🌳 产业链地图 · 标题栏（与 chain-overview 一起构成 chain tab） ============ -->
+<section id="chain-header" class="max-w-7xl mx-auto px-6 pt-8 pb-2" style="display:none">
+  <div class="flex items-center gap-3 mb-1">
+    <span class="text-3xl">🌳</span>
+    <h1 class="text-2xl font-bold text-slate-900">产业链地图</h1>
+  </div>
+  <p class="text-sm text-slate-600">把自选股按 <strong class="text-violet-700">产业链 × 层级 × 角色</strong> 三维聚类。同一标的可属于多条链（如 SK Hynix 同时在 HBM 链 + AI 算力链）。</p>
+</section>
+
+<!-- ============ 全局分布图表（已退役 · 原属"主题分组"tab，2026-05-11 合并到「产业链地图」后不再展示） ============ -->
+<section id="distribution" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
   <h2 class="text-2xl font-bold text-slate-800 mb-6">📊 全局分布</h2>
   <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
     <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
@@ -790,8 +994,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 </section>
 
-<!-- ============ 主题分组卡片 ============ -->
-<section id="theme-groups" class="max-w-7xl mx-auto px-6 py-10">
+<!-- ============ 主题分组卡片（已退役 · 2026-05-11 合并到「产业链地图」，DOM 保留但默认隐藏，无 tab 引用） ============ -->
+<section id="theme-groups" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
   <div class="flex items-center justify-between mb-6">
     <h2 class="text-2xl font-bold text-slate-800">🗂 按主题分组（10 大主题）</h2>
     <input type="text" id="searchBox" placeholder="🔍 搜索股票..." class="px-4 py-2 border border-slate-300 rounded-lg text-sm w-72 focus:outline-none focus:ring-2 focus:ring-violet-400">
@@ -809,7 +1013,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <p class="text-sm text-slate-600 mt-1">本地浏览器保存（localStorage）· 实时与 yfinance 数据计算盈亏 · <strong class="text-rose-600">不构成投资建议</strong></p>
     </div>
     <div class="flex gap-2">
-      <button onclick="loadPlanAv6()" title="把方案推荐的 12 只批量抄进持仓 — 仅在你已经真下单后用，下一步要手动改成真实成交价" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-lg text-sm font-medium">📋 把方案抄进持仓（仅在你真下单后用）</button>
+      <button onclick="loadPlanAv6()" title="把 AI 组合方案推荐的 12 只批量抄进持仓 — 仅在你已经真下单后用，下一步要手动改成真实成交价" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-lg text-sm font-medium">📋 把 AI 组合方案抄进持仓（仅在你真下单后用）</button>
       <button onclick="addHolding()" class="bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-lg text-sm font-medium">+ 添加持仓</button>
     </div>
   </div>
@@ -878,7 +1082,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
   <!-- 三层警戒线进度条 -->
   <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
-    <h3 class="text-sm font-semibold text-slate-700 mb-3">⚠️ 风险警戒线（基于本金 50 万）</h3>
+    <h3 class="text-sm font-semibold text-slate-700 mb-3">⚠️ 风险警戒线（基于本金 <span data-cfg="total_capital">50 万</span>）</h3>
     <div id="alert-line" class="space-y-2"></div>
   </div>
 
@@ -924,7 +1128,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <h3 class="text-lg font-bold mb-4">添加 / 编辑持仓</h3>
       <div class="space-y-3">
         <div>
-          <label class="text-xs font-medium text-slate-600">股票（选择 watchlist 标的）</label>
+          <label class="text-xs font-medium text-slate-600">股票（选择自选股）</label>
           <select id="form-code" class="w-full mt-1 px-3 py-2 border rounded text-sm"></select>
         </div>
         <div class="grid grid-cols-2 gap-3">
@@ -957,78 +1161,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </p>
 </section>
 
-<!-- ============ 📅 历史 Tab ============ -->
-<section id="history" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
-  <h2 class="text-2xl font-bold text-slate-900 mb-2">📅 历史走势对比</h2>
-  <p class="text-sm text-slate-600 mb-4">从 yfinance 实时拉历史价格 · 多股归一化对比（起点 = 100）· 自动算涨跌幅排行 + 相关性矩阵</p>
-
-  <!-- 主题快捷按钮 -->
-  <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
-    <h3 class="text-sm font-semibold text-slate-700 mb-3">🎨 快捷主题（一键加载同主题股）</h3>
-    <div class="flex flex-wrap gap-2">
-      <button onclick="loadHistoryByTheme('AI 算力核心', ['NVDA','TSM','AMD','AVGO'])" class="bg-violet-100 hover:bg-violet-200 text-violet-800 px-3 py-1.5 rounded text-xs font-medium">🔥 AI 算力核心 (4)</button>
-      <button onclick="loadHistoryByTheme('AI 电力链', ['VRT','ETN','GEV','MTZ','PWR','VST'])" class="bg-amber-100 hover:bg-amber-200 text-amber-800 px-3 py-1.5 rounded text-xs font-medium">⚡ AI 电力链 (6)</button>
-      <button onclick="loadHistoryByTheme('下一波稀缺资源', ['XYL','MP','CCJ','BWXT','RDDT'])" class="bg-emerald-100 hover:bg-emerald-200 text-emerald-800 px-3 py-1.5 rounded text-xs font-medium">💎 下一波稀缺资源 (5)</button>
-      <button onclick="loadHistoryByTheme('数据中心承载层', ['EQIX','ORCL','LRCX'])" class="bg-blue-100 hover:bg-blue-200 text-blue-800 px-3 py-1.5 rounded text-xs font-medium">🏢 数据中心 (3)</button>
-      <button onclick="loadHistoryByTheme('AI 应用层', ['GOOGL','NET','CDNS','CRWD'])" class="bg-cyan-100 hover:bg-cyan-200 text-cyan-800 px-3 py-1.5 rounded text-xs font-medium">📱 AI 应用层 (4)</button>
-      <button onclick="loadHistoryByTheme('物理 AI', ['SYM','TSLA'])" class="bg-rose-100 hover:bg-rose-200 text-rose-800 px-3 py-1.5 rounded text-xs font-medium">🤖 物理 AI (2)</button>
-      <button onclick="loadHistoryByTheme('SMR 核能', ['BWXT','OKLO','SMR','NNE','LEU','UUUU'])" class="bg-orange-100 hover:bg-orange-200 text-orange-800 px-3 py-1.5 rounded text-xs font-medium">☢️ 核能/SMR (6)</button>
-      <button onclick="loadHistoryByTheme('防御对照', ['KO','MCD'])" class="bg-slate-100 hover:bg-slate-200 text-slate-800 px-3 py-1.5 rounded text-xs font-medium">🛡 防御对照 (2)</button>
-      <button onclick="loadHistoryByTheme('AI 光通信链', ['MRVL','300308','300502','AVGO'])" class="bg-pink-100 hover:bg-pink-200 text-pink-800 px-3 py-1.5 rounded text-xs font-medium">🔗 AI 光通信链 (4)</button>
-      <button onclick="loadHistoryByTheme('A 股 AI 核心', ['300308','300502','002230','688256','688041','688111'])" class="bg-red-100 hover:bg-red-200 text-red-800 px-3 py-1.5 rounded text-xs font-medium">🇨🇳 A 股 AI 核心 (6)</button>
-      <button onclick="loadHistoryByTheme('港股 AI 平台', ['3690','9988','0700','0020'])" class="bg-yellow-100 hover:bg-yellow-200 text-yellow-800 px-3 py-1.5 rounded text-xs font-medium">🇭🇰 港股 AI (4)</button>
-      <button onclick="loadHistoryByTheme('基准对照', ['SPY','QQQ'])" class="bg-indigo-100 hover:bg-indigo-200 text-indigo-800 px-3 py-1.5 rounded text-xs font-medium">📐 基准 SPY/QQQ (2)</button>
-    </div>
-  </div>
-
-  <!-- 时间窗口 + 自定义选股 -->
-  <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
-    <div class="flex flex-wrap items-center gap-3 mb-3">
-      <h3 class="text-sm font-semibold text-slate-700">🎯 自定义对比</h3>
-      <span class="text-xs text-slate-500 ml-auto mr-2">时间窗口:</span>
-      <div class="flex gap-1" id="period-buttons">
-        <button onclick="setPeriod('1mo')" data-period="1mo" class="period-btn px-2.5 py-1 rounded text-xs border border-slate-300 hover:bg-slate-100">30 天</button>
-        <button onclick="setPeriod('3mo')" data-period="3mo" class="period-btn px-2.5 py-1 rounded text-xs border border-slate-300 hover:bg-slate-100 bg-violet-600 text-white border-violet-600">90 天</button>
-        <button onclick="setPeriod('6mo')" data-period="6mo" class="period-btn px-2.5 py-1 rounded text-xs border border-slate-300 hover:bg-slate-100">180 天</button>
-        <button onclick="setPeriod('1y')" data-period="1y" class="period-btn px-2.5 py-1 rounded text-xs border border-slate-300 hover:bg-slate-100">1 年</button>
-        <button onclick="setPeriod('2y')" data-period="2y" class="period-btn px-2.5 py-1 rounded text-xs border border-slate-300 hover:bg-slate-100">2 年</button>
-      </div>
-    </div>
-    <div class="flex items-center gap-3">
-      <select id="history-codes" multiple size="5" class="px-3 py-1 border rounded text-sm flex-1 max-w-md"></select>
-      <button onclick="loadHistoryCharts()" class="bg-violet-600 hover:bg-violet-700 text-white px-4 py-1.5 rounded text-sm">📊 加载所选</button>
-      <span class="text-xs text-slate-500">按住 Cmd 多选 (最多 8 只)</span>
-    </div>
-  </div>
-
-  <!-- 走势图 -->
-  <div id="history-chart-card" class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4" style="display:none">
-    <h3 class="text-sm font-semibold text-slate-700 mb-3" id="history-chart-title">📈 归一化走势对比</h3>
-    <div id="chart-history" style="height:420px"></div>
-  </div>
-
-  <!-- 涨跌幅排行表 -->
-  <div id="history-ranking-card" class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4" style="display:none">
-    <h3 class="text-sm font-semibold text-slate-700 mb-3">🏆 涨跌幅排行</h3>
-    <div id="history-ranking" class="overflow-x-auto"></div>
-  </div>
-
-  <!-- 相关性矩阵 -->
-  <div id="history-corr-card" class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4" style="display:none">
-    <h3 class="text-sm font-semibold text-slate-700 mb-1">🔗 相关性矩阵 (Pearson)</h3>
-    <p class="text-xs text-slate-500 mb-3">基于日收益率 · 1.0 = 完全同向 · 0 = 无关 · -1 = 完全反向。<strong>组合优化关心：相关性低的股票一起持仓能降低组合波动</strong></p>
-    <div id="history-corr" class="overflow-x-auto"></div>
-  </div>
-
-  <!-- DuckDB 快照统计 -->
-  <div class="bg-slate-50 rounded-xl border border-slate-200 p-4">
-    <h3 class="text-sm font-semibold text-slate-700 mb-2">📦 DuckDB 本地快照库（长期回溯用）</h3>
-    <p class="text-xs text-slate-600">每天 daily_refresh 自动写入。累积越久 = 你自己的历史数据库（不依赖 yfinance），未来可做严肃回测。</p>
-    <p class="text-xs text-slate-500 mt-1 font-mono">stock_history.duckdb</p>
-  </div>
-</section>
-
-<!-- ============ 🤖 AI 方案模拟 Tab ============ -->
+<!-- ============ 🤖 AI 组合方案 Tab ============ -->
 <section id="backtest" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
   <div class="mb-6">
     <h2 class="text-2xl font-bold text-slate-900">🆚 系统在跑两个方案 · 看 AI 到底有没有用</h2>
@@ -1188,7 +1321,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <h2 class="text-2xl font-bold text-slate-900">产业链全景</h2>
     </div>
     <p class="text-sm text-slate-600">
-      把 watchlist 按 <strong>产业链 × 层级 × 角色</strong> 三维聚类。
+      把自选股按 <strong>产业链 × 层级 × 角色</strong> 三维聚类。
       <strong class="text-violet-700">层级颜色</strong>：
       <span class="px-1.5 py-0.5 bg-violet-100 text-violet-800 rounded text-xs font-semibold">核心</span>
       <span class="px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded text-xs font-semibold">一线</span>
@@ -1210,19 +1343,98 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div id="chain-cards-container" class="space-y-6"></div>
 </section>
 
-<!-- ============ ✏️ Watchlist 编辑 Tab（DuckDB 权威 · 通过 FastAPI 增删改）============ -->
-<section id="watchlist-edit" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
-  <div class="mb-6">
-    <div class="flex items-center gap-3 mb-2">
-      <span class="text-3xl">✏️</span>
-      <h2 class="text-2xl font-bold text-slate-900">Watchlist 编辑</h2>
+<!-- ============ ⚙️ 初始化配置（父 tab · 顶部二级切换 投资方案 / 关注股票）============ -->
+<section id="init-config" class="max-w-7xl mx-auto px-6 pt-10 pb-2" style="display:none">
+  <div class="mb-4">
+    <div class="flex items-center gap-3 mb-1">
+      <span class="text-3xl">⚙️</span>
+      <h2 class="text-2xl font-bold text-slate-900">初始化配置</h2>
     </div>
-    <p class="text-sm text-slate-600">
-      DuckDB 是权威数据源（2026-05-11 起飞书表已废弃为只读快照）。
-      所有增删改保存到 <code class="text-xs bg-slate-200 px-1 rounded">stock_history.duckdb · watchlist</code>。
-      <strong class="text-amber-700">需先启动本地 API：</strong>
-      <code class="text-xs bg-amber-100 px-1 rounded">uvicorn stock_research.api.main:app --port 8765</code>
-    </p>
+    <p class="text-sm text-slate-600">系统跑批和前端展示都依赖这两组用户输入：<strong>投资方案</strong>（有多少钱）和<strong>自选股</strong>（追踪哪些标的）。</p>
+  </div>
+  <!-- 二级 tab 栏 -->
+  <div class="border-b border-slate-200 flex gap-1">
+    <button onclick="switchInitSub('portfolio')" id="init-sub-btn-portfolio"
+            class="init-sub-btn px-4 py-2 text-sm font-medium border-b-2 transition">
+      💰 投资方案
+    </button>
+    <button onclick="switchInitSub('watchlist')" id="init-sub-btn-watchlist"
+            class="init-sub-btn px-4 py-2 text-sm font-medium border-b-2 transition">
+      ✨ 自选股
+    </button>
+  </div>
+</section>
+
+<!-- ============ ⚙️ 投资方案配置（init-config 的子页之一）============ -->
+<section id="portfolio-config" class="max-w-7xl mx-auto px-6 pt-4 pb-10" style="display:none">
+  <!-- 加载/错误提示（API 离线 / 保存成功 / 校验失败 都用这一个 banner） -->
+  <div id="pcfg-banner" class="hidden mb-4 px-4 py-3 rounded-lg text-sm"></div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+    <!-- 进场本金 -->
+    <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+      <label class="block">
+        <div class="flex items-baseline justify-between mb-2">
+          <span class="text-sm font-bold text-emerald-700">💰 进场本金</span>
+          <span class="text-[11px] text-slate-400 font-mono">total_capital</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-slate-500 font-medium">¥</span>
+          <input id="pcfg-total-capital" type="number" min="1" step="10000"
+                 class="flex-1 px-3 py-2 text-2xl font-bold text-slate-900 border border-slate-300 rounded-lg focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 outline-none">
+        </div>
+        <p class="text-xs text-slate-500 mt-2 leading-relaxed">
+          整个组合按这个数算每只股票该买多少。修改后<strong>下一次跑批</strong>（build_plan_a_v5 / trade_delta / risk_metrics）就生效。
+        </p>
+      </label>
+    </div>
+
+    <!-- 止损红线 -->
+    <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+      <label class="block">
+        <div class="flex items-baseline justify-between mb-2">
+          <span class="text-sm font-bold text-rose-700">🛑 止损红线</span>
+          <span class="text-[11px] text-slate-400 font-mono">stoploss_line</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-slate-500 font-medium">¥</span>
+          <input id="pcfg-stoploss-line" type="number" min="1" step="10000"
+                 class="flex-1 px-3 py-2 text-2xl font-bold text-slate-900 border border-slate-300 rounded-lg focus:border-rose-400 focus:ring-2 focus:ring-rose-100 outline-none">
+        </div>
+        <p class="text-xs text-slate-500 mt-2 leading-relaxed">
+          组合市值跌到这条线就<strong>强制清仓</strong>。要求 &lt; 进场本金。当前最大允许亏损：<strong id="pcfg-max-loss" class="text-rose-700">—</strong>
+        </p>
+      </label>
+    </div>
+  </div>
+
+  <!-- 提交按钮 + 当前值显示 -->
+  <div class="mt-5 flex items-center gap-3">
+    <button id="pcfg-save" onclick="savePortfolioConfig()"
+            class="px-5 py-2 bg-violet-600 hover:bg-violet-700 text-white text-sm font-medium rounded-lg transition disabled:opacity-50">
+      💾 保存配置
+    </button>
+    <button onclick="loadPortfolioConfig()"
+            class="px-4 py-2 text-sm text-slate-700 hover:text-violet-600 transition">
+      ↻ 重新加载
+    </button>
+    <div class="ml-auto text-xs text-slate-500">
+      当前生效值 · 最近更新：<span id="pcfg-updated-at" class="font-mono text-slate-700">—</span>
+    </div>
+  </div>
+
+  <!-- 提示卡 -->
+  <div class="mt-6 bg-slate-50 border-l-4 border-slate-400 rounded p-4 text-sm text-slate-700">
+    <strong>💡 提示：</strong>修改后<strong>持仓页</strong>和<strong>系统介绍页</strong>会立即用新值显示；
+    但 <strong>飞书早报里的资金分配建议</strong>需要等下一次跑批（daily_refresh.sh）才更新。
+  </div>
+</section>
+
+<!-- ============ ✏️ Watchlist 编辑（init-config 子页 · DuckDB 权威 · 通过 FastAPI 增删改）============ -->
+<section id="watchlist-edit" class="max-w-7xl mx-auto px-6 pt-4 pb-10" style="display:none">
+  <!-- API 离线时才出现的命令提示 -->
+  <div id="wl-offline-hint" class="hidden mb-4 px-4 py-3 rounded bg-amber-50 border border-amber-200 text-sm text-amber-900">
+    本地 API 未启动 · 在终端跑：<code class="text-xs bg-amber-100 px-1 rounded ml-1">uvicorn stock_research.api.main:app --port 8765</code>
   </div>
 
   <!-- API 连接状态 + 操作按钮条 -->
@@ -1517,7 +1729,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <div class="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-3 text-xs text-slate-700">
         <p class="font-semibold text-slate-800 mb-1">🔧 两条线公用的基础设施</p>
         SEC 13F 机构持仓抓取 · 多源 enrichment · 跨源审计 · 反向审查 · 风险指标（VaR/Sharpe/Calmar）·
-        仓位优化方法对比 · DuckDB 长期快照库（每天累加，将来做严肃回测）· AI 方案模拟（v6 plan 锁定日为基线，往后看每日真实表现）
+        仓位优化方法对比 · DuckDB 长期快照库（每天累加，将来做严肃回测）· AI 组合方案（v6 plan 锁定日为基线，往后看每日真实表现）
       </div>
 
       <!-- ⚠️ 已规划未做 -->
@@ -1580,7 +1792,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <h4 class="text-lg font-bold text-amber-700 mb-3">🟡 在做但未完成（等数据/时间）</h4>
       <ul class="space-y-2 text-sm">
         <li class="bg-white rounded p-3 border border-amber-200"><strong>因子 IC 验证</strong> — 框架就位，需累积 30+ 天历史才有意义</li>
-        <li class="bg-white rounded p-3 border border-amber-200"><strong>每日优选 hit rate 真实回测</strong> — picks 已积累 2 天 (2026-05-09 / 05-10 多次 snapshot)，仍需 1 个月数据才能可信验证</li>
+        <li class="bg-white rounded p-3 border border-amber-200"><strong>自选股·今日 Top hit rate 真实回测</strong> — picks 已积累 2 天 (2026-05-09 / 05-10 多次 snapshot)，仍需 1 个月数据才能可信验证</li>
         <li class="bg-white rounded p-3 border border-amber-200"><strong>B 路线 Phase 2-4</strong> — quarterly_trends / earnings_call / dcf_scenarios / forward_valuation 代码就绪，等付费数据源（FMP Starter / Tushare Pro）激活</li>
       </ul>
     </div>
@@ -1697,7 +1909,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           <h4 class="text-lg font-bold text-emerald-700">🥈 Tushare Pro</h4>
           <span class="text-xl font-bold">¥200/年</span>
         </div>
-        <p class="text-sm text-slate-700 mb-3"><strong>解决 watchlist 中 30%+ A股/港股的数据脆弱问题。</strong></p>
+        <p class="text-sm text-slate-700 mb-3"><strong>解决 自选股中 30%+ A股/港股的数据脆弱问题。</strong></p>
         <ul class="text-sm text-slate-700 space-y-1 list-disc pl-5">
           <li><strong>龙虎榜</strong>（A 股最强日内信号）</li>
           <li><strong>北向资金每日明细</strong>（外资动向）</li>
@@ -1766,7 +1978,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           <span class="font-bold">$20/月 (¥145)</span>
         </div>
         <p class="text-xs text-slate-600 mb-2"><strong>适合：</strong>想全面覆盖 SoftBank / Advantest（日股）/ Lynas / Appen（澳股）/ Rolls-Royce（英股 ADR）/ Kazatomprom（哈萨克）</p>
-        <p class="text-xs text-violet-700 mt-1"><strong>建议：</strong>watchlist 里这类股 &lt; 5 只，性价比一般</p>
+        <p class="text-xs text-violet-700 mt-1"><strong>建议：</strong>自选股里这类股 &lt; 5 只，性价比一般</p>
       </div>
     </div>
   </div>
@@ -1848,7 +2060,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           <td class="font-bold">EODHD</td>
           <td>¥1700</td>
           <td>日股 / 澳股 / 英股 ADR</td>
-          <td class="text-slate-400">这类股 watchlist 里 &lt; 5 只</td>
+          <td class="text-slate-400">这类股 自选股里 &lt; 5 只</td>
         </tr>
         <tr>
           <td class="py-3"><span class="bg-slate-500 px-2 py-1 rounded text-xs font-bold">不推荐</span></td>
@@ -1873,7 +2085,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="max-w-7xl mx-auto px-6 text-sm">
     <p class="mb-2"><strong class="text-white">免责声明</strong>：本看板由 Claude AI 基于公开信息生成，仅作研究学习参考，<strong class="text-rose-300">绝不构成任何投资建议</strong>。</p>
     <p class="mb-2">投资有风险，所有交易决策需自行判断、自负盈亏。本看板的数据可能滞后、错误或解读偏差。</p>
-    <p class="text-slate-500">数据源：飞书「股票研究 Watchlist」表 · WebSearch 抓取的最新公司财报 · 数据更新时间 {UPDATE_TIME}</p>
+    <p class="text-slate-500">数据源：本地 DuckDB 自选股表 · WebSearch 抓取的最新公司财报 · 数据更新时间 {UPDATE_TIME}</p>
   </div>
 </footer>
 
@@ -1886,13 +2098,15 @@ const SIMULATION   = {SIMULATION_JSON};
 // 2026-05-11 PM: watchlist 链条定位信息(chain/chain_tier/chain_role/layman_intro)
 // 按 code 索引 → 任何 tab 显示股票时,Stock Pill 都能查到上下文
 const WATCHLIST_CHAIN_INFO = {WATCHLIST_CHAIN_INFO_JSON};
+// 2026-05-11 PM: AI 推荐的历史推荐 + 准确度跟踪(discovery_history JOIN tracking)
+// 数组,每条 = 一次 (generated_date, ticker) 推荐 + 它的 alpha 数据
+const DISCOVERY_HISTORY = {DISCOVERY_HISTORY_JSON};
 const RISK_METRICS = {RISK_METRICS_JSON_DB};
 const TRACK_13F    = {TRACK_13F_JSON_DB};
-const HISTORY_DATA = {HISTORY_DATA_JSON_DB};
 const OPTIMIZATION = {OPTIMIZATION_JSON_DB};
 const PLAN_A_V6    = {PLAN_A_V6_JSON_DB};
 const DISCOVERY    = {DISCOVERY_JSON};
-// AI 方案模拟数据：A 静态（buy-and-hold from inception） / C 动态（每周一 rebalance）
+// AI 组合方案数据：A 静态（buy-and-hold from inception） / C 动态（每周一 rebalance）
 const _BACKTEST    = {PLAN_BACKTEST_JSON_DB};
 const _DYNAMIC     = {PLAN_DYNAMIC_JSON_DB};
 
@@ -1914,15 +2128,18 @@ async function _watchlistApiCall(method, path, body) {
 
 async function _checkApiStatus() {
   const el = document.getElementById("watchlist-api-status");
+  const hint = document.getElementById("wl-offline-hint");
   if (!el) return;
   try {
     await _watchlistApiCall("GET", "/health");
     el.textContent = "✓ 已连接";
     el.className = "text-xs px-2 py-0.5 rounded bg-emerald-100 text-emerald-700";
+    if (hint) hint.classList.add("hidden");
     return true;
   } catch (e) {
     el.textContent = "✗ 未启动";
     el.className = "text-xs px-2 py-0.5 rounded bg-rose-100 text-rose-700";
+    if (hint) hint.classList.remove("hidden");
     return false;
   }
 }
@@ -1971,7 +2188,7 @@ function _chainBadges(chain) {
 
 // ============ Stock Pill 组件 ============
 // 复用组件:任何 tab 显示股票时,都用 stockPill(code) 替代裸 code/name
-// 自动从 WATCHLIST_CHAIN_INFO 查上下文(链条/层级/角色/一句话),不在 watchlist 显示 [未观察]
+// 自动从 WATCHLIST_CHAIN_INFO 查上下文(链条/层级/角色/一句话),不在自选股 显示 [未观察]
 // 用法:
 //   stockPill("NVDA")                          → 完整 pill(代码+名字+badges+hover 提示一句话)
 //   stockPill("NVDA", {layout: "mini"})        → 紧凑(只 badges,不重复代码名字)
@@ -1991,7 +2208,7 @@ function stockPill(code, opts) {
   // 紧凑模式:只显示 chain · tier · role 三个 badge,不重复 code/name
   if (layout === "mini") {
     if (!inWatchlist) {
-      return `<span class="inline-block px-1.5 py-0.5 rounded text-xs bg-slate-100 text-slate-400" title="不在 watchlist">未观察</span>`;
+      return `<span class="text-slate-300 text-xs cursor-help" title="不在自选股 · 可以加入后标注链条信息">—</span>`;
     }
     const parts = [];
     if (primaryChain) parts.push(`<span class="px-1.5 py-0 rounded text-[10px] bg-slate-100 text-slate-700">${_esc(primaryChain)}</span>`);
@@ -2012,12 +2229,12 @@ function stockPill(code, opts) {
   // inline 模式(默认):代码 + 名字 + 链条/层级/角色 badge,hover 显示一句话
   const titleAttr = intro
     ? ` title="${_esc(intro)}"`
-    : (inWatchlist ? "" : ' title="不在 watchlist,无链条信息"');
+    : (inWatchlist ? "" : ' title="不在自选股,无链条信息"');
   const codeName = `<span class="font-mono text-sm font-bold text-slate-900">${_esc(code)}</span>` +
                    (name ? ` <span class="text-sm text-slate-700">${_esc(name)}</span>` : "");
   const badges = [];
   if (!inWatchlist) {
-    badges.push(`<span class="px-1.5 py-0 rounded text-[10px] bg-slate-100 text-slate-400">未观察</span>`);
+    badges.push(`<span class="text-[10px] text-slate-400 cursor-help" title="不在自选股 · 可以加入后标注链条信息">— 待标注</span>`);
   } else {
     if (primaryChain) badges.push(`<span class="px-1.5 py-0 rounded text-[10px] bg-slate-100 text-slate-700">${_esc(primaryChain)}</span>`);
     if (tier) {
@@ -2074,8 +2291,9 @@ async function loadWatchlistTable() {
   try {
     if (_watchlistCache.length === 0) {
       _watchlistCache = await _watchlistApiCall("GET", "/api/watchlist");
-      _populateWatchlistFilters();
     }
+    // 总是调用（line 2263 内部 guard 保证幂等）— 修复:cache 可能被其他 tab 先填(如 AI 推荐的"✓ 已在自选"标记)导致筛选项漏初始化
+    _populateWatchlistFilters();
     const fChain = document.getElementById("wl-filter-chain")?.value || "";
     const fTier  = document.getElementById("wl-filter-tier")?.value || "";
     const fRole  = document.getElementById("wl-filter-role")?.value || "";
@@ -2365,23 +2583,117 @@ async function deleteWatchlistItem(code) {
   }
 }
 
+// ============ AI 推荐 → 一键加自选 ============
+function _setDiscoveryBtnAdded(btn) {
+  btn.textContent = "✓ 已在自选";
+  btn.disabled = true;
+  btn.classList.remove("bg-violet-600", "hover:bg-violet-700");
+  btn.classList.add("bg-slate-300", "text-slate-600", "cursor-not-allowed");
+}
+
+async function _markDiscoveryAddedButtons() {
+  // 渲染完表格后,异步把已在 自选股里的票按钮标灰
+  try {
+    if (_watchlistCache.length === 0) {
+      _watchlistCache = await _watchlistApiCall("GET", "/api/watchlist");
+    }
+  } catch (e) {
+    return;  // API 没起来就静默,按钮维持可点状态(点击时会再报错)
+  }
+  const existingCodes = new Set(_watchlistCache.map(r => (r.code || "").toUpperCase()));
+  document.querySelectorAll(".discovery-add-btn").forEach(btn => {
+    const ticker = (btn.dataset.ticker || "").toUpperCase();
+    if (existingCodes.has(ticker)) _setDiscoveryBtnAdded(btn);
+  });
+}
+
+async function addDiscoveryToWatchlist(ticker, btnEl) {
+  const origText = btnEl.textContent;
+  btnEl.disabled = true;
+  btnEl.textContent = "⏳ 加入中…";
+  try {
+    // 1. 确保 cache 已加载,避免重复添加
+    if (_watchlistCache.length === 0) {
+      try { _watchlistCache = await _watchlistApiCall("GET", "/api/watchlist"); } catch (e) {}
+    }
+    const tickerUpper = (ticker || "").toUpperCase();
+    if (_watchlistCache.find(r => (r.code || "").toUpperCase() === tickerUpper)) {
+      _setDiscoveryBtnAdded(btnEl);
+      return;
+    }
+    // 2. auto-enrich 拿完整字段(失败也允许只用 code 入库)
+    let enriched = {};
+    try {
+      enriched = await _watchlistApiCall("POST", "/api/watchlist/auto-enrich", {code: ticker});
+    } catch (e) {
+      console.warn("auto-enrich failed, will save with code only:", e.message);
+    }
+    // 3. POST 入库 — source = ai_discovery 留追溯
+    const item = {
+      code: ticker,
+      name: enriched.name || null,
+      market: enriched.market || null,
+      industry: enriched.industry || null,
+      business: enriched.business || null,
+      ai_relevance: enriched.ai_relevance || null,
+      ai_logic: enriched.ai_logic || null,
+      chain: enriched.chain || null,
+      chain_tier: enriched.chain_tier || null,
+      chain_role: enriched.chain_role || null,
+      layman_intro: enriched.layman_intro || null,
+      credibility: enriched.credibility || null,
+      source: "ai_discovery",
+      status: "待研究",
+    };
+    await _watchlistApiCall("POST", "/api/watchlist", item);
+    _watchlistCache.push(item);
+    _setDiscoveryBtnAdded(btnEl);
+  } catch (e) {
+    alert("加自选失败: " + e.message);
+    btnEl.textContent = origText;
+    btnEl.disabled = false;
+  }
+}
+
 
 // ============ Tab 切换框架 ============
 const TAB_SECTIONS = {
+  about: ["about"],
   overview: ["hero", "stress-test", "thesis", "evolution", "scarce", "events", "hundred-x"],
   portfolio: ["portfolio"],
   picks: ["scoring-rules", "picks-review"],
   discovery: ["discovery"],
   audit: ["audit-panel"],
   valuation: ["valuation"],
-  themes: ["distribution", "theme-groups"],
-  "chain-overview": ["chain-overview"],
-  history: ["history"],
+  // chain = 「产业链地图」· 取代原 themes + chain-overview（主题分组已退役）
+  chain: ["chain-header", "chain-overview"],
   backtest: ["backtest"],
   professional: ["professional"],
   upgrade: ["upgrade"],
-  "watchlist-edit": ["watchlist-edit"],
+  "init-config": ["init-config", "portfolio-config", "watchlist-edit"],
 };
+
+// 二级 tab：在 #init-config 父 tab 里切换 投资方案 / 关注股票
+let _initSubCurrent = "portfolio";
+function switchInitSub(sub) {
+  _initSubCurrent = sub;
+  const pcfg = document.getElementById("portfolio-config");
+  const wled = document.getElementById("watchlist-edit");
+  if (pcfg) pcfg.style.display = (sub === "portfolio") ? "" : "none";
+  if (wled) wled.style.display = (sub === "watchlist") ? "" : "none";
+  // 按钮 active 样式
+  document.querySelectorAll(".init-sub-btn").forEach(b => {
+    const active = b.id === "init-sub-btn-" + sub;
+    b.classList.toggle("border-violet-500", active);
+    b.classList.toggle("text-violet-700", active);
+    b.classList.toggle("border-transparent", !active);
+    b.classList.toggle("text-slate-500", !active);
+    b.classList.toggle("hover:text-violet-600", !active);
+  });
+  // 触发子页 lazy load
+  if (sub === "portfolio") setTimeout(loadPortfolioConfig, 50);
+  if (sub === "watchlist") setTimeout(loadWatchlistTable, 50);
+}
 
 function switchTab(tab) {
   // 收集所有需要管理的 section id
@@ -2407,16 +2719,20 @@ function switchTab(tab) {
   window.scrollTo(0, 0);
   // tab 特定的延迟初始化
   if (tab === "portfolio") setTimeout(renderPortfolio, 50);
-  if (tab === "history") setTimeout(initHistorySelect, 50);
   if (tab === "backtest") setTimeout(renderPlanBacktest, 100);
   if (tab === "professional") setTimeout(renderProfessional, 50);
-  if (tab === "watchlist-edit") setTimeout(loadWatchlistTable, 50);
-  if (tab === "chain-overview") setTimeout(loadChainOverview, 50);
+  if (tab === "chain") setTimeout(loadChainOverview, 50);
+  if (tab === "init-config") setTimeout(() => switchInitSub(_initSubCurrent), 50);
 }
 
 function getTabFromHash() {
   const h = location.hash.replace("#", "");
-  // 默认首屏改为 portfolio（"🏠 今天" 的核心）— 用户每天打开问"我现在赚还是亏"
+  // 老 hash 兼容：portfolio-config / watchlist-edit → init-config（并切到对应子页）
+  if (h === "portfolio-config") { _initSubCurrent = "portfolio"; return "init-config"; }
+  if (h === "watchlist-edit")   { _initSubCurrent = "watchlist"; return "init-config"; }
+  // 老 hash 兼容：themes / chain-overview / landscape → chain（2026-05-11 合并 + 改名后）
+  if (h === "themes" || h === "chain-overview" || h === "landscape") return "chain";
+  // 默认首屏改为 portfolio（"📋 我的池子" 的核心）— 用户每天打开问"我现在赚还是亏"
   return TAB_SECTIONS[h] ? h : "portfolio";
 }
 window.addEventListener("hashchange", () => switchTab(getTabFromHash()));
@@ -2424,10 +2740,149 @@ window.addEventListener("DOMContentLoaded", () => switchTab(getTabFromHash()));
 
 // ============ 持仓管理（localStorage） ============
 const STORAGE_KEY = "ai_portfolio_holdings_v1";
-const TOTAL_CAPITAL = 500000;
-const STOPLOSS_LINE = 300000;
-const WARNING_LINE = 400000;
-const TARGET_LINE = 550000;
+// 投资方案配置 · 默认值,会被 /api/config 覆盖
+let TOTAL_CAPITAL = 500000;
+let STOPLOSS_LINE = 300000;
+let WARNING_LINE = 400000;   // 中间警戒线（衍生）
+let TARGET_LINE = 550000;    // 盈利目标线（衍生）
+
+function _recomputePortfolioLines() {
+  WARNING_LINE = Math.round((TOTAL_CAPITAL + STOPLOSS_LINE) / 2);
+  TARGET_LINE = Math.round(TOTAL_CAPITAL * 1.1);
+}
+
+// 启动时拉一次配置；API 不可用时静默用默认值
+(async function _initPortfolioConfig() {
+  try {
+    const r = await fetch(WATCHLIST_API_BASE + "/api/config");
+    if (!r.ok) return;
+    const cfg = await r.json();
+    if (typeof cfg.total_capital === "number") TOTAL_CAPITAL = cfg.total_capital;
+    if (typeof cfg.stoploss_line === "number") STOPLOSS_LINE = cfg.stoploss_line;
+    _recomputePortfolioLines();
+    // 如果持仓页正在显示,重渲染让新值生效
+    if (typeof renderPortfolio === "function") {
+      const portfolioEl = document.getElementById("portfolio");
+      if (portfolioEl && portfolioEl.style.display !== "none") renderPortfolio();
+    }
+    // 系统介绍页里的金额展示也刷新
+    _refreshAboutPageNumbers();
+  } catch (e) {
+    // API 离线 · 静默回退默认值
+  }
+})();
+
+// 把 #about 页面里的写死数字替换成当前 TOTAL_CAPITAL/STOPLOSS_LINE
+function _refreshAboutPageNumbers() {
+  document.querySelectorAll("[data-cfg='total_capital']").forEach(el => el.textContent = "¥" + TOTAL_CAPITAL.toLocaleString());
+  document.querySelectorAll("[data-cfg='stoploss_line']").forEach(el => el.textContent = "¥" + STOPLOSS_LINE.toLocaleString());
+  // 衍生：按 TOTAL_CAPITAL × 百分比计算（现金底线/单只上限等）
+  document.querySelectorAll("[data-cfg-pct]").forEach(el => {
+    const pct = parseFloat(el.dataset.cfgPct);
+    if (!isNaN(pct)) el.textContent = "¥" + Math.round(TOTAL_CAPITAL * pct).toLocaleString();
+  });
+  // 最大允许亏损（TOTAL_CAPITAL - STOPLOSS_LINE）
+  document.querySelectorAll("[data-cfg='max_loss']").forEach(el => {
+    el.textContent = "¥" + (TOTAL_CAPITAL - STOPLOSS_LINE).toLocaleString();
+  });
+}
+
+// ====== 投资方案配置 Tab · load / save ======
+async function loadPortfolioConfig() {
+  const banner = document.getElementById("pcfg-banner");
+  const tcInput = document.getElementById("pcfg-total-capital");
+  const slInput = document.getElementById("pcfg-stoploss-line");
+  const maxLossEl = document.getElementById("pcfg-max-loss");
+  const updatedEl = document.getElementById("pcfg-updated-at");
+  if (!tcInput || !slInput) return;
+  try {
+    const r = await fetch(WATCHLIST_API_BASE + "/api/config");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const cfg = await r.json();
+    tcInput.value = cfg.total_capital ?? 500000;
+    slInput.value = cfg.stoploss_line ?? 300000;
+    _updateMaxLossDisplay();
+    if (updatedEl) updatedEl.textContent = new Date().toLocaleString("zh-CN");
+    if (banner) banner.classList.add("hidden");
+  } catch (e) {
+    if (banner) {
+      banner.className = "mb-4 px-4 py-3 rounded-lg text-sm bg-amber-50 border border-amber-200 text-amber-800";
+      banner.innerHTML = `⚠️ 无法连接 API（${e.message}）· 请先启动本地服务：<code class="bg-amber-100 px-1 rounded text-xs">uvicorn stock_research.api.main:app --port 8765</code>`;
+      banner.classList.remove("hidden");
+    }
+  }
+}
+
+function _updateMaxLossDisplay() {
+  const tc = parseInt(document.getElementById("pcfg-total-capital")?.value || "0", 10);
+  const sl = parseInt(document.getElementById("pcfg-stoploss-line")?.value || "0", 10);
+  const el = document.getElementById("pcfg-max-loss");
+  if (!el) return;
+  if (tc > 0 && sl > 0 && sl < tc) {
+    const loss = tc - sl;
+    const pct = (loss / tc * 100).toFixed(1);
+    el.textContent = `-¥${loss.toLocaleString()} (-${pct}%)`;
+  } else {
+    el.textContent = "—";
+  }
+}
+
+// 输入变化时实时更新 "最大允许亏损"
+document.addEventListener("input", e => {
+  if (e.target && (e.target.id === "pcfg-total-capital" || e.target.id === "pcfg-stoploss-line")) {
+    _updateMaxLossDisplay();
+  }
+});
+
+async function savePortfolioConfig() {
+  const banner = document.getElementById("pcfg-banner");
+  const btn = document.getElementById("pcfg-save");
+  const tc = parseInt(document.getElementById("pcfg-total-capital").value, 10);
+  const sl = parseInt(document.getElementById("pcfg-stoploss-line").value, 10);
+  // 前端校验
+  if (!Number.isFinite(tc) || tc <= 0) { _pcfgErr("进场本金必须是正数"); return; }
+  if (!Number.isFinite(sl) || sl <= 0) { _pcfgErr("止损红线必须是正数"); return; }
+  if (sl >= tc) { _pcfgErr("止损红线必须小于进场本金"); return; }
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch(WATCHLIST_API_BASE + "/api/config", {
+      method: "PUT",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({total_capital: tc, stoploss_line: sl}),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || ("HTTP " + r.status));
+    }
+    // 同步到全局变量并刷新所有显示
+    TOTAL_CAPITAL = tc;
+    STOPLOSS_LINE = sl;
+    _recomputePortfolioLines();
+    _refreshAboutPageNumbers();
+    if (typeof renderPortfolio === "function") {
+      const portfolioEl = document.getElementById("portfolio");
+      if (portfolioEl && portfolioEl.style.display !== "none") renderPortfolio();
+    }
+    if (banner) {
+      banner.className = "mb-4 px-4 py-3 rounded-lg text-sm bg-emerald-50 border border-emerald-200 text-emerald-800";
+      banner.textContent = `✅ 已保存 · 持仓页和系统介绍页已用新值刷新。飞书早报需等下一次跑批生效。`;
+      banner.classList.remove("hidden");
+    }
+    document.getElementById("pcfg-updated-at").textContent = new Date().toLocaleString("zh-CN");
+  } catch (e) {
+    _pcfgErr(e.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function _pcfgErr(msg) {
+  const banner = document.getElementById("pcfg-banner");
+  if (!banner) return;
+  banner.className = "mb-4 px-4 py-3 rounded-lg text-sm bg-rose-50 border border-rose-200 text-rose-800";
+  banner.textContent = "❌ " + msg;
+  banner.classList.remove("hidden");
+}
 
 // 主题映射（从 RECORDS 提取）
 const THEME_OF = {};
@@ -2713,7 +3168,7 @@ function loadPlanAv6() {
   if (!confirm(
     "⚠️ 这个按钮会把方案 v6 推荐的 12 只股票批量抄进「我的持仓」，把今天的现价当作买入价。\n\n" +
     "✅ 适用场景：你已经按方案在券商下单了，想快速录入再手动改成真实成交价\n" +
-    "❌ 不要用：你还没真买，只想看方案表现 → 请直接看顶部「🤖 AI 方案模拟」tab\n\n" +
+    "❌ 不要用：你还没真买，只想看方案表现 → 请直接看顶部「📊 AI 组合方案」tab\n\n" +
     "继续吗？"
   )) return;
   if (loadHoldings().length > 0) {
@@ -2843,9 +3298,9 @@ function renderSimulation() {
       { name: "熊市 5%", type: "line", smooth: true, data: dp.p5, lineStyle: { color: "#ef4444", width: 2 }, areaStyle: { color: "rgba(239,68,68,0.1)" } },
       // 警戒线
       { type: "line", markLine: { silent: true, symbol: "none", lineStyle: { color: "#cbd5e1", type: "dashed" }, data: [
-        { yAxis: 500000, label: { formatter: "本金 50 万" } },
-        { yAxis: 400000, label: { formatter: "预警 40 万" } },
-        { yAxis: 300000, label: { formatter: "止损 30 万" } },
+        { yAxis: TOTAL_CAPITAL, label: { formatter: `本金 ${(TOTAL_CAPITAL/10000).toFixed(0)} 万` } },
+        { yAxis: WARNING_LINE,  label: { formatter: `预警 ${(WARNING_LINE/10000).toFixed(0)} 万` } },
+        { yAxis: STOPLOSS_LINE, label: { formatter: `止损 ${(STOPLOSS_LINE/10000).toFixed(0)} 万` } },
       ]} },
     ],
   });
@@ -2859,7 +3314,7 @@ function renderSimulation() {
     { label: "95%（最好）", value: dist.p95, color: "#10b981" },
   ];
   echarts.init(document.getElementById("chart-sim-final")).setOption({
-    tooltip: { trigger: "axis", formatter: p => `${p[0].name}: ${(p[0].data || 0).toLocaleString()} RMB<br>${(((p[0].data || 0) - 500000) / 500000 * 100).toFixed(2)}%` },
+    tooltip: { trigger: "axis", formatter: p => `${p[0].name}: ${(p[0].data || 0).toLocaleString()} RMB<br>${(((p[0].data || 0) - TOTAL_CAPITAL) / TOTAL_CAPITAL * 100).toFixed(2)}%` },
     grid: { left: 80, right: 20, top: 20, bottom: 40 },
     xAxis: { type: "category", data: final.map(f => f.label), axisLabel: { fontSize: 10 } },
     yAxis: { type: "value", name: "RMB", scale: true, axisLabel: { formatter: v => v.toLocaleString() } },
@@ -3017,8 +3472,8 @@ function renderRiskPane() {
         type: "line", smooth: true, data: data, lineStyle: { color: "#8b5cf6", width: 2 },
         areaStyle: { color: "rgba(139,92,246,0.1)" },
         markLine: { silent: true, symbol: "none", lineStyle: { color: "#cbd5e1", type: "dashed" }, data: [
-          { yAxis: 500000, label: { formatter: "起点 50 万" } },
-          { yAxis: 300000, label: { formatter: "止损 30 万" } },
+          { yAxis: TOTAL_CAPITAL, label: { formatter: `起点 ${(TOTAL_CAPITAL/10000).toFixed(0)} 万` } },
+          { yAxis: STOPLOSS_LINE, label: { formatter: `止损 ${(STOPLOSS_LINE/10000).toFixed(0)} 万` } },
         ]},
       }],
     });
@@ -3172,7 +3627,7 @@ function renderOptPane() {
   });
 }
 
-// ============ AI 方案模拟 Tab ============
+// ============ AI 组合方案 Tab ============
 function renderPlanBacktest() {
   const data = _BACKTEST || {};
   const dynData = _DYNAMIC || {};
@@ -3474,229 +3929,6 @@ function renderPlanBacktest() {
   }
 }
 
-// ============ 历史 Tab ============
-let historyInited = false;
-let HISTORY_PERIOD = "3mo";  // 默认 90 天
-const PERIOD_LABEL = { "1mo": "30 天", "3mo": "90 天", "6mo": "180 天", "1y": "1 年", "2y": "2 年" };
-
-function initHistorySelect() {
-  if (historyInited) return;
-  const sel = document.getElementById("history-codes");
-  if (!sel) return;
-  // 用 history_data.json 里实际有数据的股票（保证选了一定能加载）
-  const availableCodes = HISTORY_DATA && HISTORY_DATA.tickers ? Object.keys(HISTORY_DATA.tickers) : [];
-  const opts = availableCodes.map(code => {
-    const r = RECORDS.find(x => x.code === code);
-    const name = (r && r.name) || (HISTORY_DATA.tickers[code].name) || code;
-    return `<option value="${code}">${name} (${code})</option>`;
-  }).sort();
-  sel.innerHTML = opts.join("");
-  historyInited = true;
-}
-
-function setPeriod(p) {
-  HISTORY_PERIOD = p;
-  document.querySelectorAll(".period-btn").forEach(b => {
-    if (b.dataset.period === p) {
-      b.classList.add("bg-violet-600", "text-white", "border-violet-600");
-    } else {
-      b.classList.remove("bg-violet-600", "text-white", "border-violet-600");
-    }
-  });
-  // 如果有选中股票，自动重新加载
-  const sel = document.getElementById("history-codes");
-  if (sel && sel.selectedOptions.length > 0) loadHistoryCharts();
-}
-
-async function loadHistoryByTheme(themeName, codes) {
-  // 在选择框里高亮选中（视觉反馈）
-  const sel = document.getElementById("history-codes");
-  if (sel) {
-    Array.from(sel.options).forEach(o => o.selected = codes.includes(o.value));
-  }
-  await loadHistoryCharts(codes, themeName);
-}
-
-// 周期 → 截取最近 N 天
-const PERIOD_DAYS = { "1mo": 22, "3mo": 65, "6mo": 130, "1y": 252, "2y": 504 };
-
-async function loadHistoryCharts(presetCodes, themeName) {
-  let codes = presetCodes;
-  if (!codes) {
-    const sel = document.getElementById("history-codes");
-    codes = Array.from(sel.selectedOptions).slice(0, 8).map(o => o.value);
-  }
-  if (!codes || codes.length === 0) { alert("请至少选 1 只股票"); return; }
-
-  // 显示卡片 + loading
-  document.getElementById("history-chart-card").style.display = "";
-  document.getElementById("history-chart-title").textContent =
-    `📈 归一化走势对比 · ${themeName ? "[" + themeName + "] " : ""}${PERIOD_LABEL[HISTORY_PERIOD]} · ${codes.length} 只`;
-
-  if (!HISTORY_DATA || !HISTORY_DATA.tickers) {
-    document.getElementById("chart-history").innerHTML = '<div class="text-center text-rose-500 py-12">history_data.json 未生成 — 请先跑 <code>python3 _fetch_history_for_dashboard.py</code></div>';
-    return;
-  }
-
-  // 从本地 history_data.json 读数据（无 CORS）
-  const days = PERIOD_DAYS[HISTORY_PERIOD] || 65;
-  const datasets = [];
-  const missing = [];
-  for (const code of codes) {
-    const td = HISTORY_DATA.tickers[code];
-    if (!td || !td.ts || td.ts.length === 0) {
-      missing.push(code);
-      continue;
-    }
-    // 取最近 N 天
-    const ts = td.ts.slice(-days);
-    const closes = td.close.slice(-days);
-    const r = RECORDS.find(x => x.code === code);
-    // 计算日收益率
-    const returns = [];
-    for (let i = 1; i < closes.length; i++) {
-      if (closes[i] != null && closes[i-1] != null && closes[i-1] > 0) {
-        returns.push((closes[i] - closes[i-1]) / closes[i-1]);
-      } else {
-        returns.push(null);
-      }
-    }
-    datasets.push({ code, name: (r && r.name) || td.name || code, ts, closes, returns });
-  }
-
-  if (datasets.length === 0) {
-    document.getElementById("chart-history").innerHTML =
-      `<div class="text-center text-rose-500 py-12">所选股票本地都没有历史数据。<br>缺失：${missing.join(", ")}<br>请运行：<code>python3 _fetch_history_for_dashboard.py</code></div>`;
-    return;
-  }
-  if (missing.length > 0) {
-    console.warn("History data missing for:", missing);
-  }
-
-  // 1. 渲染走势图
-  const series = datasets.map(d => {
-    const first = d.closes.find(c => c != null);
-    const norm = d.closes.map(c => c == null ? null : (c / first * 100));
-    return { name: d.name, type: "line", smooth: true, data: d.ts.map((t, i) => [t, norm[i]]) };
-  });
-  document.getElementById("chart-history").innerHTML = "";
-  echarts.init(document.getElementById("chart-history")).setOption({
-    tooltip: { trigger: "axis" },
-    legend: { top: 0, type: "scroll" },
-    grid: { left: 50, right: 30, top: 50, bottom: 40 },
-    xAxis: { type: "time" },
-    yAxis: { type: "value", name: "归一化 (起点=100)" },
-    series,
-  });
-
-  // 2. 渲染涨跌幅排行
-  const ranking = datasets.map(d => {
-    const validCloses = d.closes.filter(c => c != null);
-    const first = validCloses[0];
-    const last = validCloses[validCloses.length - 1];
-    const pct = first && last ? (last - first) / first * 100 : null;
-    // 最大回撤
-    let peak = first, maxDD = 0;
-    for (const c of validCloses) {
-      if (c > peak) peak = c;
-      const dd = (c - peak) / peak * 100;
-      if (dd < maxDD) maxDD = dd;
-    }
-    // 年化波动率 (returns 标准差 × sqrt(252))
-    const validReturns = d.returns.filter(r => r != null);
-    const mean = validReturns.reduce((a,b) => a+b, 0) / validReturns.length;
-    const variance = validReturns.reduce((a,b) => a + (b-mean)*(b-mean), 0) / validReturns.length;
-    const annualVol = Math.sqrt(variance * 252) * 100;
-    return { name: d.name, code: d.code, pct, maxDD, annualVol, first, last };
-  }).sort((a,b) => (b.pct || -999) - (a.pct || -999));
-
-  document.getElementById("history-ranking-card").style.display = "";
-  document.getElementById("history-ranking").innerHTML = `
-    <table class="w-full text-sm">
-      <thead class="bg-slate-100 text-slate-700">
-        <tr>
-          <th class="px-3 py-2 text-left">#</th>
-          <th class="px-3 py-2 text-left">股票</th>
-          <th class="px-3 py-2 text-right">起点</th>
-          <th class="px-3 py-2 text-right">终点</th>
-          <th class="px-3 py-2 text-right">涨跌幅</th>
-          <th class="px-3 py-2 text-right">最大回撤</th>
-          <th class="px-3 py-2 text-right">年化波动率</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${ranking.map((r, i) => `
-          <tr class="border-t border-slate-100 hover:bg-slate-50">
-            <td class="px-3 py-2">${i+1}</td>
-            <td class="px-3 py-2 font-medium">${r.name} <span class="text-xs text-slate-500 font-mono">${r.code}</span></td>
-            <td class="px-3 py-2 text-right font-mono">${r.first ? r.first.toFixed(2) : '-'}</td>
-            <td class="px-3 py-2 text-right font-mono">${r.last ? r.last.toFixed(2) : '-'}</td>
-            <td class="px-3 py-2 text-right font-mono ${r.pct >= 0 ? 'text-emerald-600' : 'text-rose-600'} font-bold">${r.pct >= 0 ? '+' : ''}${r.pct ? r.pct.toFixed(1) : '-'}%</td>
-            <td class="px-3 py-2 text-right font-mono text-rose-500">${r.maxDD.toFixed(1)}%</td>
-            <td class="px-3 py-2 text-right font-mono">${r.annualVol.toFixed(1)}%</td>
-          </tr>`).join("")}
-      </tbody>
-    </table>`;
-
-  // 3. 渲染相关性矩阵 (≥2 只时)
-  if (datasets.length >= 2) {
-    document.getElementById("history-corr-card").style.display = "";
-    // 用最短的 returns 长度对齐
-    const minLen = Math.min(...datasets.map(d => d.returns.filter(r => r != null).length));
-    const aligned = datasets.map(d => d.returns.filter(r => r != null).slice(-minLen));
-
-    function pearson(x, y) {
-      const n = x.length;
-      const mx = x.reduce((a,b)=>a+b,0) / n;
-      const my = y.reduce((a,b)=>a+b,0) / n;
-      let num = 0, dx = 0, dy = 0;
-      for (let i = 0; i < n; i++) {
-        num += (x[i] - mx) * (y[i] - my);
-        dx += (x[i] - mx) ** 2;
-        dy += (y[i] - my) ** 2;
-      }
-      const denom = Math.sqrt(dx * dy);
-      return denom > 0 ? num / denom : 0;
-    }
-
-    const N = datasets.length;
-    const matrix = [];
-    for (let i = 0; i < N; i++) {
-      const row = [];
-      for (let j = 0; j < N; j++) {
-        row.push(i === j ? 1.0 : pearson(aligned[i], aligned[j]));
-      }
-      matrix.push(row);
-    }
-
-    const corrColor = (v) => {
-      // 1.0 → 浓绿; 0 → 白; -1 → 浓红
-      if (v > 0.7) return "bg-emerald-300";
-      if (v > 0.5) return "bg-emerald-200";
-      if (v > 0.3) return "bg-emerald-100";
-      if (v > 0) return "bg-slate-50";
-      if (v > -0.3) return "bg-rose-50";
-      if (v > -0.5) return "bg-rose-100";
-      return "bg-rose-200";
-    };
-
-    let corrHtml = '<table class="text-xs"><thead><tr><th class="px-2 py-1"></th>';
-    for (const d of datasets) corrHtml += `<th class="px-2 py-1 font-mono">${d.code}</th>`;
-    corrHtml += '</tr></thead><tbody>';
-    for (let i = 0; i < N; i++) {
-      corrHtml += `<tr><th class="px-2 py-1 text-left font-mono">${datasets[i].code}</th>`;
-      for (let j = 0; j < N; j++) {
-        corrHtml += `<td class="px-2 py-1 text-center font-mono ${corrColor(matrix[i][j])}">${matrix[i][j].toFixed(2)}</td>`;
-      }
-      corrHtml += '</tr>';
-    }
-    corrHtml += '</tbody></table>';
-    document.getElementById("history-corr").innerHTML = corrHtml;
-  } else {
-    document.getElementById("history-corr-card").style.display = "none";
-  }
-}
-
 const aiCount = {};
 RECORDS.forEach(r => { const k = r.ai_relevance || "未分类"; aiCount[k] = (aiCount[k] || 0) + 1; });
 echarts.init(document.getElementById("chart-ai")).setOption({
@@ -3818,7 +4050,7 @@ document.getElementById("picks-today-list").innerHTML = todayPicks.length > 0
   : '<div class="col-span-3 text-center text-slate-500 text-sm py-4">暂无入选数据 — daily_picks_v5 跑完后会显示</div>';
 
 
-// ============ 每日优选回顾 ============
+// ============ 自选股·今日 Top回顾 ============
 const validPicks = PICKS.filter(p => p.pct != null && p.pct !== "");
 const totalPicks = PICKS.length;
 const validCount = validPicks.length;
@@ -3921,56 +4153,276 @@ function pickRow(p) {
 document.getElementById("picks-top").innerHTML = sortedPicks.slice(0, 5).map(pickRow).join("") || '<div class="text-slate-500 text-sm">暂无数据</div>';
 document.getElementById("picks-bottom").innerHTML = sortedPicks.slice(-5).reverse().map(pickRow).join("") || '<div class="text-slate-500 text-sm">暂无数据</div>';
 
-// ============ 🔍 候选发现 ============
+// ============ 🔍 AI 推荐 ============
+// 工具:格式化 alpha 数字 +color
+function _fmtAlpha(v) {
+  if (v == null || v === undefined || isNaN(v)) return '<span class="text-slate-300">—</span>';
+  const sign = v >= 0 ? "+" : "";
+  const cls = v >= 0 ? "text-emerald-600" : "text-rose-600";
+  return `<span class="font-mono ${cls}">${sign}${v.toFixed(1)}%</span>`;
+}
+
+// 工具:从 DISCOVERY_HISTORY 找 (date, ticker) 对应的 alpha 记录
+function _lookupTrackingForToday(ticker) {
+  if (!Array.isArray(DISCOVERY_HISTORY) || !DISCOVERY_HISTORY.length) return null;
+  // 找最早一次推荐这个 ticker 的 alpha (最早推荐说明跟踪时间最长)
+  const recs = DISCOVERY_HISTORY.filter(h => h.ticker === ticker);
+  if (!recs.length) return null;
+  recs.sort((a, b) => (a.generated_date || "").localeCompare(b.generated_date || ""));
+  return recs[0];  // 最早那次
+}
+
+// 工具:聚合统计 — 用于准确度面板
+function _computeDiscoveryStats() {
+  const all = (DISCOVERY_HISTORY || []).filter(r => r.alpha_5d != null || r.alpha_20d != null);
+  if (!all.length) {
+    return { totalRecs: (DISCOVERY_HISTORY || []).length, evaluated: 0, panel: null };
+  }
+  const mean = arr => arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : null;
+  const a1 = all.map(r => r.alpha_1d).filter(v => v != null);
+  const a5 = all.map(r => r.alpha_5d).filter(v => v != null);
+  const a20 = all.map(r => r.alpha_20d).filter(v => v != null);
+  const a60 = all.map(r => r.alpha_60d).filter(v => v != null);
+  const hit20 = a20.filter(v => v > 5).length;
+  const hitRate = a20.length ? (hit20 / a20.length * 100) : null;
+  // composite_z 分位 vs alpha_20d 看相关性(简化 IC: 高分组 vs 低分组的 alpha 差异)
+  const zRanked = all.filter(r => r.composite_z != null && r.alpha_20d != null)
+    .sort((a, b) => b.composite_z - a.composite_z);
+  let topAlpha20 = null, botAlpha20 = null;
+  if (zRanked.length >= 6) {
+    const tier = Math.floor(zRanked.length / 3);
+    topAlpha20 = mean(zRanked.slice(0, tier).map(r => r.alpha_20d));
+    botAlpha20 = mean(zRanked.slice(-tier).map(r => r.alpha_20d));
+  }
+  return {
+    totalRecs: (DISCOVERY_HISTORY || []).length,
+    evaluated: all.length,
+    panel: {
+      alpha_1d: mean(a1),
+      alpha_5d: mean(a5),
+      alpha_20d: mean(a20),
+      alpha_60d: mean(a60),
+      hitRate20d: hitRate,
+      hitCount20d: hit20,
+      hitTotal20d: a20.length,
+      topAlpha20: topAlpha20,
+      botAlpha20: botAlpha20,
+      ic_spread: (topAlpha20 != null && botAlpha20 != null) ? (topAlpha20 - botAlpha20) : null,
+    }
+  };
+}
+
 (function renderDiscovery() {
   const wrap = document.getElementById("discovery-table-wrap");
   const empty = document.getElementById("discovery-empty");
   const meta = document.getElementById("discovery-meta");
   const tbody = document.getElementById("discovery-table-body");
+  const accuracyEl = document.getElementById("discovery-accuracy");
+  const historyEl = document.getElementById("discovery-history-list");
   const cands = (DISCOVERY && DISCOVERY.candidates) || [];
+
+  // ── sub-tab 计数显示
+  const tabCountEl = document.getElementById("disc-tab-count");
+  if (tabCountEl) {
+    const nHist = Array.isArray(DISCOVERY_HISTORY) ? DISCOVERY_HISTORY.length : 0;
+    const nDates = nHist ? new Set(DISCOVERY_HISTORY.map(h => h.generated_date)).size : 0;
+    tabCountEl.textContent = `今日 ${cands.length} 只 · 历史 ${nDates} 天 / ${nHist} 条推荐`;
+  }
+
+  // ── 准确度面板(基于 DISCOVERY_HISTORY 历史回测数据)
+  const stats = _computeDiscoveryStats();
+  if (accuracyEl) {
+    if (!stats.totalRecs) {
+      accuracyEl.innerHTML = `<div class="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-800">
+        <strong>📊 算法准确度</strong> · 暂无历史推荐数据 — 每天跑一次 discover_candidates.py + evaluate_discovery.py,数据将自动累积。1 周后回来看第一组 5d alpha,1 个月后看 20d alpha。</div>`;
+    } else if (!stats.evaluated) {
+      accuracyEl.innerHTML = `<div class="bg-sky-50 border border-sky-200 rounded-lg p-4 text-sm text-sky-800">
+        <strong>📊 算法准确度</strong> · 已记录 ${stats.totalRecs} 条推荐,但**还没有 alpha 数据**(可能 evaluate_discovery 还没跑,或推荐才生成不久 yfinance 拉不到对应日期的价格)。</div>`;
+    } else {
+      const p = stats.panel;
+      const cell = (label, v, hint) => {
+        const fmt = (v == null) ? "—" : ((v >= 0 ? "+" : "") + v.toFixed(2) + "%");
+        const cls = v == null ? "text-slate-400" : (v >= 0 ? "text-emerald-600" : "text-rose-600");
+        return `<div class="bg-white rounded-lg p-3 border border-slate-200">
+          <div class="text-xs text-slate-500">${label}</div>
+          <div class="text-2xl font-bold ${cls} font-mono">${fmt}</div>
+          ${hint ? `<div class="text-[10px] text-slate-400 mt-0.5">${hint}</div>` : ""}
+        </div>`;
+      };
+      const hitCell = (p.hitRate20d == null) ? "" : `<div class="bg-white rounded-lg p-3 border border-slate-200">
+        <div class="text-xs text-slate-500">20d 大涨命中率</div>
+        <div class="text-2xl font-bold text-violet-700 font-mono">${p.hitRate20d.toFixed(0)}%</div>
+        <div class="text-[10px] text-slate-400 mt-0.5">${p.hitCount20d}/${p.hitTotal20d} 推荐 alpha >+5%</div>
+      </div>`;
+      const icCell = (p.ic_spread == null) ? "" : `<div class="bg-white rounded-lg p-3 border border-slate-200">
+        <div class="text-xs text-slate-500">高低分组 20d α 差(信号 IC)</div>
+        <div class="text-xl font-bold font-mono ${p.ic_spread >= 0 ? 'text-emerald-600' : 'text-rose-600'}">${p.ic_spread >= 0 ? '+' : ''}${p.ic_spread.toFixed(2)}%</div>
+        <div class="text-[10px] text-slate-400 mt-0.5">Top 1/3 vs Bot 1/3 平均 α 差</div>
+      </div>`;
+
+      accuracyEl.innerHTML = `<div class="bg-gradient-to-br from-violet-50 to-sky-50 rounded-xl p-4 border border-violet-200">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="text-xl">📊</span>
+          <h3 class="text-lg font-bold text-slate-900">算法准确度</h3>
+          <span class="text-xs text-slate-500">基于过去 ${stats.totalRecs} 次推荐 · ${stats.evaluated} 条已评估</span>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          ${cell("平均 1d α", p.alpha_1d, "1 个交易日 vs SPY")}
+          ${cell("平均 5d α", p.alpha_5d, "5 个交易日 vs SPY")}
+          ${cell("平均 20d α", p.alpha_20d, "20 个交易日 ≈ 1 个月")}
+          ${cell("平均 60d α", p.alpha_60d, "60 个交易日 ≈ 3 个月")}
+          ${hitCell}
+          ${icCell}
+        </div>
+        <p class="text-xs text-slate-500 mt-3">
+          📌 <strong>α (alpha)</strong> = 推荐后涨幅 - 同期 SPY 涨幅。正值 = 跑赢基准,负值 = 跑输。
+          <strong>信号 IC</strong> 正值越大,说明 composite_z 高分组真的更准。
+        </p>
+      </div>`;
+    }
+  }
+
+  // ── 今日推荐表格
   if (!cands.length) {
     if (wrap) wrap.classList.add("hidden");
     if (empty) empty.classList.remove("hidden");
-    return;
+  } else {
+    meta.innerHTML = `生成于 <strong>${DISCOVERY.generated_at || "?"}</strong> · `
+      + `universe ${DISCOVERY.universe_size || "?"} 只(已排除 watchlist ${DISCOVERY.watchlist_excluded || "?"} 只) · `
+      + `数据源 ${(DISCOVERY.etf_sources || []).join(" / ")} · `
+      + `市值门槛 $${((DISCOVERY.min_market_cap_usd || 0) / 1e9).toFixed(0)}B`;
+    tbody.innerHTML = cands.map(c => {
+      const cap = c.market_cap_usd ? (c.market_cap_usd / 1e9).toFixed(1) : "-";
+      const f = c.f_score == null ? "-" : Math.round(c.f_score);
+      const fColor = c.f_score >= 7 ? "text-emerald-600" : (c.f_score >= 4 ? "text-amber-600" : "text-rose-600");
+      const mom = c.momentum_12_1 == null ? "-" : (c.momentum_12_1 > 0 ? "+" : "") + c.momentum_12_1.toFixed(1) + "%";
+      const momColor = (c.momentum_12_1 || 0) > 0 ? "text-emerald-600" : "text-rose-600";
+      const zColor = c.composite_z > 0 ? "text-emerald-600 font-bold" : "text-rose-600";
+      const etfs = (c.etfs || []).map(e => `<span class="inline-block px-1.5 py-0.5 mr-1 text-xs bg-indigo-100 text-indigo-700 rounded">${e}</span>`).join("");
+      const market = (() => {
+        const t = c.ticker || "";
+        if (t.endsWith(".SS")) return "🇨🇳 沪 A";
+        if (t.endsWith(".SZ")) return "🇨🇳 深 A";
+        if (t.endsWith(".HK")) return "🇭🇰 港股";
+        if (t.endsWith(".TW") || t.endsWith(".TWO")) return "🇹🇼 台股";
+        if (t.endsWith(".KS")) return "🇰🇷 韩股";
+        if (t.endsWith(".T"))  return "🇯🇵 日股";
+        if (t.endsWith(".AX")) return "🇦🇺 澳股";
+        if (t.endsWith(".L"))  return "🇬🇧 英股";
+        return "🇺🇸 美股";
+      })();
+      // 从历史里查 alpha (用本 ticker 最早一次推荐的 5d/20d alpha — 它跟踪时间最长)
+      const track = _lookupTrackingForToday(c.ticker);
+      const alpha5 = track ? track.alpha_5d : null;
+      const alpha20 = track ? track.alpha_20d : null;
+      return `<tr class="hover:bg-slate-50">
+        <td class="px-3 py-2 font-mono text-slate-500">${c.rank}</td>
+        <td class="px-3 py-2 font-mono font-semibold text-slate-900">${c.ticker}</td>
+        <td class="px-3 py-2 text-slate-700">
+          <div>${c.name || ""}</div>
+          <div class="mt-0.5">${stockPill(c.ticker, {layout: "mini"})}</div>
+        </td>
+        <td class="px-3 py-2 text-xs text-slate-700 whitespace-nowrap">${market}</td>
+        <td class="px-3 py-2 text-xs text-slate-500">${c.sector || ""}</td>
+        <td class="px-3 py-2 text-right font-mono ${zColor}">${c.composite_z >= 0 ? "+" : ""}${c.composite_z.toFixed(2)}</td>
+        <td class="px-3 py-2 text-right font-mono ${fColor}">${f}</td>
+        <td class="px-3 py-2 text-right font-mono ${momColor}">${mom}</td>
+        <td class="px-3 py-2 text-right font-mono text-slate-700">${c.analyst_score || 0}</td>
+        <td class="px-3 py-2 text-right font-mono text-slate-700">${cap}</td>
+        <td class="px-3 py-2 text-right">${_fmtAlpha(alpha5)}</td>
+        <td class="px-3 py-2 text-right">${_fmtAlpha(alpha20)}</td>
+        <td class="px-3 py-2">${etfs}</td>
+        <td class="px-3 py-2 text-center">
+          <button data-ticker="${_esc(c.ticker)}"
+                  onclick="addDiscoveryToWatchlist('${_esc(c.ticker)}', this)"
+                  class="discovery-add-btn px-2 py-1 text-xs bg-violet-600 hover:bg-violet-700 text-white rounded transition whitespace-nowrap">
+            ➕ 加自选
+          </button>
+        </td>
+      </tr>`;
+    }).join("");
+
+    // 异步加载 watchlist,把已在自选里的票按钮置灰
+    _markDiscoveryAddedButtons();
   }
-  meta.innerHTML = `生成于 <strong>${DISCOVERY.generated_at || "?"}</strong> · `
-    + `universe ${DISCOVERY.universe_size || "?"} 只（已排除 watchlist ${DISCOVERY.watchlist_excluded || "?"} 只）· `
-    + `数据源 ${(DISCOVERY.etf_sources || []).join(" / ")} · `
-    + `市值门槛 $${((DISCOVERY.min_market_cap_usd || 0) / 1e9).toFixed(0)}B`;
-  tbody.innerHTML = cands.map(c => {
-    const cap = c.market_cap_usd ? (c.market_cap_usd / 1e9).toFixed(1) : "-";
-    const f = c.f_score == null ? "-" : Math.round(c.f_score);
-    const fColor = c.f_score >= 7 ? "text-emerald-600" : (c.f_score >= 4 ? "text-amber-600" : "text-rose-600");
-    const mom = c.momentum_12_1 == null ? "-" : (c.momentum_12_1 > 0 ? "+" : "") + c.momentum_12_1.toFixed(1) + "%";
-    const momColor = (c.momentum_12_1 || 0) > 0 ? "text-emerald-600" : "text-rose-600";
-    const zColor = c.composite_z > 0 ? "text-emerald-600 font-bold" : "text-rose-600";
-    const etfs = (c.etfs || []).map(e => `<span class="inline-block px-1.5 py-0.5 mr-1 text-xs bg-indigo-100 text-indigo-700 rounded">${e}</span>`).join("");
-    const market = (() => {
-      const t = c.ticker || "";
-      if (t.endsWith(".SS")) return "🇨🇳 沪 A";
-      if (t.endsWith(".SZ")) return "🇨🇳 深 A";
-      if (t.endsWith(".HK")) return "🇭🇰 港股";
-      if (t.endsWith(".TW") || t.endsWith(".TWO")) return "🇹🇼 台股";
-      if (t.endsWith(".KS")) return "🇰🇷 韩股";
-      if (t.endsWith(".T"))  return "🇯🇵 日股";
-      if (t.endsWith(".AX")) return "🇦🇺 澳股";
-      if (t.endsWith(".L"))  return "🇬🇧 英股";
-      return "🇺🇸 美股";
-    })();
-    return `<tr class="hover:bg-slate-50">
-      <td class="px-3 py-2 font-mono text-slate-500">${c.rank}</td>
-      <td class="px-3 py-2 font-mono font-semibold text-slate-900">${c.ticker}</td>
-      <td class="px-3 py-2 text-slate-700">${c.name || ""}</td>
-      <td class="px-3 py-2 text-xs text-slate-700 whitespace-nowrap">${market}</td>
-      <td class="px-3 py-2 text-xs text-slate-500">${c.sector || ""}</td>
-      <td class="px-3 py-2 text-right font-mono ${zColor}">${c.composite_z >= 0 ? "+" : ""}${c.composite_z.toFixed(2)}</td>
-      <td class="px-3 py-2 text-right font-mono ${fColor}">${f}</td>
-      <td class="px-3 py-2 text-right font-mono ${momColor}">${mom}</td>
-      <td class="px-3 py-2 text-right font-mono text-slate-700">${c.analyst_score || 0}</td>
-      <td class="px-3 py-2 text-right font-mono text-slate-700">${cap}</td>
-      <td class="px-3 py-2">${etfs}</td>
-    </tr>`;
-  }).join("");
+
+  // ── 推荐历史(按日期分组,折叠/展开)
+  if (historyEl) {
+    if (!Array.isArray(DISCOVERY_HISTORY) || !DISCOVERY_HISTORY.length) {
+      historyEl.innerHTML = `<div class="text-sm text-slate-500 bg-white rounded-lg p-4 border border-slate-200">
+        暂无历史推荐数据。每次跑 discover_candidates.py 会自动追加一批,跨日累积。
+      </div>`;
+    } else {
+      // 按 generated_date 分组
+      const byDate = {};
+      DISCOVERY_HISTORY.forEach(h => {
+        const d = h.generated_date || "未知";
+        (byDate[d] = byDate[d] || []).push(h);
+      });
+      const dates = Object.keys(byDate).sort().reverse();  // 倒序
+
+      historyEl.innerHTML = dates.map(d => {
+        const recs = byDate[d];
+        recs.sort((a, b) => (a.rank || 0) - (b.rank || 0));
+        // 当日均 alpha
+        const a5s = recs.map(r => r.alpha_5d).filter(v => v != null);
+        const a20s = recs.map(r => r.alpha_20d).filter(v => v != null);
+        const meanA5 = a5s.length ? (a5s.reduce((s, v) => s + v, 0) / a5s.length) : null;
+        const meanA20 = a20s.length ? (a20s.reduce((s, v) => s + v, 0) / a20s.length) : null;
+        const hit5 = a5s.filter(v => v > 5).length;
+
+        const summary = `<div class="flex items-center gap-3 text-sm">
+          <span class="font-bold text-slate-900">${d}</span>
+          <span class="text-slate-500">推荐 ${recs.length} 只</span>
+          <span class="text-slate-400">·</span>
+          <span class="text-xs text-slate-600">5d α: ${meanA5 == null ? "—" : (meanA5 >= 0 ? "+" : "") + meanA5.toFixed(2) + "%"}</span>
+          <span class="text-xs text-slate-600">20d α: ${meanA20 == null ? "—" : (meanA20 >= 0 ? "+" : "") + meanA20.toFixed(2) + "%"}</span>
+          <span class="text-xs text-slate-600">大涨命中: ${hit5}/${a5s.length || "—"}</span>
+        </div>`;
+
+        const rows = recs.map(r => {
+          const a1 = _fmtAlpha(r.alpha_1d);
+          const a5 = _fmtAlpha(r.alpha_5d);
+          const a20 = _fmtAlpha(r.alpha_20d);
+          const a60 = _fmtAlpha(r.alpha_60d);
+          return `<tr class="hover:bg-slate-50">
+            <td class="px-2 py-1 font-mono text-xs text-slate-500">#${r.rank}</td>
+            <td class="px-2 py-1 font-mono text-xs font-bold">${r.ticker}</td>
+            <td class="px-2 py-1 text-xs text-slate-700 max-w-xs truncate">${r.name || ""}</td>
+            <td class="px-2 py-1 text-xs">${stockPill(r.ticker, {layout: "mini"})}</td>
+            <td class="px-2 py-1 text-right text-xs font-mono">${r.composite_z != null ? (r.composite_z >= 0 ? "+" : "") + r.composite_z.toFixed(2) : "—"}</td>
+            <td class="px-2 py-1 text-right text-xs">${a1}</td>
+            <td class="px-2 py-1 text-right text-xs">${a5}</td>
+            <td class="px-2 py-1 text-right text-xs">${a20}</td>
+            <td class="px-2 py-1 text-right text-xs">${a60}</td>
+          </tr>`;
+        }).join("");
+
+        const id = "disc-hist-" + d.replace(/[^a-zA-Z0-9]/g, "_");
+        return `<details class="bg-white rounded-lg border border-slate-200 overflow-hidden">
+          <summary class="cursor-pointer px-4 py-3 hover:bg-slate-50">${summary}</summary>
+          <div class="px-4 py-3 border-t border-slate-100 overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead class="text-[10px] text-slate-500 uppercase">
+                <tr>
+                  <th class="px-2 py-1 text-left">排名</th>
+                  <th class="px-2 py-1 text-left">代码</th>
+                  <th class="px-2 py-1 text-left">名字</th>
+                  <th class="px-2 py-1 text-left">链条</th>
+                  <th class="px-2 py-1 text-right">z 分</th>
+                  <th class="px-2 py-1 text-right">1d α</th>
+                  <th class="px-2 py-1 text-right">5d α</th>
+                  <th class="px-2 py-1 text-right">20d α</th>
+                  <th class="px-2 py-1 text-right">60d α</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">${rows}</tbody>
+            </table>
+          </div>
+        </details>`;
+      }).join("");
+    }
+  }
 })();
 
 // ============ 估值视角 ============
@@ -4461,7 +4913,7 @@ def _uncal_badge(reason_short):
 
 
 def scoring_rules_panel_html(calib):
-    """渲染「每日优选 · 打分规则」面板。
+    """渲染「自选股·今日 Top · 打分规则」面板。
 
     calib=None 时显示"未校准"警告 + 全部维度标⚪未实证
     calib 存在时按 factor_weights.json 内容动态展示每个因子的 IC 实证状态
@@ -4534,7 +4986,7 @@ def scoring_rules_panel_html(calib):
         <div>
           <h2 class="text-2xl font-bold text-slate-900 flex items-center gap-3">
             <span class="text-3xl">📐</span>
-            每日优选 · 打分规则（透明 + IC 实证）
+            自选股·今日 Top · 打分规则（透明 + IC 实证）
           </h2>
           <p class="text-sm text-slate-600 mt-1 ml-12">点击展开 — 看每个维度有没有数据实证支撑</p>
         </div>
@@ -4682,7 +5134,7 @@ def scoring_rules_panel_html(calib):
           <li><strong>4 维度中 3 维（AI/估值/可信度）权重未经 IC 实证</strong>：等 picks 表 ≥ 3 个月可做 logit 校准</li>
           <li><strong>不考虑宏观/政策风险</strong>：地缘冲突、关税、监管这些黑天鹅打分没法量化</li>
           <li><strong>2018 类熊市趋势 IC 反转</strong>：所有趋势因子在系统性下跌中变负 alpha，依赖 v7 防御信号</li>
-          <li><strong>只用 watchlist 内 37 只</strong>：不是从全市场万只里挑，覆盖范围有限</li>
+          <li><strong>只用 自选股内 37 只</strong>：不是从全市场万只里挑，覆盖范围有限</li>
         </ul>
       </div>
     </div>
@@ -5435,7 +5887,7 @@ def build():
     print(f"  共 {len(records)} 条 watchlist")
     pick_items = fetch_records(token, PICKS_URL)
     picks = extract_picks(pick_items)
-    print(f"  共 {len(picks)} 条每日优选")
+    print(f"  共 {len(picks)} 条自选股·今日 Top")
 
     # 读取模拟结果（如果存在）
     sim_file = os.path.join(_REPO, "simulation_plan_a.json")
@@ -5504,7 +5956,7 @@ def build():
     if history_data:
         print(f"  历史数据已加载 ({len(history_data.get('tickers', {}))} 只 × 2 年日K)")
     if discovery:
-        print(f"  候选发现已加载 ({len(discovery.get('candidates', []))} 只 · universe {discovery.get('universe_size', 0)})")
+        print(f"  AI 推荐已加载 ({len(discovery.get('candidates', []))} 只 · universe {discovery.get('universe_size', 0)})")
     print(f"  [DuckDB 镜像] risk={'✓' if risk_metrics_db else '✗'} 13f={'✓' if track_13f_db else '✗'} "
           f"opt={'✓' if optimization_db else '✗'} plan={'✓' if plan_a_v6_db else '✗'} "
           f"hist={'✓' if history_data_db else '✗'}")
@@ -5582,11 +6034,44 @@ def build():
             }
             for r in wl_rows
         }
-        print(f"  Stock Pill 链条上下文已加载 [DuckDB]({len(chain_info)} 条)")
+        n_wl = len(chain_info)
+        # 2026-05-11 PM: 合并 candidate / 其他非 watchlist ticker 的链条覆盖文件
+        # (让AI 推荐里的 ticker 也能在 stockPill 显示链条信息)
+        overrides_path = os.path.join(_REPO, "data", "stock_chain_overrides.json")
+        if os.path.exists(overrides_path):
+            with open(overrides_path, encoding="utf-8") as f:
+                overrides = json.load(f)
+            n_added = 0
+            for code, meta in overrides.items():
+                if code.startswith("_"):  # 跳过 _comment / _schema_version 这些元数据键
+                    continue
+                if code not in chain_info:  # watchlist 优先
+                    chain_info[code] = meta
+                    n_added += 1
+            print(f"  Stock Pill 链条上下文已加载 [DuckDB+overrides]"
+                  f"({n_wl} watchlist + {n_added} overrides = {len(chain_info)} 条)")
+        else:
+            print(f"  Stock Pill 链条上下文已加载 [DuckDB]({n_wl} 条)")
     except Exception as e:
         print(f"  ⚠️ 链条上下文加载失败: {e}")
         chain_info = {}
     html = html.replace("{WATCHLIST_CHAIN_INFO_JSON}", json.dumps(chain_info, ensure_ascii=False))
+
+    # AI 推荐的历史推荐 + 准确度跟踪(DuckDB discovery_history JOIN tracking)
+    try:
+        from stock_db import fetch_discovery_history
+        disc_hist = fetch_discovery_history(days=90)  # 过去 90 天
+        # date / datetime → ISO string,方便 JSON
+        for r in disc_hist:
+            for k in ("generated_date", "last_refreshed_at"):
+                v = r.get(k)
+                if v is not None and hasattr(v, "isoformat"):
+                    r[k] = v.isoformat()
+        print(f"  Discovery 历史已加载 [DuckDB]({len(disc_hist)} 条推荐记录)")
+    except Exception as e:
+        print(f"  ⚠️ Discovery 历史加载失败: {e}")
+        disc_hist = []
+    html = html.replace("{DISCOVERY_HISTORY_JSON}", json.dumps(disc_hist, ensure_ascii=False, default=str))
     html = html.replace("{RECORDS_JSON}", json.dumps(records, ensure_ascii=False))
     html = html.replace("{PICKS_JSON}", json.dumps(picks, ensure_ascii=False))
     html = html.replace("{SIMULATION_JSON}", json.dumps(simulation, ensure_ascii=False))
@@ -5594,10 +6079,9 @@ def build():
     html = html.replace("{TRACK_13F_JSON_DB}", json.dumps(track_13f_db, ensure_ascii=False))
     html = html.replace("{OPTIMIZATION_JSON_DB}", json.dumps(optimization_db, ensure_ascii=False))
     html = html.replace("{PLAN_A_V6_JSON_DB}", json.dumps(plan_a_v6_db, ensure_ascii=False))
-    html = html.replace("{HISTORY_DATA_JSON_DB}", json.dumps(history_data_db, ensure_ascii=False))
     html = html.replace("{DISCOVERY_JSON}", json.dumps(discovery, ensure_ascii=False))
 
-    # AI 方案模拟 — Static (A 类: buy-and-hold from inception) — DuckDB 优先，fallback JSON
+    # AI 组合方案 — Static (A 类: buy-and-hold from inception) — DuckDB 优先，fallback JSON
     plan_for_bt = plan_a_v6_db or plan_a_v6
     history_for_bt = history_data_db or history_data
     backtest_db = compute_plan_forward_track(plan_for_bt, history_for_bt)
@@ -5605,15 +6089,15 @@ def build():
         m = backtest_db["metrics"]
         inception = backtest_db.get("inception_date") or "?"
         baseline = backtest_db.get("baseline_date") or "?"
-        print(f"  AI 方案模拟 A 静态: 锁定 {inception} → 基线 {baseline} · 跟踪 {m['n_tracked_days']} 日"
+        print(f"  AI 组合方案 A 静态: 锁定 {inception} → 基线 {baseline} · 跟踪 {m['n_tracked_days']} 日"
               f" · 累计 {m['cumulative_return_pct']}% (vs SPY {m['bench_cumulative_return_pct']}%)")
     html = html.replace("{PLAN_BACKTEST_JSON_DB}", json.dumps(backtest_db, ensure_ascii=False))
 
-    # AI 方案模拟 — Dynamic (C 类: weekly Monday rebalance, P1+P2)
+    # AI 组合方案 — Dynamic (C 类: weekly Monday rebalance, P1+P2)
     dynamic_db = compute_dynamic_rebalance_track(history_for_bt)
     if dynamic_db and dynamic_db.get("metrics"):
         m = dynamic_db["metrics"]
-        print(f"  AI 方案模拟 C 动态: {m['n_rebalances']} 次调仓 · 累计手续费 {dynamic_db.get('total_commission_pct', 0)}% · "
+        print(f"  AI 组合方案 C 动态: {m['n_rebalances']} 次调仓 · 累计手续费 {dynamic_db.get('total_commission_pct', 0)}% · "
               f"跟踪 {m['n_tracked_days']} 日 · 累计 {m['cumulative_return_pct']}% (vs SPY {m['bench_cumulative_return_pct']}%)")
     html = html.replace("{PLAN_DYNAMIC_JSON_DB}", json.dumps(dynamic_db, ensure_ascii=False))
 

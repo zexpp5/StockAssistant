@@ -25,7 +25,7 @@ from datetime import datetime
 from typing import Any
 
 from .. import config
-from ..core import akshare_client, finnhub_client, trends
+from ..core import akshare_client, finnhub_client, trends, baostock_client
 from ..adapters import feishu, store
 
 logger = logging.getLogger("stock_research.jobs.enrich_watchlist")
@@ -39,7 +39,7 @@ def _is_us_stock(market: str, code: str) -> bool:
 
 def enrich_one(name: str, code: str, market: str,
                do_trends: bool = True, do_finnhub: bool = True,
-               do_akshare: bool = True) -> dict[str, Any]:
+               do_akshare: bool = True, do_baostock: bool = True) -> dict[str, Any]:
     """对一只股票做一站式 enrichment。返回完整 dict（已 JSON 可序列化）。"""
     out: dict[str, Any] = {
         "name": name,
@@ -66,6 +66,12 @@ def enrich_one(name: str, code: str, market: str,
             if ak.get("akshare"):
                 out["akshare"] = ak["akshare"]
                 out["sources_used"].append("akshare")
+        # A 股二源：baostock（免费、官方接口，给 akshare cross-check）
+        if do_baostock and "A股" in market:
+            bs_quote = baostock_client.fetch_a_share_quote(code)
+            if bs_quote:
+                out["baostock"] = bs_quote
+                out["sources_used"].append("baostock")
         if do_trends:
             tr = trends.fetch_trend(name, geo="CN" if "A股" in market else "")
             if tr:
@@ -143,6 +149,7 @@ def _format_for_feishu(enriched: dict[str, Any]) -> dict[str, str]:
 
 def run_all(only_code: str | None = None, do_trends: bool = True,
             do_finnhub: bool = True, do_akshare: bool = True,
+            do_baostock: bool = True,
             sleep_sec: float = 1.0) -> dict[str, Any]:
     watchlist = feishu.fetch_watchlist()
     print(f"[enrich] watchlist {len(watchlist)} 只")
@@ -160,7 +167,8 @@ def run_all(only_code: str | None = None, do_trends: bool = True,
         print(f"  → {name} ({code}, {market or '?'})")
         try:
             enriched = enrich_one(name, code, market,
-                                  do_trends=do_trends, do_finnhub=do_finnhub, do_akshare=do_akshare)
+                                  do_trends=do_trends, do_finnhub=do_finnhub,
+                                  do_akshare=do_akshare, do_baostock=do_baostock)
         except Exception as e:
             logger.warning("enrich_one failed for %s: %s", code, e)
             continue
@@ -191,12 +199,14 @@ def main() -> int:
     p.add_argument("--skip-trends", action="store_true", help="跳过 Google Trends（慢）")
     p.add_argument("--skip-finnhub", action="store_true", help="跳过 Finnhub")
     p.add_argument("--skip-akshare", action="store_true", help="跳过 akshare")
+    p.add_argument("--skip-baostock", action="store_true", help="跳过 A 股 baostock 二源")
     args = p.parse_args()
     run_all(
         only_code=args.code,
         do_trends=not args.skip_trends,
         do_finnhub=not args.skip_finnhub,
         do_akshare=not args.skip_akshare,
+        do_baostock=not args.skip_baostock,
     )
     return 0
 

@@ -17,6 +17,7 @@ DuckDB 持久化层 — 股票时间序列本地仓
 """
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime, date
 from typing import Iterable, Mapping, Any
@@ -133,7 +134,60 @@ ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS chain        VARCHAR;
 ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS chain_tier   VARCHAR;
 ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS chain_role   VARCHAR;
 ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS layman_intro VARCHAR;
+
+-- 2026-05-11 PM: 候选发现历史 + 推荐准确度跟踪
+--   discovery_history  每天 discover_candidates 跑完追加(不覆盖) → 永久快照
+--   discovery_tracking 每天 evaluate_discovery 刷新一次 → N 天后的 alpha
+CREATE TABLE IF NOT EXISTS discovery_history (
+    generated_date  DATE     NOT NULL,
+    rank            INTEGER  NOT NULL,
+    ticker          VARCHAR  NOT NULL,
+    name            VARCHAR,
+    sector          VARCHAR,
+    market          VARCHAR,
+    composite_z     DOUBLE,
+    f_score         DOUBLE,
+    momentum_12_1   DOUBLE,
+    pead            DOUBLE,
+    analyst_score   DOUBLE,
+    market_cap_usd  DOUBLE,
+    PRIMARY KEY (generated_date, ticker)
+);
+
+CREATE TABLE IF NOT EXISTS discovery_tracking (
+    generated_date     DATE     NOT NULL,
+    ticker             VARCHAR  NOT NULL,
+    entry_price        DOUBLE,
+    pct_1d             DOUBLE,
+    pct_5d             DOUBLE,
+    pct_20d            DOUBLE,
+    pct_60d            DOUBLE,
+    benchmark_code     VARCHAR,
+    benchmark_pct_1d   DOUBLE,
+    benchmark_pct_5d   DOUBLE,
+    benchmark_pct_20d  DOUBLE,
+    benchmark_pct_60d  DOUBLE,
+    alpha_1d           DOUBLE,
+    alpha_5d           DOUBLE,
+    alpha_20d          DOUBLE,
+    alpha_60d          DOUBLE,
+    last_refreshed_at  TIMESTAMP,
+    PRIMARY KEY (generated_date, ticker)
+);
+
+-- 2026-05-11 PM: 用户级配置 key-value 表（投资方案总资金/止损线等可调参数）
+CREATE TABLE IF NOT EXISTS user_config (
+    key        VARCHAR PRIMARY KEY,
+    value      VARCHAR NOT NULL,  -- 任意 JSON 字符串
+    updated_at TIMESTAMP
+);
 """
+
+# user_config 已知 key 的默认值（首次读取或被删除时返回）
+USER_CONFIG_DEFAULTS = {
+    "total_capital": 500000,   # 进场本金，跑批 + 前端共用
+    "stoploss_line": 300000,   # 止损红线（组合市值跌至此则强制清仓）
+}
 
 
 def get_db(path: str = DB_PATH) -> duckdb.DuckDBPyConnection:
@@ -458,6 +512,148 @@ def delete_watchlist_item(code: str, *, conn: duckdb.DuckDBPyConnection | None =
 
 
 # ============================================================
+# Discovery 历史 + 准确度跟踪(2026-05-11 PM 新增)
+# ============================================================
+
+DISCOVERY_HISTORY_COLS = [
+    "generated_date", "rank", "ticker", "name", "sector", "market",
+    "composite_z", "f_score", "momentum_12_1", "pead", "analyst_score",
+    "market_cap_usd",
+]
+
+
+def upsert_discovery_history(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    generated_date: date | str | None = None,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> int:
+    """落候选发现快照。同日同 ticker 重跑覆盖,跨日累积。
+
+    rows 每条字段对齐 discover_candidates.py 的 candidates(ticker/name/sector/composite_z 等)。
+    """
+    own = conn is None
+    if own:
+        conn = get_db()
+    default_date = _to_date(generated_date) if generated_date else date.today()
+    n = 0
+    for r in rows:
+        values = [
+            _to_date(r.get("generated_date")) or default_date,
+            r.get("rank"),
+            r.get("ticker"),
+            r.get("name"),
+            r.get("sector"),
+            r.get("market") or r.get("location"),
+            r.get("composite_z"),
+            r.get("f_score"),
+            r.get("momentum_12_1"),
+            r.get("pead"),
+            r.get("analyst_score"),
+            r.get("market_cap_usd"),
+        ]
+        placeholders = ",".join(["?"] * len(DISCOVERY_HISTORY_COLS))
+        update_set = ",".join(
+            f"{c}=excluded.{c}" for c in DISCOVERY_HISTORY_COLS
+            if c not in ("generated_date", "ticker")
+        )
+        conn.execute(
+            f"INSERT INTO discovery_history ({','.join(DISCOVERY_HISTORY_COLS)}) "
+            f"VALUES ({placeholders}) "
+            f"ON CONFLICT (generated_date, ticker) DO UPDATE SET {update_set}",
+            values,
+        )
+        n += 1
+    if own:
+        conn.close()
+    return n
+
+
+DISCOVERY_TRACKING_COLS = [
+    "generated_date", "ticker", "entry_price",
+    "pct_1d", "pct_5d", "pct_20d", "pct_60d",
+    "benchmark_code",
+    "benchmark_pct_1d", "benchmark_pct_5d", "benchmark_pct_20d", "benchmark_pct_60d",
+    "alpha_1d", "alpha_5d", "alpha_20d", "alpha_60d",
+    "last_refreshed_at",
+]
+
+
+def upsert_discovery_tracking(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> int:
+    """落 / 更新候选发现的绩效跟踪。同 (date, ticker) 重跑覆盖。"""
+    own = conn is None
+    if own:
+        conn = get_db()
+    now = datetime.now()
+    n = 0
+    for r in rows:
+        values = [
+            _to_date(r.get("generated_date")),
+            r.get("ticker"),
+            r.get("entry_price"),
+            r.get("pct_1d"), r.get("pct_5d"), r.get("pct_20d"), r.get("pct_60d"),
+            r.get("benchmark_code"),
+            r.get("benchmark_pct_1d"), r.get("benchmark_pct_5d"),
+            r.get("benchmark_pct_20d"), r.get("benchmark_pct_60d"),
+            r.get("alpha_1d"), r.get("alpha_5d"),
+            r.get("alpha_20d"), r.get("alpha_60d"),
+            r.get("last_refreshed_at") or now,
+        ]
+        placeholders = ",".join(["?"] * len(DISCOVERY_TRACKING_COLS))
+        update_set = ",".join(
+            f"{c}=excluded.{c}" for c in DISCOVERY_TRACKING_COLS
+            if c not in ("generated_date", "ticker")
+        )
+        conn.execute(
+            f"INSERT INTO discovery_tracking ({','.join(DISCOVERY_TRACKING_COLS)}) "
+            f"VALUES ({placeholders}) "
+            f"ON CONFLICT (generated_date, ticker) DO UPDATE SET {update_set}",
+            values,
+        )
+        n += 1
+    if own:
+        conn.close()
+    return n
+
+
+def fetch_discovery_history(
+    *, days: int | None = 60,
+    conn: duckdb.DuckDBPyConnection | None = None
+) -> list[dict]:
+    """读 discovery_history JOIN discovery_tracking,返回每个 (date, ticker) 的完整记录。
+    days=None 表示读全部。
+    """
+    own = conn is None
+    if own:
+        conn = get_db()
+    sql = """
+        SELECT h.*,
+               t.entry_price, t.pct_1d, t.pct_5d, t.pct_20d, t.pct_60d,
+               t.benchmark_code,
+               t.benchmark_pct_1d, t.benchmark_pct_5d,
+               t.benchmark_pct_20d, t.benchmark_pct_60d,
+               t.alpha_1d, t.alpha_5d, t.alpha_20d, t.alpha_60d,
+               t.last_refreshed_at
+        FROM discovery_history h
+        LEFT JOIN discovery_tracking t
+          ON h.generated_date = t.generated_date AND h.ticker = t.ticker
+    """
+    if days is not None:
+        sql += f" WHERE h.generated_date >= CURRENT_DATE - INTERVAL '{int(days)}' DAY"
+    sql += " ORDER BY h.generated_date DESC, h.rank ASC"
+    rows = conn.execute(sql).fetchall()
+    cols = [d[0] for d in conn.description]
+    out = [dict(zip(cols, r)) for r in rows]
+    if own:
+        conn.close()
+    return out
+
+
+# ============================================================
 # 便捷查询
 # ============================================================
 
@@ -472,6 +668,58 @@ def latest_price(code: str, *, conn: duckdb.DuckDBPyConnection | None = None) ->
     if own:
         conn.close()
     return dict(zip(cols, row)) if row else None
+
+
+# ============================================================
+# user_config（投资方案等用户级配置）
+# ============================================================
+
+def get_config(key: str, *, conn: duckdb.DuckDBPyConnection | None = None) -> Any:
+    """读单个配置值；未设置时回退到 USER_CONFIG_DEFAULTS。"""
+    own = conn is None
+    if own:
+        conn = get_db()
+    row = conn.execute("SELECT value FROM user_config WHERE key = ?", [key]).fetchone()
+    if own:
+        conn.close()
+    if row is None:
+        return USER_CONFIG_DEFAULTS.get(key)
+    try:
+        return json.loads(row[0])
+    except (json.JSONDecodeError, TypeError):
+        return row[0]
+
+
+def get_all_config(*, conn: duckdb.DuckDBPyConnection | None = None) -> dict[str, Any]:
+    """读全部配置；缺失的 key 用默认值补齐。"""
+    own = conn is None
+    if own:
+        conn = get_db()
+    rows = conn.execute("SELECT key, value FROM user_config").fetchall()
+    if own:
+        conn.close()
+    out = dict(USER_CONFIG_DEFAULTS)
+    for k, v in rows:
+        try:
+            out[k] = json.loads(v)
+        except (json.JSONDecodeError, TypeError):
+            out[k] = v
+    return out
+
+
+def set_config(key: str, value: Any, *, conn: duckdb.DuckDBPyConnection | None = None) -> None:
+    """写单个配置值（upsert）。"""
+    own = conn is None
+    if own:
+        conn = get_db()
+    payload = json.dumps(value, ensure_ascii=False)
+    conn.execute(
+        "INSERT INTO user_config (key, value, updated_at) VALUES (?, ?, ?) "
+        "ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+        [key, payload, datetime.now()],
+    )
+    if own:
+        conn.close()
 
 
 def stats() -> dict:

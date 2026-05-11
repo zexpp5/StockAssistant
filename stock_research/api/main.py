@@ -151,6 +151,50 @@ def create_app():
             raise HTTPException(400, "code is required")
         return enrich_one(code, item.get("name"))
 
+    # ────────── 投资方案配置（DuckDB user_config 表 · 2026-05-11 PM 起） ──────────
+    @app.get("/api/config")
+    def get_user_config() -> dict[str, Any]:
+        """读全部配置；缺失 key 自动用 USER_CONFIG_DEFAULTS 补齐。"""
+        import stock_db
+        return stock_db.get_all_config()
+
+    @app.put("/api/config")
+    def update_user_config(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        """批量 upsert 配置。
+
+        Body: {"total_capital": 600000, "stoploss_line": 350000}
+        校验：total_capital 与 stoploss_line 必须为正数；后者 < 前者。
+        """
+        import stock_db
+        # 抽出已知数值类 key（其它 key 直接透传）
+        tc = payload.get("total_capital")
+        sl = payload.get("stoploss_line")
+        if tc is not None:
+            try:
+                tc = int(tc)
+            except (TypeError, ValueError):
+                raise HTTPException(400, "total_capital must be a number")
+            if tc <= 0:
+                raise HTTPException(400, "total_capital must be positive")
+        if sl is not None:
+            try:
+                sl = int(sl)
+            except (TypeError, ValueError):
+                raise HTTPException(400, "stoploss_line must be a number")
+            if sl <= 0:
+                raise HTTPException(400, "stoploss_line must be positive")
+        if tc is not None and sl is not None and sl >= tc:
+            raise HTTPException(400, "stoploss_line must be less than total_capital")
+        # 写入
+        for k, v in payload.items():
+            if k == "total_capital" and tc is not None:
+                stock_db.set_config(k, tc)
+            elif k == "stoploss_line" and sl is not None:
+                stock_db.set_config(k, sl)
+            else:
+                stock_db.set_config(k, v)
+        return {"status": "ok", "config": stock_db.get_all_config()}
+
     # ────────── 异步 job 触发 ──────────
     @app.post("/api/jobs/refresh-13f")
     def trigger_13f_refresh(background: BackgroundTasks):

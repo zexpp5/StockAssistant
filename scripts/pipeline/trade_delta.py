@@ -36,7 +36,11 @@ CURRENT_PLAN_A = [
     ("阿里巴巴",     "9988.HK",    0.05),
     ("海光信息",     "688041.SS",  0.05),
 ]
-TOTAL_CAPITAL = 500000  # 50 万 RMB
+try:
+    import stock_db
+    TOTAL_CAPITAL = stock_db.get_config("total_capital")
+except Exception:
+    TOTAL_CAPITAL = 500000  # 默认 50 万 RMB（DuckDB 不可用时回退）
 USD_TO_RMB = 7.10
 
 

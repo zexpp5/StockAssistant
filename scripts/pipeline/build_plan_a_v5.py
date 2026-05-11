@@ -48,7 +48,11 @@ CURRENT_PLAN_A = [
     ("海光信息",     "688041.SS",  0.05),
 ]
 CASH_PCT = 0.05
-TOTAL_CAPITAL = 500000
+try:
+    import stock_db
+    TOTAL_CAPITAL = stock_db.get_config("total_capital")
+except Exception:
+    TOTAL_CAPITAL = 500000  # DuckDB 不可用时回退默认
 MAX_WEIGHT = 0.15
 MIN_WEIGHT = 0.02
 TOP_N = 12

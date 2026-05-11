@@ -80,8 +80,9 @@ def run_audit(only_code: str | None = None) -> dict[str, Any]:
             continue
 
         yf_data = prices.get(code)
-        ak_data = enrich.get(code)  # 内含 akshare/finnhub/trends 子结构
+        ak_data = enrich.get(code)  # 内含 akshare/finnhub/trends/baostock 子结构
         finnhub_data = enrich.get(code)
+        baostock_data = (enrich.get(code) or {}).get("baostock")
         sec = sec_signals.get(code, [])
 
         result = audit.audit_stock(
@@ -89,6 +90,7 @@ def run_audit(only_code: str | None = None) -> dict[str, Any]:
             akshare_data=ak_data,
             finnhub_data=finnhub_data,
             sec_signals=sec,
+            baostock_data=baostock_data,
             ticker=code,
         )
         result["name"] = w["normalized"]["name"]

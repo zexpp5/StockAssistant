@@ -59,10 +59,12 @@ def audit_stock(yf_data: dict[str, Any] | None = None,
                 akshare_data: dict[str, Any] | None = None,
                 finnhub_data: dict[str, Any] | None = None,
                 sec_signals: list[dict[str, Any]] | None = None,
+                baostock_data: dict[str, Any] | None = None,
                 ticker: str = "") -> dict[str, Any]:
     """对一只股票的多源数据做交叉审计。
 
     所有参数都可选；只要 ≥1 源就能审计，越多源结论越可靠。
+    baostock_data 仅 A 股有意义（非 A 股代码 baostock_client 返回 {}）。
     """
     sources: list[str] = []
     conflicts: list[dict[str, Any]] = []
@@ -76,8 +78,17 @@ def audit_stock(yf_data: dict[str, Any] | None = None,
     ak_quote = ((akshare_data or {}).get("akshare") or {}).get("quote") or {}
     ak_price = _safe(ak_quote.get("price"))
     ak_mcap = _safe(ak_quote.get("market_cap_yuan") or ak_quote.get("market_cap_hkd"))
+    ak_name = ak_quote.get("name")
     if ak_price is not None or ak_mcap is not None:
         sources.append("akshare")
+
+    bs_inner = (baostock_data or {}).get("baostock") if isinstance(baostock_data, dict) else None
+    bs_quote = bs_inner if isinstance(bs_inner, dict) else (baostock_data or {})
+    bs_price = _safe(bs_quote.get("price"))
+    bs_name = bs_quote.get("name")
+    bs_date = bs_quote.get("date")
+    if bs_price is not None or bs_name:
+        sources.append("baostock")
 
     finnhub_inner = (finnhub_data or {}).get("finnhub") or {}
     if finnhub_inner.get("news") or finnhub_inner.get("insider") or finnhub_inner.get("analyst_recommendations"):
@@ -121,6 +132,48 @@ def audit_stock(yf_data: dict[str, Any] | None = None,
                         "sources": ["yfinance", "akshare"],
                         "value_avg": round((yf_price + ak_price) / 2, 2),
                     })
+
+    # ────────── A 股价格 akshare ↔ baostock 交叉验证 ──────────
+    # baostock 是 A 股二源（免费、官方接口、无 token），用来给 akshare cross-check。
+    # 阈值：> 2% LOW（baostock T-1 vs akshare 实时存在合理 intraday gap）
+    #       > 5% CONFLICT（同日同源同收盘价不应有 5% 偏差）
+    if ak_price is not None and bs_price is not None:
+        diff = _pct_diff(ak_price, bs_price)
+        if diff is not None:
+            if diff > 5:
+                conflicts.append({
+                    "field": "price",
+                    "sources": ["akshare", "baostock"],
+                    "values": {"akshare": ak_price, "baostock": bs_price},
+                    "diff_pct": round(diff, 2),
+                    "bs_date": bs_date,
+                    "severity": "HIGH",
+                })
+            elif diff > 2:
+                conflicts.append({
+                    "field": "price",
+                    "sources": ["akshare", "baostock"],
+                    "values": {"akshare": ak_price, "baostock": bs_price},
+                    "diff_pct": round(diff, 2),
+                    "bs_date": bs_date,
+                    "severity": "LOW",
+                })
+            else:
+                agreements.append({
+                    "field": "price",
+                    "sources": ["akshare", "baostock"],
+                    "value_avg": round((ak_price + bs_price) / 2, 2),
+                })
+
+    # ────────── A 股名字 akshare ↔ baostock 一致性 ──────────
+    # 名字不一致 = 代码映射错位（致命数据错误）
+    if ak_name and bs_name and ak_name != bs_name:
+        conflicts.append({
+            "field": "name",
+            "sources": ["akshare", "baostock"],
+            "values": {"akshare": ak_name, "baostock": bs_name},
+            "severity": "HIGH",
+        })
 
     # ────────── 市值交叉验证 ──────────
     if yf_mcap is not None and ak_mcap is not None:

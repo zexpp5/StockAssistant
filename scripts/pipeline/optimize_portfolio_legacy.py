@@ -42,7 +42,11 @@ CURRENT_PLAN = [
     ("海光信息",     "688041.SS",  0.05),
 ]
 CASH_PCT = 0.05
-TOTAL = 500000
+try:
+    import stock_db
+    TOTAL = stock_db.get_config("total_capital")
+except Exception:
+    TOTAL = 500000
 
 LOOKBACK_DAYS = 250
 

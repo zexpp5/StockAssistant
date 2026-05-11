@@ -197,6 +197,10 @@ else
     echo "[23/25 候选发现] 跳过 — 上次 $AGE_DAY 天前刚跑过（< 6 天，无需重跑）"
 fi
 
+# 2026-05-11 PM: 推荐准确度评估 — 每天跑(即使 discovery 本身跳过),
+# 因为要给过去 70 天的所有推荐刷新 1d/5d/20d/60d alpha 数据。
+run_step "23b/25 推荐准确度评估（每日）" "scripts/tools/evaluate_discovery.py"
+
 # DuckDB pipeline 同步：把今天刷新过的根目录数据 JSON（risk_metrics / track_13f / plan_a_v5
 # / history_data / optimization_result / factor_scores_today / reverse_validation_*）
 # 增量插入到 stock_history.duckdb 的 snapshots(category='pipeline') 表，
