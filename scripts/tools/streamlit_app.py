@@ -35,7 +35,7 @@ sys.path.insert(0, str(_REPO_ROOT / "scripts" / "lib"))  # 2026-05-11 lib 迁移
 # ─────────── 页面配置 ───────────
 
 st.set_page_config(
-    page_title="StockAssistant v7.5",
+    page_title="StockAssistant",
     page_icon="📊",
     layout="wide",
 )
@@ -90,9 +90,9 @@ def load_picks_csv(date_str: str) -> pd.DataFrame | None:
 
 # ─────────── 顶部 ───────────
 
-st.title("📊 StockAssistant v7.5")
+st.title("📊 StockAssistant")
 st.caption(
-    "AI 主线投资研究系统 · 学术因子 + Markowitz + 反向审查 + 实盘防御 + OpenBB 增强 · "
+    "AI 主线投资研究系统 · 学术因子 + Markowitz + 反向审查 + 实盘防御 · "
     "**不构成投资建议**"
 )
 
@@ -167,20 +167,7 @@ def _load_json(rel: str) -> dict | None:
 
 # ───── Tab 1: 概览 ─────
 with tab_overview:
-    st.header("当前系统状态")
-    st.markdown(
-        """
-        **v7.5 系统覆盖（11 步流水线 + 16 步流水线 daily_refresh）：**
-        1. 多源数据：SEC EDGAR + akshare + Finnhub + yfinance + OpenBB FRED
-        2. 5 因子学术模型：Piotroski + 12-1 动量 + 1月反转 + PEAD + 分析师
-        3. 5 种组合优化：max_sharpe / min_vol / HRP / Black-Litterman / min_CVaR
-        4. 双维度反向审查：时间维度（v6 walk-forward）+ 横截面（picks_audit）
-        5. v7 实盘防御：VIX + 200MA + 单股 -15% 止损 + 宏观 + PCR
-        6. OpenBB 增强：行业轮动 + 商品 vs 股票相关性 + 内部人交易
-        7. Stress Test：4 历史崩盘 × 3 防御机制 A/B/C
-        """
-    )
-
+    # 顶部：实盘防御警报（实时数据，永远放最上面）
     if defense_snap:
         st.subheader(f"🛡 实盘防御警报（{defense_snap.get('generated_at', '')[:16]}）")
         alerts = defense_snap.get("alerts", [])
@@ -192,6 +179,34 @@ with tab_overview:
                 icon = {"CRITICAL": "🔴", "HIGH": "🟠", "MEDIUM": "🟡", "LOW": "⚪"}.get(sev, "❓")
                 with st.expander(f"{icon} [{sev}] {a.get('type')}"):
                     st.write(a.get("suggested_action", a.get("trigger", "")))
+
+    st.divider()
+
+    # 中部 + 底部：从 docs/关于.md 读「系统能力 + Roadmap」
+    # 单一信息源：以后更新文档即可，UI 自动跟上
+    about_md_path = _REPO_ROOT / "docs" / "关于.md"
+    if about_md_path.exists():
+        about_md = about_md_path.read_text(encoding="utf-8")
+        # 按章节标题切两半
+        SEP = "# 二、接下来要做的 (roadmap)"
+        if SEP in about_md:
+            capabilities_md, roadmap_md = about_md.split(SEP, 1)
+            roadmap_md = SEP + roadmap_md
+        else:
+            capabilities_md, roadmap_md = about_md, ""
+
+        # Roadmap 默认展开 —「接下来要做什么」是高频问题
+        if roadmap_md:
+            with st.expander("🗺 接下来要做什么（Roadmap）", expanded=True):
+                st.markdown(roadmap_md)
+
+        # 系统能力默认折叠 —「系统能做什么」点开再看
+        with st.expander("📖 系统能力概览（关于.md §1）", expanded=False):
+            st.markdown(capabilities_md)
+
+        st.caption(f"📄 内容源：[docs/关于.md](docs/关于.md) — 改文档即更新本页")
+    else:
+        st.warning("找不到 docs/关于.md — 请先创建该文件")
 
 
 # ───── Tab 2: 每日推荐 ─────

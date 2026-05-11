@@ -676,11 +676,97 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </ol>
   </div>
 
-  <!-- 五、推荐逻辑预留位 -->
-  <div class="bg-slate-50 border border-dashed border-slate-300 rounded-2xl p-6 text-center text-slate-500">
-    <div class="text-2xl mb-2">🚧</div>
-    <div class="font-medium">五、系统是怎么"推荐"股票的</div>
-    <div class="text-sm mt-1">（待补充：F-Score 因子打分 / 防御信号 / AI 主线匹配 等推荐逻辑）</div>
+  <!-- 五、用了哪些数据 + 做了哪些分析 -->
+  <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 mb-6">
+    <h3 class="text-xl font-bold text-slate-800 mb-2">五、用了哪些数据 + 做了哪些分析</h3>
+    <p class="text-sm text-slate-600 mb-5">前面四节讲"钱怎么分"，这一节讲"数据从哪来、做什么计算"。系统覆盖 4 个市场，用 7 个免费源，做 8 个维度的分析。</p>
+
+    <!-- 5.1 覆盖股市 -->
+    <div class="mb-5">
+      <h4 class="font-bold text-slate-700 mb-2">5.1 覆盖股市</h4>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b-2 border-slate-200 text-left text-slate-600">
+              <th class="py-2 pr-4">市场</th>
+              <th class="py-2 pr-4">代码识别</th>
+              <th class="py-2">数据主源</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            <tr><td class="py-2 pr-4 font-medium">美股</td><td class="py-2 pr-4 text-slate-700">裸 ticker（AAPL、NVDA）</td><td class="py-2 text-slate-700">yfinance + SEC EDGAR + FMP + Finnhub</td></tr>
+            <tr><td class="py-2 pr-4 font-medium">A 股（沪深京）</td><td class="py-2 pr-4 text-slate-700">.SS / .SZ / .BJ</td><td class="py-2 text-slate-700">akshare + baostock 二源</td></tr>
+            <tr><td class="py-2 pr-4 font-medium">港股</td><td class="py-2 pr-4 text-slate-700">.HK</td><td class="py-2 text-slate-700">akshare</td></tr>
+            <tr><td class="py-2 pr-4 font-medium">宏观/指数/商品</td><td class="py-2 pr-4 text-slate-700">—</td><td class="py-2 text-slate-700">yfinance + akshare</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 5.2 数据源 -->
+    <div class="mb-5">
+      <h4 class="font-bold text-slate-700 mb-2">5.2 数据源（7 个免费源在用）</h4>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b-2 border-slate-200 text-left text-slate-600">
+              <th class="py-2 pr-4">源</th>
+              <th class="py-2 pr-4">拿什么</th>
+              <th class="py-2">凭证</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            <tr><td class="py-2 pr-4 font-medium">yfinance</td><td class="py-2 pr-4 text-slate-700">美股 K 线 / 市值 / PE / SPY 期权链 PCR</td><td class="py-2 text-slate-500 text-xs">无</td></tr>
+            <tr><td class="py-2 pr-4 font-medium">akshare</td><td class="py-2 pr-4 text-slate-700">A 股财报 / 北向 / 龙虎榜 / IPO / 政策事件</td><td class="py-2 text-slate-500 text-xs">无</td></tr>
+            <tr><td class="py-2 pr-4 font-medium">baostock</td><td class="py-2 pr-4 text-slate-700">A 股二源校验（akshare 失败时顶上）</td><td class="py-2 text-slate-500 text-xs">无</td></tr>
+            <tr><td class="py-2 pr-4 font-medium">SEC EDGAR</td><td class="py-2 pr-4 text-slate-700">13F 大佬持仓（11 家机构季度）</td><td class="py-2 text-slate-500 text-xs">User-Agent</td></tr>
+            <tr><td class="py-2 pr-4 font-medium">FMP（免费档）</td><td class="py-2 pr-4 text-slate-700">财报 / DCF / 分析师预期</td><td class="py-2 text-slate-500 text-xs">FMP_API_KEY，250/天</td></tr>
+            <tr><td class="py-2 pr-4 font-medium">Finnhub（免费档）</td><td class="py-2 pr-4 text-slate-700">美股新闻 / 内部人交易 / 评级</td><td class="py-2 text-slate-500 text-xs">FINNHUB_API_KEY</td></tr>
+            <tr><td class="py-2 pr-4 font-medium">Google Trends</td><td class="py-2 pr-4 text-slate-700">搜索热度（情绪面）</td><td class="py-2 text-slate-500 text-xs">无（限流）</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="text-xs text-slate-500 mt-2"><strong>已退役</strong>：OpenBB（2026-05-11 拆，源码只是 yfinance 包装层）。<strong>待充值激活</strong>：Tushare / Anthropic / FMP Starter。</p>
+    </div>
+
+    <!-- 5.3 分析维度 -->
+    <div class="mb-5">
+      <h4 class="font-bold text-slate-700 mb-2">5.3 分析维度（8 个）</h4>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b-2 border-slate-200 text-left text-slate-600">
+              <th class="py-2 pr-4">维度</th>
+              <th class="py-2">做什么</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            <tr><td class="py-2 pr-4 font-medium">基本面</td><td class="py-2 text-slate-700">财报深度 / 远期 PE / PEG / 三档 DCF / 同业对比 / F-Score 9 项</td></tr>
+            <tr><td class="py-2 pr-4 font-medium">技术/价格</td><td class="py-2 text-slate-700">历史 K 线（274 天）/ MA20-60-200 / 最大回撤 / 趋势 emoji 7 档</td></tr>
+            <tr><td class="py-2 pr-4 font-medium">资金流</td><td class="py-2 text-slate-700">13F 季度持仓 / A 股北向 / 龙虎榜 / 美股内部人</td></tr>
+            <tr><td class="py-2 pr-4 font-medium">量化打分</td><td class="py-2 text-slate-700">美股 5 因子（Value/Quality/Momentum/Size/残差波动）+ A 股因子 + IC 校准 + 行业中性化</td></tr>
+            <tr><td class="py-2 pr-4 font-medium">防御 regime</td><td class="py-2 text-slate-700">VIX / 200MA / 宏观 / PCR 四闸门 → NONE/LOW/HIGH/CRITICAL，每 15 分钟巡检</td></tr>
+            <tr><td class="py-2 pr-4 font-medium">事件日历</td><td class="py-2 text-slate-700">earnings / 政策 / IPO 打新 / 电话会议</td></tr>
+            <tr><td class="py-2 pr-4 font-medium">组合优化</td><td class="py-2 text-slate-700">Ledoit-Wolf 协方差收缩 + 相关性闸门 + A 股涨跌停/ST/停牌约束 + NAV 跟踪</td></tr>
+            <tr><td class="py-2 pr-4 font-medium">数据审计</td><td class="py-2 text-slate-700">跨源 cross-check（yfinance vs akshare vs SEC）+ CONFLICT 比例闸门 + 因子 IC 闸门</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 5.4 输出口 -->
+    <div>
+      <h4 class="font-bold text-slate-700 mb-2">5.4 输出口</h4>
+      <p class="text-sm text-slate-700 leading-relaxed mb-2">每天 08:30 自动推 <strong>飞书早报卡片</strong>，5 个 section：</p>
+      <ol class="text-sm text-slate-700 list-decimal list-inside space-y-1">
+        <li>经济日历（持仓 earnings + 政策）</li>
+        <li>当前建议组合 + 60 天趋势</li>
+        <li>NAV 净值 + Sharpe（"AI 有没有用"）</li>
+        <li>红旗（防御信号升档时显示）</li>
+        <li>今天做什么</li>
+      </ol>
+      <p class="text-xs text-slate-500 mt-3">中间产物存 <code class="bg-slate-100 px-1 py-0.5 rounded font-mono text-xs">data/latest/*.json</code>，历史快照存 <code class="bg-slate-100 px-1 py-0.5 rounded font-mono text-xs">data/snapshots/*.json</code>。完整技术清单见 <code class="bg-slate-100 px-1 py-0.5 rounded font-mono text-xs">docs/关于.md</code>。</p>
+    </div>
   </div>
 </section>
 
@@ -1479,6 +1565,7 @@ function switchDiscoveryView(view) {
           <th class="px-3 py-2 text-left">角色</th>
           <th class="px-3 py-2 text-left">一句话解释(新手向)</th>
           <th class="px-3 py-2 text-left">市场</th>
+          <th class="px-3 py-2 text-left" title="基于学术因子 (F-Score + 12-1 动量 + PEAD + 分析师) 综合评分">AI 评级</th>
           <th class="px-3 py-2 text-left">状态</th>
           <th class="px-3 py-2 text-right">操作</th>
         </tr>
@@ -1619,7 +1706,7 @@ function switchDiscoveryView(view) {
   <!-- ════════ 系统响应能力 ════════ -->
   <div class="bg-gradient-to-br from-emerald-50 to-cyan-50 border-2 border-emerald-300 rounded-xl p-6 mb-8">
     <h3 class="text-2xl font-bold text-emerald-900 mb-4">📡 系统响应能力（实时性总览）</h3>
-    <p class="text-sm text-slate-700 mb-4">数据从市场发生 → 落入系统的实际延迟。系统不是真"实时"，是 <strong>每天 07:30 一次 daily 批处理</strong>（盘中轮询/异动告警已规划但未实施）。</p>
+    <p class="text-sm text-slate-700 mb-4">数据从市场发生 → 落入系统的实际延迟。系统不是真"实时"，是 <strong>每天 08:30 一次 daily 批处理</strong> + <strong>每 15 分钟 defense_watcher 巡检</strong>（升档才推飞书）。</p>
 
     <!-- 响应能力分级 -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
@@ -1667,7 +1754,7 @@ function switchDiscoveryView(view) {
 
       <!-- 🇺🇸 美股线 -->
       <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3">
-        <p class="text-sm font-bold text-blue-900 mb-2">🇺🇸 美股线 — 每天 07:30 launchd 自动跑（<strong>v6 选股 + v7 防御 + v7.5 情报，三个一起干活</strong>）</p>
+        <p class="text-sm font-bold text-blue-900 mb-2">🇺🇸 美股线 — 每天 08:30 launchd 自动跑（<strong>v6 选股 + v7 防御 + v7.5 情报，三个一起干活</strong>）</p>
         <table class="w-full text-xs">
           <thead><tr class="border-b border-blue-200 text-left text-blue-700">
             <th class="py-1.5 px-2">部件</th>
@@ -1690,8 +1777,8 @@ function switchDiscoveryView(view) {
             </tr>
             <tr>
               <td class="py-1.5 px-2 font-semibold">v7.5 情报</td>
-              <td class="px-2">OpenBB 综合：宏观 / 行业轮动 / 商品 / 内部人交易</td>
-              <td class="px-2 font-mono text-[11px]">openbb_intelligence.py</td>
+              <td class="px-2">宏观 / 行业轮动 / 商品 / 内部人交易 / SPY 期权链 PCR（2026-05-11 OpenBB → yfinance 原生）</td>
+              <td class="px-2 font-mono text-[11px]">openbb_intelligence.py · options_signals.py</td>
               <td class="px-2 text-emerald-700 font-semibold">✅ 在跑</td>
             </tr>
           </tbody>
@@ -1750,7 +1837,7 @@ function switchDiscoveryView(view) {
 
     <!-- ✅ 做得好的 -->
     <div class="mb-6">
-      <h4 class="text-lg font-bold text-emerald-700 mb-3">✅ 已经做得好的（6 块基础坚实）</h4>
+      <h4 class="text-lg font-bold text-emerald-700 mb-3">✅ 已经做得好的（10 块基础坚实）</h4>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div class="bg-white rounded-lg p-3 border border-emerald-200">
           <p class="font-bold text-slate-800 mb-1">1. 多源数据体系</p>
@@ -1784,6 +1871,14 @@ function switchDiscoveryView(view) {
           <p class="font-bold text-slate-800 mb-1">8. 个股深度研究（B 路线 Phase 1）</p>
           <p class="text-xs text-slate-600">fundamental_deep / peer_compare / sec_filings / fmp_cache —— FMP 免费层可用，Phase 2-4 待付费源激活</p>
         </div>
+        <div class="bg-white rounded-lg p-3 border border-emerald-200">
+          <p class="font-bold text-slate-800 mb-1">9. 跨源 CONFLICT 比例闸门（2026-05-11 新增）</p>
+          <p class="text-xs text-slate-600">audit_gate.py：CONFLICT &lt; 10% / min_sample 30 / max_age 36h，超阈值拦截 picks 推送（与 factor_ic_gate 对称设计）</p>
+        </div>
+        <div class="bg-white rounded-lg p-3 border border-emerald-200">
+          <p class="font-bold text-slate-800 mb-1">10. A 股 baostock 二源校验（2026-05-11 新增）</p>
+          <p class="text-xs text-slate-600">baostock_client + audit.py akshare↔baostock cross-check，价差 &gt; 2% LOW / &gt; 5% CONFLICT / 名字不一致 HIGH conflict（600519 实测 akshare 失败时已顶上）</p>
+        </div>
       </div>
     </div>
 
@@ -1792,7 +1887,7 @@ function switchDiscoveryView(view) {
       <h4 class="text-lg font-bold text-amber-700 mb-3">🟡 在做但未完成（等数据/时间）</h4>
       <ul class="space-y-2 text-sm">
         <li class="bg-white rounded p-3 border border-amber-200"><strong>因子 IC 验证</strong> — 框架就位，需累积 30+ 天历史才有意义</li>
-        <li class="bg-white rounded p-3 border border-amber-200"><strong>自选股·今日 Top hit rate 真实回测</strong> — picks 已积累 2 天 (2026-05-09 / 05-10 多次 snapshot)，仍需 1 个月数据才能可信验证</li>
+        <li class="bg-white rounded p-3 border border-amber-200"><strong>自选股·今日 Top hit rate 真实回测</strong> — picks 已积累 3 天 (2026-05-09 / 05-10 / 05-11 多次 snapshot)，仍需 1 个月数据才能可信验证</li>
         <li class="bg-white rounded p-3 border border-amber-200"><strong>B 路线 Phase 2-4</strong> — quarterly_trends / earnings_call / dcf_scenarios / forward_valuation 代码就绪，等付费数据源（FMP Starter / Tushare Pro）激活</li>
       </ul>
     </div>
@@ -1811,7 +1906,7 @@ function switchDiscoveryView(view) {
           <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-rose-500 text-white px-2 py-0.5 rounded text-xs">🔴 真痛点</span></td><td class="px-2 font-medium">中港股财务深度（akshare 残缺）</td><td class="px-2 text-emerald-700">Tushare Pro 同上</td></tr>
           <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-rose-500 text-white px-2 py-0.5 rounded text-xs">🔴 真痛点</span></td><td class="px-2 font-medium">美股小盘 (RDDT/CCJ/BWXT) 财务深度</td><td class="px-2 text-emerald-700">FMP Starter $14/月</td></tr>
           <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-emerald-500 text-white px-2 py-0.5 rounded text-xs">✅ 已建</span></td><td class="px-2 font-medium line-through text-slate-500">数据缓存层（重复请求多）</td><td class="px-2 text-emerald-700">已实现 adapters/fmp_cache.py（2026-05-10）</td></tr>
-          <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-rose-500 text-white px-2 py-0.5 rounded text-xs">🔴 真痛点</span></td><td class="px-2 font-medium">告警系统（只有 macOS notify）</td><td class="px-2 text-slate-600">邮件/微信推送（免费）</td></tr>
+          <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-emerald-500 text-white px-2 py-0.5 rounded text-xs">✅ 已建</span></td><td class="px-2 font-medium line-through text-slate-500">告警系统（只有 macOS notify）</td><td class="px-2 text-emerald-700">defense_watcher.py 15 min 巡检 + 飞书 webhook 升档推送（2026-05-11）</td></tr>
           <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-amber-500 text-white px-2 py-0.5 rounded text-xs">🟡 体验</span></td><td class="px-2 font-medium">移动端适配</td><td class="px-2 text-slate-600">HTML 表格 responsive</td></tr>
           <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-amber-500 text-white px-2 py-0.5 rounded text-xs">🟡 体验</span></td><td class="px-2 font-medium">AI 摘要对话（"今天有什么变化"）</td><td class="px-2 text-slate-600">集成 LLM（按需）</td></tr>
           <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-amber-500 text-white px-2 py-0.5 rounded text-xs">🟡 体验</span></td><td class="px-2 font-medium">Web 服务部署（同事难协作）</td><td class="px-2 text-slate-600">api/main.py 已就绪，需上线</td></tr>
@@ -1847,12 +1942,13 @@ function switchDiscoveryView(view) {
 
     <!-- 推荐执行顺序 -->
     <div class="bg-white border-2 border-indigo-400 rounded-lg p-5 mt-4">
-      <h4 class="text-lg font-bold text-indigo-900 mb-3">📅 我建议的下一步（按顺序）</h4>
+      <h4 class="text-lg font-bold text-indigo-900 mb-3">📅 我建议的下一步（按顺序，2026-05-11 更新）</h4>
       <ol class="space-y-2 text-sm">
-        <li class="flex gap-3"><span class="bg-indigo-100 text-indigo-700 font-bold rounded-full w-7 h-7 flex items-center justify-center flex-shrink-0">1</span><div><strong>本周</strong>：用免费 FMP 跑 1 周，看 NVDA/AAPL/GOOGL 大盘股能不能给出新洞察</div></li>
-        <li class="flex gap-3"><span class="bg-indigo-100 text-indigo-700 font-bold rounded-full w-7 h-7 flex items-center justify-center flex-shrink-0">2</span><div><strong>下周</strong>：注册 Tushare Pro（¥200）+ 加 SQLite 缓存层（免费，1 天工作量）</div></li>
-        <li class="flex gap-3"><span class="bg-indigo-100 text-indigo-700 font-bold rounded-full w-7 h-7 flex items-center justify-center flex-shrink-0">3</span><div><strong>下月</strong>：积累 1 个月 picks 历史，跑真实 hit rate 回测，看 v6 模型到底准不准</div></li>
-        <li class="flex gap-3"><span class="bg-indigo-100 text-indigo-700 font-bold rounded-full w-7 h-7 flex items-center justify-center flex-shrink-0">4</span><div><strong>下季度</strong>：根据回测决定要不要持续；要就上 FMP Starter / Polygon</div></li>
+        <li class="flex gap-3"><span class="bg-indigo-100 text-indigo-700 font-bold rounded-full w-7 h-7 flex items-center justify-center flex-shrink-0">1</span><div><strong>本周（无成本）</strong>：继续累积 picks 实盘数据，目标 30 天（当前 3/30，约还差 25 天）；监控 audit_gate CONFLICT 比例 + baostock 二源稳定性</div></li>
+        <li class="flex gap-3"><span class="bg-indigo-100 text-indigo-700 font-bold rounded-full w-7 h-7 flex items-center justify-center flex-shrink-0">2</span><div><strong>下月（P0 充值 ¥200/年）</strong>：注册 Tushare Pro，按 baostock 接入模板做 A 股三源 reconcile（解锁龙虎榜 / 北向明细 / 一致预期）</div></li>
+        <li class="flex gap-3"><span class="bg-indigo-100 text-indigo-700 font-bold rounded-full w-7 h-7 flex items-center justify-center flex-shrink-0">3</span><div><strong>30 天后（P1 充值，量计费 ¥100-300/月）</strong>：撤销旧泄漏 key 后充 Anthropic API，先在 claude_client.py 加 citation + 数字 anchor 强约束，再激活 B 路线 Phase 2-4（LLM 研报 / supply chain）</div></li>
+        <li class="flex gap-3"><span class="bg-indigo-100 text-indigo-700 font-bold rounded-full w-7 h-7 flex items-center justify-center flex-shrink-0">4</span><div><strong>同时 P1.5（$14/月）</strong>：FMP Starter 解锁电话会议 transcript + 同业排名 + 小盘股 DCF 字段</div></li>
+        <li class="flex gap-3"><span class="bg-indigo-100 text-indigo-700 font-bold rounded-full w-7 h-7 flex items-center justify-center flex-shrink-0">5</span><div><strong>下季度</strong>：30 天 hit rate 出来后，根据回测决定是否深化（Polygon / 期权）—— 不做日内可不上</div></li>
       </ol>
     </div>
   </div>
@@ -2094,6 +2190,7 @@ function switchDiscoveryView(view) {
 // RECORDS / PICKS / SIMULATION 来自飞书 watchlist API 实时拉（仍保留），其余全部走 DuckDB。
 const RECORDS      = {RECORDS_JSON};
 const PICKS        = {PICKS_JSON};
+const WATCHLIST_RATINGS = {WATCHLIST_RATINGS_JSON};  // {code: {rating, total_score, ai_score}}  来自 picks 最新一日
 const SIMULATION   = {SIMULATION_JSON};
 // 2026-05-11 PM: watchlist 链条定位信息(chain/chain_tier/chain_role/layman_intro)
 // 按 code 索引 → 任何 tab 显示股票时,Stock Pill 都能查到上下文
@@ -2146,6 +2243,38 @@ async function _checkApiStatus() {
 
 function _esc(s) {
   return (s || "").toString().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+// 持仓「持」标记 — 数据来自 _holdingsCache（DB holdings 表）。同 code 多笔自动聚合显示总股数
+function _heldBadge(code) {
+  if (!_holdingsCache || _holdingsCache.length === 0) return "";
+  const lots = _holdingsCache.filter(h => h.code === code);
+  if (lots.length === 0) return "";
+  const totalShares = lots.reduce((a, b) => a + (b.shares || 0), 0);
+  const lotInfo = lots.length > 1 ? `（${lots.length} 笔）` : "";
+  return ` <span class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-700 align-middle" title="你已持仓 ${totalShares} 股${lotInfo}">💼 持</span>`;
+}
+
+// 自选股 AI 评级 badge — 数据来自 picks 表最新一日（daily_picks_v5 学术因子）
+//   注: 命名为 _wlRatingBadge 避免和 line 4214 的 _ratingBadge(rating) 同名冲突
+//   ⭐⭐⭐ 强烈推荐(z≥1) → ✅ 推荐
+//   ⭐⭐ 推荐(z≥0.5) / ⭐ 关注 → ⚠️ 观察
+//   不在 picks → — 未评级（z 未达入选门槛 或 数据缺失）
+//   ❌ 不建议 待补：当前 daily_picks_v5 只存入选股，需要它输出 z < -0.5 的股才能给负向评级
+function _wlRatingBadge(code) {
+  const info = WATCHLIST_RATINGS[code];
+  if (!info || !info.rating) {
+    return '<span class="text-slate-400 text-xs" title="未在今日 daily_picks 入选池">— 未评级</span>';
+  }
+  const r = String(info.rating);
+  const score = info.total_score != null ? ` · ${info.total_score}` : "";
+  if (r.includes("⭐⭐⭐")) {
+    return `<span class="inline-flex px-2 py-0.5 rounded text-xs font-bold bg-emerald-100 text-emerald-700" title="${_esc(r)}${score}">✅ 推荐</span>`;
+  }
+  if (r.includes("⭐⭐") || r.includes("⭐")) {
+    return `<span class="inline-flex px-2 py-0.5 rounded text-xs font-bold bg-amber-100 text-amber-700" title="${_esc(r)}${score}">⚠️ 观察</span>`;
+  }
+  return '<span class="text-slate-400 text-xs">— 未评级</span>';
 }
 
 // 链条层级 → 颜色 / 序号(用于排序)
@@ -2292,6 +2421,8 @@ async function loadWatchlistTable() {
     if (_watchlistCache.length === 0) {
       _watchlistCache = await _watchlistApiCall("GET", "/api/watchlist");
     }
+    // 确保持仓 cache 已加载,这样 _heldBadge 能正确显示「💼 持」标记
+    if (!_holdingsLoaded) await _ensureHoldingsLoaded();
     // 总是调用（line 2263 内部 guard 保证幂等）— 修复:cache 可能被其他 tab 先填(如 AI 推荐的"✓ 已在自选"标记)导致筛选项漏初始化
     _populateWatchlistFilters();
     const fChain = document.getElementById("wl-filter-chain")?.value || "";
@@ -2318,18 +2449,19 @@ async function loadWatchlistTable() {
     });
     countEl.textContent = `${filtered.length} / ${_watchlistCache.length} 条`;
     if (filtered.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="9" class="px-3 py-8 text-center text-slate-500 text-sm">没有匹配的记录</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="10" class="px-3 py-8 text-center text-slate-500 text-sm">没有匹配的记录</td></tr>`;
       return;
     }
     tbody.innerHTML = filtered.map(r => `
       <tr class="hover:bg-slate-50">
-        <td class="px-3 py-2 font-mono text-xs font-bold text-slate-900 whitespace-nowrap">${_esc(r.code)}</td>
+        <td class="px-3 py-2 font-mono text-xs font-bold text-slate-900 whitespace-nowrap">${_esc(r.code)}${_heldBadge(r.code)}</td>
         <td class="px-3 py-2 text-sm text-slate-800 whitespace-nowrap">${_esc(r.name)}</td>
         <td class="px-3 py-2">${_chainBadges(r.chain)}</td>
         <td class="px-3 py-2">${_tierBadge(r.chain_tier)}</td>
         <td class="px-3 py-2">${_roleBadge(r.chain_role)}</td>
         <td class="px-3 py-2 text-xs text-slate-700 max-w-md">${_esc(r.layman_intro) || '<span class="text-slate-400">—</span>'}</td>
         <td class="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">${_esc(r.market)}</td>
+        <td class="px-3 py-2 whitespace-nowrap">${_wlRatingBadge(r.code)}</td>
         <td class="px-3 py-2 text-xs whitespace-nowrap">${_esc(r.status)}</td>
         <td class="px-3 py-2 text-right space-x-1 whitespace-nowrap">
           <button onclick="openWatchlistEditor('${_esc(r.code)}')" class="text-xs px-2 py-1 bg-slate-100 hover:bg-violet-100 text-slate-700 rounded">✏️</button>
@@ -2338,7 +2470,7 @@ async function loadWatchlistTable() {
       </tr>
     `).join("");
   } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="9" class="px-3 py-8 text-center text-rose-700 text-sm">加载失败：${_esc(e.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="10" class="px-3 py-8 text-center text-rose-700 text-sm">加载失败：${_esc(e.message)}</td></tr>`;
   }
 }
 async function forceReloadWatchlist() { _watchlistCache = []; await loadWatchlistTable(); }
@@ -2718,7 +2850,7 @@ function switchTab(tab) {
   // 滚到顶部
   window.scrollTo(0, 0);
   // tab 特定的延迟初始化
-  if (tab === "portfolio") setTimeout(renderPortfolio, 50);
+  if (tab === "portfolio") setTimeout(async () => { await _ensureHoldingsLoaded(); renderPortfolio(); }, 50);
   if (tab === "backtest") setTimeout(renderPlanBacktest, 100);
   if (tab === "professional") setTimeout(renderProfessional, 50);
   if (tab === "chain") setTimeout(loadChainOverview, 50);
@@ -2738,8 +2870,8 @@ function getTabFromHash() {
 window.addEventListener("hashchange", () => switchTab(getTabFromHash()));
 window.addEventListener("DOMContentLoaded", () => switchTab(getTabFromHash()));
 
-// ============ 持仓管理（localStorage） ============
-const STORAGE_KEY = "ai_portfolio_holdings_v1";
+// ============ 持仓管理（DuckDB · /api/holdings · 2026-05-12 从 localStorage 迁过来） ============
+const STORAGE_KEY = "ai_portfolio_holdings_v1";  // 仅用于首次启动检测+一次性导入到 DuckDB,导入完清空
 // 投资方案配置 · 默认值,会被 /api/config 覆盖
 let TOTAL_CAPITAL = 500000;
 let STOPLOSS_LINE = 300000;
@@ -2920,39 +3052,108 @@ function getCurrentPriceRMB(code) {
   return { rmb_price: p.price * fx, raw_price: p.price, currency: p.currency, fx };
 }
 
-function loadHoldings() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); }
-  catch { return []; }
+let _holdingsCache = [];          // 同步快照,供 renderPortfolio 用
+let _holdingsLoaded = false;      // 是否已从 API 拉过一次(含 legacy 迁移)
+
+async function _ensureHoldingsLoaded() {
+  if (_holdingsLoaded) return;
+  // 1. 一次性迁移:首次启动如果 localStorage 还有老数据,导入 DuckDB 再清空
+  try {
+    const legacy = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    if (Array.isArray(legacy) && legacy.length > 0) {
+      const items = legacy.map(h => ({
+        code: h.code,
+        entry_price: h.entry_price,
+        shares: h.shares,
+        date: h.date,
+        source: h._plan_a_v6 ? "ai_plan" : "manual",
+      }));
+      const r = await fetch(WATCHLIST_API_BASE + "/api/holdings/bulk-replace", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(items),
+      });
+      if (r.ok) {
+        localStorage.removeItem(STORAGE_KEY);
+        console.log(`✓ 已迁移 ${legacy.length} 条持仓 localStorage → DuckDB`);
+      } else {
+        console.warn("legacy holdings migration failed:", r.status);
+      }
+    }
+  } catch (e) {
+    console.warn("legacy holdings migration error:", e);
+  }
+  // 2. 拉最新
+  try {
+    const r = await fetch(WATCHLIST_API_BASE + "/api/holdings");
+    _holdingsCache = r.ok ? await r.json() : [];
+  } catch (e) {
+    _holdingsCache = [];
+  }
+  _holdingsLoaded = true;
 }
 
-function saveHoldings(holdings) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(holdings));
+// 同步返回 cache(供同步代码用)
+function loadHoldings() { return _holdingsCache; }
+
+// 重新拉最新数据并 render
+async function refreshHoldingsAndRender() {
+  try {
+    const r = await fetch(WATCHLIST_API_BASE + "/api/holdings");
+    if (r.ok) _holdingsCache = await r.json();
+  } catch (e) {}
+  _holdingsLoaded = true;
   renderPortfolio();
 }
 
-let editingIdx = -1;
+// 整批替换(loadPlanAv6 / importHoldings / clearHoldings)
+async function saveHoldings(holdings) {
+  const items = holdings.map(h => ({
+    code: h.code,
+    entry_price: h.entry_price,
+    shares: h.shares,
+    date: h.date,
+    source: h._plan_a_v6 ? "ai_plan" : (h.source || "manual"),
+  }));
+  try {
+    const r = await fetch(WATCHLIST_API_BASE + "/api/holdings/bulk-replace", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(items),
+    });
+    if (!r.ok) { alert("保存持仓失败: HTTP " + r.status); return; }
+  } catch (e) { alert("保存持仓失败: " + e.message); return; }
+  await refreshHoldingsAndRender();
+}
 
-function addHolding() { editingIdx = -1; openModal(); }
-function editHolding(idx) {
-  editingIdx = idx;
-  const h = loadHoldings()[idx];
+let editingId = null;  // null = 新增, 数字 = 编辑该 id
+
+function addHolding() { editingId = null; openModal(); }
+
+function editHolding(id) {
+  editingId = id;
+  const h = _holdingsCache.find(x => x.id === id);
+  if (!h) return;
   document.getElementById("form-code").value = h.code;
   document.getElementById("form-price").value = h.entry_price;
   document.getElementById("form-shares").value = h.shares;
-  document.getElementById("form-date").value = h.date;
+  document.getElementById("form-date").value = h.entry_date || "";
   openModal();
 }
-function deleteHolding(idx) {
+
+async function deleteHolding(id) {
   if (!confirm("确定删除？")) return;
-  const arr = loadHoldings();
-  arr.splice(idx, 1);
-  saveHoldings(arr);
+  try {
+    const r = await fetch(WATCHLIST_API_BASE + "/api/holdings/" + id, { method: "DELETE" });
+    if (!r.ok) { alert("删除失败: HTTP " + r.status); return; }
+  } catch (e) { alert("删除失败: " + e.message); return; }
+  await refreshHoldingsAndRender();
 }
+
 function openModal() {
-  // 填充股票下拉
   const sel = document.getElementById("form-code");
   sel.innerHTML = RECORDS.map(r => `<option value="${r.code}">${r.name} (${r.code})</option>`).join("");
-  if (editingIdx === -1) {
+  if (editingId == null) {
     document.getElementById("form-price").value = "";
     document.getElementById("form-shares").value = "";
     document.getElementById("form-date").value = new Date().toISOString().split("T")[0];
@@ -2960,17 +3161,33 @@ function openModal() {
   document.getElementById("holding-modal").classList.remove("hidden");
 }
 function closeModal() { document.getElementById("holding-modal").classList.add("hidden"); }
-function saveHolding() {
+
+async function saveHolding() {
   const code = document.getElementById("form-code").value;
   const entry_price = parseFloat(document.getElementById("form-price").value);
   const shares = parseFloat(document.getElementById("form-shares").value);
   const date = document.getElementById("form-date").value;
   if (!code || !entry_price || !shares) { alert("请填完整"); return; }
-  const arr = loadHoldings();
-  const h = { code, entry_price, shares, date };
-  if (editingIdx >= 0) arr[editingIdx] = h; else arr.push(h);
-  saveHoldings(arr);
+  const item = { code, entry_price, shares, date };
+  try {
+    let r;
+    if (editingId != null) {
+      r = await fetch(WATCHLIST_API_BASE + "/api/holdings/" + editingId, {
+        method: "PUT", headers: {"Content-Type":"application/json"}, body: JSON.stringify(item),
+      });
+    } else {
+      r = await fetch(WATCHLIST_API_BASE + "/api/holdings", {
+        method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(item),
+      });
+    }
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      alert("保存失败: " + (err.detail || r.status));
+      return;
+    }
+  } catch (e) { alert("保存失败: " + e.message); return; }
   closeModal();
+  await refreshHoldingsAndRender();
 }
 
 function renderPortfolio() {
@@ -3003,8 +3220,8 @@ function renderPortfolio() {
         <td class="px-3 py-2 text-right">-</td>
         <td class="px-3 py-2 text-right text-slate-400" colspan="5">无价格数据</td>
         <td class="px-3 py-2 text-center">
-          <button onclick="editHolding(${idx})" class="text-violet-600 text-xs">编辑</button>
-          <button onclick="deleteHolding(${idx})" class="text-rose-500 text-xs ml-2">删除</button>
+          <button onclick="editHolding(${h.id})" class="text-violet-600 text-xs">编辑</button>
+          <button onclick="deleteHolding(${h.id})" class="text-rose-500 text-xs ml-2">删除</button>
         </td>
       </tr>`;
     }
@@ -3037,8 +3254,8 @@ function renderPortfolio() {
       <td class="px-3 py-2 text-right font-mono ${pnlColor}">${pnl_pct >= 0 ? '+' : ''}${pnl_pct.toFixed(2)}%</td>
       <td class="px-3 py-2 text-right font-mono">${(value_rmb / TOTAL_CAPITAL * 100).toFixed(1)}%</td>
       <td class="px-3 py-2 text-center">
-        <button onclick="editHolding(${idx})" class="text-violet-600 text-xs">编辑</button>
-        <button onclick="deleteHolding(${idx})" class="text-rose-500 text-xs ml-2">删除</button>
+        <button onclick="editHolding(${h.id})" class="text-violet-600 text-xs">编辑</button>
+        <button onclick="deleteHolding(${h.id})" class="text-rose-500 text-xs ml-2">删除</button>
       </td>
     </tr>`;
   }).join("");
@@ -3153,14 +3370,13 @@ function importHoldings() {
   };
   input.click();
 }
-function clearHoldings() {
+async function clearHoldings() {
   if (!confirm("确定清空所有持仓？")) return;
-  localStorage.removeItem(STORAGE_KEY);
-  renderPortfolio();
+  await saveHoldings([]);
 }
 
 // ============ 一键加载方案 A v6（学术因子 + Markowitz 客观仓位） ============
-function loadPlanAv6() {
+async function loadPlanAv6() {
   if (!PLAN_A_V6 || !PLAN_A_V6.plan_v5 || PLAN_A_V6.plan_v5.length === 0) {
     alert("还没有方案 A v6 数据，请先跑：python3 build_plan_a_v5.py");
     return;
@@ -3198,7 +3414,7 @@ function loadPlanAv6() {
     });
     totalAmount += shares * priceUsd * USD_TO_RMB;
   });
-  saveHoldings(holdings);
+  await saveHoldings(holdings);
   const metrics = PLAN_A_V6.portfolio_metrics || {};
   // 渲染持久指标卡片
   renderV6Metrics(metrics);
@@ -3241,9 +3457,10 @@ function renderV6Metrics(metrics) {
   document.getElementById("v6-metrics-card").style.display = "";
 }
 
-// 加载时如果已有方案 A v6 数据 + 持仓，就显示指标
-window.addEventListener("DOMContentLoaded", () => {
-  if (PLAN_A_V6 && PLAN_A_V6.portfolio_metrics && loadHoldings().some(h => h._plan_a_v6)) {
+// 加载时如果已有方案 A v6 数据 + ai_plan 来源持仓，就显示指标
+window.addEventListener("DOMContentLoaded", async () => {
+  await _ensureHoldingsLoaded();
+  if (PLAN_A_V6 && PLAN_A_V6.portfolio_metrics && _holdingsCache.some(h => h.source === "ai_plan")) {
     renderV6Metrics(PLAN_A_V6.portfolio_metrics);
   }
 });
@@ -4133,8 +4350,15 @@ const themeHtml = Object.entries(byTheme)
   }).join("");
 document.getElementById("picks-by-theme").innerHTML = themeHtml || '<div class="text-slate-500 text-sm">暂无数据</div>';
 
-// Top 5 / Bottom 5
-const sortedPicks = [...validPicks].sort((a, b) => parseFloat(b.pct) - parseFloat(a.pct));
+// Top 5 / Bottom 5 — 按 code 去重,每只股保留 days_held 最大那条(持有最久,最有代表性)
+const dedupByCode = new Map();
+for (const p of validPicks) {
+  const prev = dedupByCode.get(p.code);
+  if (!prev || (parseFloat(p.days_held) || 0) > (parseFloat(prev.days_held) || 0)) {
+    dedupByCode.set(p.code, p);
+  }
+}
+const sortedPicks = [...dedupByCode.values()].sort((a, b) => parseFloat(b.pct) - parseFloat(a.pct));
 function pickRow(p) {
   const v = parseFloat(p.pct);
   const color = v > 0 ? "text-emerald-600" : "text-rose-600";
@@ -6072,6 +6296,26 @@ def build():
         print(f"  ⚠️ Discovery 历史加载失败: {e}")
         disc_hist = []
     html = html.replace("{DISCOVERY_HISTORY_JSON}", json.dumps(disc_hist, ensure_ascii=False, default=str))
+
+    # AI 评级:自选股每只的当前评级(来自 picks 最新一日,daily_picks_v5 学术因子产出)
+    watchlist_ratings = {}
+    try:
+        from stock_db import get_db as _get_db
+        _conn = _get_db()
+        for code, rating, total_score, ai_score in _conn.execute(
+            "SELECT code, rating, total_score, ai_score FROM picks "
+            "WHERE pick_date = (SELECT MAX(pick_date) FROM picks)"
+        ).fetchall():
+            watchlist_ratings[code] = {
+                "rating": rating,
+                "total_score": total_score,
+                "ai_score": ai_score,
+            }
+        _conn.close()
+        print(f"  自选股 AI 评级已加载 [DuckDB picks]({len(watchlist_ratings)} 只)")
+    except Exception as e:
+        print(f"  ⚠️ AI 评级加载失败: {e}")
+    html = html.replace("{WATCHLIST_RATINGS_JSON}", json.dumps(watchlist_ratings, ensure_ascii=False))
     html = html.replace("{RECORDS_JSON}", json.dumps(records, ensure_ascii=False))
     html = html.replace("{PICKS_JSON}", json.dumps(picks, ensure_ascii=False))
     html = html.replace("{SIMULATION_JSON}", json.dumps(simulation, ensure_ascii=False))
