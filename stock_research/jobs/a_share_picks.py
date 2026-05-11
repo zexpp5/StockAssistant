@@ -181,7 +181,8 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
                       dry_run: bool = False, theme_field: str = "industry",
                       sector_cap_count: int = 3,
                       require_after_close: bool = False,
-                      bypass_ic_gate: bool = False):
+                      bypass_ic_gate: bool = False,
+                      bypass_audit_gate: bool = False):
     """主入口。
 
     参数：
@@ -211,6 +212,19 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
         else:
             print("\n🔴 因子 IC 闸门 FAIL → 强制 dry-run（不写飞书 / 不写 DB）")
             print("   修复：python3 -m stock_research.jobs.audit_ic  或 --bypass-ic-gate\n")
+            dry_run = True
+
+    # 跨源 audit CONFLICT 闸门 — 同 daily_picks_v5
+    from stock_research.core.audit_gate import evaluate_gate as evaluate_audit_gate
+    from stock_research.core.audit_gate import format_report as format_audit_report
+    audit_gate = evaluate_audit_gate()
+    print(format_audit_report(audit_gate))
+    if not audit_gate.passed:
+        if bypass_audit_gate:
+            print("\n⚠️ --bypass-audit-gate：用户强制跳过闸门，继续（风险自担）\n")
+        else:
+            print("\n🔴 跨源 audit 闸门 FAIL → 强制 dry-run（不写飞书 / 不写 DB）")
+            print("   修复：python3 -m stock_research.jobs.daily_audit  或 --bypass-audit-gate\n")
             dry_run = True
 
     print(f"\n📊 A 股每日优选 — {datetime.now():%Y-%m-%d %H:%M}")
@@ -536,12 +550,15 @@ def main():
                         help="仅在 A 股收盘后允许执行（北向 T+1 + LHB 盘后才出）")
     parser.add_argument("--bypass-ic-gate", action="store_true",
                         help="⚠️ 强行跳过因子 IC 闸门（需自担风险）")
+    parser.add_argument("--bypass-audit-gate", action="store_true",
+                        help="⚠️ 强行跳过跨源 audit CONFLICT 闸门（需自担风险）")
     args = parser.parse_args()
     return run_a_share_picks(
         top_k=args.top, mode=args.mode, dry_run=args.dry_run,
         sector_cap_count=args.sector_cap,
         require_after_close=args.require_after_close,
         bypass_ic_gate=args.bypass_ic_gate,
+        bypass_audit_gate=args.bypass_audit_gate,
     )
 
 

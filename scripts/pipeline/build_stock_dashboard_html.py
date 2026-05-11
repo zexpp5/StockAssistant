@@ -432,6 +432,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <a href="#discovery" data-tab="discovery" class="tab-link block px-3 py-1.5 text-sm text-slate-700 hover:text-violet-600 hover:bg-violet-50 rounded transition">🔍 候选发现</a>
       <a href="#valuation" data-tab="valuation" class="tab-link block px-3 py-1.5 text-sm text-slate-700 hover:text-violet-600 hover:bg-violet-50 rounded transition">📈 估值视角</a>
       <a href="#themes" data-tab="themes" class="tab-link block px-3 py-1.5 text-sm text-slate-700 hover:text-violet-600 hover:bg-violet-50 rounded transition">🗂 主题分组</a>
+      <a href="#chain-overview" data-tab="chain-overview" class="tab-link block px-3 py-1.5 text-sm text-violet-700 font-medium hover:text-violet-800 hover:bg-violet-50 rounded transition">🌳 产业链全景</a>
     </div>
 
     <!-- 🛡️ 验证 = 反向审查 + 专业分析 -->
@@ -1179,6 +1180,36 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 </section>
 
+<!-- ============ 🌳 产业链全景 Tab（按链条聚类 watchlist，让新手看出层级 + 角色 + 一句话）============ -->
+<section id="chain-overview" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
+  <div class="mb-6">
+    <div class="flex items-center gap-3 mb-2">
+      <span class="text-3xl">🌳</span>
+      <h2 class="text-2xl font-bold text-slate-900">产业链全景</h2>
+    </div>
+    <p class="text-sm text-slate-600">
+      把 watchlist 按 <strong>产业链 × 层级 × 角色</strong> 三维聚类。
+      <strong class="text-violet-700">层级颜色</strong>：
+      <span class="px-1.5 py-0.5 bg-violet-100 text-violet-800 rounded text-xs font-semibold">核心</span>
+      <span class="px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded text-xs font-semibold">一线</span>
+      <span class="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 rounded text-xs font-semibold">二线</span>
+      <span class="px-1.5 py-0.5 bg-amber-100 text-amber-800 rounded text-xs font-semibold">三线</span>
+      <span class="px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded text-xs font-semibold">N/A</span>
+      。同一标的可属于多条链(如 SK Hynix 同时在 HBM 和 AI 算力链)。
+    </p>
+  </div>
+
+  <div class="flex items-center gap-3 mb-4 flex-wrap text-xs">
+    <span id="chain-api-status" class="px-2 py-0.5 rounded bg-slate-100 text-slate-500">检测中…</span>
+    <button onclick="forceReloadChainOverview()" class="px-3 py-1 bg-slate-600 hover:bg-slate-700 text-white rounded">🔄 刷新</button>
+    <span id="chain-count" class="ml-auto text-slate-500"></span>
+  </div>
+
+  <div id="chain-summary" class="mb-6 flex flex-wrap gap-2"></div>
+
+  <div id="chain-cards-container" class="space-y-6"></div>
+</section>
+
 <!-- ============ ✏️ Watchlist 编辑 Tab（DuckDB 权威 · 通过 FastAPI 增删改）============ -->
 <section id="watchlist-edit" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
   <div class="mb-6">
@@ -1199,7 +1230,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <span class="text-sm text-slate-600">API: </span>
     <code class="text-xs font-mono bg-slate-100 px-2 py-1 rounded" id="watchlist-api-base">http://127.0.0.1:8765</code>
     <span id="watchlist-api-status" class="text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-500">检测中…</span>
-    <button onclick="loadWatchlistTable()" class="text-xs px-3 py-1 bg-slate-600 hover:bg-slate-700 text-white rounded">🔄 刷新</button>
+    <button onclick="forceReloadWatchlist()" class="text-xs px-3 py-1 bg-slate-600 hover:bg-slate-700 text-white rounded">🔄 刷新</button>
     <button onclick="openWatchlistEditor()" class="text-xs px-3 py-1 bg-violet-600 hover:bg-violet-700 text-white rounded">➕ 添加新股</button>
     <span id="watchlist-count" class="ml-auto text-xs text-slate-500"></span>
   </div>
@@ -1251,10 +1282,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <h3 class="text-lg font-bold text-slate-900" id="watchlist-modal-title">添加新股</h3>
         <button onclick="closeWatchlistEditor()" class="text-slate-400 hover:text-slate-700 text-xl">×</button>
       </div>
+      <!-- 自动补全提示条 -->
+      <div class="px-6 pt-3 pb-1">
+        <div class="bg-violet-50 border border-violet-200 rounded-lg p-3 text-xs text-violet-800 leading-relaxed">
+          💡 <strong>只填代码就行</strong>，点 <kbd class="bg-white border border-violet-300 px-1 rounded">🪄 自动补全</kbd> 按钮 →
+          系统自动从 yfinance + GICS 拉取名字 / 行业 / AI 关联 / 主题 / 产业链 / 1 句话解释。然后你 review 一下点保存。
+        </div>
+      </div>
       <div class="px-6 py-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
+        <div class="md:col-span-2">
           <label class="text-xs text-slate-500 block mb-1">代码 *</label>
-          <input id="wl-code" type="text" class="w-full px-3 py-2 border border-slate-300 rounded text-sm font-mono" placeholder="如 NVDA / 600519.SS">
+          <div class="flex gap-2">
+            <input id="wl-code" type="text" class="flex-1 px-3 py-2 border border-slate-300 rounded text-sm font-mono" placeholder="如 NVDA / 600519.SS">
+            <button onclick="autoEnrichWatchlist()" id="wl-enrich-btn" class="px-3 py-2 text-sm bg-violet-600 hover:bg-violet-700 text-white rounded font-medium whitespace-nowrap">🪄 自动补全</button>
+          </div>
+          <div id="wl-enrich-status" class="text-xs text-slate-500 mt-1"></div>
         </div>
         <div>
           <label class="text-xs text-slate-500 block mb-1">名称</label>
@@ -1271,6 +1313,44 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div>
           <label class="text-xs text-slate-500 block mb-1">主营业务</label>
           <input id="wl-business" type="text" class="w-full px-3 py-2 border border-slate-300 rounded text-sm">
+        </div>
+        <!-- 2026-05-11 新增:产业链定位字段 -->
+        <div>
+          <label class="text-xs text-slate-500 block mb-1">产业链(逗号分隔多链)</label>
+          <input id="wl-chain" type="text" class="w-full px-3 py-2 border border-slate-300 rounded text-sm" placeholder="HBM,AI 算力 / 数据中心电力 / …">
+        </div>
+        <div>
+          <label class="text-xs text-slate-500 block mb-1">链条层级</label>
+          <select id="wl-chain-tier" class="w-full px-3 py-2 border border-slate-300 rounded text-sm">
+            <option value="">—</option>
+            <option value="核心">核心</option>
+            <option value="一线">一线</option>
+            <option value="二线">二线</option>
+            <option value="三线">三线</option>
+            <option value="N/A">N/A(对照组)</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-slate-500 block mb-1">链条角色</label>
+          <select id="wl-chain-role" class="w-full px-3 py-2 border border-slate-300 rounded text-sm">
+            <option value="">—</option>
+            <option value="IDM">IDM(自产芯片)</option>
+            <option value="GPU">GPU</option>
+            <option value="网络芯片">网络芯片</option>
+            <option value="设备">设备</option>
+            <option value="材料">材料</option>
+            <option value="封测">封测</option>
+            <option value="EDA">EDA</option>
+            <option value="服务器">服务器</option>
+            <option value="应用层">应用层</option>
+            <option value="服务">服务</option>
+            <option value="基础设施">基础设施</option>
+            <option value="对照">对照</option>
+          </select>
+        </div>
+        <div class="md:col-span-2">
+          <label class="text-xs text-slate-500 block mb-1">新手一句话解释(<60 字)</label>
+          <input id="wl-layman-intro" type="text" maxlength="80" class="w-full px-3 py-2 border border-slate-300 rounded text-sm" placeholder="如:全球 HBM 内存第一,NVIDIA 主供应商,AI GPU 必须配它才跑得动">
         </div>
         <div>
           <label class="text-xs text-slate-500 block mb-1">AI 关联度</label>
@@ -1803,6 +1883,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 const RECORDS      = {RECORDS_JSON};
 const PICKS        = {PICKS_JSON};
 const SIMULATION   = {SIMULATION_JSON};
+// 2026-05-11 PM: watchlist 链条定位信息(chain/chain_tier/chain_role/layman_intro)
+// 按 code 索引 → 任何 tab 显示股票时,Stock Pill 都能查到上下文
+const WATCHLIST_CHAIN_INFO = {WATCHLIST_CHAIN_INFO_JSON};
 const RISK_METRICS = {RISK_METRICS_JSON_DB};
 const TRACK_13F    = {TRACK_13F_JSON_DB};
 const HISTORY_DATA = {HISTORY_DATA_JSON_DB};
@@ -1848,12 +1931,140 @@ function _esc(s) {
   return (s || "").toString().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+// 链条层级 → 颜色 / 序号(用于排序)
+const TIER_STYLE = {
+  "核心": { bg: "bg-violet-100", txt: "text-violet-800", order: 0 },
+  "一线": { bg: "bg-blue-100",   txt: "text-blue-800",   order: 1 },
+  "二线": { bg: "bg-emerald-100",txt: "text-emerald-800",order: 2 },
+  "三线": { bg: "bg-amber-100",  txt: "text-amber-800",  order: 3 },
+  "N/A":  { bg: "bg-slate-100",  txt: "text-slate-500",  order: 9 },
+};
+const ROLE_STYLE = {
+  "IDM":      "bg-rose-50 text-rose-700",
+  "GPU":      "bg-fuchsia-50 text-fuchsia-700",
+  "网络芯片":  "bg-sky-50 text-sky-700",
+  "设备":     "bg-cyan-50 text-cyan-700",
+  "材料":     "bg-lime-50 text-lime-700",
+  "封测":     "bg-teal-50 text-teal-700",
+  "EDA":      "bg-indigo-50 text-indigo-700",
+  "服务器":    "bg-orange-50 text-orange-700",
+  "应用层":    "bg-violet-50 text-violet-700",
+  "服务":     "bg-blue-50 text-blue-700",
+  "基础设施":  "bg-emerald-50 text-emerald-700",
+  "对照":     "bg-slate-50 text-slate-500",
+};
+function _tierBadge(tier) {
+  const s = TIER_STYLE[tier] || TIER_STYLE["N/A"];
+  return `<span class="inline-block px-2 py-0.5 rounded text-xs font-semibold ${s.bg} ${s.txt}">${_esc(tier || "—")}</span>`;
+}
+function _roleBadge(role) {
+  if (!role) return `<span class="text-slate-400 text-xs">—</span>`;
+  const cls = ROLE_STYLE[role] || "bg-slate-100 text-slate-700";
+  return `<span class="inline-block px-2 py-0.5 rounded text-xs ${cls}">${_esc(role)}</span>`;
+}
+function _chainBadges(chain) {
+  if (!chain) return `<span class="text-slate-400 text-xs">—</span>`;
+  return chain.split(",").map(c => c.trim()).filter(Boolean).map(c =>
+    `<span class="inline-block px-2 py-0.5 rounded text-xs bg-slate-100 text-slate-700 mr-1 mb-0.5">${_esc(c)}</span>`
+  ).join("");
+}
+
+// ============ Stock Pill 组件 ============
+// 复用组件:任何 tab 显示股票时,都用 stockPill(code) 替代裸 code/name
+// 自动从 WATCHLIST_CHAIN_INFO 查上下文(链条/层级/角色/一句话),不在 watchlist 显示 [未观察]
+// 用法:
+//   stockPill("NVDA")                          → 完整 pill(代码+名字+badges+hover 提示一句话)
+//   stockPill("NVDA", {layout: "mini"})        → 紧凑(只 badges,不重复代码名字)
+//   stockPill("NVDA", {nameOverride: "英伟达"}) → 用自定义名字覆盖
+function stockPill(code, opts) {
+  opts = opts || {};
+  const info = (typeof WATCHLIST_CHAIN_INFO !== "undefined" ? WATCHLIST_CHAIN_INFO : {})[code] || {};
+  const layout = opts.layout || "inline";  // inline | mini
+  const name = opts.nameOverride || info.name || "";
+  const chain = (info.chain || "").split(",").map(s => s.trim()).filter(Boolean);
+  const primaryChain = chain[0] || null;
+  const tier = info.chain_tier;
+  const role = info.chain_role;
+  const intro = info.layman_intro || "";
+  const inWatchlist = !!info.name;
+
+  // 紧凑模式:只显示 chain · tier · role 三个 badge,不重复 code/name
+  if (layout === "mini") {
+    if (!inWatchlist) {
+      return `<span class="inline-block px-1.5 py-0.5 rounded text-xs bg-slate-100 text-slate-400" title="不在 watchlist">未观察</span>`;
+    }
+    const parts = [];
+    if (primaryChain) parts.push(`<span class="px-1.5 py-0 rounded text-[10px] bg-slate-100 text-slate-700">${_esc(primaryChain)}</span>`);
+    if (tier) {
+      const s = TIER_STYLE[tier] || TIER_STYLE["N/A"];
+      parts.push(`<span class="px-1.5 py-0 rounded text-[10px] font-semibold ${s.bg} ${s.txt}">${_esc(tier)}</span>`);
+    }
+    if (role) {
+      const cls = ROLE_STYLE[role] || "bg-slate-100 text-slate-700";
+      parts.push(`<span class="px-1.5 py-0 rounded text-[10px] ${cls}">${_esc(role)}</span>`);
+    }
+    const wrap = intro
+      ? `<span title="${_esc(intro)}" class="inline-flex items-center gap-1 cursor-help">${parts.join(" ")}</span>`
+      : `<span class="inline-flex items-center gap-1">${parts.join(" ")}</span>`;
+    return wrap;
+  }
+
+  // inline 模式(默认):代码 + 名字 + 链条/层级/角色 badge,hover 显示一句话
+  const titleAttr = intro
+    ? ` title="${_esc(intro)}"`
+    : (inWatchlist ? "" : ' title="不在 watchlist,无链条信息"');
+  const codeName = `<span class="font-mono text-sm font-bold text-slate-900">${_esc(code)}</span>` +
+                   (name ? ` <span class="text-sm text-slate-700">${_esc(name)}</span>` : "");
+  const badges = [];
+  if (!inWatchlist) {
+    badges.push(`<span class="px-1.5 py-0 rounded text-[10px] bg-slate-100 text-slate-400">未观察</span>`);
+  } else {
+    if (primaryChain) badges.push(`<span class="px-1.5 py-0 rounded text-[10px] bg-slate-100 text-slate-700">${_esc(primaryChain)}</span>`);
+    if (tier) {
+      const s = TIER_STYLE[tier] || TIER_STYLE["N/A"];
+      badges.push(`<span class="px-1.5 py-0 rounded text-[10px] font-semibold ${s.bg} ${s.txt}">${_esc(tier)}</span>`);
+    }
+    if (role) {
+      const cls = ROLE_STYLE[role] || "bg-slate-100 text-slate-700";
+      badges.push(`<span class="px-1.5 py-0 rounded text-[10px] ${cls}">${_esc(role)}</span>`);
+    }
+  }
+  return `<div class="inline-flex flex-col gap-0.5"${titleAttr}>
+    <div class="flex items-center gap-2 flex-wrap">${codeName}</div>
+    <div class="flex items-center gap-1 flex-wrap">${badges.join("")}</div>
+  </div>`;
+}
+
+function _populateWatchlistFilters() {
+  const chains = new Set(), roles = new Set();
+  _watchlistCache.forEach(r => {
+    (r.chain || "").split(",").map(s => s.trim()).filter(Boolean).forEach(c => chains.add(c));
+    if (r.chain_role) roles.add(r.chain_role);
+  });
+  const chainSel = document.getElementById("wl-filter-chain");
+  const roleSel = document.getElementById("wl-filter-role");
+  if (chainSel && chainSel.options.length <= 1) {
+    [...chains].sort().forEach(c => {
+      const opt = document.createElement("option");
+      opt.value = c; opt.textContent = c;
+      chainSel.appendChild(opt);
+    });
+  }
+  if (roleSel && roleSel.options.length <= 1) {
+    [...roles].sort().forEach(c => {
+      const opt = document.createElement("option");
+      opt.value = c; opt.textContent = c;
+      roleSel.appendChild(opt);
+    });
+  }
+}
+
 async function loadWatchlistTable() {
   const ok = await _checkApiStatus();
   const tbody = document.getElementById("watchlist-table-body");
   const countEl = document.getElementById("watchlist-count");
   if (!ok) {
-    tbody.innerHTML = `<tr><td colspan="8" class="px-3 py-8 text-center text-rose-700 text-sm">
+    tbody.innerHTML = `<tr><td colspan="9" class="px-3 py-8 text-center text-rose-700 text-sm">
       ⚠️ 本地 API 未启动 — 请在 terminal 跑：<br>
       <code class="text-xs bg-rose-50 px-2 py-1 mt-2 inline-block rounded">uvicorn stock_research.api.main:app --port 8765</code>
     </td></tr>`;
@@ -1861,21 +2072,47 @@ async function loadWatchlistTable() {
     return;
   }
   try {
-    _watchlistCache = await _watchlistApiCall("GET", "/api/watchlist");
-    countEl.textContent = `共 ${_watchlistCache.length} 条`;
     if (_watchlistCache.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="8" class="px-3 py-8 text-center text-slate-500 text-sm">暂无记录，点右上「➕ 添加新股」开始</td></tr>`;
+      _watchlistCache = await _watchlistApiCall("GET", "/api/watchlist");
+      _populateWatchlistFilters();
+    }
+    const fChain = document.getElementById("wl-filter-chain")?.value || "";
+    const fTier  = document.getElementById("wl-filter-tier")?.value || "";
+    const fRole  = document.getElementById("wl-filter-role")?.value || "";
+    const fKw    = (document.getElementById("wl-filter-keyword")?.value || "").trim().toLowerCase();
+    const filtered = _watchlistCache.filter(r => {
+      if (fChain && !(r.chain || "").split(",").map(s => s.trim()).includes(fChain)) return false;
+      if (fTier  && r.chain_tier !== fTier) return false;
+      if (fRole  && r.chain_role !== fRole) return false;
+      if (fKw) {
+        const hay = [r.code, r.name, r.layman_intro, r.industry].map(x => (x || "").toLowerCase()).join(" ");
+        if (!hay.includes(fKw)) return false;
+      }
+      return true;
+    });
+    filtered.sort((a, b) => {
+      const ca = (a.chain || "zz").split(",")[0].trim();
+      const cb = (b.chain || "zz").split(",")[0].trim();
+      if (ca !== cb) return ca.localeCompare(cb);
+      const ta = (TIER_STYLE[a.chain_tier] || TIER_STYLE["N/A"]).order;
+      const tb = (TIER_STYLE[b.chain_tier] || TIER_STYLE["N/A"]).order;
+      return ta - tb;
+    });
+    countEl.textContent = `${filtered.length} / ${_watchlistCache.length} 条`;
+    if (filtered.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="9" class="px-3 py-8 text-center text-slate-500 text-sm">没有匹配的记录</td></tr>`;
       return;
     }
-    tbody.innerHTML = _watchlistCache.map(r => `
+    tbody.innerHTML = filtered.map(r => `
       <tr class="hover:bg-slate-50">
-        <td class="px-3 py-2 font-mono text-sm font-bold text-slate-900">${_esc(r.code)}</td>
-        <td class="px-3 py-2 text-sm text-slate-800">${_esc(r.name)}</td>
-        <td class="px-3 py-2 text-xs text-slate-500">${_esc(r.market)}</td>
-        <td class="px-3 py-2 text-xs text-slate-500">${_esc(r.industry)}</td>
-        <td class="px-3 py-2 text-xs">${_esc(r.ai_relevance)}</td>
-        <td class="px-3 py-2 text-xs">${_esc(r.status)}</td>
-        <td class="px-3 py-2 text-xs">${_esc(r.credibility)}</td>
+        <td class="px-3 py-2 font-mono text-xs font-bold text-slate-900 whitespace-nowrap">${_esc(r.code)}</td>
+        <td class="px-3 py-2 text-sm text-slate-800 whitespace-nowrap">${_esc(r.name)}</td>
+        <td class="px-3 py-2">${_chainBadges(r.chain)}</td>
+        <td class="px-3 py-2">${_tierBadge(r.chain_tier)}</td>
+        <td class="px-3 py-2">${_roleBadge(r.chain_role)}</td>
+        <td class="px-3 py-2 text-xs text-slate-700 max-w-md">${_esc(r.layman_intro) || '<span class="text-slate-400">—</span>'}</td>
+        <td class="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">${_esc(r.market)}</td>
+        <td class="px-3 py-2 text-xs whitespace-nowrap">${_esc(r.status)}</td>
         <td class="px-3 py-2 text-right space-x-1 whitespace-nowrap">
           <button onclick="openWatchlistEditor('${_esc(r.code)}')" class="text-xs px-2 py-1 bg-slate-100 hover:bg-violet-100 text-slate-700 rounded">✏️</button>
           <button onclick="deleteWatchlistItem('${_esc(r.code)}')" class="text-xs px-2 py-1 bg-rose-100 hover:bg-rose-200 text-rose-700 rounded">🗑️</button>
@@ -1883,15 +2120,114 @@ async function loadWatchlistTable() {
       </tr>
     `).join("");
   } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="8" class="px-3 py-8 text-center text-rose-700 text-sm">加载失败：${_esc(e.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" class="px-3 py-8 text-center text-rose-700 text-sm">加载失败：${_esc(e.message)}</td></tr>`;
   }
 }
+async function forceReloadWatchlist() { _watchlistCache = []; await loadWatchlistTable(); }
+
+// ============ 🌳 产业链全景渲染 ============
+async function loadChainOverview() {
+  const statusEl = document.getElementById("chain-api-status");
+  const countEl = document.getElementById("chain-count");
+  const summaryEl = document.getElementById("chain-summary");
+  const container = document.getElementById("chain-cards-container");
+  if (!container) return;
+
+  const ok = await _checkApiStatus();
+  if (statusEl) statusEl.className = ok
+    ? "px-2 py-0.5 rounded bg-emerald-100 text-emerald-700"
+    : "px-2 py-0.5 rounded bg-rose-100 text-rose-700";
+  if (statusEl) statusEl.textContent = ok ? "✓ API 已连接" : "✗ API 未启动";
+  if (!ok) {
+    container.innerHTML = `<div class="bg-rose-50 border border-rose-200 rounded p-4 text-sm text-rose-700">
+      本地 API 未启动 — 请运行: <code class="bg-rose-100 px-2 py-0.5 rounded">uvicorn stock_research.api.main:app --port 8765</code>
+    </div>`;
+    return;
+  }
+  try {
+    if (_watchlistCache.length === 0) {
+      _watchlistCache = await _watchlistApiCall("GET", "/api/watchlist");
+    }
+    const byChain = {};
+    _watchlistCache.forEach(r => {
+      const chains = (r.chain || "").split(",").map(s => s.trim()).filter(Boolean);
+      if (chains.length === 0) chains.push("(未分类)");
+      chains.forEach(c => { (byChain[c] = byChain[c] || []).push(r); });
+    });
+    const chainsSorted = Object.keys(byChain).sort((a, b) => byChain[b].length - byChain[a].length);
+    countEl.textContent = `${chainsSorted.length} 条链 · ${_watchlistCache.length} 个标的(去重)`;
+
+    summaryEl.innerHTML = chainsSorted.map(c => {
+      const n = byChain[c].length;
+      const anchor = "chain-card-" + c.replace(/[^a-zA-Z0-9]/g, "_");
+      return `<a href="#${anchor}" onclick="document.getElementById('${anchor}')?.scrollIntoView({behavior:'smooth',block:'start'});return false;"
+        class="inline-flex items-center gap-1.5 px-3 py-1 bg-white border border-slate-200 hover:border-violet-400 hover:bg-violet-50 rounded-full text-xs text-slate-700 transition">
+        <span class="font-medium">${_esc(c)}</span>
+        <span class="text-slate-400">·</span>
+        <span class="text-violet-600 font-semibold">${n}</span>
+      </a>`;
+    }).join("");
+
+    container.innerHTML = chainsSorted.map(c => {
+      const rows = byChain[c];
+      rows.sort((a, b) => {
+        const ta = (TIER_STYLE[a.chain_tier] || TIER_STYLE["N/A"]).order;
+        const tb = (TIER_STYLE[b.chain_tier] || TIER_STYLE["N/A"]).order;
+        if (ta !== tb) return ta - tb;
+        return (a.code || "").localeCompare(b.code || "");
+      });
+      const tiers = ["核心", "一线", "二线", "三线", "N/A"];
+      const byTier = {};
+      tiers.forEach(t => byTier[t] = []);
+      rows.forEach(r => {
+        const t = r.chain_tier && byTier[r.chain_tier] !== undefined ? r.chain_tier : "N/A";
+        byTier[t].push(r);
+      });
+      const anchor = "chain-card-" + c.replace(/[^a-zA-Z0-9]/g, "_");
+
+      const tierBlocks = tiers.filter(t => byTier[t].length > 0).map(t => {
+        const s = TIER_STYLE[t];
+        const stockCards = byTier[t].map(r => `
+          <div class="bg-white border border-slate-200 hover:border-violet-300 rounded-lg p-3 cursor-pointer transition group"
+               onclick="location.hash='#watchlist-edit';setTimeout(()=>openWatchlistEditor('${_esc(r.code)}'),200);">
+            <div class="flex items-start justify-between gap-2 mb-1.5">
+              <div class="flex-1 min-w-0">
+                <div class="font-mono text-xs font-bold text-slate-900 truncate">${_esc(r.code)}</div>
+                <div class="text-sm text-slate-700 truncate">${_esc(r.name)}</div>
+              </div>
+              ${_roleBadge(r.chain_role)}
+            </div>
+            <div class="text-xs text-slate-600 leading-snug line-clamp-3">${_esc(r.layman_intro) || '<span class="text-slate-400">(未填一句话解释)</span>'}</div>
+          </div>
+        `).join("");
+        return `<div class="mb-4">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="px-2 py-0.5 rounded ${s.bg} ${s.txt} text-xs font-semibold">${t}</span>
+            <span class="text-xs text-slate-400">${byTier[t].length} 只</span>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">${stockCards}</div>
+        </div>`;
+      }).join("");
+
+      return `<div id="${anchor}" class="bg-slate-50 rounded-xl border border-slate-200 p-5">
+        <div class="flex items-center gap-3 mb-4 pb-3 border-b border-slate-200">
+          <h3 class="text-xl font-bold text-slate-900">🔗 ${_esc(c)}</h3>
+          <span class="text-sm text-slate-500">${rows.length} 个标的</span>
+        </div>
+        ${tierBlocks || '<div class="text-sm text-slate-400">本链暂无标的</div>'}
+      </div>`;
+    }).join("");
+  } catch (e) {
+    container.innerHTML = `<div class="bg-rose-50 border border-rose-200 rounded p-4 text-sm text-rose-700">加载失败：${_esc(e.message)}</div>`;
+  }
+}
+async function forceReloadChainOverview() { _watchlistCache = []; await loadChainOverview(); }
 
 function openWatchlistEditor(code) {
   _watchlistEditCode = code || null;
   const title = code ? `编辑 · ${code}` : "添加新股";
   document.getElementById("watchlist-modal-title").textContent = title;
-  const fields = ["code", "name", "market", "industry", "business", "ai-relevance", "ai-logic", "status", "credibility", "conclusion", "risks", "peers", "rhythm", "notes"];
+  const fields = ["code", "name", "market", "industry", "business", "ai-relevance", "ai-logic", "status", "credibility", "conclusion", "risks", "peers", "rhythm", "notes", "chain", "chain-tier", "chain-role", "layman-intro"];
   fields.forEach(f => {
     const el = document.getElementById("wl-" + f);
     if (el) el.value = "";
@@ -1913,6 +2249,10 @@ function openWatchlistEditor(code) {
     document.getElementById("wl-peers").value = row.peers || "";
     document.getElementById("wl-rhythm").value = row.rhythm || "";
     document.getElementById("wl-notes").value = row.notes || "";
+    document.getElementById("wl-chain").value = row.chain || "";
+    document.getElementById("wl-chain-tier").value = row.chain_tier || "";
+    document.getElementById("wl-chain-role").value = row.chain_role || "";
+    document.getElementById("wl-layman-intro").value = row.layman_intro || "";
   } else {
     document.getElementById("wl-code").disabled = false;
   }
@@ -1945,6 +2285,10 @@ async function saveWatchlistItem() {
     peers: document.getElementById("wl-peers").value.trim() || null,
     rhythm: document.getElementById("wl-rhythm").value.trim() || null,
     notes: document.getElementById("wl-notes").value.trim() || null,
+    chain: document.getElementById("wl-chain").value.trim() || null,
+    chain_tier: document.getElementById("wl-chain-tier").value || null,
+    chain_role: document.getElementById("wl-chain-role").value || null,
+    layman_intro: document.getElementById("wl-layman-intro").value.trim() || null,
   };
   try {
     if (_watchlistEditCode) {
@@ -1953,9 +2297,61 @@ async function saveWatchlistItem() {
       await _watchlistApiCall("POST", "/api/watchlist", item);
     }
     closeWatchlistEditor();
-    await loadWatchlistTable();
+    await forceReloadWatchlist();
   } catch (e) {
     alert("保存失败：" + e.message);
+  }
+}
+
+async function autoEnrichWatchlist() {
+  const code = document.getElementById("wl-code").value.trim();
+  const statusEl = document.getElementById("wl-enrich-status");
+  const btn = document.getElementById("wl-enrich-btn");
+  if (!code) {
+    statusEl.innerHTML = '<span class="text-rose-600">⚠️ 先填代码</span>';
+    return;
+  }
+  const origText = btn.textContent;
+  btn.textContent = "🔄 抓取中...";
+  btn.disabled = true;
+  statusEl.innerHTML = '<span class="text-slate-500">正在从 yfinance + GICS 拉取...</span>';
+  try {
+    const data = await _watchlistApiCall("POST", "/api/watchlist/auto-enrich", {code});
+    // 把 enrich 结果填进表单 — 只填非空字段，不覆盖用户已经手填的（如有）
+    const fillIfEmpty = (id, val) => {
+      if (val == null) return;
+      const el = document.getElementById(id);
+      if (el && !el.value.trim()) el.value = val;
+    };
+    fillIfEmpty("wl-name", data.name);
+    fillIfEmpty("wl-market", data.market);
+    fillIfEmpty("wl-industry", data.industry);
+    fillIfEmpty("wl-business", data.business);
+    fillIfEmpty("wl-ai-relevance", data.ai_relevance);
+    fillIfEmpty("wl-ai-logic", data.ai_logic);
+    fillIfEmpty("wl-chain", data.chain);
+    fillIfEmpty("wl-chain-role", data.chain_role);
+    fillIfEmpty("wl-chain-tier", data.chain_tier);
+    fillIfEmpty("wl-layman-intro", data.layman_intro);
+    fillIfEmpty("wl-credibility", data.credibility);
+    const meta = data._enrich_meta || {};
+    const sources = (meta.sources || []).join(" · ");
+    const warnings = (meta.warnings || []).join("; ");
+    let msg = `<span class="text-emerald-700">✓ 已补全</span> <span class="text-slate-500">${_esc(sources)}</span>`;
+
+    // 防拼写错误：GICS 没匹配（default:0）→ 警告用户可能 ticker 错
+    if (sources.includes("gics:default:0")) {
+      const yfName = data.name || "";
+      msg += `<br><span class="text-amber-700 font-medium">⚠️ GICS 未识别此 ticker（AI 关联度 = 0/3）</span>`;
+      msg += `<br><span class="text-amber-700 text-xs">yfinance 找到的是 <strong>${_esc(yfName)}</strong> — 如果不是你想要的公司，改正代码后重新点补全</span>`;
+    }
+    if (warnings) msg += `<br><span class="text-amber-700">⚠️ ${_esc(warnings)}</span>`;
+    statusEl.innerHTML = msg;
+  } catch (e) {
+    statusEl.innerHTML = `<span class="text-rose-600">✗ 补全失败：${_esc(e.message)}</span>`;
+  } finally {
+    btn.textContent = origText;
+    btn.disabled = false;
   }
 }
 
@@ -1979,6 +2375,7 @@ const TAB_SECTIONS = {
   audit: ["audit-panel"],
   valuation: ["valuation"],
   themes: ["distribution", "theme-groups"],
+  "chain-overview": ["chain-overview"],
   history: ["history"],
   backtest: ["backtest"],
   professional: ["professional"],
@@ -2014,6 +2411,7 @@ function switchTab(tab) {
   if (tab === "backtest") setTimeout(renderPlanBacktest, 100);
   if (tab === "professional") setTimeout(renderProfessional, 50);
   if (tab === "watchlist-edit") setTimeout(loadWatchlistTable, 50);
+  if (tab === "chain-overview") setTimeout(loadChainOverview, 50);
 }
 
 function getTabFromHash() {
@@ -2143,7 +2541,7 @@ function renderPortfolio() {
     const cur = getCurrentPriceRMB(h.code);
     if (!cur) {
       return `<tr class="border-t border-slate-100">
-        <td class="px-3 py-2">${name}</td>
+        <td class="px-3 py-2">${stockPill(h.code, {nameOverride: name})}</td>
         <td class="px-3 py-2 text-xs text-slate-600">${industry}</td>
         <td class="px-3 py-2 text-right">${h.entry_price}</td>
         <td class="px-3 py-2 text-right">${h.shares}</td>
@@ -2173,7 +2571,7 @@ function renderPortfolio() {
 
     const pnlColor = pnl_rmb >= 0 ? "text-emerald-600" : "text-rose-600";
     return `<tr class="border-t border-slate-100 hover:bg-slate-50">
-      <td class="px-3 py-2 font-medium">${name}<br><span class="text-xs text-slate-500 font-mono">${h.code}</span></td>
+      <td class="px-3 py-2 font-medium">${stockPill(h.code, {nameOverride: name})}</td>
       <td class="px-3 py-2 text-xs text-slate-700 max-w-[140px]">${industry}</td>
       <td class="px-3 py-2 text-right font-mono">${h.entry_price.toFixed(2)} ${cur.currency}</td>
       <td class="px-3 py-2 text-right font-mono">${h.shares}</td>
@@ -5169,6 +5567,26 @@ def build():
         print(f"  反向审查快照已加载 [DuckDB]（{n_picks_db} 只 picks @ {ts_db}）")
 
     # RECORDS / PICKS / SIMULATION 来自飞书 watchlist 实时拉，其它走 DuckDB
+    # 从 DuckDB 拉 watchlist 链条信息(chain/chain_tier/chain_role/layman_intro)
+    # 用于 Stock Pill 组件 — 任何 tab 显示股票时都能查到链条上下文
+    try:
+        from stock_db import fetch_all_watchlist
+        wl_rows = fetch_all_watchlist()
+        chain_info = {
+            r["code"]: {
+                "name": r.get("name"),
+                "chain": r.get("chain"),
+                "chain_tier": r.get("chain_tier"),
+                "chain_role": r.get("chain_role"),
+                "layman_intro": r.get("layman_intro"),
+            }
+            for r in wl_rows
+        }
+        print(f"  Stock Pill 链条上下文已加载 [DuckDB]({len(chain_info)} 条)")
+    except Exception as e:
+        print(f"  ⚠️ 链条上下文加载失败: {e}")
+        chain_info = {}
+    html = html.replace("{WATCHLIST_CHAIN_INFO_JSON}", json.dumps(chain_info, ensure_ascii=False))
     html = html.replace("{RECORDS_JSON}", json.dumps(records, ensure_ascii=False))
     html = html.replace("{PICKS_JSON}", json.dumps(picks, ensure_ascii=False))
     html = html.replace("{SIMULATION_JSON}", json.dumps(simulation, ensure_ascii=False))
