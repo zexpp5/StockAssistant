@@ -33,62 +33,78 @@
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
 </style>
 </head>
-<body class="bg-gradient-to-b from-slate-50 to-white">
+<body class="bg-gradient-to-b from-slate-50 to-white" style="padding-left: 14rem;">
 
-<!-- ============ Tab 导航（4 主入口 + dropdown 子菜单 · 2026-05-11 PM 重构） ============ -->
-<!-- 信息架构：13 个并排 tab → 4 主入口（今天/发现/验证/历史）+ 底部 footer（投资观点/升级建议）-->
-<nav id="tab-nav" class="sticky top-0 z-50 bg-white border-b border-slate-200 shadow-sm">
-  <div class="max-w-7xl mx-auto px-4 flex items-center">
-    <span class="text-base font-bold text-slate-900 mr-6 flex-shrink-0">📊 AI 投资</span>
+<!-- ============ 左侧 sidebar 导航（4 主入口 + 子项展开 + 次级 + 工具） ============ -->
+<!-- 信息架构：所有 tab 全列出，分 4 组 + 次级（投资观点/升级建议）+ 底部工具 -->
+<aside id="tab-nav" class="fixed left-0 top-0 h-screen w-56 bg-white border-r border-slate-200 shadow-sm overflow-y-auto z-50">
+  <div class="p-4">
+    <div class="text-base font-bold text-slate-900 mb-6 flex items-center gap-2">
+      <span>📊</span><span>AI 投资</span>
+    </div>
+
+    <!-- 📌 投资观点（顶部独立 · 方法论开屏第一眼）-->
+    <div class="mb-4">
+      <a href="#overview" data-tab="overview" class="tab-link block px-3 py-1.5 text-sm text-slate-700 hover:text-violet-600 hover:bg-violet-50 rounded transition font-medium">📌 投资观点</a>
+    </div>
 
     <!-- 🏠 今天 = 我的持仓 + AI 方案模拟 + 每日优选 -->
-    <div class="relative group flex-shrink-0">
-      <a href="#portfolio" data-tab="portfolio" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap inline-flex items-center gap-1">🏠 今天 <span class="text-[9px]">▾</span></a>
-      <div class="hidden group-hover:block absolute left-0 top-full bg-white border border-slate-200 shadow-lg rounded-b min-w-[160px] z-50">
-        <a href="#portfolio" data-tab="portfolio" class="tab-link block px-4 py-2 text-sm text-slate-700 hover:bg-violet-50 hover:text-violet-600">💼 我的持仓</a>
-        <a href="#backtest" data-tab="backtest" class="tab-link block px-4 py-2 text-sm text-slate-700 hover:bg-violet-50 hover:text-violet-600">🤖 AI 方案模拟</a>
-        <a href="#picks" data-tab="picks" class="tab-link block px-4 py-2 text-sm text-slate-700 hover:bg-violet-50 hover:text-violet-600">⭐ 每日优选</a>
-      </div>
+    <div class="mb-4">
+      <div class="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 px-2">🏠 今天</div>
+      <a href="#portfolio" data-tab="portfolio" class="tab-link block px-3 py-1.5 text-sm text-slate-700 hover:text-violet-600 hover:bg-violet-50 rounded transition">💼 我的持仓</a>
+      <a href="#backtest" data-tab="backtest" class="tab-link block px-3 py-1.5 text-sm text-slate-700 hover:text-violet-600 hover:bg-violet-50 rounded transition">🤖 AI 方案模拟</a>
+      <a href="#picks" data-tab="picks" class="tab-link block px-3 py-1.5 text-sm text-slate-700 hover:text-violet-600 hover:bg-violet-50 rounded transition">⭐ 每日优选</a>
     </div>
 
     <!-- 🔍 发现 = 候选发现 + 估值视角 + 主题分组 -->
-    <div class="relative group flex-shrink-0">
-      <a href="#discovery" data-tab="discovery" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap inline-flex items-center gap-1">🔍 发现 <span class="text-[9px]">▾</span></a>
-      <div class="hidden group-hover:block absolute left-0 top-full bg-white border border-slate-200 shadow-lg rounded-b min-w-[160px] z-50">
-        <a href="#discovery" data-tab="discovery" class="tab-link block px-4 py-2 text-sm text-slate-700 hover:bg-violet-50 hover:text-violet-600">🔍 候选发现</a>
-        <a href="#valuation" data-tab="valuation" class="tab-link block px-4 py-2 text-sm text-slate-700 hover:bg-violet-50 hover:text-violet-600">📈 估值视角</a>
-        <a href="#themes" data-tab="themes" class="tab-link block px-4 py-2 text-sm text-slate-700 hover:bg-violet-50 hover:text-violet-600">🗂 主题分组</a>
-      </div>
+    <div class="mb-4">
+      <div class="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 px-2">🔍 发现</div>
+      <a href="#discovery" data-tab="discovery" class="tab-link block px-3 py-1.5 text-sm text-slate-700 hover:text-violet-600 hover:bg-violet-50 rounded transition">🔍 候选发现</a>
+      <a href="#valuation" data-tab="valuation" class="tab-link block px-3 py-1.5 text-sm text-slate-700 hover:text-violet-600 hover:bg-violet-50 rounded transition">📈 估值视角</a>
+      <a href="#themes" data-tab="themes" class="tab-link block px-3 py-1.5 text-sm text-slate-700 hover:text-violet-600 hover:bg-violet-50 rounded transition">🗂 主题分组</a>
     </div>
 
     <!-- 🛡️ 验证 = 反向审查 + 专业分析 -->
-    <div class="relative group flex-shrink-0">
-      <a href="#audit" data-tab="audit" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap inline-flex items-center gap-1">🛡️ 验证 <span class="text-[9px]">▾</span></a>
-      <div class="hidden group-hover:block absolute left-0 top-full bg-white border border-slate-200 shadow-lg rounded-b min-w-[160px] z-50">
-        <a href="#audit" data-tab="audit" class="tab-link block px-4 py-2 text-sm text-slate-700 hover:bg-violet-50 hover:text-violet-600">🛡 反向审查</a>
-        <a href="#professional" data-tab="professional" class="tab-link block px-4 py-2 text-sm text-slate-700 hover:bg-violet-50 hover:text-violet-600">📊 专业分析</a>
-      </div>
+    <div class="mb-4">
+      <div class="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 px-2">🛡️ 验证</div>
+      <a href="#audit" data-tab="audit" class="tab-link block px-3 py-1.5 text-sm text-slate-700 hover:text-violet-600 hover:bg-violet-50 rounded transition">🛡 反向审查</a>
+      <a href="#professional" data-tab="professional" class="tab-link block px-3 py-1.5 text-sm text-slate-700 hover:text-violet-600 hover:bg-violet-50 rounded transition">📊 专业分析</a>
     </div>
 
-    <!-- 📅 历史（独立，无子项）-->
-    <a href="#history" data-tab="history" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap flex-shrink-0">📅 历史</a>
+    <!-- 📅 历史（独立）-->
+    <div class="mb-4">
+      <a href="#history" data-tab="history" class="tab-link block px-3 py-1.5 text-sm text-slate-700 hover:text-violet-600 hover:bg-violet-50 rounded transition font-medium">📅 历史</a>
+    </div>
 
-    <span class="ml-auto flex items-center gap-2 flex-shrink-0">
-      <span class="text-[11px] text-slate-500" title="切换数据来源以验证 DuckDB 迁移">数据源</span>
-      <button id="ds-toggle-btn" onclick="swapDataSource(_DATA_SOURCE === 'file' ? 'db' : 'file')"
-        class="text-[11px] font-mono px-2 py-1 rounded border border-blue-300 bg-blue-50 text-blue-800 hover:bg-blue-100 transition whitespace-nowrap"
-        title="点击切换到 DuckDB / JSON 文件">JSON 文件 ⇄</button>
-      <span class="text-xs text-slate-500">2026-05-11 09:47</span>
-    </span>
+    <hr class="my-4 border-slate-200">
+
+    <!-- 次级：升级建议（视觉权重降低）-->
+    <div class="mb-4">
+      <a href="#upgrade" data-tab="upgrade" class="tab-link block px-3 py-1.5 text-sm text-slate-500 hover:text-violet-600 hover:bg-violet-50 rounded transition">💰 升级建议</a>
+    </div>
+
+    <hr class="my-4 border-slate-200">
+
+    <!-- 底部工具：数据源切换 + 更新时间 -->
+    <div class="text-xs text-slate-500 px-2 space-y-2">
+      <div class="flex items-center justify-between">
+        <span title="切换数据来源以验证 DuckDB 迁移">数据源</span>
+        <button id="ds-toggle-btn" onclick="swapDataSource(_DATA_SOURCE === 'file' ? 'db' : 'file')"
+          class="text-[10px] font-mono px-2 py-0.5 rounded border border-blue-300 bg-blue-50 text-blue-800 hover:bg-blue-100 transition"
+          title="点击切换到 DuckDB / JSON 文件">JSON ⇄</button>
+      </div>
+      <div class="text-[10px] text-slate-400">2026-05-11 10:24</div>
+      <div class="text-[10px] text-slate-400 leading-snug pt-2 border-t border-slate-100">⚠️ 不构成投资建议<br>崩盘期 alpha = -9.77%</div>
+    </div>
   </div>
-</nav>
+</aside>
 
 <!-- ============ HERO ============ -->
 <header id="hero" class="gradient-bg text-white">
   <div class="max-w-7xl mx-auto px-6 py-10">
     <div class="flex items-center gap-3 mb-3">
       <span class="bg-violet-500/20 text-violet-300 text-xs font-bold px-3 py-1 rounded-full">AI 投资研究 · 资深分析员视角</span>
-      <span class="text-slate-400 text-sm">数据更新 2026-05-11 09:47</span>
+      <span class="text-slate-400 text-sm">数据更新 2026-05-11 10:24</span>
     </div>
     <h1 class="text-4xl md:text-5xl font-bold mb-3 leading-tight">AI 主线已轮动到「下一波稀缺资源」拐点</h1>
     <p class="text-lg text-slate-300 max-w-4xl mb-6">算力（NVDA）→ 网络（COHR）→ 电力（GEV/VST）→ 内存（SK Hynix）→ 存储（SanDisk）都已发生。下一波最可能的「百倍候选」在：水冷、稀土、铀、SMR、AI 数据。</p>
@@ -3882,10 +3898,52 @@ function toggleAuditSource() {
 <!-- ============ 🤖 AI 方案模拟 Tab ============ -->
 <section id="backtest" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
   <div class="mb-6">
-    <h2 class="text-2xl font-bold text-slate-900">🤖 AI 方案模拟：A 静态死守 vs C 动态调仓 双曲线对比</h2>
-    <p class="text-sm text-slate-600 mt-1">⚠️ <strong>这不是你的真实账户</strong>。<strong class="text-violet-700">A 静态</strong> = 锁定日买入 11 只 buy-and-hold 死守（无 look-ahead bias）；<strong class="text-orange-600">C 动态</strong> = 每周一按当时最新 v6 推荐调仓（含手续费 0.10% per swap）。<strong class="text-emerald-700">差距 C − A = AI 持续选股的真实 alpha</strong>。基准 SPY · 每日 daily_refresh 自动累加。</p>
-    <div id="backtest-inception-banner" class="mt-3 hidden bg-violet-50 border-l-4 border-violet-500 rounded-r-lg p-3 text-sm text-slate-800"></div>
+    <h2 class="text-2xl font-bold text-slate-900">🆚 系统在跑两个方案 · 看 AI 到底有没有用</h2>
+    <p class="text-sm text-slate-600 mt-1">每周一同时跑两套策略，让数据自然分胜负。<strong class="text-emerald-700">差距 C − A = AI 加的 alpha</strong>。基准 SPY · daily_refresh 自动累加。⚠️ <strong>这不是你的真实账户</strong>。</p>
   </div>
+
+  <!-- 🆚 两个方案对比卡（让新人一眼看懂 "两个方案 + 比什么"）-->
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+    <!-- 方案 A · 静态死守（紫色，跟 NAV 曲线颜色一致） -->
+    <div class="bg-violet-50 border-2 border-violet-300 rounded-xl p-5">
+      <div class="flex items-center gap-2 mb-2">
+        <span class="text-2xl">📦</span>
+        <h3 class="text-lg font-bold text-violet-900">方案 A · 静态死守</h3>
+      </div>
+      <p class="text-sm text-violet-800 font-medium mb-3">5-10 锁定 11 只股 · 从此不调仓</p>
+      <ul class="text-xs text-violet-700 space-y-1.5">
+        <li>✓ 模拟「<strong>佛系投资者</strong>」</li>
+        <li>✓ 不调仓 → <strong>0 手续费</strong>，无 look-ahead bias</li>
+        <li>✓ 完全取决于锁定日的初始选股运气</li>
+      </ul>
+    </div>
+
+    <!-- 方案 C · 动态调仓（橙色，跟 NAV 曲线颜色一致） -->
+    <div class="bg-orange-50 border-2 border-orange-300 rounded-xl p-5">
+      <div class="flex items-center gap-2 mb-2">
+        <span class="text-2xl">🔄</span>
+        <h3 class="text-lg font-bold text-orange-900">方案 C · 动态调仓</h3>
+      </div>
+      <p class="text-sm text-orange-800 font-medium mb-3">每周一按 AI 推荐重新优化</p>
+      <ul class="text-xs text-orange-700 space-y-1.5">
+        <li>✓ 模拟「<strong>听 AI 调仓</strong>」</li>
+        <li>✓ 扣 <strong>10bps / 换股</strong> 手续费（A 股可调到 8bps）</li>
+        <li>✓ 跟踪 AI 实时选股建议</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- 核心 KPI：C - A spread = AI alpha 的硬证据 -->
+  <div class="bg-gradient-to-r from-emerald-50 via-emerald-50 to-blue-50 border-2 border-emerald-300 rounded-xl p-5 mb-6 text-center">
+    <div class="text-[11px] uppercase tracking-widest text-emerald-700 font-bold mb-1">AI 加的 alpha</div>
+    <div class="text-3xl md:text-4xl font-bold text-emerald-900 mb-1">
+      <span id="ai-alpha-spread-display">—</span>
+      <span class="text-sm text-emerald-600 font-normal">= C 累计 − A 累计</span>
+    </div>
+    <div class="text-xs text-slate-600 mt-2">C 一直跑赢 A → AI 动态调仓有价值；C 跟不上 A → AI 加价值不够覆盖手续费</div>
+  </div>
+
+  <div id="backtest-inception-banner" class="mb-4 hidden bg-violet-50 border-l-4 border-violet-500 rounded-r-lg p-3 text-sm text-slate-800"></div>
 
   <!-- A vs C 对比 + 调仓记录 -->
   <div id="backtest-rebalance-log" class="mb-4"></div>
@@ -4465,7 +4523,7 @@ function toggleAuditSource() {
   <div class="max-w-7xl mx-auto px-6 text-sm">
     <p class="mb-2"><strong class="text-white">免责声明</strong>：本看板由 Claude AI 基于公开信息生成，仅作研究学习参考，<strong class="text-rose-300">绝不构成任何投资建议</strong>。</p>
     <p class="mb-2">投资有风险，所有交易决策需自行判断、自负盈亏。本看板的数据可能滞后、错误或解读偏差。</p>
-    <p class="text-slate-500">数据源：飞书「股票研究 Watchlist」表 · WebSearch 抓取的最新公司财报 · 数据更新时间 2026-05-11 09:47</p>
+    <p class="text-slate-500">数据源：飞书「股票研究 Watchlist」表 · WebSearch 抓取的最新公司财报 · 数据更新时间 2026-05-11 10:24</p>
   </div>
 </footer>
 
@@ -5539,6 +5597,14 @@ function renderPlanBacktest() {
     const spreadCls = spread == null ? 'text-slate-500'
       : (spread > 0 ? 'text-emerald-700' : 'text-rose-700');
 
+    // 顶部 KPI 横幅同步 spread（正绿/负红/未知灰）
+    const topSpreadEl = document.getElementById('ai-alpha-spread-display');
+    if (topSpreadEl) {
+      topSpreadEl.textContent = spreadStr;
+      topSpreadEl.style.color = spread == null ? '#64748b'
+        : (spread > 0 ? '#047857' : '#be123c');
+    }
+
     let summaryHtml = `
       <div class="grid grid-cols-1 md:grid-cols-4 gap-3 mb-3">
         <div class="bg-white rounded-lg p-3 border border-violet-200">
@@ -6216,15 +6282,5 @@ document.getElementById("cheap-and-rising").innerHTML = cheapRising.map(r => {
 }).join("") || '<div class="text-slate-500 text-sm">暂无符合条件的标的</div>';
 </script>
 
-<!-- ============ 页脚（次级入口：投资观点 / 升级建议）============ -->
-<!-- 这两个 tab 从主导航降级，仅在页脚提供入口；hash 仍可用，原有 section 不删 -->
-<footer class="max-w-7xl mx-auto px-6 py-8 mt-12 border-t border-slate-200">
-  <div class="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-slate-500">
-    <span class="font-semibold text-slate-700">📊 StockAssistant</span>
-    <a href="#overview" data-tab="overview" class="tab-link hover:text-violet-600 transition">📌 投资观点（5 条核心 / 百倍股 / AI 时间轴）</a>
-    <a href="#upgrade" data-tab="upgrade" class="tab-link hover:text-violet-600 transition">💰 系统体检 / 升级建议</a>
-    <span class="ml-auto text-xs">⚠️ 不构成投资建议 · 崩盘期历史 alpha = -9.77%</span>
-  </div>
-</footer>
 </body>
 </html>

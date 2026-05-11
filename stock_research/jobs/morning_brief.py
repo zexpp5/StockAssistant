@@ -94,20 +94,25 @@ def section_regime(defense: dict | None) -> str:
     summary = defense.get("summary", "")
     alerts = defense.get("alerts", []) or []
 
-    icon_map = {"NONE": "🟢", "LOW": "🟡", "MEDIUM": "🟠", "HIGH": "🔴"}
+    # severity 档位与 stock_research/core/defense_signals.py:201 对齐
+    # （NONE / LOW / HIGH / CRITICAL 4 档，CRITICAL 最严重）
+    icon_map = {"NONE": "🟢", "LOW": "🟡", "HIGH": "🟠", "CRITICAL": "🔴"}
     icon = icon_map.get(severity, "⚪")
 
     advice = {
-        "NONE": "今天可以按系统建议执行（regime 正常）。",
-        "LOW": "今天保守执行，单笔不超 5% 仓位。",
-        "MEDIUM": "今天只减仓不加仓，可加防御标的。",
-        "HIGH": "今天 sit out — 系统在崩盘期历史 alpha = -9.77%，不要交易。",
-    }.get(severity, "保守按已有计划执行。")
+        "NONE": "👉 **今天可以正常调仓**（v7 三道闸门都没亮灯）。",
+        "LOW": "👉 **留意但别加仓**，单笔不超 5% 仓位。",
+        "HIGH": "👉 **减仓 30-50%，停止买入**，可换防御标的（KO / MCD 等）。",
+        "CRITICAL": "👉 **清仓 sit out** — 崩盘期历史 alpha = -9.77%，等信号转回 LOW 再回来。",
+    }.get(severity, "👉 保守按已有计划执行。")
 
     lines = [
-        "#### 1. 今天能不能动手？",
+        "#### 1. 今天能不能动手？（v7 防御层信号）",
         f"{icon} **{severity}** — {summary}",
         advice,
+        "",
+        "📖 灯色对照：🟢 NONE 正常 ｜ 🟡 LOW 留意别加仓 ｜ 🟠 HIGH 减仓 30-50% ｜ 🔴 CRITICAL 清仓 sit out",
+        "🛡️ v7 三道闸门：VIX 飙高 / 跌破 200 日均线 / 单股 -15% 止损 — 任意一道触发就升级灯色。",
     ]
     if alerts:
         lines.append("")
@@ -189,34 +194,37 @@ def section_picks(plan: dict | None, a_share_picks: dict | None) -> str:
 # ────────────────────────────────────────────────────────
 
 def section_ai_alpha(risk_metrics: dict | None) -> str:
-    """从 risk_metrics.json 读 NAV 时序（暂时是回测）。
+    """系统同时跑两个方案（A 静态 vs C 动态），让用户一眼看懂"AI 到底有没有用"。
 
     TODO（4 周后）：切到 build_stock_dashboard_html.compute_plan_forward_track
     + compute_dynamic_rebalance_track 的真实 forward 数据。当前 tracked=0 / rebalance=0。
     """
-    lines = ["#### 3. 昨天系统说对了么？"]
-
     today = date.today()
     inception_date = date(2026, 5, 10)
     days_tracked = max(0, (today - inception_date).days - 1)
 
+    lines = [
+        "#### 3. 系统在跑两个方案 · 看 AI 到底有没有用",
+        "_系统每周一同时跑两套策略，让数据自然分胜负_",
+        "",
+        "**📦 方案 A · 静态死守**：5-10 锁定 12 只股，从此不动（佛系基准）",
+        "**🔄 方案 C · 动态调仓**：每周一按 AI 重新优化（扣 10bps/换股 手续费）",
+        "",
+    ]
     if days_tracked < 7:
-        lines.append(
-            f"📅 **Forward tracking 累积中** — 已 {days_tracked} / 7 天（第一周还没结束）"
-        )
-        lines.append("AI alpha 双曲线（A 静态死守 vs C 动态调仓 vs SPY）会从下周一起逐周出数据。")
+        lines.append(f"📅 **Forward tracking 累积中**：已 {days_tracked} / 7 天（第一周还没结束）")
+        lines.append("🆚 等下周起每周一较量 → **C − A spread** 就是 AI 加的 alpha")
     else:
-        lines.append(f"📅 已 forward tracked {days_tracked} 天 — 真实数据见 dashboard。")
+        lines.append(f"📅 已 forward tracked {days_tracked} 天 — 真实数据见 dashboard")
 
     if risk_metrics:
         rm = risk_metrics
+        lines.append("")
+        lines.append("_历史回测参考（不代表未来；崩盘期实测 alpha = **-9.77%**）_")
         lines.append(
-            f"_历史回测_ Sharpe **{rm.get('sharpe', '?')}** · "
+            f"Sharpe **{rm.get('sharpe', '?')}** · "
             f"MaxDD **{rm.get('max_drawdown_pct', '?')}%** · "
             f"95% VaR {rm.get('var_95_pct', '?')}%"
-        )
-        lines.append(
-            "⚠️ 回测含 survivorship bias，不代表未来；崩盘期实测 alpha = **-9.77%**。"
         )
 
     return "\n".join(lines) + "\n"
@@ -277,8 +285,8 @@ def section_red_flags(
                     f"{ev.get('event_type')} · {ev.get('description', '')[:60]}"
                 )
 
-    # 3. regime 告警重复一遍
-    if defense and defense.get("severity") in ("MEDIUM", "HIGH"):
+    # 3. regime 告警重复一遍（HIGH/CRITICAL 时才上红旗，对齐 defense_signals 4 档）
+    if defense and defense.get("severity") in ("HIGH", "CRITICAL"):
         flags.append(
             f"⚠️ **regime = {defense.get('severity')}** — 见 section 1 详情。"
         )
@@ -301,11 +309,14 @@ def section_actions(trade_delta: dict | None, defense: dict | None) -> str:
     weekday = date.today().weekday()  # 0 = 周一
     is_monday = (weekday == 0)
 
-    # regime HIGH = 任何动作都让位
-    if defense and defense.get("severity") == "HIGH":
-        actions.append("🔴 **regime = HIGH，今天不交易**，等系统恢复 NORMAL")
+    # regime CRITICAL = 任何动作都让位（HIGH 时仅减仓不加仓，不阻断 rebalance 卖出）
+    sev = defense.get("severity") if defense else None
+    if sev == "CRITICAL":
+        actions.append("🔴 **regime = CRITICAL，今天清仓 sit out**，等信号转回 LOW 再回来")
         lines.extend(actions)
         return "\n".join(lines) + "\n"
+    if sev == "HIGH":
+        actions.append('🟠 **regime = HIGH：今天只减仓不加仓**（rebalance 的「卖」照做，「买」暂停）')
 
     # 周一 rebalance
     if is_monday and trade_delta:
@@ -510,7 +521,7 @@ def _build_card_payload() -> dict:
     """构造飞书 card v1 schema dict — 每个 section 上色块 + 横排 KPI + 长列表分 2 列。
 
     每个 section 用 column_set + background_style 包装：
-      regime  → 动态色（NONE green / LOW yellow / MEDIUM orange / HIGH red）
+      regime  → 动态色（NONE blue / LOW yellow / HIGH orange / CRITICAL red；与 defense_signals 4 档对齐）
       建议组合 → wathet 浅蓝（专业凉爽）
       AI alpha → violet 紫（数据回顾）
       红旗    → carmine 红粉（警示，仅非空时）
@@ -528,21 +539,26 @@ def _build_card_payload() -> dict:
     today = date.today()
     weekday_cn = "一二三四五六日"[today.weekday()]
     severity = (defense or {}).get("severity", "UNKNOWN")
-    severity_icon = {"NONE": "🟢", "LOW": "🟡", "MEDIUM": "🟠", "HIGH": "🔴"}.get(severity, "⚪")
-    header_template = {"NONE": "blue", "LOW": "yellow", "MEDIUM": "orange", "HIGH": "red"}.get(severity, "grey")
+    # 4 档与 stock_research/core/defense_signals.py:201 对齐 (NONE/LOW/HIGH/CRITICAL)
+    severity_icon = {"NONE": "🟢", "LOW": "🟡", "HIGH": "🟠", "CRITICAL": "🔴"}.get(severity, "⚪")
+    header_template = {"NONE": "blue", "LOW": "yellow", "HIGH": "orange", "CRITICAL": "red"}.get(severity, "grey")
 
     blocks: list[dict] = []
 
-    # ─── Section 1: regime（默认白底，靠 emoji + 加粗强标识）───
+    # ─── Section 1: regime（白底；自带新人能看懂的灯色对照 + 三道闸门解释）───
     advice = {
-        "NONE": "今天可以按系统建议执行。",
-        "LOW": "今天保守执行，单笔不超 5%。",
-        "MEDIUM": "今天只减仓不加仓，可加防御标的。",
-        "HIGH": "今天 sit out — 崩盘期 alpha = -9.77%，不要交易。",
-    }.get(severity, "保守按已有计划执行。")
+        "NONE": "👉 **今天可以正常调仓**（v7 三道闸门都没亮灯）",
+        "LOW": "👉 **留意但别加仓**，单笔不超 5% 仓位",
+        "HIGH": "👉 **减仓 30-50%，停止买入**，可换防御标的（KO / MCD 等）",
+        "CRITICAL": "👉 **清仓 sit out** — 崩盘期 alpha = -9.77%，等灯转回 LOW 再回来",
+    }.get(severity, "👉 保守按已有计划执行")
     blocks.append({
         "tag": "div",
-        "text": {"tag": "lark_md", "content": f"{severity_icon} **regime = {severity}** — {advice}"}
+        "text": {"tag": "lark_md", "content": (
+            f"{severity_icon} **regime = {severity}** — {advice}\n\n"
+            "📖 **灯色对照**：🟢 NONE 正常 ｜ 🟡 LOW 留意别加仓 ｜ 🟠 HIGH 减仓 30-50% ｜ 🔴 CRITICAL 清仓 sit out\n"
+            "🛡️ **v7 三道闸门**（什么时候升级灯色）：VIX 恐慌指数飙高 / 大盘跌破 200 日均线 / 单股亏 -15% 自动止损"
+        )}
     })
     blocks.append({"tag": "hr"})
 
@@ -591,18 +607,40 @@ def _build_card_payload() -> dict:
         blocks.extend(section2)
         blocks.append({"tag": "hr"})
 
-    # ─── Section 3: AI alpha（白底）───
+    # ─── Section 3: 两个方案对比（核心 — 让新人一眼看懂"AI 有没有用"）───
     inception_date = date(2026, 5, 10)
     days_tracked = max(0, (today - inception_date).days - 1)
-    if days_tracked < 7:
-        ai_intro = f"📅 **Forward tracking 累积中** — 已 {days_tracked} / 7 天"
-    else:
-        ai_intro = f"📅 已 forward tracked {days_tracked} 天"
+
     section3: list[dict] = [
-        {"tag": "div", "text": {"tag": "lark_md", "content": ai_intro}}
+        {"tag": "div", "text": {"tag": "lark_md", "content":
+            "**🆚 系统在跑两个方案**\n_每周一同时跑两套策略，让数据自然分胜负_"}}
     ]
+    # 2 列横向对比卡：A 静态 vs C 动态
+    section3.append({
+        "tag": "column_set",
+        "flex_mode": "stretch",
+        "horizontal_spacing": "default",
+        "columns": [
+            {"tag": "column", "width": "weighted", "weight": 1,
+             "elements": [{"tag": "div", "text": {"tag": "lark_md", "content":
+                "**📦 方案 A · 静态死守**\n5-10 锁定 12 只股\n从此不调仓\n_模拟「佛系投资者」_"}}]},
+            {"tag": "column", "width": "weighted", "weight": 1,
+             "elements": [{"tag": "div", "text": {"tag": "lark_md", "content":
+                "**🔄 方案 C · 动态调仓**\n每周一按 AI rebalance\n扣 10bps/换股 手续费\n_模拟「听 AI 调仓」_"}}]},
+        ],
+    })
+    if days_tracked < 7:
+        section3.append({"tag": "div", "text": {"tag": "lark_md", "content":
+            f"📅 **Forward tracking 累积中**：已 {days_tracked} / 7 天 — 等下周起每周一较量\n"
+            f"🆚 **C − A spread = AI 加的 alpha**（等数据累积）"}})
+    else:
+        section3.append({"tag": "div", "text": {"tag": "lark_md", "content":
+            f"📅 已 forward tracked {days_tracked} 天 — 真实曲线见 dashboard"}})
+
     if risk_metrics:
         rm = risk_metrics
+        section3.append({"tag": "div", "text": {"tag": "lark_md", "content":
+            "_历史回测参考（仅参考，不代表未来）_"}})
         section3.append(_kpi_row([
             ("回测 Sharpe", str(rm.get("sharpe", "?"))),
             ("Max DD", f"{rm.get('max_drawdown_pct', '?')}%"),
@@ -637,7 +675,7 @@ def _build_card_payload() -> dict:
         ]
         if urgent:
             flags.append(f"⚠️ 持仓 3 天内有 {len(urgent)} 个事件")
-    if defense and severity in ("MEDIUM", "HIGH"):
+    if defense and severity in ("HIGH", "CRITICAL"):
         flags.append(f"⚠️ regime = {severity}（见上方）")
     if flags:
         blocks.append({"tag": "hr"})
