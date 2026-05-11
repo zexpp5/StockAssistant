@@ -1,6 +1,13 @@
 """
 方案 A v5 - 全客观化仓位
 ─────────────────────────────────────────
+⚠️ 命名历史包袱：文件名是 v5，实际输出的是 v6 plan。v5→v6 升级（加 PEAD 因子）只改了
+   看板文案，文件名未跟着改以避免连锁修改（18 个文件引用，改名性价比低）。
+     - 输入：v6 学术因子（Piotroski + 12-1 动量 + 1 月反转 + PEAD + 分析师上修）
+     - 输出文件：plan_a_v5.json（= v6 plan 数据）
+     - DuckDB 分类名：optimize/plan_v6（已对齐 v6）
+     - 看板 tab 文案：「v6 学术指标」（已对齐 v6）
+
 选股：v5 学术因子模型（Piotroski + 动量 + 反转 + 分析师）→ 取 Top N
 仓位：Markowitz Max Sharpe（学术经典 1952 论文）+ 风险约束
 
@@ -115,7 +122,24 @@ def main():
     print(f"  📊 方案 A v5（学术因子选股 + Markowitz 客观仓位）")
     print("=" * 95)
     print(f"\n  选股：v5 4 因子模型 Top {TOP_N}")
-    print(f"  仓位：Markowitz Max Sharpe（1952），约束 max={MAX_WEIGHT*100:.0f}% / min={MIN_WEIGHT*100:.0f}% / 现金={CASH_PCT*100:.0f}%")
+    print(f"  仓位：Markowitz Max Sharpe（1952），约束 max={MAX_WEIGHT*100:.0f}% / min={MIN_WEIGHT*100:.0f}% / 现金（基线）={CASH_PCT*100:.0f}%")
+
+    # ════════════════════════════════════════════════════════
+    # 动态 Gross Exposure（v2 regime filter）
+    # VIX/SPY-200MA/Yield-curve 三信号 → 5 档位 gross cap
+    # 触发减仓时，cash_pct = 1 - gross_cap（覆盖默认 5%）
+    # ════════════════════════════════════════════════════════
+    from stock_research.core.regime_filter import (
+        get_dynamic_gross_exposure, format_gross_exposure_report,
+    )
+    regime = get_dynamic_gross_exposure()
+    print()
+    print(format_gross_exposure_report(regime))
+    gross_cap = regime["gross_exposure_cap"]
+    effective_cash_pct = max(CASH_PCT, 1.0 - gross_cap)
+    if effective_cash_pct > CASH_PCT + 1e-9:
+        print(f"  → regime={regime['regime']} 触发：cash_pct {CASH_PCT*100:.0f}% → {effective_cash_pct*100:.0f}% "
+              f"(gross cap={gross_cap*100:.0f}%)")
 
     # ============================================================
     # 2. 拉历史收益率
@@ -142,8 +166,8 @@ def main():
     # ============================================================
     # 3. Markowitz 优化（带约束）
     # ============================================================
-    print(f"\n[2/3] Markowitz 蒙特卡洛优化（20000 次，带 {MAX_WEIGHT*100:.0f}%/{MIN_WEIGHT*100:.0f}% 约束）...")
-    weights, sharpe = markowitz_constrained(mean_returns, cov_matrix)
+    print(f"\n[2/3] Markowitz 蒙特卡洛优化（20000 次，带 {MAX_WEIGHT*100:.0f}%/{MIN_WEIGHT*100:.0f}% 约束，cash={effective_cash_pct*100:.0f}%）...")
+    weights, sharpe = markowitz_constrained(mean_returns, cov_matrix, cash_pct=effective_cash_pct)
     if weights is None:
         print("❌ 优化失败")
         return
@@ -182,7 +206,7 @@ def main():
             "current_weight": cur,
         })
 
-    print(f"  {'现金':<8}{' ':>10}{CASH_PCT*100:>8.1f}%{TOTAL_CAPITAL*CASH_PCT:>11,.0f}{CASH_PCT*100:>10.1f}%")
+    print(f"  {'现金':<8}{' ':>10}{effective_cash_pct*100:>8.1f}%{TOTAL_CAPITAL*effective_cash_pct:>11,.0f}{CASH_PCT*100:>10.1f}%")
 
     # 用户方案中但 v5 没选的（暴露分歧）
     out_of_v5 = [(name, tk, w) for name, tk, w in CURRENT_PLAN_A if tk not in final_tickers]
@@ -200,9 +224,19 @@ def main():
         "constraints": {
             "max_weight": MAX_WEIGHT,
             "min_weight": MIN_WEIGHT,
-            "cash_pct": CASH_PCT,
+            "cash_pct_baseline": CASH_PCT,
+            "cash_pct_effective": effective_cash_pct,
+            "gross_exposure_cap": gross_cap,
             "top_n": TOP_N,
             "lookback_days": LOOKBACK_DAYS,
+        },
+        "regime": {
+            "label": regime["regime"],
+            "gross_exposure_cap": gross_cap,
+            "signals_triggered": regime["signals_triggered"],
+            "triggers": regime["triggers"],
+            "advice": regime["advice"],
+            "signals": regime["signals"],
         },
         "portfolio_metrics": {
             "annual_sharpe": round(annual_sharpe, 2),

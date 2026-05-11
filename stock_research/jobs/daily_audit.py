@@ -125,6 +125,16 @@ def run_audit(only_code: str | None = None) -> dict[str, Any]:
     store.save_json(audits, config.AUDIT_DIR, "audit")
     summary = feishu.batch_update(updates) if updates else {"success": 0, "failed": 0}
 
+    # 跨市场风险快照（SPY × CSI300 相关性 + USDCNY 敞口）
+    # 单独跑：python3 -m stock_research.jobs.cross_market_risk
+    if not only_code:
+        try:
+            from . import cross_market_risk as cmr_job
+            print("\n[cross-market] 算 SPY × CSI300 相关性 + USDCNY 敞口 ...")
+            cmr_job.run()
+        except Exception as e:
+            logger.warning("cross_market_risk failed: %s", e)
+
     # 控制台简报
     bucket = {"HIGH": 0, "MEDIUM": 0, "LOW": 0, "CONFLICT": 0}
     for a in audits:

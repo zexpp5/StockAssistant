@@ -57,7 +57,25 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--cache", default="factor_scores_today.json",
                        help="因子缓存文件，避免重复拉")
+    parser.add_argument("--bypass-ic-gate", action="store_true",
+                       help="⚠️ 强行跳过因子 IC 闸门（需自担风险，建议先 audit_ic）")
     args = parser.parse_args()
+
+    # ────────────────────────────────────────────────────────
+    # 因子 IC CI 闸门（Grinold-Kahn 行业标准）
+    # IC<0.03 或 |IR|<0.30 全部因子失效 → 强制 dry-run，避免把噪声当 alpha 写飞书
+    # ────────────────────────────────────────────────────────
+    from stock_research.core.factor_ic_gate import evaluate_gate, format_report
+    gate = evaluate_gate()
+    print(format_report(gate))
+    if not gate.passed:
+        if args.bypass_ic_gate:
+            print("\n⚠️ --bypass-ic-gate：用户强制跳过闸门，继续写入（风险自担）\n")
+        else:
+            print("\n🔴 因子 IC 闸门 FAIL → 强制 dry-run（不写飞书）")
+            print("   修复方法：python3 -m stock_research.jobs.audit_ic  然后看哪个因子 healthy")
+            print("   或：使用 --bypass-ic-gate 强行通过（不推荐）\n")
+            args.dry_run = True
 
     token = feishu_token()
     print("[1/5] 拉 watchlist...")

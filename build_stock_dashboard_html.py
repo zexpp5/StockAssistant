@@ -403,21 +403,44 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 </head>
 <body class="bg-gradient-to-b from-slate-50 to-white">
 
-<!-- ============ Tab 导航（sticky，所有 tab 都能看见） ============ -->
+<!-- ============ Tab 导航（4 主入口 + dropdown 子菜单 · 2026-05-11 PM 重构） ============ -->
+<!-- 信息架构：13 个并排 tab → 4 主入口（今天/发现/验证/历史）+ 底部 footer（投资观点/升级建议）-->
 <nav id="tab-nav" class="sticky top-0 z-50 bg-white border-b border-slate-200 shadow-sm">
-  <div class="max-w-7xl mx-auto px-4 flex items-center overflow-x-auto">
+  <div class="max-w-7xl mx-auto px-4 flex items-center">
     <span class="text-base font-bold text-slate-900 mr-6 flex-shrink-0">📊 AI 投资</span>
-    <a href="#overview" data-tab="overview" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">📌 概览</a>
-    <a href="#portfolio" data-tab="portfolio" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">💼 我的持仓</a>
-    <a href="#picks" data-tab="picks" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">⭐ 每日优选</a>
-    <a href="#discovery" data-tab="discovery" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">🔍 候选发现</a>
-    <a href="#audit" data-tab="audit" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">🛡 反向审查</a>
-    <a href="#valuation" data-tab="valuation" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">📈 估值视角</a>
-    <a href="#themes" data-tab="themes" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">🗂 主题分组</a>
-    <a href="#history" data-tab="history" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">📅 历史</a>
-    <a href="#backtest" data-tab="backtest" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">🤖 AI 方案模拟</a>
-    <a href="#professional" data-tab="professional" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">📊 专业分析</a>
-    <a href="#upgrade" data-tab="upgrade" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap">💰 升级建议</a>
+
+    <!-- 🏠 今天 = 我的持仓 + AI 方案模拟 + 每日优选 -->
+    <div class="relative group flex-shrink-0">
+      <a href="#portfolio" data-tab="portfolio" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap inline-flex items-center gap-1">🏠 今天 <span class="text-[9px]">▾</span></a>
+      <div class="hidden group-hover:block absolute left-0 top-full bg-white border border-slate-200 shadow-lg rounded-b min-w-[160px] z-50">
+        <a href="#portfolio" data-tab="portfolio" class="tab-link block px-4 py-2 text-sm text-slate-700 hover:bg-violet-50 hover:text-violet-600">💼 我的持仓</a>
+        <a href="#backtest" data-tab="backtest" class="tab-link block px-4 py-2 text-sm text-slate-700 hover:bg-violet-50 hover:text-violet-600">🤖 AI 方案模拟</a>
+        <a href="#picks" data-tab="picks" class="tab-link block px-4 py-2 text-sm text-slate-700 hover:bg-violet-50 hover:text-violet-600">⭐ 每日优选</a>
+      </div>
+    </div>
+
+    <!-- 🔍 发现 = 候选发现 + 估值视角 + 主题分组 -->
+    <div class="relative group flex-shrink-0">
+      <a href="#discovery" data-tab="discovery" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap inline-flex items-center gap-1">🔍 发现 <span class="text-[9px]">▾</span></a>
+      <div class="hidden group-hover:block absolute left-0 top-full bg-white border border-slate-200 shadow-lg rounded-b min-w-[160px] z-50">
+        <a href="#discovery" data-tab="discovery" class="tab-link block px-4 py-2 text-sm text-slate-700 hover:bg-violet-50 hover:text-violet-600">🔍 候选发现</a>
+        <a href="#valuation" data-tab="valuation" class="tab-link block px-4 py-2 text-sm text-slate-700 hover:bg-violet-50 hover:text-violet-600">📈 估值视角</a>
+        <a href="#themes" data-tab="themes" class="tab-link block px-4 py-2 text-sm text-slate-700 hover:bg-violet-50 hover:text-violet-600">🗂 主题分组</a>
+      </div>
+    </div>
+
+    <!-- 🛡️ 验证 = 反向审查 + 专业分析 -->
+    <div class="relative group flex-shrink-0">
+      <a href="#audit" data-tab="audit" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap inline-flex items-center gap-1">🛡️ 验证 <span class="text-[9px]">▾</span></a>
+      <div class="hidden group-hover:block absolute left-0 top-full bg-white border border-slate-200 shadow-lg rounded-b min-w-[160px] z-50">
+        <a href="#audit" data-tab="audit" class="tab-link block px-4 py-2 text-sm text-slate-700 hover:bg-violet-50 hover:text-violet-600">🛡 反向审查</a>
+        <a href="#professional" data-tab="professional" class="tab-link block px-4 py-2 text-sm text-slate-700 hover:bg-violet-50 hover:text-violet-600">📊 专业分析</a>
+      </div>
+    </div>
+
+    <!-- 📅 历史（独立，无子项）-->
+    <a href="#history" data-tab="history" class="tab-link px-3 py-3 text-sm font-medium text-slate-700 hover:text-violet-600 border-b-2 border-transparent hover:border-violet-300 transition whitespace-nowrap flex-shrink-0">📅 历史</a>
+
     <span class="ml-auto flex items-center gap-2 flex-shrink-0">
       <span class="text-[11px] text-slate-500" title="切换数据来源以验证 DuckDB 迁移">数据源</span>
       <button id="ds-toggle-btn" onclick="swapDataSource(_DATA_SOURCE === 'file' ? 'db' : 'file')"
@@ -460,6 +483,50 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </div>
   </div>
 </header>
+
+<!-- ============ 💀 压力测试：崩盘期表现（诚实暴露）============ -->
+<section id="stress-test" class="max-w-7xl mx-auto px-6 py-10">
+  <div class="bg-gradient-to-br from-rose-50 to-amber-50 border-2 border-rose-300 rounded-2xl p-6">
+    <div class="flex items-center justify-between mb-4">
+      <div>
+        <h2 class="text-2xl font-bold text-rose-900">💀 压力测试 — 历史崩盘期实测</h2>
+        <p class="text-sm text-slate-700 mt-1">v6 模型在 <strong>4 个真实历史崩盘 regime</strong> 中的抗跌表现 · 平均 DD alpha <strong class="text-rose-700">-9.77%</strong> · 抗跌仅 <strong class="text-rose-700">1/4</strong></p>
+      </div>
+      <a href="docs/STRESS_TEST_REPORT.md" target="_blank" class="text-xs px-3 py-1.5 rounded bg-white border border-rose-300 text-rose-700 hover:bg-rose-50 transition whitespace-nowrap">📄 详细报告</a>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div class="bg-white rounded-xl p-4 border-l-4 border-rose-500 shadow-sm">
+        <div class="text-xs text-slate-500">2008 雷曼金融危机</div>
+        <div class="text-3xl font-bold text-rose-700 mt-1">-9.72%</div>
+        <div class="text-xs text-slate-600 mt-1">DD alpha · 🔴 放大版 SPY</div>
+        <div class="text-[10px] text-slate-500 mt-2 font-mono">2008-09 → 2009-03</div>
+      </div>
+      <div class="bg-white rounded-xl p-4 border-l-4 border-amber-500 shadow-sm">
+        <div class="text-xs text-slate-500">2018 贸易战 + 加息</div>
+        <div class="text-3xl font-bold text-amber-700 mt-1">-2.79%</div>
+        <div class="text-xs text-slate-600 mt-1">DD alpha · 🟡 中性</div>
+        <div class="text-[10px] text-slate-500 mt-2 font-mono">2018-10 → 2018-12</div>
+      </div>
+      <div class="bg-white rounded-xl p-4 border-l-4 border-emerald-500 shadow-sm">
+        <div class="text-xs text-slate-500">2020 新冠崩盘</div>
+        <div class="text-3xl font-bold text-emerald-700 mt-1">+0.82%</div>
+        <div class="text-xs text-slate-600 mt-1">DD alpha · 🟢 唯一抗跌</div>
+        <div class="text-[10px] text-slate-500 mt-2 font-mono">2020-02 → 2020-03</div>
+      </div>
+      <div class="bg-white rounded-xl p-4 border-l-4 border-rose-500 shadow-sm">
+        <div class="text-xs text-slate-500">2022 加息熊市</div>
+        <div class="text-3xl font-bold text-rose-700 mt-1">-27.38%</div>
+        <div class="text-xs text-slate-600 mt-1">DD alpha · 🔴 跌得更惨</div>
+        <div class="text-[10px] text-slate-500 mt-2 font-mono">2022-01 → 2022-10</div>
+      </div>
+    </div>
+    <p class="text-xs text-slate-600 mt-4">
+      <strong>读法</strong>：DD alpha > 0 = 组合最大回撤比 SPY 小（抗跌）；< 0 = 跌得更惨。
+      <strong>正确用法</strong>：把这些数字当作"模型有哪些系统性弱点"的诚实自评，<strong class="text-rose-700">不是性能广告</strong>。
+      v7 防御层（VIX/200MA/-15% 止损）就是针对 2008/2022 这类回撤设计的，预计能把 DD alpha 拉回 -3% ~ +2% 区间。
+    </p>
+  </div>
+</section>
 
 <!-- ============ 我的核心观点 ============ -->
 <section id="thesis" class="max-w-7xl mx-auto px-6 py-10">
@@ -926,10 +993,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <!-- ============ 🤖 AI 方案模拟 Tab ============ -->
 <section id="backtest" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
   <div class="mb-6">
-    <h2 class="text-2xl font-bold text-slate-900">🤖 AI 方案模拟：v6 锁定日推荐组合 buy-and-hold 跟踪</h2>
-    <p class="text-sm text-slate-600 mt-1">⚠️ <strong>这不是你的真实账户</strong>，是"假设你在 v6 plan 锁定那天按推荐买入并一直持有"的模拟。<strong>tickers 冻结在锁定日</strong>（已修复 look-ahead bias，未来 v6 换股不会回填）。基线 NAV=100，按每日真实收盘价计算。基准 SPY · <strong class="text-rose-600">不是历史回测，是 forward 跟踪</strong>。每日 daily_refresh 自动累加。</p>
+    <h2 class="text-2xl font-bold text-slate-900">🤖 AI 方案模拟：A 静态死守 vs C 动态调仓 双曲线对比</h2>
+    <p class="text-sm text-slate-600 mt-1">⚠️ <strong>这不是你的真实账户</strong>。<strong class="text-violet-700">A 静态</strong> = 锁定日买入 11 只 buy-and-hold 死守（无 look-ahead bias）；<strong class="text-orange-600">C 动态</strong> = 每周一按当时最新 v6 推荐调仓（含手续费 0.10% per swap）。<strong class="text-emerald-700">差距 C − A = AI 持续选股的真实 alpha</strong>。基准 SPY · 每日 daily_refresh 自动累加。</p>
     <div id="backtest-inception-banner" class="mt-3 hidden bg-violet-50 border-l-4 border-violet-500 rounded-r-lg p-3 text-sm text-slate-800"></div>
   </div>
+
+  <!-- A vs C 对比 + 调仓记录 -->
+  <div id="backtest-rebalance-log" class="mb-4"></div>
 
   <!-- 关键指标卡 -->
   <div id="backtest-metrics" class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4"></div>
@@ -937,10 +1007,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <!-- NAV 曲线 -->
   <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
     <div class="flex items-center justify-between mb-3">
-      <h3 class="text-sm font-semibold text-slate-700">📈 NAV 曲线（起点 = 100，组合 vs SPY）</h3>
+      <h3 class="text-sm font-semibold text-slate-700">📈 NAV 曲线（起点 = 100，A 静态紫 / C 动态橙 / SPY 红）</h3>
       <span id="backtest-coverage" class="text-xs text-slate-500"></span>
     </div>
-    <div id="backtest-nav-chart" style="height:380px"></div>
+    <div id="backtest-nav-chart" style="height:420px"></div>
   </div>
 
   <!-- 最近 60 天每日 P&L -->
@@ -1040,7 +1110,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <!-- ════════ 系统响应能力 ════════ -->
   <div class="bg-gradient-to-br from-emerald-50 to-cyan-50 border-2 border-emerald-300 rounded-xl p-6 mb-8">
     <h3 class="text-2xl font-bold text-emerald-900 mb-4">📡 系统响应能力（实时性总览）</h3>
-    <p class="text-sm text-slate-700 mb-4">数据从市场发生 → 落入系统的实际延迟。系统不是真"实时"，是 <strong>daily 批处理 + 盘中 30 分钟轮询</strong>。</p>
+    <p class="text-sm text-slate-700 mb-4">数据从市场发生 → 落入系统的实际延迟。系统不是真"实时"，是 <strong>每天 07:30 一次 daily 批处理</strong>（盘中轮询/异动告警已规划但未实施）。</p>
 
     <!-- 响应能力分级 -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
@@ -1052,7 +1122,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           <li>· Yahoo Trending 美股热门</li>
           <li>· Reddit WSB 情感（几分钟）</li>
           <li>· 个股新闻（yfinance）</li>
-          <li>· 盘中异动告警（每 30 分钟）</li>
         </ul>
       </div>
       <div class="bg-white rounded-lg p-4 border-l-4 border-amber-500">
@@ -1536,8 +1605,12 @@ const _DATA_DB = {
   PLAN_A_V6:     {PLAN_A_V6_JSON_DB},
 };
 // AI 方案模拟数据：和其他源一样准备两份
+// _BACKTEST_*  = A 静态（buy-and-hold from inception）
+// _DYNAMIC_*   = C 动态（每周一 rebalance）
 const _BACKTEST_FILE = {PLAN_BACKTEST_JSON_FILE};
 const _BACKTEST_DB   = {PLAN_BACKTEST_JSON_DB};
+const _DYNAMIC_FILE  = {PLAN_DYNAMIC_JSON_FILE};
+const _DYNAMIC_DB    = {PLAN_DYNAMIC_JSON_DB};
 
 let _DATA_SOURCE = 'file';
 let RECORDS       = _DATA_FILE.RECORDS;
@@ -1598,7 +1671,7 @@ function swapDataSource(src) {
 
 // ============ Tab 切换框架 ============
 const TAB_SECTIONS = {
-  overview: ["hero", "thesis", "evolution", "scarce", "events", "hundred-x"],
+  overview: ["hero", "stress-test", "thesis", "evolution", "scarce", "events", "hundred-x"],
   portfolio: ["portfolio"],
   picks: ["scoring-rules", "picks-review"],
   discovery: ["discovery"],
@@ -1642,7 +1715,8 @@ function switchTab(tab) {
 
 function getTabFromHash() {
   const h = location.hash.replace("#", "");
-  return TAB_SECTIONS[h] ? h : "overview";
+  // 默认首屏改为 portfolio（"🏠 今天" 的核心）— 用户每天打开问"我现在赚还是亏"
+  return TAB_SECTIONS[h] ? h : "portfolio";
 }
 window.addEventListener("hashchange", () => switchTab(getTabFromHash()));
 window.addEventListener("DOMContentLoaded", () => switchTab(getTabFromHash()));
@@ -2400,6 +2474,7 @@ function renderOptPane() {
 // ============ AI 方案模拟 Tab ============
 function renderPlanBacktest() {
   const data = (_DATA_SOURCE === 'db' ? _BACKTEST_DB : _BACKTEST_FILE) || {};
+  const dynData = (_DATA_SOURCE === 'db' ? _DYNAMIC_DB : _DYNAMIC_FILE) || {};
   const metricsEl = document.getElementById('backtest-metrics');
   const navEl = document.getElementById('backtest-nav-chart');
   const dailyEl = document.getElementById('backtest-daily-chart');
@@ -2407,6 +2482,7 @@ function renderPlanBacktest() {
   const warnEl = document.getElementById('backtest-missing-warning');
   const covEl = document.getElementById('backtest-coverage');
   const bannerEl = document.getElementById('backtest-inception-banner');
+  const rebalanceEl = document.getElementById('backtest-rebalance-log');
   if (!metricsEl) return;
 
   if (!data.dates || data.dates.length === 0) {
@@ -2481,37 +2557,58 @@ function renderPlanBacktest() {
     }
   }
 
-  // NAV chart：context 段灰色虚线，tracked 段紫色实线 + 锁定日竖线
+  // NAV chart：3 条曲线 — A 静态(紫) / C 动态(橙) / SPY(红)
   if (navEl && typeof echarts !== 'undefined') {
     let navChart = echarts.getInstanceByDom(navEl);
     if (!navChart) navChart = echarts.init(navEl);
     const baselineIdx = data.baseline_idx_in_window != null ? data.baseline_idx_in_window : 0;
-    const navPct = data.nav.map(v => +(v * 100).toFixed(2));
+    const navPct = (data.nav || []).map(v => v == null ? null : +(v * 100).toFixed(2));
     const benchPct = (data.bench_nav || []).map(v => +(v * 100).toFixed(2));
-    // 拆成 context（含 baseline 那点）+ tracked（baseline 之后），用 null 隔开避免重叠
+    // A 静态：拆成 context（含 baseline 那点）+ tracked（baseline 之后），用 null 隔开避免重叠
     const ctxNav = navPct.map((v, i) => i <= baselineIdx ? v : null);
     const trkNav = navPct.map((v, i) => i >= baselineIdx ? v : null);
     const ctxBench = benchPct.map((v, i) => i <= baselineIdx ? v : null);
     const trkBench = benchPct.map((v, i) => i >= baselineIdx ? v : null);
     const baselineDate = data.baseline_date || (data.dates[baselineIdx] || '');
 
+    // C 动态：同样的窗口（dates 一致），独立的 nav
+    const dynNav = (dynData.nav || []).map(v => v == null ? null : +(v * 100).toFixed(2));
+    const dynTrk = dynNav.length ? dynNav.map((v, i) => i >= baselineIdx ? v : null) : [];
+
+    // 调仓日竖线（多条）
+    const rebalanceLines = (dynData.rebalance_dates || []).map(d => ({
+      xAxis: d,
+      label: { formatter: '↻', fontSize: 11, color: '#f97316', position: 'insideEndTop' },
+      lineStyle: { color: '#f97316', width: 1, type: 'dashed', opacity: 0.5 }
+    }));
+
     const series = [
       {
-        name: '组合（锁定前·上下文）', type: 'line', smooth: true, showSymbol: false,
+        name: 'A 静态（锁定前·上下文）', type: 'line', smooth: true, showSymbol: false,
         data: ctxNav,
         lineStyle: { width: 1.2, color: '#cbd5e1', type: 'dashed' },
       },
       {
-        name: '组合（锁定后·实盘）', type: 'line', smooth: true, showSymbol: true, symbolSize: 6,
+        name: 'A 静态（buy-and-hold 死守）', type: 'line', smooth: true, showSymbol: true, symbolSize: 6,
         data: trkNav,
         lineStyle: { width: 2.5, color: '#7c3aed' },
-        areaStyle: { color: 'rgba(124,58,237,0.08)' },
         markLine: {
           symbol: ['none', 'none'], silent: true,
-          data: [{ xAxis: baselineDate, label: { formatter: '📍 锁定日 ' + baselineDate, fontSize: 10, color: '#7c3aed', position: 'insideEndTop' }, lineStyle: { color: '#7c3aed', width: 1.5, type: 'dashed' } }]
+          data: [
+            { xAxis: baselineDate, label: { formatter: '📍 锁定 ' + baselineDate, fontSize: 10, color: '#7c3aed', position: 'insideEndTop' }, lineStyle: { color: '#7c3aed', width: 1.5, type: 'dashed' } },
+            ...rebalanceLines,
+          ]
         }
       },
     ];
+    if (dynTrk.length) {
+      series.push({
+        name: 'C 动态（每周一调仓·含手续费）', type: 'line', smooth: true, showSymbol: true, symbolSize: 6,
+        data: dynTrk,
+        lineStyle: { width: 2.5, color: '#f97316' },
+        areaStyle: { color: 'rgba(249,115,22,0.06)' },
+      });
+    }
     if (benchPct.length) {
       series.push({
         name: 'SPY（锁定前·上下文）', type: 'line', smooth: true, showSymbol: false,
@@ -2519,7 +2616,7 @@ function renderPlanBacktest() {
         lineStyle: { width: 1, color: '#fda4af', type: 'dashed' },
       });
       series.push({
-        name: 'SPY（锁定后·实盘）', type: 'line', smooth: true, showSymbol: true, symbolSize: 5,
+        name: 'SPY 基准', type: 'line', smooth: true, showSymbol: true, symbolSize: 5,
         data: trkBench,
         lineStyle: { width: 1.8, color: '#f43f5e' },
       });
@@ -2538,6 +2635,74 @@ function renderPlanBacktest() {
       window._BACKTEST_NAV_RESIZE_HOOKED = true;
       window.addEventListener('resize', () => navChart.resize());
     }
+  }
+
+  // C-A spread + 调仓记录
+  const dynM = dynData.metrics || {};
+  if (rebalanceEl) {
+    const nReb = dynM.n_rebalances || 0;
+    const commPct = dynData.total_commission_pct || 0;
+    const dynCum = dynM.cumulative_return_pct;
+    const staCum = m.cumulative_return_pct;
+    const spread = (dynCum != null && staCum != null) ? (dynCum - staCum) : null;
+    const spreadStr = spread == null ? '—' :
+      (spread > 0 ? `+${spread.toFixed(2)}%` : `${spread.toFixed(2)}%`);
+    const spreadCls = spread == null ? 'text-slate-500'
+      : (spread > 0 ? 'text-emerald-700' : 'text-rose-700');
+
+    let summaryHtml = `
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-3 mb-3">
+        <div class="bg-white rounded-lg p-3 border border-violet-200">
+          <div class="text-xs text-slate-500">A 静态（死守不动）累计</div>
+          <div class="text-xl font-bold text-violet-700">${staCum == null ? '—' : (staCum >= 0 ? '+' : '') + staCum.toFixed(2) + '%'}</div>
+        </div>
+        <div class="bg-white rounded-lg p-3 border border-orange-200">
+          <div class="text-xs text-slate-500">C 动态（每周一调仓）累计</div>
+          <div class="text-xl font-bold text-orange-600">${dynCum == null ? '—' : (dynCum >= 0 ? '+' : '') + dynCum.toFixed(2) + '%'}</div>
+        </div>
+        <div class="bg-white rounded-lg p-3 border border-emerald-200">
+          <div class="text-xs text-slate-500">C − A = AI 持续选股 alpha</div>
+          <div class="text-xl font-bold ${spreadCls}">${spreadStr}</div>
+        </div>
+        <div class="bg-white rounded-lg p-3 border border-slate-200">
+          <div class="text-xs text-slate-500">调仓次数 · 累计手续费</div>
+          <div class="text-base font-semibold text-slate-800">${nReb} 次 · ${commPct.toFixed(3)}%</div>
+        </div>
+      </div>`;
+
+    const log = (dynData.rebalance_log || []).slice(-12).reverse();
+    if (log.length) {
+      const rows = log.map(r => {
+        const turnoverPct = r.pre_nav > 0 ? (r.turnover_dollar / r.pre_nav * 100) : 0;
+        const costPct = r.pre_nav > 0 ? (r.commission_dollar / r.pre_nav * 100) : 0;
+        const adds = (r.tickers_added || []).join(' / ') || '—';
+        const rems = (r.tickers_removed || []).join(' / ') || '—';
+        return `<tr class="border-b border-slate-100">
+          <td class="px-3 py-1.5 font-mono text-xs">${r.date}</td>
+          <td class="px-3 py-1.5 text-xs">${r.n_tickers}</td>
+          <td class="px-3 py-1.5 text-xs">${turnoverPct.toFixed(1)}%</td>
+          <td class="px-3 py-1.5 text-xs text-rose-600">-${costPct.toFixed(3)}%</td>
+          <td class="px-3 py-1.5 text-xs text-emerald-700">${adds}</td>
+          <td class="px-3 py-1.5 text-xs text-rose-700">${rems}</td>
+        </tr>`;
+      }).join('');
+      summaryHtml += `
+        <details class="bg-white rounded-lg border border-slate-200 p-3">
+          <summary class="text-sm font-semibold text-slate-700 cursor-pointer">📋 最近 ${log.length} 次调仓明细（点开展开）</summary>
+          <table class="w-full text-left mt-2">
+            <thead class="text-xs text-slate-600">
+              <tr><th class="px-3 py-1.5">日期</th><th class="px-3 py-1.5">N</th>
+                  <th class="px-3 py-1.5">换手率</th><th class="px-3 py-1.5">手续费</th>
+                  <th class="px-3 py-1.5">买入</th><th class="px-3 py-1.5">卖出</th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </details>`;
+    } else if (nReb === 0 && (dynM.n_tracked_days || 0) === 0) {
+      summaryHtml += `<div class="text-xs text-slate-500 italic">⏳ 锁定日刚定，还没经历过 rebalance — 第一个周一收盘后会出现第 1 次调仓记录。</div>`;
+    }
+
+    rebalanceEl.innerHTML = summaryHtml;
   }
 
   // Daily P&L last 60 days
@@ -3161,6 +3326,17 @@ document.getElementById("cheap-and-rising").innerHTML = cheapRising.map(r => {
   </div>`;
 }).join("") || '<div class="text-slate-500 text-sm">暂无符合条件的标的</div>';
 </script>
+
+<!-- ============ 页脚（次级入口：投资观点 / 升级建议）============ -->
+<!-- 这两个 tab 从主导航降级，仅在页脚提供入口；hash 仍可用，原有 section 不删 -->
+<footer class="max-w-7xl mx-auto px-6 py-8 mt-12 border-t border-slate-200">
+  <div class="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-slate-500">
+    <span class="font-semibold text-slate-700">📊 StockAssistant</span>
+    <a href="#overview" data-tab="overview" class="tab-link hover:text-violet-600 transition">📌 投资观点（5 条核心 / 百倍股 / AI 时间轴）</a>
+    <a href="#upgrade" data-tab="upgrade" class="tab-link hover:text-violet-600 transition">💰 系统体检 / 升级建议</a>
+    <span class="ml-auto text-xs">⚠️ 不构成投资建议 · 崩盘期历史 alpha = -9.77%</span>
+  </div>
+</footer>
 </body>
 </html>
 """
@@ -3773,6 +3949,287 @@ def _load_inception_plan_from_duckdb() -> dict | None:
     return None
 
 
+def _load_plan_v6_at_or_before(date_str: str) -> dict | None:
+    """读 DuckDB plan_v6 在 date_str 当天（含）及之前的最新一条 payload。
+
+    用于 P1 动态 rebalance：每周一找"截至本周一最新的推荐方案"调仓。
+    若当天没有快照（系统未跑日 / 节假日），自然 fallback 到上一次落库的方案。
+    """
+    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_history.duckdb")
+    if not os.path.exists(db_path):
+        return None
+    try:
+        import duckdb
+        con = duckdb.connect(db_path, read_only=True)
+        row = con.execute(
+            "SELECT payload FROM snapshots "
+            "WHERE category='optimize' AND name='plan_v6' "
+            "AND taken_at <= CAST(? AS TIMESTAMP) + INTERVAL 1 DAY - INTERVAL 1 SECOND "
+            "ORDER BY taken_at DESC LIMIT 1",
+            [date_str]
+        ).fetchone()
+        con.close()
+        if row and row[0]:
+            return json.loads(row[0]) if isinstance(row[0], str) else row[0]
+    except Exception:
+        pass
+    return None
+
+
+def _extract_plan_weights(plan: dict) -> dict:
+    """从 plan payload 抽出 {ticker: normalized_weight}，处理 v5/v6/plan 三种字段名 + 各种 weight 字段。"""
+    if not plan or not isinstance(plan, dict):
+        return {}
+    plan_list = plan.get("plan_v5") or plan.get("plan_v6") or plan.get("plan") or []
+    raw = []
+    for p in plan_list:
+        t = p.get("ticker")
+        w = (p.get("v5_weight") or p.get("v6_weight") or p.get("weight")
+             or p.get("target_weight") or p.get("capped_weight") or 0.0)
+        if t and w and float(w) > 0:
+            raw.append((t, float(w)))
+    if not raw:
+        return {}
+    total = sum(w for _, w in raw) or 1.0
+    return {t: w / total for t, w in raw}
+
+
+def compute_dynamic_rebalance_track(history: dict, benchmark: str = "SPY",
+                                     commission_per_movement: float = 0.0005,
+                                     rebalance_dow: int = 0) -> dict:
+    """P1 + P2 动态 rebalance NAV 跟踪（C 类设计）。
+
+    用户实际用法：每周一根据系统最新推荐换仓。这条曲线反映"持续按 AI 推荐调仓"
+    的真实回报，与 compute_plan_forward_track() 的"buy-and-hold 死守"对照看，
+    差距 = AI 持续动态选股带来的真实价值（P2 双曲线对比的核心）。
+
+    参数：
+      • commission_per_movement: 每"流动 1 元"的手续费成本（默认 5 bps）。
+        一次"卖 ¥1000 of A + 买 ¥1000 of B"的 swap，total_movement = ¥2000，
+        cost = ¥2000 × 0.0005 = ¥1 = 0.10% 完整 round-trip。涵盖 spread + 印花税
+        粗略估算（A 股稍高，美股稍低，取中间值）。
+      • rebalance_dow: 每周哪一天 rebalance（0=Monday）；周一节假日时自动顺延到本周
+        第一个交易日。
+    """
+    if not history or "tickers" not in history:
+        return {}
+
+    inception_date = _find_plan_inception_date()
+    if not inception_date:
+        return {}
+
+    inception_plan = _load_inception_plan_from_duckdb()
+    if not inception_plan:
+        return {}
+
+    initial_weights = _extract_plan_weights(inception_plan)
+    if not initial_weights:
+        return {}
+
+    tickers_data = history["tickers"]
+
+    # 构造 ticker → {date_str: close} 加速查询
+    ticker_close: dict[str, dict[str, float]] = {}
+    for tkr, d in tickers_data.items():
+        if d and d.get("ts") and d.get("close"):
+            ticker_close[tkr] = dict(zip(d["ts"], [float(c) for c in d["close"]]))
+
+    # common_dates：所有 initial_tickers 都有价格的日期交集
+    common: set | None = None
+    for tkr in initial_weights:
+        if tkr not in ticker_close:
+            continue
+        ts_set = set(ticker_close[tkr].keys())
+        common = ts_set if common is None else (common & ts_set)
+    if not common:
+        return {"inception_date": inception_date, "error": "no common dates in initial plan"}
+
+    common_dates = sorted(common)
+
+    # baseline_idx：最后一个 ≤ inception_date 的交易日
+    baseline_idx = None
+    for i, d in enumerate(common_dates):
+        if d <= inception_date:
+            baseline_idx = i
+        else:
+            break
+    if baseline_idx is None:
+        baseline_idx = 0
+    baseline_date = common_dates[baseline_idx]
+
+    # 在 baseline 那天按 inception plan 建仓
+    holdings: dict[str, float] = {}
+    for t, w in initial_weights.items():
+        p0 = ticker_close.get(t, {}).get(baseline_date)
+        if p0 and p0 > 0:
+            holdings[t] = w / p0  # NAV=1.0 → shares = w / price
+
+    # 用 context_days 之前作为图表上下文（虚线），跟 static 函数对齐
+    context_days = 30
+    win_start = max(0, baseline_idx - context_days)
+    win_dates = common_dates[win_start:]
+    rel_baseline = baseline_idx - win_start
+
+    from datetime import datetime as _dt
+
+    def _iso_week(date_str: str) -> tuple[int, int]:
+        """返回 (iso_year, iso_week)，跨年周一也算同一周。"""
+        y, m, d = date_str.split("-")
+        return _dt(int(y), int(m), int(d)).isocalendar()[:2]
+
+    # rebalance 触发：今天的 iso-week 跟上一个交易日不同（即跨周了）
+    # 等价于"本周的第一个交易日就 rebalance"，自然处理周一节假日顺延
+    nav_list: list[float | None] = []
+    rebalance_log: list[dict] = []
+    rebalance_dates_used: list[str] = []
+    total_commission = 0.0
+    prev_iso_week: tuple[int, int] | None = None
+
+    # 先在 win_start..baseline 段填 None（context 段，不算 NAV）
+    for _ in range(rel_baseline):
+        nav_list.append(None)
+
+    # 从 baseline 开始算
+    for i in range(baseline_idx, len(common_dates)):
+        date = common_dates[i]
+        cur_iso = _iso_week(date)
+
+        # 当前 NAV（rebalance 前）
+        current_value = 0.0
+        for t, shares in holdings.items():
+            p = ticker_close.get(t, {}).get(date)
+            if p is not None:
+                current_value += shares * p
+
+        # rebalance：跨周（prev_iso_week 存在且不同）且今天 != baseline 那天
+        if prev_iso_week is not None and cur_iso != prev_iso_week and date != baseline_date:
+            new_plan = _load_plan_v6_at_or_before(date)
+            new_weights = _extract_plan_weights(new_plan) if new_plan else {}
+            # 过滤掉今天没有价格数据的 tickers
+            available_w = {t: w for t, w in new_weights.items()
+                           if t in ticker_close and date in ticker_close[t]}
+            wsum = sum(available_w.values())
+            if available_w and wsum > 0 and current_value > 0:
+                available_w = {t: w / wsum for t, w in available_w.items()}
+                new_alloc = {t: w * current_value for t, w in available_w.items()}
+                old_alloc = {t: holdings.get(t, 0) * ticker_close.get(t, {}).get(date, 0)
+                             for t in (set(holdings.keys()) | set(available_w.keys()))}
+                all_t = set(new_alloc.keys()) | set(old_alloc.keys())
+                total_movement = sum(abs(new_alloc.get(t, 0) - old_alloc.get(t, 0)) for t in all_t)
+                cost = total_movement * commission_per_movement
+                post_value = current_value - cost
+                total_commission += cost
+
+                new_holdings: dict[str, float] = {}
+                for t, w in available_w.items():
+                    p_t = ticker_close[t][date]
+                    new_holdings[t] = w * post_value / p_t
+
+                rebalance_log.append({
+                    "date": date,
+                    "pre_nav": round(current_value, 6),
+                    "post_nav": round(post_value, 6),
+                    "turnover_dollar": round(total_movement, 6),
+                    "commission_dollar": round(cost, 6),
+                    "n_tickers": len(available_w),
+                    "tickers_added": sorted(set(available_w.keys()) - set(holdings.keys())),
+                    "tickers_removed": sorted(set(holdings.keys()) - set(available_w.keys())),
+                })
+                holdings = new_holdings
+                current_value = post_value
+                rebalance_dates_used.append(date)
+
+        nav_list.append(current_value)
+        prev_iso_week = cur_iso
+
+    # 基准 SPY（同样锚到 baseline）
+    bench_nav: list[float | None] = []
+    bench_d = ticker_close.get(benchmark, {})
+    b_anchor = bench_d.get(baseline_date) if bench_d else None
+    if bench_d and b_anchor:
+        last_b = 1.0
+        for d in win_dates:
+            v = bench_d.get(d)
+            if v and b_anchor:
+                last_b = v / b_anchor
+            bench_nav.append(last_b)
+
+    # tracked 段（baseline 之后）算指标
+    tracked = [v for v in nav_list[rel_baseline:] if v is not None]
+    tracked_dates = win_dates[rel_baseline:rel_baseline + len(tracked)]
+    bench_tracked = bench_nav[rel_baseline:rel_baseline + len(tracked)] if bench_nav else []
+
+    import math
+    def _daily_rets(curve: list[float]) -> list[float]:
+        return [0.0] + [
+            (curve[i] / curve[i - 1] - 1.0) if curve[i - 1] else 0.0
+            for i in range(1, len(curve))
+        ]
+
+    def _max_dd(curve: list[float]) -> float:
+        if not curve: return 0.0
+        peak = curve[0]; mdd = 0.0
+        for v in curve:
+            if v > peak: peak = v
+            dd = (v - peak) / peak if peak else 0.0
+            if dd < mdd: mdd = dd
+        return mdd
+
+    n_tracked = max(0, len(tracked) - 1)
+    daily_rets = _daily_rets(tracked) if tracked else []
+    cumret = (tracked[-1] - 1.0) if len(tracked) >= 1 else 0.0
+    bench_cumret = (bench_tracked[-1] - 1.0) if len(bench_tracked) >= 1 else 0.0
+    if n_tracked > 0:
+        r_avg = sum(daily_rets[1:]) / n_tracked
+        r_var = sum((r - r_avg) ** 2 for r in daily_rets[1:]) / max(1, n_tracked - 1) if n_tracked >= 2 else 0
+        r_std = math.sqrt(r_var)
+        annvol = r_std * math.sqrt(252)
+        sharpe = (r_avg * 252) / annvol if annvol > 1e-9 else 0.0
+        win_days = sum(1 for r in daily_rets[1:] if r > 0)
+        win_rate = win_days / n_tracked
+        annret = (1 + cumret) ** (252 / n_tracked) - 1.0 if n_tracked > 0 else 0.0
+    else:
+        annvol = sharpe = win_rate = annret = 0.0
+        win_days = 0
+
+    universe = set(initial_weights.keys())
+    for r in rebalance_log:
+        universe.update(r["tickers_added"])
+
+    return {
+        "dates": win_dates,
+        "nav": [round(v, 6) if v is not None else None for v in nav_list],
+        "bench_nav": [round(v, 6) for v in bench_nav] if bench_nav else [],
+        "benchmark": benchmark if bench_nav else None,
+        "inception_date": inception_date,
+        "baseline_date": baseline_date,
+        "baseline_idx_in_window": rel_baseline,
+        "rebalance_dates": rebalance_dates_used,
+        "rebalance_log": rebalance_log,
+        "total_commission": round(total_commission, 6),
+        "total_commission_pct": round(total_commission * 100, 4),
+        "commission_per_movement_bps": round(commission_per_movement * 10000, 1),
+        "rebalance_freq": "weekly_monday",
+        "tickers_universe": sorted(universe),
+        "metrics": {
+            "n_tracked_days": n_tracked,
+            "tracked_start": tracked_dates[1] if len(tracked_dates) > 1 else None,
+            "tracked_end": tracked_dates[-1] if tracked_dates else None,
+            "cumulative_return_pct": round(cumret * 100, 2),
+            "bench_cumulative_return_pct": round(bench_cumret * 100, 2),
+            "alpha_pct": round((cumret - bench_cumret) * 100, 2),
+            "annual_return_pct": round(annret * 100, 2),
+            "annual_vol_pct": round(annvol * 100, 2),
+            "sharpe": round(sharpe, 2),
+            "max_drawdown_pct": round(_max_dd(tracked) * 100, 2),
+            "win_rate_pct": round(win_rate * 100, 1),
+            "win_days": win_days,
+            "total_days": n_tracked,
+            "n_rebalances": len(rebalance_log),
+        },
+    }
+
+
 def compute_plan_forward_track(plan: dict, history: dict, benchmark: str = "SPY",
                                 context_days: int = 30) -> dict:
     """从 plan 锁定日往后跟踪真实表现（forward 视角）。
@@ -4365,7 +4822,7 @@ function toggleAuditSource() {{
     html = html.replace("{HISTORY_DATA_JSON_DB}", json.dumps(history_data_db, ensure_ascii=False))
     html = html.replace("{DISCOVERY_JSON}", json.dumps(discovery, ensure_ascii=False))
 
-    # AI 方案模拟：从 v6 锁定日往后看每日表现
+    # AI 方案模拟 — Static (A 类: buy-and-hold from inception)
     backtest_file = compute_plan_forward_track(plan_a_v6, history_data)
     backtest_db = compute_plan_forward_track(plan_a_v6_db or plan_a_v6, history_data_db or history_data)
     for label, bt in (("JSON", backtest_file), ("DuckDB", backtest_db)):
@@ -4373,10 +4830,21 @@ function toggleAuditSource() {{
             m = bt["metrics"]
             inception = bt.get("inception_date") or "?"
             baseline = bt.get("baseline_date") or "?"
-            print(f"  AI 方案模拟 [{label}]: 锁定 {inception} → 基线 {baseline} · 跟踪 {m['n_tracked_days']} 日"
+            print(f"  AI 方案模拟 A 静态 [{label}]: 锁定 {inception} → 基线 {baseline} · 跟踪 {m['n_tracked_days']} 日"
                   f" · 累计 {m['cumulative_return_pct']}% (vs SPY {m['bench_cumulative_return_pct']}%)")
     html = html.replace("{PLAN_BACKTEST_JSON_FILE}", json.dumps(backtest_file, ensure_ascii=False))
     html = html.replace("{PLAN_BACKTEST_JSON_DB}", json.dumps(backtest_db, ensure_ascii=False))
+
+    # AI 方案模拟 — Dynamic (C 类: weekly Monday rebalance, P1+P2)
+    dynamic_file = compute_dynamic_rebalance_track(history_data)
+    dynamic_db = compute_dynamic_rebalance_track(history_data_db or history_data)
+    for label, dyn in (("JSON", dynamic_file), ("DuckDB", dynamic_db)):
+        if dyn and dyn.get("metrics"):
+            m = dyn["metrics"]
+            print(f"  AI 方案模拟 C 动态 [{label}]: {m['n_rebalances']} 次调仓 · 累计手续费 {dyn.get('total_commission_pct', 0)}% · "
+                  f"跟踪 {m['n_tracked_days']} 日 · 累计 {m['cumulative_return_pct']}% (vs SPY {m['bench_cumulative_return_pct']}%)")
+    html = html.replace("{PLAN_DYNAMIC_JSON_FILE}", json.dumps(dynamic_file, ensure_ascii=False))
+    html = html.replace("{PLAN_DYNAMIC_JSON_DB}", json.dumps(dynamic_db, ensure_ascii=False))
 
     with open(OUTPUT, "w", encoding="utf-8") as f:
         f.write(html)

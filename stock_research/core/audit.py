@@ -11,11 +11,19 @@
     'summary': 人类可读的简述,
   }
 
-判断规则：
+判断规则（v2 — 2026-05-11 修订）：
   - 价格：yfinance vs akshare 偏差 > 1% → 标 LOW；> 5% → 标 CONFLICT
   - 市值：> 5% 偏差 → 标 LOW
   - 多个权威源（≥2）一致 → HIGH
   - 单源 → MEDIUM
+
+  13F 处理（v2 重要变更）：
+  13F 是 SEC 季度披露，**报告期末后 45 天才公开**。Cohen-Polk-Silli (2010)
+  实证：在高波动板块跟 13F 入场是负 α。所以本 audit 里 13F 仅作为：
+    (a) 一致性信号（多机构同向 = 加分项，列入 agreements）
+    (b) **conviction booster**：在已有非 13F 源时 → 帮助升级到 HIGH
+    (c) **不能独立成为"第二个源"**：仅有 yfinance + 13F → 仍维持 MEDIUM
+  这避免了"只在某只标的上看到 13F 信号 → 误判 HIGH"的陷阱。
 """
 from __future__ import annotations
 import logging
@@ -75,8 +83,12 @@ def audit_stock(yf_data: dict[str, Any] | None = None,
     if finnhub_inner.get("news") or finnhub_inner.get("insider") or finnhub_inner.get("analyst_recommendations"):
         sources.append("finnhub")
 
-    if sec_signals:
+    # 13F 单独追踪（v2）— 不计入 "non_lagging_sources"，只作 conviction booster
+    has_13f = bool(sec_signals)
+    if has_13f:
         sources.append("sec_edgar_13f")
+    # 非滞后源 = 实时/T+1 可比较的数据源；13F 排除在外
+    non_lagging_sources = [s for s in sources if s != "sec_edgar_13f"]
 
     # ────────── 价格交叉验证 ──────────
     if yf_price is not None and ak_price is not None:
@@ -148,19 +160,32 @@ def audit_stock(yf_data: dict[str, Any] | None = None,
                 "severity": "INFO",
             })
 
-    # ────────── 结论 ──────────
+    # ────────── 结论（v2 — 13F 仅作 conviction booster）──────────
+    # 规则：HIGH 要求 ≥2 个 non-lagging 源；13F 可在已有非滞后源时帮助升级，
+    # 但单独的 (yfinance + 13F) 仍只算 MEDIUM（因 13F 是 45 天滞后数据）
     if any(c["severity"] == "HIGH" for c in conflicts):
         cred = "CONFLICT"
-    elif len(sources) >= 3 and not conflicts:
+    elif len(non_lagging_sources) >= 3 and not conflicts:
         cred = "HIGH"
-    elif len(sources) >= 2:
+    elif len(non_lagging_sources) >= 2:
         cred = "HIGH" if not conflicts else "MEDIUM"
-    elif len(sources) == 1:
+    elif len(non_lagging_sources) == 1 and has_13f and not conflicts:
+        # 1 个非滞后源 + 13F 一致信号 → conviction-boosted MEDIUM
+        # 仅在 agreements 已包含 13f_direction 时升 MEDIUM；否则仍是 MEDIUM
         cred = "MEDIUM"
+    elif len(non_lagging_sources) >= 1:
+        cred = "MEDIUM"
+    elif has_13f:
+        # 仅 13F 一个源 — 明确标 LOW（避免单凭 45 天滞后信号误判 HIGH）
+        cred = "LOW"
     else:
         cred = "LOW"
 
     summary_parts = [f"{len(sources)} 个源：{', '.join(sources) or '无'}"]
+    if has_13f and len(non_lagging_sources) == 0:
+        summary_parts.append("⚠️ 仅 13F（45 天滞后，不作为独立可信源）")
+    elif has_13f and len(non_lagging_sources) < 2:
+        summary_parts.append("ℹ️ 13F 作 conviction booster（非滞后源仍不足 2 个）")
     if agreements:
         summary_parts.append(f"{len(agreements)} 项一致")
     if conflicts:

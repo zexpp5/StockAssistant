@@ -1,5 +1,5 @@
 {
-  "date": "2026-05-10",
+  "date": "2026-05-11",
   "factors": [
     {
       "ticker": "GOOGL",
@@ -1740,6 +1740,316 @@
         "qoq_prev_pct": 20.57,
         "error": null
       }
+    },
+    {
+      "ticker": "ASML",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 8,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": false,
+          "7_no_new_shares": true,
+          "8_dgm>0": true,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 108.0,
+        "reversal_1m": -10.14,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -39.09,
+        "method": "QoQ",
+        "qoq_now_pct": -9.79,
+        "qoq_prev_pct": 29.3,
+        "error": null
+      }
+    },
+    {
+      "ticker": "CEG",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 6,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": false,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": false,
+          "7_no_new_shares": true,
+          "8_dgm>0": false,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 5.05,
+        "reversal_1m": -8.34,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -15.24,
+        "method": "QoQ",
+        "qoq_now_pct": -7.55,
+        "qoq_prev_pct": 7.69,
+        "error": null
+      }
+    },
+    {
+      "ticker": "QCOM",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 6,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": false,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": true,
+          "7_no_new_shares": true,
+          "8_dgm>0": false,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": -9.39,
+        "reversal_1m": -71.5,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -22.2,
+        "method": "QoQ",
+        "qoq_now_pct": -13.49,
+        "qoq_prev_pct": 8.7,
+        "error": null
+      }
+    },
+    {
+      "ticker": "SNPS",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 3,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": false,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": false,
+          "7_no_new_shares": false,
+          "8_dgm>0": false,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": -15.74,
+        "reversal_1m": -27.55,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -22.78,
+        "method": "QoQ",
+        "qoq_now_pct": 6.83,
+        "qoq_prev_pct": 29.61,
+        "error": null
+      }
+    },
+    {
+      "ticker": "AMAT",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 6,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": false,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": true,
+          "7_no_new_shares": true,
+          "8_dgm>0": true,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 157.6,
+        "reversal_1m": -9.46,
+        "error": null
+      },
+      "pead": {
+        "acceleration": 9.99,
+        "method": "QoQ",
+        "qoq_now_pct": 3.12,
+        "qoq_prev_pct": -6.87,
+        "error": null
+      }
+    },
+    {
+      "ticker": "WDC",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 6,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": false,
+          "5_dltd<0": true,
+          "6_dcr>0": false,
+          "7_no_new_shares": false,
+          "8_dgm>0": true,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 666.0,
+        "reversal_1m": -42.06,
+        "error": null
+      },
+      "pead": {
+        "acceleration": 3.54,
+        "method": "QoQ",
+        "qoq_now_pct": 10.61,
+        "qoq_prev_pct": 7.06,
+        "error": null
+      }
+    },
+    {
+      "ticker": "DLR",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 6,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": false,
+          "7_no_new_shares": false,
+          "8_dgm>0": true,
+          "9_dat>0": true
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 15.83,
+        "reversal_1m": -3.81,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -3.61,
+        "method": "QoQ",
+        "qoq_now_pct": 0.03,
+        "qoq_prev_pct": 3.64,
+        "error": null
+      }
+    },
+    {
+      "ticker": "RGTI",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 3,
+        "details": {
+          "1_roa>0": false,
+          "2_cfo>0": false,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": true,
+          "7_no_new_shares": false,
+          "8_dgm>0": false,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 54.7,
+        "reversal_1m": -32.35,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -12.16,
+        "method": "QoQ",
+        "qoq_now_pct": -4.06,
+        "qoq_prev_pct": 8.11,
+        "error": null
+      }
+    },
+    {
+      "ticker": "QBTS",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 5,
+        "details": {
+          "1_roa>0": false,
+          "2_cfo>0": false,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": true,
+          "7_no_new_shares": false,
+          "8_dgm>0": true,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": 101.31,
+        "reversal_1m": -62.73,
+        "error": null
+      },
+      "pead": {
+        "acceleration": -47.21,
+        "method": "QoQ",
+        "qoq_now_pct": -26.4,
+        "qoq_prev_pct": 20.81,
+        "error": null
+      }
+    },
+    {
+      "ticker": "PANW",
+      "as_of": null,
+      "piotroski": {
+        "f_score": 4,
+        "details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": false,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": true,
+          "7_no_new_shares": false,
+          "8_dgm>0": false,
+          "9_dat>0": false
+        },
+        "data_quality": "full"
+      },
+      "momentum": {
+        "momentum_12_1": -11.24,
+        "reversal_1m": -24.49,
+        "error": null
+      },
+      "pead": {
+        "acceleration": 7.31,
+        "method": "QoQ",
+        "qoq_now_pct": 4.85,
+        "qoq_prev_pct": -2.46,
+        "error": null
+      }
     }
   ],
   "signals": [
@@ -1835,12 +2145,12 @@
       },
       "analyst": {
         "window_days": 90,
-        "events_total": 16,
-        "raises": 15,
+        "events_total": 15,
+        "raises": 14,
         "lowers": 1,
         "upgrades": 0,
         "downgrades": 0,
-        "avg_target_raise_pct": 4.99
+        "avg_target_raise_pct": 4.62
       }
     },
     {
@@ -2055,10 +2365,10 @@
       },
       "analyst": {
         "window_days": 90,
-        "events_total": 27,
+        "events_total": 26,
         "raises": 3,
         "lowers": 15,
-        "upgrades": 3,
+        "upgrades": 2,
         "downgrades": 0,
         "avg_target_raise_pct": 6.23
       }
@@ -2515,7 +2825,7 @@
       },
       "analyst": {
         "window_days": 90,
-        "events_total": 41,
+        "events_total": 40,
         "raises": 4,
         "lowers": 26,
         "upgrades": 0,
@@ -2835,9 +3145,9 @@
       },
       "analyst": {
         "window_days": 90,
-        "events_total": 40,
+        "events_total": 39,
         "raises": 17,
-        "lowers": 14,
+        "lowers": 13,
         "upgrades": 1,
         "downgrades": 0,
         "avg_target_raise_pct": 30.06
@@ -2868,10 +3178,10 @@
       "as_of": null,
       "insider": {
         "buy_shares_6m": 23676.0,
-        "sell_shares_6m": 216806.0,
-        "net_shares_6m": -193130.0,
-        "net_transactions_6m": 17.0,
-        "net_value_usd_approx": -144231414.8284912
+        "sell_shares_6m": 204306.0,
+        "net_shares_6m": -180630.0,
+        "net_transactions_6m": 16.0,
+        "net_value_usd_approx": -134896289.8590088
       },
       "analyst": {
         "window_days": 90,
@@ -2881,6 +3191,206 @@
         "upgrades": 0,
         "downgrades": 0,
         "avg_target_raise_pct": 25.59
+      }
+    },
+    {
+      "ticker": "ASML",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 0,
+        "sell_shares_6m": 0,
+        "net_shares_6m": 0,
+        "net_transactions_6m": 0,
+        "net_value_usd_approx": null
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 2,
+        "raises": 2,
+        "lowers": 0,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": 3.88
+      }
+    },
+    {
+      "ticker": "CEG",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 0,
+        "sell_shares_6m": 0,
+        "net_shares_6m": 0,
+        "net_transactions_6m": 0,
+        "net_value_usd_approx": null
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 14,
+        "raises": 1,
+        "lowers": 13,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": 1.12
+      }
+    },
+    {
+      "ticker": "QCOM",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 311044.0,
+        "sell_shares_6m": 75275.0,
+        "net_shares_6m": 235769.0,
+        "net_transactions_6m": 53.0,
+        "net_value_usd_approx": 51654629.346588135
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 21,
+        "raises": 14,
+        "lowers": 4,
+        "upgrades": 3,
+        "downgrades": 4,
+        "avg_target_raise_pct": 18.64
+      }
+    },
+    {
+      "ticker": "SNPS",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 38173.0,
+        "sell_shares_6m": 4157.0,
+        "net_shares_6m": 34016.0,
+        "net_transactions_6m": 27.0,
+        "net_value_usd_approx": 17568583.015625
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 5,
+        "raises": 0,
+        "lowers": 4,
+        "upgrades": 0,
+        "downgrades": 1,
+        "avg_target_raise_pct": null
+      }
+    },
+    {
+      "ticker": "AMAT",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 370138.0,
+        "sell_shares_6m": 20612.0,
+        "net_shares_6m": 349526.0,
+        "net_transactions_6m": 28.0,
+        "net_value_usd_approx": 152197602.29333496
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 18,
+        "raises": 15,
+        "lowers": 0,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": 16.81
+      }
+    },
+    {
+      "ticker": "WDC",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 23145.0,
+        "sell_shares_6m": 171021.0,
+        "net_shares_6m": -147876.0,
+        "net_transactions_6m": 64.0,
+        "net_value_usd_approx": -70980480.0
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 15,
+        "raises": 15,
+        "lowers": 0,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": 27.12
+      }
+    },
+    {
+      "ticker": "DLR",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 5923.0,
+        "sell_shares_6m": 4166.0,
+        "net_shares_6m": 1757.0,
+        "net_transactions_6m": 4.0,
+        "net_value_usd_approx": 343159.6657104492
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 15,
+        "raises": 12,
+        "lowers": 0,
+        "upgrades": 0,
+        "downgrades": 1,
+        "avg_target_raise_pct": 7.42
+      }
+    },
+    {
+      "ticker": "RGTI",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 80000.0,
+        "sell_shares_6m": 295942.0,
+        "net_shares_6m": -215942.0,
+        "net_transactions_6m": 7.0,
+        "net_value_usd_approx": -4089941.59532547
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 5,
+        "raises": 0,
+        "lowers": 4,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": null
+      }
+    },
+    {
+      "ticker": "QBTS",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 2882583.0,
+        "sell_shares_6m": 2532730.0,
+        "net_shares_6m": 349853.0,
+        "net_transactions_6m": 31.0,
+        "net_value_usd_approx": 7896182.103233337
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 4,
+        "raises": 0,
+        "lowers": 4,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": null
+      }
+    },
+    {
+      "ticker": "PANW",
+      "as_of": null,
+      "insider": {
+        "buy_shares_6m": 365566.0,
+        "sell_shares_6m": 312220.0,
+        "net_shares_6m": 53346.0,
+        "net_transactions_6m": 31.0,
+        "net_value_usd_approx": 11089566.740478516
+      },
+      "analyst": {
+        "window_days": 90,
+        "events_total": 26,
+        "raises": 3,
+        "lowers": 16,
+        "upgrades": 0,
+        "downgrades": 0,
+        "avg_target_raise_pct": 10.94
       }
     }
   ]

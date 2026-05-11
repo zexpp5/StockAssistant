@@ -1,0 +1,166 @@
+{
+  "generated_at": "2026-05-11T00:12:02.443300",
+  "method": "v5 factor selection + Markowitz Max Sharpe with constraints",
+  "constraints": {
+    "max_weight": 0.15,
+    "min_weight": 0.02,
+    "cash_pct": 0.05,
+    "top_n": 12,
+    "lookback_days": 252
+  },
+  "portfolio_metrics": {
+    "annual_sharpe": 4.34,
+    "annual_return_pct": 171.5,
+    "annual_vol_pct": 38.49
+  },
+  "plan_v5": [
+    {
+      "ticker": "WDC",
+      "f_score": "6",
+      "composite_z": 1.114148967011729,
+      "v5_weight": 0.1499538664081195,
+      "amount_rmb": 74976.93,
+      "current_weight": 0
+    },
+    {
+      "ticker": "SNDK",
+      "f_score": "5",
+      "composite_z": 1.0359583919358484,
+      "v5_weight": 0.14680133040737264,
+      "amount_rmb": 73400.67,
+      "current_weight": 0
+    },
+    {
+      "ticker": "MU",
+      "f_score": "7",
+      "composite_z": 0.9917147222876872,
+      "v5_weight": 0.04254314788343544,
+      "amount_rmb": 21271.57,
+      "current_weight": 0
+    },
+    {
+      "ticker": "LRCX",
+      "f_score": "8",
+      "composite_z": 0.8870104657651826,
+      "v5_weight": 0.01999384885441594,
+      "amount_rmb": 9996.92,
+      "current_weight": 0
+    },
+    {
+      "ticker": "MTZ",
+      "f_score": "8",
+      "composite_z": 0.8041313600925186,
+      "v5_weight": 0.0894548243183546,
+      "amount_rmb": 44727.41,
+      "current_weight": 0
+    },
+    {
+      "ticker": "MOD",
+      "f_score": "9",
+      "composite_z": 0.6544424737062584,
+      "v5_weight": 0.08910656399042013,
+      "amount_rmb": 44553.28,
+      "current_weight": 0
+    },
+    {
+      "ticker": "GEV",
+      "f_score": "7",
+      "composite_z": 0.5999008677549476,
+      "v5_weight": 0.07430995796183158,
+      "amount_rmb": 37154.98,
+      "current_weight": 0
+    },
+    {
+      "ticker": "VRT",
+      "f_score": "6",
+      "composite_z": 0.5587892056810626,
+      "v5_weight": 0.04482954538468547,
+      "amount_rmb": 22414.77,
+      "current_weight": 0.1
+    },
+    {
+      "ticker": "AMAT",
+      "f_score": "6",
+      "composite_z": 0.5532860761899341,
+      "v5_weight": 0.0866978861432454,
+      "amount_rmb": 43348.94,
+      "current_weight": 0
+    },
+    {
+      "ticker": "TSM",
+      "f_score": "9",
+      "composite_z": 0.5102325108895026,
+      "v5_weight": 0.04246994681711253,
+      "amount_rmb": 21234.97,
+      "current_weight": 0.1
+    },
+    {
+      "ticker": "KO",
+      "f_score": "7",
+      "composite_z": 0.5098441649277289,
+      "v5_weight": 0.12799487011887067,
+      "amount_rmb": 63997.44,
+      "current_weight": 0
+    },
+    {
+      "ticker": "ETN",
+      "f_score": "7",
+      "composite_z": 0.5062512956929712,
+      "v5_weight": 0.035844211712136004,
+      "amount_rmb": 17922.11,
+      "current_weight": 0
+    }
+  ],
+  "out_of_v5": [
+    {
+      "name": "NVDA",
+      "ticker": "NVDA",
+      "current_weight": 0.12
+    },
+    {
+      "name": "GOOGL",
+      "ticker": "GOOGL",
+      "current_weight": 0.1
+    },
+    {
+      "name": "MSFT",
+      "ticker": "MSFT",
+      "current_weight": 0.1
+    },
+    {
+      "name": "AMD",
+      "ticker": "AMD",
+      "current_weight": 0.08
+    },
+    {
+      "name": "北方稀土",
+      "ticker": "600111.SS",
+      "current_weight": 0.08
+    },
+    {
+      "name": "Cameco",
+      "ticker": "CCJ",
+      "current_weight": 0.07
+    },
+    {
+      "name": "Datadog",
+      "ticker": "DDOG",
+      "current_weight": 0.05
+    },
+    {
+      "name": "中际旭创",
+      "ticker": "300308.SZ",
+      "current_weight": 0.05
+    },
+    {
+      "name": "阿里巴巴",
+      "ticker": "9988.HK",
+      "current_weight": 0.05
+    },
+    {
+      "name": "海光信息",
+      "ticker": "688041.SS",
+      "current_weight": 0.05
+    }
+  ]
+}

@@ -7,11 +7,9 @@
     VIX > 30 = 市场恐慌阈值；VIX > 40 = 极端恐慌
     历史回看：2020-02-28 VIX 突破 30，**比 SPY 跌破 200MA 早 3 周**
   - Whaley (1993, 2000) 原始 VIX 论文 — CBOE 标准计算法
-
-为什么 VIX 比 200MA 灵敏：
-  - 200MA 是"价格滞后指标"：要等价格跌一段时间才跌破
-  - VIX 是"期权隐含波动率"：恐慌情绪即时反映在期权价格里
-  - 闪崩时 VIX 通常**先于价格** spike
+  - Estrella-Mishkin (1998) "Predicting U.S. Recessions: Financial Variables..."
+    10Y-2Y 利差倒挂 → 未来 12-18 个月经济衰退概率 ↑
+  - Wright (2006) Fed Working Paper：yield curve 是 NBER 衰退最稳的领先指标
 
 Modes:
   - "none"        : 满仓
@@ -21,6 +19,21 @@ Modes:
 
 输出：
   (position_multiplier, regime_label, signals_dict)
+
+────────────────────────────────────────────────────────
+v2 升级（get_dynamic_gross_exposure）：连续档位 gross exposure
+────────────────────────────────────────────────────────
+  原 get_position_multiplier 是 binary（1.0 / 0.5），过于粗糙：
+    - VIX 22 和 VIX 60 给同一个 0.5 倍数，吃满下行
+    - 不能利用 yield curve 这种"领先 6-12 月"的慢信号
+  新 get_dynamic_gross_exposure 用 3 信号合成 5 档位 gross：
+    1.00 (RISK_ON)     全无信号
+    0.85 (CAUTIOUS_1)  1 个慢信号告警（如 yield curve 倒挂）
+    0.65 (CAUTIOUS_2)  2 个信号 或 VIX 20-30
+    0.40 (RISK_OFF)    3 个信号 或 VIX 30-40
+    0.20 (PANIC)       VIX ≥ 40（Whaley 极端恐慌阈值）
+
+  对应 2026-05-10 review 提的"动态 gross exposure 决定器"。
 """
 from __future__ import annotations
 import logging
@@ -154,3 +167,176 @@ def get_position_multiplier(as_of: str | None = None,
         "signals": {"ma": ma_info, "vix": vix_info},
         "trigger": trigger,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  动态 gross exposure（v2）— 连续档位替代 binary
+# ═══════════════════════════════════════════════════════════════════
+
+def _yield_curve_inverted(as_of: str | None = None) -> tuple[bool, dict]:
+    """10Y-2Y 利差是否倒挂（Estrella-Mishkin 1998）。
+
+    用 FRED-style yfinance proxy：
+      ^TNX = 10Y Treasury yield (报价 = 实际 yield × 10，需 / 10)
+      ^IRX = 13W T-Bill（短端代理）
+      ^FVX = 5Y Treasury yield
+    准确做 10Y-2Y 需 FRED API；yfinance 没有 2Y 直接行情。
+    退而求其次：用 10Y - 13W（更陡的曲线测度），同样能反映"短端高于长端"的衰退信号。
+    返回 inverted=True 表示倒挂 / 衰退预警。
+    """
+    try:
+        import yfinance as yf
+    except ImportError:
+        return False, {"error": "yfinance not installed"}
+
+    target = pd.to_datetime(as_of) if as_of else pd.Timestamp.now()
+    start = target - pd.Timedelta(days=30)
+    end = target + pd.Timedelta(days=2)
+    try:
+        tnx = yf.Ticker("^TNX").history(start=start, end=end)
+        irx = yf.Ticker("^IRX").history(start=start, end=end)
+    except Exception as e:
+        return False, {"error": str(e)[:80]}
+    if len(tnx) < 1 or len(irx) < 1:
+        return False, {"error": "no yield data"}
+
+    def _last_close(df):
+        if df.index.tz:
+            df = df[df.index.tz_localize(None) <= target]
+        else:
+            df = df[df.index <= target]
+        if len(df) < 1:
+            return None
+        return float(df["Close"].iloc[-1])
+
+    tnx_yield = _last_close(tnx)
+    irx_yield = _last_close(irx)
+    if tnx_yield is None or irx_yield is None:
+        return False, {"error": "no cutoff data"}
+
+    # yfinance 报价已是 yield 百分比（^TNX 报 45 = 4.5%）
+    spread_pct = (tnx_yield - irx_yield) / 10.0
+    inverted = spread_pct < 0
+    return inverted, {
+        "tnx_10y": round(tnx_yield / 10.0, 3),
+        "irx_13w": round(irx_yield / 10.0, 3),
+        "spread_pct": round(spread_pct, 3),
+        "is_inverted": inverted,
+    }
+
+
+def get_dynamic_gross_exposure(as_of: str | None = None,
+                               *,
+                               vix_threshold_cautious: float = 20.0,
+                               vix_threshold_risk_off: float = 30.0,
+                               vix_threshold_panic: float = 40.0
+                               ) -> dict:
+    """根据 3 信号合成 5 档位 gross exposure 上限。
+
+    信号：
+      1. SPY < 200MA  (Faber 2007 慢信号)
+      2. VIX 分档       (Whaley 2009 快信号)
+      3. 10Y - 13W < 0  (Estrella-Mishkin 1998 慢信号，领先 6-12 月)
+
+    档位（优先级：VIX 极端 > 信号计数）：
+      VIX ≥ 40                       → 0.20 PANIC
+      VIX ≥ 30 或 3 信号触发          → 0.40 RISK_OFF
+      VIX ≥ 20 或 2 信号触发          → 0.65 CAUTIOUS_2
+      1 信号触发                      → 0.85 CAUTIOUS_1
+      全无                            → 1.00 RISK_ON
+
+    返回 {
+      "gross_exposure_cap": float (0.20 / 0.40 / 0.65 / 0.85 / 1.00),
+      "regime": str (PANIC / RISK_OFF / CAUTIOUS_2 / CAUTIOUS_1 / RISK_ON),
+      "signals_triggered": int (0-3),
+      "signals": {ma, vix, yield_curve},  # 各信号细节
+      "triggers": [str, ...],             # 触发的信号名
+      "advice": str,                       # 给上层的操作建议
+    }
+    """
+    spy_ok, ma_info = _spy_above_200ma(as_of)
+    _, vix_info = _vix_below_panic(as_of, panic_threshold=vix_threshold_panic)
+    yc_inverted, yc_info = _yield_curve_inverted(as_of)
+    vix_value = vix_info.get("vix_close")
+
+    triggers = []
+    if not spy_ok:
+        triggers.append("SPY < 200MA (Faber)")
+    if vix_value is not None and vix_value >= vix_threshold_cautious:
+        triggers.append(f"VIX={vix_value} ≥ {vix_threshold_cautious}")
+    if yc_inverted:
+        triggers.append("10Y-13W 倒挂 (Estrella-Mishkin)")
+
+    # 档位判定（VIX 极端绕过信号计数）
+    if vix_value is not None and vix_value >= vix_threshold_panic:
+        gross, regime = 0.20, "PANIC"
+        advice = "VIX 极端恐慌 — 仓位强制降至 20%，新仓位暂停"
+    elif vix_value is not None and vix_value >= vix_threshold_risk_off:
+        gross, regime = 0.40, "RISK_OFF"
+        advice = "VIX 恐慌阈值上 — 仓位降至 40%，新仓位仅限防御板块"
+    elif len(triggers) >= 3:
+        gross, regime = 0.40, "RISK_OFF"
+        advice = "3 信号同时告警 — 仓位降至 40%（结构性熊市风险）"
+    elif vix_value is not None and vix_value >= vix_threshold_cautious:
+        gross, regime = 0.65, "CAUTIOUS_2"
+        advice = "VIX 抬升 — 仓位降至 65%，控制新仓位 beta"
+    elif len(triggers) >= 2:
+        gross, regime = 0.65, "CAUTIOUS_2"
+        advice = "2 信号告警 — 仓位降至 65%，新仓位防御优先"
+    elif len(triggers) == 1:
+        gross, regime = 0.85, "CAUTIOUS_1"
+        advice = "1 信号告警 — 仓位降至 85%，留 15% 缓冲"
+    else:
+        gross, regime = 1.00, "RISK_ON"
+        advice = "全无信号 — 满仓"
+
+    return {
+        "gross_exposure_cap": gross,
+        "regime": regime,
+        "signals_triggered": len(triggers),
+        "signals": {"ma": ma_info, "vix": vix_info, "yield_curve": yc_info},
+        "triggers": triggers,
+        "advice": advice,
+        "thresholds": {
+            "vix_cautious": vix_threshold_cautious,
+            "vix_risk_off": vix_threshold_risk_off,
+            "vix_panic": vix_threshold_panic,
+        },
+    }
+
+
+def format_gross_exposure_report(result: dict) -> str:
+    """渲染 get_dynamic_gross_exposure 结果为可读报告。"""
+    regime_icons = {
+        "RISK_ON": "🟢", "CAUTIOUS_1": "🟡", "CAUTIOUS_2": "🟠",
+        "RISK_OFF": "🔴", "PANIC": "⛔",
+    }
+    icon = regime_icons.get(result["regime"], "?")
+    lines = [
+        "=" * 72,
+        f"  动态 Gross Exposure — {icon} {result['regime']}",
+        "=" * 72,
+        f"  Gross exposure 上限：{result['gross_exposure_cap']:.0%}",
+        f"  触发信号数：{result['signals_triggered']}/3",
+        f"  操作建议：{result['advice']}",
+        "",
+        "  信号细节：",
+    ]
+    ma = result["signals"].get("ma", {})
+    if "spy_close" in ma:
+        lines.append(f"    SPY = {ma['spy_close']}  200MA = {ma['spy_200ma']}  "
+                     f"距离 = {ma['distance_pct']:+.2f}%")
+    vix = result["signals"].get("vix", {})
+    if "vix_close" in vix:
+        lines.append(f"    VIX = {vix['vix_close']}  阈值 = {vix['panic_threshold']}  "
+                     f"恐慌 = {vix['is_panic']}")
+    yc = result["signals"].get("yield_curve", {})
+    if "spread_pct" in yc:
+        lines.append(f"    10Y = {yc['tnx_10y']}%  13W = {yc['irx_13w']}%  "
+                     f"利差 = {yc['spread_pct']:+.3f}%  "
+                     f"倒挂 = {yc['is_inverted']}")
+    if result["triggers"]:
+        lines.append("")
+        lines.append(f"  触发：{' | '.join(result['triggers'])}")
+    lines.append("=" * 72)
+    return "\n".join(lines)

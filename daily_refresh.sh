@@ -115,6 +115,7 @@ if [ "$MODE" = "a_share_only" ]; then
     run_a_share_steps
     run_step "24/25 DuckDB pipeline 同步" "migrate_pipeline_to_duckdb.py"
     run_step "25/25 重建 HTML" "build_stock_dashboard_html.py"
+    run_step "26 早安简报（主入口 · 每天打开看这一份）" "-m stock_research.jobs.morning_brief"
     DONE_TS=$(date '+%Y-%m-%d %H:%M:%S')
     echo ""
     if [ ${#FAILED_STEPS[@]} -eq 0 ]; then
@@ -196,6 +197,10 @@ run_step "24/25 DuckDB pipeline 同步" "migrate_pipeline_to_duckdb.py"
 
 run_step "25/25 重建 HTML" "build_stock_dashboard_html.py"
 
+# 26 早安简报 — 这是真正的"主入口"，把所有 JSON 拼成一份每天能读完的 markdown。
+# 设了 FEISHU_BRIEF_WEBHOOK 还会自动推送到飞书群机器人。
+run_step "26 早安简报（主入口 · 每天打开看这一份）" "-m stock_research.jobs.morning_brief"
+
 DONE_TS=$(date '+%Y-%m-%d %H:%M:%S')
 echo ""
 if [ ${#FAILED_STEPS[@]} -eq 0 ]; then
@@ -208,8 +213,9 @@ else
         echo "     - $s"
     done
 fi
-echo "  HTML：$DIR/stock_dashboard.html"
-echo "  DuckDB：$DIR/stock_history.duckdb"
+echo "  📋 主入口 — 早安简报：$DIR/morning_brief.md"
+echo "  HTML（调试）：$DIR/stock_dashboard.html"
+echo "  DuckDB（数据落地）：$DIR/stock_history.duckdb"
 if [ -n "$FEISHU_BASE_TOKEN" ] && [ -n "$FEISHU_PICKS_TABLE_ID" ]; then
     echo "  每日优选：https://w5scrwkn9y.feishu.cn/base/$FEISHU_BASE_TOKEN?table=$FEISHU_PICKS_TABLE_ID"
 fi

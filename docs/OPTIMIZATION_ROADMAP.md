@@ -7,10 +7,14 @@
 
 ## 总览
 
-**当前评分**: **89 / 100**（v9.1，加入个股深度新维度后的综合分；量化打分维度仍 97/100）
+**当前评分**: **30 / 100**（v9.2 起，min-aggregation + risk veto，机器算出来不再人工拍）
 
-> 评分口径在 v9 后扩展：从单一"量化打分质量"改为"量化 + 个股深度 + 数据效率"三维加权。
-> 详见 [docs/2026-05-10_B路线个股深度研究系统.md](2026-05-10_B路线个股深度研究系统.md)
+> 评分口径在 v9.2 改为 `overall = min(quant, deep, data, risk)`：
+> 任一维度跌破阈值会拉低整体，risk 是显式 veto 维度（mean DD α < -7% → 30）。
+> 当前 risk = 30（stress_test mean α_DD = -9.77% / 1/4 抗跌），把整体限定在 30。
+> v1 的"加权平均 89"把崩盘期 -9.77% α 折叠掉了；这是 risk team 不能接受的口径，
+> 故改成 min。每次运行 `python3 -m stock_research.jobs.self_score` 自动重算。
+> 详见 [stock_research/core/self_score.py](../stock_research/core/self_score.py)
 
 | 阶段 | 时间 | 评分 | 关键里程碑 |
 |---|---|---|---|

@@ -27,18 +27,27 @@ FMP_BASE = "https://financialmodelingprep.com/stable"  # 2025-08 后新用户用
 # 测试时可手动覆盖；实际从 config 读
 FMP_API_KEY = config.__dict__.get("FMP_API_KEY") or __import__("os").environ.get("FMP_API_KEY")
 
+# 进程级强制刷新开关：FMP_FORCE_REFRESH=1 时整次运行绕过 24h 缓存（财报日 / debug 用）
+_FORCE_REFRESH_ENV = __import__("os").environ.get("FMP_FORCE_REFRESH", "").lower() in ("1", "true", "yes", "on")
+
 
 def is_available() -> bool:
     return bool(FMP_API_KEY)
 
 
-def _get(path: str, params: dict | None = None) -> Any:
+def _get(path: str, params: dict | None = None, force_refresh: bool = False) -> Any:
     """带 24h 文件缓存 + 速率友好的 FMP HTTP 请求。Key 自动附加。
 
-    缓存命中直接返回；未命中走 HTTP，成功响应自动写缓存。429/null 不缓存。
+    缓存命中直接返回；未命中或 force_refresh=True 走 HTTP，成功响应仍写缓存。
+    429/null 不缓存。
+
+    强制刷新两种方式（财报日想绕开 24h 缓存时）：
+      - 单次调用：fmp_client.fetch_xxx(..., force_refresh=True)（如果该 fetch_ 函数支持透传）
+      - 全局：FMP_FORCE_REFRESH=1 python3 ... 命令行 export
     清缓存：python3 -m stock_research.adapters.fmp_cache clear
     """
-    cached = fmp_cache.get(path, params)
+    effective_force = force_refresh or _FORCE_REFRESH_ENV
+    cached = fmp_cache.get(path, params, force_refresh=effective_force)
     if cached is not None:
         logger.debug("FMP cache HIT: %s %s", path, params)
         return cached

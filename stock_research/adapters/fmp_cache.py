@@ -48,8 +48,16 @@ def _cache_file(key: str) -> Path:
     return CACHE_DIR / f"{key}.json"
 
 
-def get(path: str, params: dict | None, ttl_sec: int = DEFAULT_TTL_SEC) -> Any | None:
-    """命中返回缓存 data；未命中或过期返回 None。"""
+def get(path: str, params: dict | None, ttl_sec: int = DEFAULT_TTL_SEC,
+        force_refresh: bool = False) -> Any | None:
+    """命中返回缓存 data；未命中、过期或 force_refresh=True 返回 None。
+
+    force_refresh 用途：财报日想强制走 HTTP 拉最新数据 —— 调用方传 True，
+    或设环境变量 FMP_FORCE_REFRESH=1 对整次运行全局生效（见 fmp_client._get）。
+    """
+    if force_refresh:
+        logger.debug("cache forced refresh: %s %s", path, params)
+        return None
     f = _cache_file(_make_key(path, params))
     if not f.exists():
         return None

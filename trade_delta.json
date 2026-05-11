@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-10T10:56:57.324004",
+  "generated_at": "2026-05-11T08:55:07.060703",
   "total_capital_rmb": 500000,
   "sells": [
     {
@@ -65,94 +65,94 @@
   ],
   "buys": [
     {
-      "ticker": "MU",
-      "v6_weight": 0.11605047469881943,
-      "amount_rmb": 58025.24,
-      "price_usd": 746.8099975585938,
-      "shares_estimate": 10,
-      "f_score": "7",
-      "composite_z": 1.0410111555727493
-    },
-    {
-      "ticker": "LRCX",
-      "v6_weight": 0.14927308777799342,
-      "amount_rmb": 74636.54,
-      "price_usd": 294.04998779296875,
-      "shares_estimate": 35,
-      "f_score": "8",
-      "composite_z": 0.9278481522652845
-    },
-    {
-      "ticker": "MTZ",
-      "v6_weight": 0.11836872621986912,
-      "amount_rmb": 59184.36,
-      "price_usd": 414.2900085449219,
-      "shares_estimate": 20,
-      "f_score": "8",
-      "composite_z": 0.8129210520197147
+      "ticker": "WDC",
+      "v6_weight": 0.1499538664081195,
+      "amount_rmb": 74976.93,
+      "price_usd": 480.0,
+      "shares_estimate": 22,
+      "f_score": "6",
+      "composite_z": 1.114148967011729
     },
     {
       "ticker": "SNDK",
-      "v6_weight": 0.1416891388770159,
-      "amount_rmb": 70844.57,
+      "v6_weight": 0.14680133040737264,
+      "amount_rmb": 73400.67,
       "price_usd": 1562.3399658203125,
       "shares_estimate": 6,
       "f_score": "5",
-      "composite_z": 0.806687235284399
+      "composite_z": 1.0359583919358484
+    },
+    {
+      "ticker": "MU",
+      "v6_weight": 0.04254314788343544,
+      "amount_rmb": 21271.57,
+      "price_usd": 746.8099975585938,
+      "shares_estimate": 4,
+      "f_score": "7",
+      "composite_z": 0.9917147222876872
+    },
+    {
+      "ticker": "LRCX",
+      "v6_weight": 0.01999384885441594,
+      "amount_rmb": 9996.92,
+      "price_usd": 294.04998779296875,
+      "shares_estimate": 4,
+      "f_score": "8",
+      "composite_z": 0.8870104657651826
+    },
+    {
+      "ticker": "MTZ",
+      "v6_weight": 0.0894548243183546,
+      "amount_rmb": 44727.41,
+      "price_usd": 414.2900085449219,
+      "shares_estimate": 15,
+      "f_score": "8",
+      "composite_z": 0.8041313600925186
     },
     {
       "ticker": "MOD",
-      "v6_weight": 0.028730135220136815,
-      "amount_rmb": 14365.07,
+      "v6_weight": 0.08910656399042013,
+      "amount_rmb": 44553.28,
       "price_usd": 273.0,
-      "shares_estimate": 7,
+      "shares_estimate": 22,
       "f_score": "9",
-      "composite_z": 0.6690201168876345
+      "composite_z": 0.6544424737062584
     },
     {
       "ticker": "GEV",
-      "v6_weight": 0.021828489501697718,
-      "amount_rmb": 10914.24,
+      "v6_weight": 0.07430995796183158,
+      "amount_rmb": 37154.98,
       "price_usd": 1040.1500244140625,
-      "shares_estimate": 1,
+      "shares_estimate": 5,
       "f_score": "7",
-      "composite_z": 0.6284952368128488
+      "composite_z": 0.5999008677549476
     },
     {
-      "ticker": "ETN",
-      "v6_weight": 0.02529247300239598,
-      "amount_rmb": 12646.24,
-      "price_usd": 401.510009765625,
-      "shares_estimate": 4,
-      "f_score": "7",
-      "composite_z": 0.4644600224257539
+      "ticker": "AMAT",
+      "v6_weight": 0.0866978861432454,
+      "amount_rmb": 43348.94,
+      "price_usd": 435.44000244140625,
+      "shares_estimate": 14,
+      "f_score": "6",
+      "composite_z": 0.5532860761899341
     },
     {
       "ticker": "KO",
-      "v6_weight": 0.14213905126032345,
-      "amount_rmb": 71069.53,
+      "v6_weight": 0.12799487011887067,
+      "amount_rmb": 63997.44,
       "price_usd": 78.41999816894531,
-      "shares_estimate": 127,
+      "shares_estimate": 114,
       "f_score": "7",
-      "composite_z": 0.45306276690401354
+      "composite_z": 0.5098441649277289
     },
     {
-      "ticker": "AVGO",
-      "v6_weight": 0.01990307837039913,
-      "amount_rmb": 9951.54,
-      "price_usd": 430.0,
-      "shares_estimate": 3,
-      "f_score": "8",
-      "composite_z": 0.44407362937382755
-    },
-    {
-      "ticker": "MRVL",
-      "v6_weight": 0.1169679727844191,
-      "amount_rmb": 58483.99,
-      "price_usd": 170.1300048828125,
-      "shares_estimate": 48,
-      "f_score": "8",
-      "composite_z": 0.41188799160906625
+      "ticker": "ETN",
+      "v6_weight": 0.035844211712136004,
+      "amount_rmb": 17922.11,
+      "price_usd": 401.510009765625,
+      "shares_estimate": 6,
+      "f_score": "7",
+      "composite_z": 0.5062512956929712
     }
   ],
   "adjusts": [
@@ -160,27 +160,27 @@
       "ticker": "VRT",
       "name": "Vertiv",
       "cur_weight": 0.1,
-      "new_weight": 0.037761444414917876,
-      "delta_pct": -0.06223855558508213,
-      "delta_amount": -31119.277792541066,
-      "shares_to_trade": 12,
+      "new_weight": 0.04482954538468547,
+      "delta_pct": -0.055170454615314536,
+      "delta_amount": -27585.227307657267,
+      "shares_to_trade": 11,
       "action": "减仓"
     },
     {
       "ticker": "TSM",
       "name": "TSM",
       "cur_weight": 0.1,
-      "new_weight": 0.03199592787201199,
-      "delta_pct": -0.06800407212798801,
-      "delta_amount": -34002.036063994005,
-      "shares_to_trade": 11,
+      "new_weight": 0.04246994681711253,
+      "delta_pct": -0.057530053182887474,
+      "delta_amount": -28765.026591443737,
+      "shares_to_trade": 9,
       "action": "减仓"
     }
   ],
   "summary": {
     "total_sell_rmb": 375000.0,
-    "total_buy_rmb": 440121.32,
-    "total_adjust_rmb": -65121.31,
-    "net_cash_need_rmb": 0.01
+    "total_buy_rmb": 431350.25,
+    "total_adjust_rmb": -56350.25,
+    "net_cash_need_rmb": -0.0
   }
 }

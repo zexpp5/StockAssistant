@@ -179,7 +179,8 @@ def fetch_a_share_watchlist() -> list[dict]:
 def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
                       dry_run: bool = False, theme_field: str = "industry",
                       sector_cap_count: int = 3,
-                      require_after_close: bool = False):
+                      require_after_close: bool = False,
+                      bypass_ic_gate: bool = False):
     """主入口。
 
     参数：
@@ -198,6 +199,18 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
         print(f"   --require-after-close 设置下退出。北向 T+1、龙虎榜盘后发布、spot 盘前 volume=0。")
         print(f"   收盘后单跑：python -m stock_research.jobs.a_share_picks --dry-run")
         return 0
+
+    # 因子 IC CI 闸门 — 同 daily_picks_v5（Grinold-Kahn 行业标准）
+    from stock_research.core.factor_ic_gate import evaluate_gate, format_report
+    gate = evaluate_gate()
+    print(format_report(gate))
+    if not gate.passed:
+        if bypass_ic_gate:
+            print("\n⚠️ --bypass-ic-gate：用户强制跳过闸门，继续（风险自担）\n")
+        else:
+            print("\n🔴 因子 IC 闸门 FAIL → 强制 dry-run（不写飞书 / 不写 DB）")
+            print("   修复：python3 -m stock_research.jobs.audit_ic  或 --bypass-ic-gate\n")
+            dry_run = True
 
     print(f"\n📊 A 股每日优选 — {datetime.now():%Y-%m-%d %H:%M}")
     print("=" * 70)
@@ -520,11 +533,14 @@ def main():
                         help="单 industry 在 top_k 内最多入选股票数（默认 3）")
     parser.add_argument("--require-after-close", action="store_true",
                         help="仅在 A 股收盘后允许执行（北向 T+1 + LHB 盘后才出）")
+    parser.add_argument("--bypass-ic-gate", action="store_true",
+                        help="⚠️ 强行跳过因子 IC 闸门（需自担风险）")
     args = parser.parse_args()
     return run_a_share_picks(
         top_k=args.top, mode=args.mode, dry_run=args.dry_run,
         sector_cap_count=args.sector_cap,
         require_after_close=args.require_after_close,
+        bypass_ic_gate=args.bypass_ic_gate,
     )
 
 
