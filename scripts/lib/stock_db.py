@@ -23,9 +23,11 @@ from typing import Iterable, Mapping, Any
 
 import duckdb
 
+# 2026-05-11 PM: scripts/lib 重构后,DB_PATH 默认指 repo root (scripts/lib/.. /.. = repo)
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DB_PATH = os.environ.get(
     "STOCK_DB_PATH",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_history.duckdb"),
+    os.path.join(_REPO_ROOT, "stock_history.duckdb"),
 )
 
 
@@ -362,6 +364,22 @@ WATCHLIST_COLS = [
 ]
 
 
+def _normalize_watchlist_market(value: Any, code: str) -> str | None:
+    s = value.strip() if isinstance(value, str) else ""
+    if s in ("", "其他", "未知", "N/A"):
+        try:
+            from stock_research.core.watchlist_enrich import _infer_market
+            s = _infer_market(code or "")
+        except Exception:
+            s = ""
+    if not s:
+        return None
+    s = s.replace(" NASDAQ", "·NASDAQ").replace(" NYSE", "·NYSE")
+    s = s.replace("·深交所主板", "·深交所").replace("·上交所主板", "·上交所")
+    s = s.replace("·沪交所", "·上交所")
+    return s
+
+
 def fetch_all_watchlist(*, conn: duckdb.DuckDBPyConnection | None = None) -> list[dict]:
     """读全部 watchlist 记录，按 code 升序。"""
     own = conn is None
@@ -408,6 +426,8 @@ def upsert_watchlist(
     n = 0
     now = datetime.now()
     for r in rows:
+        r = dict(r)
+        r["market"] = _normalize_watchlist_market(r.get("market"), r.get("code") or "")
         values = [r.get(c) for c in WATCHLIST_COLS] + [now]
         placeholders = ",".join(["?"] * (len(WATCHLIST_COLS) + 1))
         update_set = ",".join(f"{c}=excluded.{c}" for c in WATCHLIST_COLS if c != "code")
@@ -427,8 +447,11 @@ def delete_watchlist_item(code: str, *, conn: duckdb.DuckDBPyConnection | None =
     own = conn is None
     if own:
         conn = get_db()
-    cur = conn.execute("DELETE FROM watchlist WHERE code = ?", [code])
-    n = cur.rowcount if hasattr(cur, "rowcount") else 0
+    exists = conn.execute("SELECT 1 FROM watchlist WHERE code = ?", [code]).fetchone()
+    n = 0
+    if exists:
+        conn.execute("DELETE FROM watchlist WHERE code = ?", [code])
+        n = 1
     if own:
         conn.close()
     return n
