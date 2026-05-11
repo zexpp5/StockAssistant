@@ -1,5 +1,13 @@
 #!/bin/bash
 # AI 股票看板每日自动刷新（25 步）
+#
+# 🏛️ 2026-05-11 架构调整：飞书表降级为通知入口，DuckDB 是 single source of truth
+#   ▸ daily_picks / daily_picks_v5 / write_*_to_feishu / fetch_stock_prices / weekly_review
+#     默认都不再写飞书 picks/trade_delta/价格/watchlist 表（仅写 DuckDB）
+#   ▸ 飞书继续承担：watchlist 人工编辑入口 + 早安简报机器人推送
+#   ▸ Dashboard 默认从 DuckDB 读
+#   ▸ 应急写回飞书表：export FEISHU_WRITE_TABLES=1 再跑（不推荐）
+#
 # 流程：抓价格 → SEC 13F → 13F→json → enrichment → 跨源审计 → v1 优选 → picks 反向审查
 #       → 历史回顾 → v6 学术因子选股 → Markowitz 仓位优化 → 调整清单 → 写飞书
 #       → 风险指标 → 优化方法对比 → 实盘防御 → OpenBB 综合情报

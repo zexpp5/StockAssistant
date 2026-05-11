@@ -504,20 +504,27 @@ def main():
         print("\n[Dry-Run] 未写入飞书")
         return
 
-    print("\n[4/4] 写入飞书「每日优选 · AI 投资」...")
-    exclude_codes = fetch_existing_picks_today(token)
-    if exclude_codes:
-        print(f"  今日已存在 {len(exclude_codes)} 条，将跳过: {', '.join(list(exclude_codes)[:5])}...")
+    # 2026-05-11 架构调整：飞书 picks 表已废弃为通知/查阅入口
+    # DuckDB 是 single source of truth（详见 stock_db.py 注释）
+    # 历史写入逻辑保留在 FEISHU_WRITE_TABLES=1 时才执行（应急用）
+    if os.environ.get("FEISHU_WRITE_TABLES", "0") == "1":
+        print("\n[4/4] 写入飞书「每日优选 · AI 投资」(FEISHU_WRITE_TABLES=1)...")
+        exclude_codes = fetch_existing_picks_today(token)
+        if exclude_codes:
+            print(f"  今日已存在 {len(exclude_codes)} 条，将跳过: {', '.join(list(exclude_codes)[:5])}...")
 
-    success = 0
-    for r, s in selected:
-        rid = write_pick(token, r, s, exclude_codes)
-        if rid:
-            success += 1
-            print(f"    + {r['name']} ({r['code']}) → {grade(s['total'])} (分数 {s['total']:.1f})")
+        success = 0
+        for r, s in selected:
+            rid = write_pick(token, r, s, exclude_codes)
+            if rid:
+                success += 1
+                print(f"    + {r['name']} ({r['code']}) → {grade(s['total'])} (分数 {s['total']:.1f})")
 
-    print(f"\n✅ 已入选 {success} 只")
-    print(f"  飞书表：https://w5scrwkn9y.feishu.cn/base/{FEISHU_APP_TOKEN}?table={PICKS_TABLE_ID}")
+        print(f"\n✅ 已入选 {success} 只")
+        print(f"  飞书表：https://w5scrwkn9y.feishu.cn/base/{FEISHU_APP_TOKEN}?table={PICKS_TABLE_ID}")
+    else:
+        print("\n[4/4] 跳过飞书写入（FEISHU_WRITE_TABLES=0 · DuckDB 是 single source of truth）")
+        print("       如需写飞书 picks 表作应急快照：FEISHU_WRITE_TABLES=1 python3 daily_picks.py")
 
     # 落 DuckDB（无论是否新写入飞书，selected 名单都落库做历史回测用）
     if selected:

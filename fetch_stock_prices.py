@@ -269,8 +269,9 @@ def main():
         }
         results.append(result)
 
-        # 写回飞书
-        if not args.dry_run:
+        # 写回飞书 watchlist 表（2026-05-11 起默认跳过，DuckDB 是 single source of truth）
+        # FEISHU_WRITE_TABLES=1 时启用（应急更新 watchlist 展示字段用）
+        if not args.dry_run and os.environ.get("FEISHU_WRITE_TABLES", "0") == "1":
             update_fields = {
                 "最新价格": f"{data['price']} {data['currency']}" if data["price"] else "",
                 "YTD涨幅%": data["ytd_pct"] if data["ytd_pct"] is not None else None,

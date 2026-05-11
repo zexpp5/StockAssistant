@@ -22,6 +22,14 @@ def headers(token):
 
 
 def main():
+    # 2026-05-11 架构调整：飞书 trade_delta 表废弃为通知入口，trade_delta.json 是 single source of truth
+    # 默认 no-op；FEISHU_WRITE_TABLES=1 强制启用（应急快照用）
+    if os.environ.get("FEISHU_WRITE_TABLES", "0") != "1":
+        print("⏭️  跳过 write_trade_delta_to_feishu（FEISHU_WRITE_TABLES=0）")
+        print("    调仓清单已在 trade_delta.json，dashboard 直接读，飞书早安简报里也展示")
+        print("    应急写飞书：FEISHU_WRITE_TABLES=1 python3 write_trade_delta_to_feishu.py")
+        return
+
     delta_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_delta.json")
     if not os.path.exists(delta_file):
         print(f"❌ {delta_file} 不存在，先运行 trade_delta.py")

@@ -453,13 +453,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     <hr class="my-4 border-slate-200">
 
-    <!-- 底部工具：数据源切换 + 更新时间 -->
+    <!-- 底部信息：数据源 + 更新时间 -->
     <div class="text-xs text-slate-500 px-2 space-y-2">
       <div class="flex items-center justify-between">
-        <span title="切换数据来源以验证 DuckDB 迁移">数据源</span>
-        <button id="ds-toggle-btn" onclick="swapDataSource(_DATA_SOURCE === 'file' ? 'db' : 'file')"
-          class="text-[10px] font-mono px-2 py-0.5 rounded border border-blue-300 bg-blue-50 text-blue-800 hover:bg-blue-100 transition"
-          title="点击切换到 DuckDB / JSON 文件">JSON ⇄</button>
+        <span title="数据源">数据源</span>
+        <span class="text-[10px] font-mono px-2 py-0.5 rounded border border-emerald-300 bg-emerald-50 text-emerald-800" title="2026-05-11 起 DuckDB 是 single source of truth · 飞书仅作通知">DuckDB</span>
       </div>
       <div class="text-[10px] text-slate-400">{UPDATE_TIME}</div>
       <div class="text-[10px] text-slate-400 leading-snug pt-2 border-t border-slate-100">⚠️ 不构成投资建议<br>崩盘期 alpha = -9.77%</div>
@@ -603,15 +601,34 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
 <!-- ============ 每日优选回顾 ============ -->
 <section id="picks-review" class="max-w-7xl mx-auto px-6 py-10 bg-gradient-to-br from-amber-50 to-orange-50 rounded-2xl my-6">
-  <div class="flex items-center justify-between mb-4">
-    <div>
+  <div class="flex items-start justify-between mb-4 gap-4">
+    <div class="flex-1">
       <div class="flex items-center gap-3 mb-1">
         <span class="text-3xl">⭐</span>
-        <h2 class="text-2xl font-bold text-slate-900">每日优选 · 历史回顾</h2>
+        <h2 class="text-2xl font-bold text-slate-900">每日优选 · watchlist 内</h2>
       </div>
-      <p class="text-slate-700">每天自动选股，长期跟踪表现 · <strong>检验我的选股策略是否有效</strong></p>
+      <p class="text-slate-700 text-sm">
+        <strong class="text-violet-700">顶部 = 今日 top picks</strong>（系统综合评分最高的几只 · 飞书早安简报也会推送一份）·
+        <strong class="text-slate-600">下方 = 30 天历史回顾</strong>（检验系统打分是否真的越高越涨）
+      </p>
     </div>
-    <div id="picks-summary" class="text-right"></div>
+    <div id="picks-summary" class="text-right flex-shrink-0"></div>
+  </div>
+
+  <!-- 🌟 今日 top picks 横幅（最新一批入选）-->
+  <div class="mb-6 bg-gradient-to-r from-violet-100 to-fuchsia-50 border-2 border-violet-300 rounded-xl p-5">
+    <div class="flex items-center gap-2 mb-3">
+      <span class="text-2xl">🌟</span>
+      <h3 class="text-lg font-bold text-violet-900">今日 top picks</h3>
+      <span id="picks-today-meta" class="text-xs text-violet-700"></span>
+    </div>
+    <div id="picks-today-list" class="grid grid-cols-1 md:grid-cols-3 gap-3"></div>
+  </div>
+
+  <!-- 历史回顾分隔 -->
+  <div class="border-t border-amber-200 pt-5 mb-3">
+    <h3 class="text-base font-semibold text-slate-700">📊 30 天历史回顾 — 系统打分准不准</h3>
+    <p class="text-xs text-slate-500 mt-1">关键看下方"⭐ 评分 vs 实际表现"是否单调（⭐⭐⭐ 平均涨幅 > ⭐⭐ > ⭐）</p>
   </div>
 
   <!-- 整体统计 -->
@@ -1639,93 +1656,20 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 </footer>
 
 <script>
-// ============ 双数据源（验证 DuckDB 迁移用）============
-// RECORDS / PICKS / SIMULATION 来自飞书 API，无 DB 镜像；其余每个数据有两份。
-const _DATA_FILE = {
-  RECORDS:       {RECORDS_JSON},
-  PICKS:         {PICKS_JSON},
-  SIMULATION:    {SIMULATION_JSON},
-  RISK_METRICS:  {RISK_METRICS_JSON_FILE},
-  TRACK_13F:     {TRACK_13F_JSON_FILE},
-  HISTORY_DATA:  {HISTORY_DATA_JSON_FILE},
-  OPTIMIZATION:  {OPTIMIZATION_JSON_FILE},
-  PLAN_A_V6:     {PLAN_A_V6_JSON_FILE},
-};
-const DISCOVERY = {DISCOVERY_JSON};
-const _DATA_DB = {
-  RECORDS:       {RECORDS_JSON},
-  PICKS:         {PICKS_JSON},
-  SIMULATION:    {SIMULATION_JSON},
-  RISK_METRICS:  {RISK_METRICS_JSON_DB},
-  TRACK_13F:     {TRACK_13F_JSON_DB},
-  HISTORY_DATA:  {HISTORY_DATA_JSON_DB},
-  OPTIMIZATION:  {OPTIMIZATION_JSON_DB},
-  PLAN_A_V6:     {PLAN_A_V6_JSON_DB},
-};
-// AI 方案模拟数据：和其他源一样准备两份
-// _BACKTEST_*  = A 静态（buy-and-hold from inception）
-// _DYNAMIC_*   = C 动态（每周一 rebalance）
-const _BACKTEST_FILE = {PLAN_BACKTEST_JSON_FILE};
-const _BACKTEST_DB   = {PLAN_BACKTEST_JSON_DB};
-const _DYNAMIC_FILE  = {PLAN_DYNAMIC_JSON_FILE};
-const _DYNAMIC_DB    = {PLAN_DYNAMIC_JSON_DB};
-
-let _DATA_SOURCE = 'file';
-let RECORDS       = _DATA_FILE.RECORDS;
-let PICKS         = _DATA_FILE.PICKS;
-let SIMULATION    = _DATA_FILE.SIMULATION;
-let RISK_METRICS  = _DATA_FILE.RISK_METRICS;
-let TRACK_13F     = _DATA_FILE.TRACK_13F;
-let HISTORY_DATA  = _DATA_FILE.HISTORY_DATA;
-let OPTIMIZATION  = _DATA_FILE.OPTIMIZATION;
-let PLAN_A_V6     = _DATA_FILE.PLAN_A_V6;
-
-function swapDataSource(src) {
-  if (src !== 'file' && src !== 'db') return;
-  _DATA_SOURCE = src;
-  const D = (src === 'db') ? _DATA_DB : _DATA_FILE;
-  RECORDS = D.RECORDS; PICKS = D.PICKS; SIMULATION = D.SIMULATION;
-  RISK_METRICS = D.RISK_METRICS; TRACK_13F = D.TRACK_13F;
-  HISTORY_DATA = D.HISTORY_DATA; OPTIMIZATION = D.OPTIMIZATION;
-  PLAN_A_V6 = D.PLAN_A_V6;
-
-  // 更新按钮样式
-  const btn = document.getElementById('ds-toggle-btn');
-  if (btn) {
-    if (src === 'db') {
-      btn.textContent = 'DuckDB ⇄';
-      btn.className = 'text-[11px] font-mono px-2 py-1 rounded border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 transition whitespace-nowrap';
-    } else {
-      btn.textContent = 'JSON 文件 ⇄';
-      btn.className = 'text-[11px] font-mono px-2 py-1 rounded border border-blue-300 bg-blue-50 text-blue-800 hover:bg-blue-100 transition whitespace-nowrap';
-    }
-  }
-
-  // 同步切换 audit 面板（已 prerender 两份）
-  const aJ = document.getElementById('audit-panel-json-wrap');
-  const aD = document.getElementById('audit-panel-db-wrap');
-  const aLbl = document.getElementById('audit-source-label');
-  if (aJ && aD) {
-    aJ.style.display = (src === 'file') ? '' : 'none';
-    aD.style.display = (src === 'db') ? '' : 'none';
-    if (aLbl) {
-      aLbl.textContent = (src === 'db' ? 'DuckDB · ' : 'JSON 文件 · ') + ((src === 'db' ? aD : aJ).dataset.ts || '—');
-      aLbl.className = 'text-xs font-mono px-2 py-0.5 rounded ' +
-        (src === 'db' ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800');
-    }
-  }
-
-  // 触发各 panel 重新渲染
-  try { if (typeof renderPortfolio === 'function') renderPortfolio(); } catch (e) {}
-  try { if (typeof renderRiskPane === 'function') renderRiskPane(); } catch (e) {}
-  try { if (typeof render13FPane === 'function') render13FPane(); } catch (e) {}
-  try { if (typeof renderOptPane === 'function') renderOptPane(); } catch (e) {}
-  try { if (typeof renderSimulation === 'function') renderSimulation(); } catch (e) {}
-  try { if (typeof initHistorySelect === 'function') initHistorySelect(); } catch (e) {}
-  try { if (typeof renderPlanBacktest === 'function') renderPlanBacktest(); } catch (e) {}
-
-  console.log('[swapDataSource] →', src);
-}
+// ============ 数据注入 · 2026-05-11 起 DuckDB single source of truth ============
+// RECORDS / PICKS / SIMULATION 来自飞书 watchlist API 实时拉（仍保留），其余全部走 DuckDB。
+const RECORDS      = {RECORDS_JSON};
+const PICKS        = {PICKS_JSON};
+const SIMULATION   = {SIMULATION_JSON};
+const RISK_METRICS = {RISK_METRICS_JSON_DB};
+const TRACK_13F    = {TRACK_13F_JSON_DB};
+const HISTORY_DATA = {HISTORY_DATA_JSON_DB};
+const OPTIMIZATION = {OPTIMIZATION_JSON_DB};
+const PLAN_A_V6    = {PLAN_A_V6_JSON_DB};
+const DISCOVERY    = {DISCOVERY_JSON};
+// AI 方案模拟数据：A 静态（buy-and-hold from inception） / C 动态（每周一 rebalance）
+const _BACKTEST    = {PLAN_BACKTEST_JSON_DB};
+const _DYNAMIC     = {PLAN_DYNAMIC_JSON_DB};
 
 // ============ Tab 切换框架 ============
 const TAB_SECTIONS = {
@@ -2531,8 +2475,8 @@ function renderOptPane() {
 
 // ============ AI 方案模拟 Tab ============
 function renderPlanBacktest() {
-  const data = (_DATA_SOURCE === 'db' ? _BACKTEST_DB : _BACKTEST_FILE) || {};
-  const dynData = (_DATA_SOURCE === 'db' ? _DYNAMIC_DB : _DYNAMIC_FILE) || {};
+  const data = _BACKTEST || {};
+  const dynData = _DYNAMIC || {};
   const metricsEl = document.getElementById('backtest-metrics');
   const navEl = document.getElementById('backtest-nav-chart');
   const dailyEl = document.getElementById('backtest-daily-chart');
@@ -3092,6 +3036,89 @@ searchBox.addEventListener("input", () => {
   });
 });
 
+// ============ 🌟 今日 top picks（最新一批入选，按评分排序）============
+function _ratingScore(rating) {
+  if (!rating) return 0;
+  if (rating.startsWith("⭐⭐⭐")) return 3;
+  if (rating.startsWith("⭐⭐")) return 2;
+  if (rating.startsWith("⭐")) return 1;
+  return 0;
+}
+
+let _latestPickDate = null;
+PICKS.forEach(p => {
+  if (p.pick_date && (_latestPickDate == null || p.pick_date > _latestPickDate)) {
+    _latestPickDate = p.pick_date;
+  }
+});
+
+// 数据问题：同一只股同一天可能有多档评分记录（⭐⭐⭐/⭐⭐/🟡 共存），
+// 且 daily_refresh 偶尔重复写入导致 2 倍重复。按 code 去重，保留评分最高那条。
+// TODO（数据端）：daily_picks_v5 写入飞书时应该 upsert 而非 insert，避免重复。
+const _todayDedup = new Map();
+PICKS.forEach(p => {
+  if (p.pick_date !== _latestPickDate) return;
+  const key = p.code || p.name || "";
+  if (!key) return;
+  const cur = _todayDedup.get(key);
+  if (!cur) {
+    _todayDedup.set(key, p);
+    return;
+  }
+  const sNew = _ratingScore(p.rating);
+  const sCur = _ratingScore(cur.rating);
+  // 评分高的胜出；评分相同时取 score 大的
+  if (sNew > sCur || (sNew === sCur && (parseFloat(p.score) || 0) > (parseFloat(cur.score) || 0))) {
+    _todayDedup.set(key, p);
+  }
+});
+
+const todayPicks = Array.from(_todayDedup.values()).sort((a, b) => {
+  const ra = _ratingScore(a.rating), rb = _ratingScore(b.rating);
+  if (rb !== ra) return rb - ra;
+  return (parseFloat(b.score) || 0) - (parseFloat(a.score) || 0);
+});
+
+if (_latestPickDate) {
+  const d = new Date(_latestPickDate);
+  const dateStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  document.getElementById("picks-today-meta").textContent = `· ${dateStr} 入选 ${todayPicks.length} 只 · 按评分+综合分排序`;
+}
+
+function _ratingBadge(rating) {
+  const s = _ratingScore(rating);
+  const cls = s === 3 ? "bg-rose-100 text-rose-700"
+            : s === 2 ? "bg-amber-100 text-amber-700"
+            : s === 1 ? "bg-slate-100 text-slate-600"
+            : "bg-slate-100 text-slate-400";
+  return `<span class="text-[10px] ${cls} px-1.5 py-0.5 rounded font-medium whitespace-nowrap">${rating || "—"}</span>`;
+}
+
+function _pctBadge(pct) {
+  if (pct == null || pct === "") return '<span class="text-xs text-slate-400">— 持有 <1 天</span>';
+  const v = parseFloat(pct);
+  const cls = v > 0 ? "text-emerald-600" : v < 0 ? "text-rose-600" : "text-slate-500";
+  const sign = v > 0 ? "+" : "";
+  return `<span class="text-xs font-mono font-bold ${cls}">${sign}${v.toFixed(2)}%</span>`;
+}
+
+document.getElementById("picks-today-list").innerHTML = todayPicks.length > 0
+  ? todayPicks.map(p => `
+      <div class="bg-white rounded-lg p-3 border border-violet-200 hover:border-violet-400 transition">
+        <div class="flex items-center justify-between gap-2 mb-1.5">
+          <span class="font-bold text-slate-900 truncate font-mono">${p.code || "?"}</span>
+          ${_ratingBadge(p.rating)}
+        </div>
+        <div class="text-xs text-slate-700 truncate mb-1.5">${p.name || ""}</div>
+        <div class="flex items-center justify-between text-xs gap-2">
+          <span class="text-slate-500 truncate">${p.theme || ""}</span>
+          ${_pctBadge(p.pct)}
+        </div>
+      </div>
+    `).join("")
+  : '<div class="col-span-3 text-center text-slate-500 text-sm py-4">暂无入选数据 — daily_picks_v5 跑完后会显示</div>';
+
+
 // ============ 每日优选回顾 ============
 const validPicks = PICKS.filter(p => p.pct != null && p.pct !== "");
 const totalPicks = PICKS.length;
@@ -3102,30 +3129,38 @@ const flatCount = validPicks.filter(p => { const v = parseFloat(p.pct); return v
 const lossCount = validPicks.filter(p => parseFloat(p.pct) < -5).length;
 const winRate = validCount > 0 ? (winCount / validCount * 100) : 0;
 
+// 30 天不重复股票数（按 code 去重，反映"系统在选股集合的广度"）
+const _uniqueCodes30d = new Set();
+PICKS.forEach(p => { if (p.code) _uniqueCodes30d.add(p.code); });
+const uniqueStocks30d = _uniqueCodes30d.size;
+
 document.getElementById("picks-summary").innerHTML = totalPicks > 0
-  ? `<div class="text-xs text-slate-500">最近 30 天累计 <strong class="text-amber-700">${totalPicks}</strong> 次入选</div>`
+  ? `<div class="text-xs text-slate-500 leading-relaxed">
+       <div>最近 30 天：<strong class="text-amber-700">${uniqueStocks30d}</strong> 只不重复股票被选过</div>
+       <div class="text-[10px] text-slate-400 mt-0.5">原始 ${totalPicks} 行 · 含多档评分 + 数据重复（待修）</div>
+     </div>`
   : "";
 
 document.getElementById("picks-stats").innerHTML = totalPicks > 0 ? `
   <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200">
-    <div class="text-2xl font-bold text-slate-900">${totalPicks}</div>
-    <div class="text-xs text-slate-500 mt-1">累计入选次数</div>
+    <div class="text-2xl font-bold text-slate-900">${uniqueStocks30d}</div>
+    <div class="text-xs text-slate-500 mt-1">不重复股票数（30 天内被选过）</div>
   </div>
   <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200">
     <div class="text-2xl font-bold ${avgPct > 0 ? 'text-emerald-600' : 'text-rose-600'}">${avgPct > 0 ? '+' : ''}${avgPct.toFixed(2)}%</div>
-    <div class="text-xs text-slate-500 mt-1">平均涨跌</div>
+    <div class="text-xs text-slate-500 mt-1">入选后平均涨跌</div>
   </div>
   <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200">
     <div class="text-2xl font-bold text-emerald-600">${winRate.toFixed(0)}%</div>
-    <div class="text-xs text-slate-500 mt-1">命中率（>+5%）</div>
+    <div class="text-xs text-slate-500 mt-1">大涨命中率（>+5%）</div>
   </div>
   <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200">
-    <div class="text-lg font-bold text-emerald-600">${winCount} 命中</div>
-    <div class="text-xs text-slate-500 mt-1"><span class="text-amber-600">${flatCount} 跟随</span> · <span class="text-rose-600">${lossCount} 失败</span></div>
+    <div class="text-lg font-bold"><span class="text-emerald-600">${winCount}</span> <span class="text-amber-500">/ ${flatCount}</span> <span class="text-rose-600">/ ${lossCount}</span></div>
+    <div class="text-[11px] text-slate-500 mt-1">命中 <span class="text-slate-400">/</span> 跟随 (±5%) <span class="text-slate-400">/</span> 失败 (&lt;-5%)</div>
   </div>
   <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200">
     <div class="text-2xl font-bold text-slate-900">${validCount}</div>
-    <div class="text-xs text-slate-500 mt-1">已可回顾的（有持有天数）</div>
+    <div class="text-xs text-slate-500 mt-1">有持有天数的样本（可统计涨跌）</div>
   </div>
 ` : '<div class="col-span-5 text-center text-slate-500 py-4">暂无入选记录</div>';
 
@@ -4805,101 +4840,62 @@ def build():
     theme_sections = "\n".join(theme_section_html(t, records) for t in THEMES)
     html = html.replace("{THEME_SECTIONS}", theme_sections)
 
-    # 反向审查面板（picks_audit 快照）—— 双数据源：JSON 文件 + DuckDB
-    audit_snap_json = load_audit_snapshot()
+    # 反向审查面板（picks_audit 快照）— 2026-05-11 起单源走 DuckDB
     audit_snap_db = load_audit_snapshot_from_db()
-
-    panel_json_inner = audit_panel_html(audit_snap_json)
     panel_db_inner = (
         audit_panel_html(audit_snap_db) if audit_snap_db else
         '<section class="max-w-7xl mx-auto px-6 py-10 bg-rose-50 rounded-2xl my-6">'
-        '<p class="text-rose-700">⚠️ DuckDB <code>snapshots</code> 表中暂无 picks_audit 数据。</p>'
+        '<p class="text-rose-700">⚠️ DuckDB <code>snapshots</code> 表中暂无 picks_audit 数据，待 daily_refresh 跑完累积。</p>'
         '</section>'
     )
-    panel_json_inner = panel_json_inner.replace('id="audit-panel"', 'id="audit-panel-json-section"', 1)
-    panel_db_inner = panel_db_inner.replace('id="audit-panel"', 'id="audit-panel-db-section"', 1)
-
-    ts_json = (audit_snap_json or {}).get("ts", "—")[:16] if audit_snap_json else "—"
     ts_db = (audit_snap_db or {}).get("ts", "—")[:16] if audit_snap_db else "—"
 
     audit_panel_combined = f'''
 <div id="audit-panel">
   <div class="max-w-7xl mx-auto px-6 pt-6">
-    <div class="flex flex-wrap items-center gap-3 bg-amber-50 border border-amber-300 rounded-lg p-3">
-      <span class="text-sm font-semibold text-amber-900">🔬 数据源对比模式</span>
-      <span class="text-xs text-amber-800">验证 DuckDB 迁移；下方面板可切换数据来源</span>
-      <div class="ml-auto flex items-center gap-2">
-        <span class="text-xs text-slate-600">当前：</span>
-        <span id="audit-source-label" class="text-xs font-mono px-2 py-0.5 bg-blue-100 text-blue-800 rounded">JSON 文件 · {ts_json}</span>
-        <button onclick="toggleAuditSource()" class="text-xs px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded font-medium shadow-sm">
-          切换 ⇄
-        </button>
-      </div>
-    </div>
+    <div class="text-xs text-slate-500 mb-1">数据源：<span class="font-mono px-1.5 py-0.5 bg-emerald-50 text-emerald-800 rounded">DuckDB · {ts_db}</span></div>
   </div>
-  <div id="audit-panel-json-wrap" data-source="json" data-ts="{ts_json}">{panel_json_inner}</div>
-  <div id="audit-panel-db-wrap" data-source="duckdb" data-ts="{ts_db}" style="display:none">{panel_db_inner}</div>
+  <div id="audit-panel-db-wrap" data-source="duckdb" data-ts="{ts_db}">{panel_db_inner}</div>
 </div>
-<script>
-// 局部按钮联动到全局数据源切换（顶部 nav 也会同步）
-function toggleAuditSource() {{
-  if (typeof swapDataSource === 'function') {{
-    swapDataSource(_DATA_SOURCE === 'file' ? 'db' : 'file');
-  }}
-}}
-</script>
 '''
     html = html.replace("{AUDIT_PANEL}", audit_panel_combined)
 
     # 打分规则面板（动态读 factor_weights.json，缺失则 fallback 到「未实证」版本）
     calib_snap = load_calibration_snapshot()
     html = html.replace("{SCORING_RULES_PANEL}", scoring_rules_panel_html(calib_snap))
-    if audit_snap_json:
-        n_picks = audit_snap_json.get("picks_today_count", 0)
-        print(f"  反向审查快照已加载 [JSON]（{n_picks} 只 picks @ {ts_json}）")
     if audit_snap_db:
         n_picks_db = audit_snap_db.get("picks_today_count", 0)
         print(f"  反向审查快照已加载 [DuckDB]（{n_picks_db} 只 picks @ {ts_db}）")
 
-    # RECORDS / PICKS / SIMULATION 来自飞书 / 本地中间结果，无 DB 镜像
+    # RECORDS / PICKS / SIMULATION 来自飞书 watchlist 实时拉，其它走 DuckDB
     html = html.replace("{RECORDS_JSON}", json.dumps(records, ensure_ascii=False))
     html = html.replace("{PICKS_JSON}", json.dumps(picks, ensure_ascii=False))
     html = html.replace("{SIMULATION_JSON}", json.dumps(simulation, ensure_ascii=False))
-    # 双源：每个数据嵌入 _FILE 与 _DB 两份
-    html = html.replace("{RISK_METRICS_JSON_FILE}", json.dumps(risk_metrics, ensure_ascii=False))
     html = html.replace("{RISK_METRICS_JSON_DB}", json.dumps(risk_metrics_db, ensure_ascii=False))
-    html = html.replace("{TRACK_13F_JSON_FILE}", json.dumps(track_13f, ensure_ascii=False))
     html = html.replace("{TRACK_13F_JSON_DB}", json.dumps(track_13f_db, ensure_ascii=False))
-    html = html.replace("{OPTIMIZATION_JSON_FILE}", json.dumps(optimization, ensure_ascii=False))
     html = html.replace("{OPTIMIZATION_JSON_DB}", json.dumps(optimization_db, ensure_ascii=False))
-    html = html.replace("{PLAN_A_V6_JSON_FILE}", json.dumps(plan_a_v6, ensure_ascii=False))
     html = html.replace("{PLAN_A_V6_JSON_DB}", json.dumps(plan_a_v6_db, ensure_ascii=False))
-    html = html.replace("{HISTORY_DATA_JSON_FILE}", json.dumps(history_data, ensure_ascii=False))
     html = html.replace("{HISTORY_DATA_JSON_DB}", json.dumps(history_data_db, ensure_ascii=False))
     html = html.replace("{DISCOVERY_JSON}", json.dumps(discovery, ensure_ascii=False))
 
-    # AI 方案模拟 — Static (A 类: buy-and-hold from inception)
-    backtest_file = compute_plan_forward_track(plan_a_v6, history_data)
-    backtest_db = compute_plan_forward_track(plan_a_v6_db or plan_a_v6, history_data_db or history_data)
-    for label, bt in (("JSON", backtest_file), ("DuckDB", backtest_db)):
-        if bt and bt.get("metrics"):
-            m = bt["metrics"]
-            inception = bt.get("inception_date") or "?"
-            baseline = bt.get("baseline_date") or "?"
-            print(f"  AI 方案模拟 A 静态 [{label}]: 锁定 {inception} → 基线 {baseline} · 跟踪 {m['n_tracked_days']} 日"
-                  f" · 累计 {m['cumulative_return_pct']}% (vs SPY {m['bench_cumulative_return_pct']}%)")
-    html = html.replace("{PLAN_BACKTEST_JSON_FILE}", json.dumps(backtest_file, ensure_ascii=False))
+    # AI 方案模拟 — Static (A 类: buy-and-hold from inception) — DuckDB 优先，fallback JSON
+    plan_for_bt = plan_a_v6_db or plan_a_v6
+    history_for_bt = history_data_db or history_data
+    backtest_db = compute_plan_forward_track(plan_for_bt, history_for_bt)
+    if backtest_db and backtest_db.get("metrics"):
+        m = backtest_db["metrics"]
+        inception = backtest_db.get("inception_date") or "?"
+        baseline = backtest_db.get("baseline_date") or "?"
+        print(f"  AI 方案模拟 A 静态: 锁定 {inception} → 基线 {baseline} · 跟踪 {m['n_tracked_days']} 日"
+              f" · 累计 {m['cumulative_return_pct']}% (vs SPY {m['bench_cumulative_return_pct']}%)")
     html = html.replace("{PLAN_BACKTEST_JSON_DB}", json.dumps(backtest_db, ensure_ascii=False))
 
     # AI 方案模拟 — Dynamic (C 类: weekly Monday rebalance, P1+P2)
-    dynamic_file = compute_dynamic_rebalance_track(history_data)
-    dynamic_db = compute_dynamic_rebalance_track(history_data_db or history_data)
-    for label, dyn in (("JSON", dynamic_file), ("DuckDB", dynamic_db)):
-        if dyn and dyn.get("metrics"):
-            m = dyn["metrics"]
-            print(f"  AI 方案模拟 C 动态 [{label}]: {m['n_rebalances']} 次调仓 · 累计手续费 {dyn.get('total_commission_pct', 0)}% · "
-                  f"跟踪 {m['n_tracked_days']} 日 · 累计 {m['cumulative_return_pct']}% (vs SPY {m['bench_cumulative_return_pct']}%)")
-    html = html.replace("{PLAN_DYNAMIC_JSON_FILE}", json.dumps(dynamic_file, ensure_ascii=False))
+    dynamic_db = compute_dynamic_rebalance_track(history_for_bt)
+    if dynamic_db and dynamic_db.get("metrics"):
+        m = dynamic_db["metrics"]
+        print(f"  AI 方案模拟 C 动态: {m['n_rebalances']} 次调仓 · 累计手续费 {dynamic_db.get('total_commission_pct', 0)}% · "
+              f"跟踪 {m['n_tracked_days']} 日 · 累计 {m['cumulative_return_pct']}% (vs SPY {m['bench_cumulative_return_pct']}%)")
     html = html.replace("{PLAN_DYNAMIC_JSON_DB}", json.dumps(dynamic_db, ensure_ascii=False))
 
     with open(OUTPUT, "w", encoding="utf-8") as f:

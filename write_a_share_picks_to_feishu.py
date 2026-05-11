@@ -65,6 +65,14 @@ def _format_reasons(entry: dict, weights: dict) -> str:
 
 
 def main():
+    # 2026-05-11 架构调整：飞书 picks 表废弃为通知入口，DuckDB 是 single source of truth
+    # 默认 no-op；FEISHU_WRITE_TABLES=1 强制启用（应急快照用）
+    if os.environ.get("FEISHU_WRITE_TABLES", "0") != "1":
+        print("⏭️  跳过 write_a_share_picks_to_feishu（FEISHU_WRITE_TABLES=0）")
+        print("    A 股 picks 已在 data/a_share_picks.json + DuckDB（如有），dashboard 直接读")
+        print("    应急写飞书：FEISHU_WRITE_TABLES=1 python3 write_a_share_picks_to_feishu.py")
+        return 0
+
     src = REPO / "data" / "a_share_picks.json"
     if not src.exists():
         print(f"❌ 找不到 {src}，先运行 stock_research.jobs.a_share_picks")

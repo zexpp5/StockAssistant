@@ -105,6 +105,10 @@ def fetch_picks(token):
 
 
 def update_record(token, record_id, fields):
+    # 2026-05-11 起默认跳过飞书写入（DuckDB 是 single source of truth）
+    # FEISHU_WRITE_TABLES=1 时启用（应急更新飞书 picks 表跟踪状态）
+    if os.environ.get("FEISHU_WRITE_TABLES", "0") != "1":
+        return {"code": 0, "_skipped": "FEISHU_WRITE_TABLES=0"}
     url = f"{PICKS_BASE}/records/{record_id}"
     r = requests.put(url, headers=headers(token), json={"fields": fields})
     return r.json()

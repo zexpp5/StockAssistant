@@ -195,9 +195,15 @@ def main():
         return
 
     # ============================================================
-    # 5. 写入飞书 + DuckDB
+    # 5. 写入飞书（可选）+ DuckDB（权威）
     # ============================================================
-    print(f"\n[4/5] 写入飞书「每日优选」...")
+    # 2026-05-11 架构调整：飞书 picks 表废弃为通知入口，DuckDB 是 single source of truth
+    # 飞书写入用 FEISHU_WRITE_TABLES=1 应急启用，默认跳过
+    feishu_write = os.environ.get("FEISHU_WRITE_TABLES", "0") == "1"
+    if feishu_write:
+        print(f"\n[4/5] 写入飞书「每日优选」(FEISHU_WRITE_TABLES=1)...")
+    else:
+        print(f"\n[4/5] 跳过飞书写入（FEISHU_WRITE_TABLES=0 · DuckDB 是 single source of truth）")
     # v6 学术因子模型与 v1 旧体系并存，不互相跳过 —— 用「入选评分」字段区分
     exclude_codes = set()
 
@@ -234,29 +240,32 @@ def main():
             f"🏷 GICS 分类：{ai_label} ({source})",
         ]
 
-        fields = {
-            "入选日期": today_ts,
-            "股票名称": s["name"],
-            "代码": s["code"],
-            "市场": s["market"] or "美股",
-            "入选评分": grade_label,
-            "综合得分": round(z * 100, 2),  # z 转成百分制方便对比
-            "AI关联度": ai_label,
-            "主题分类": theme,
-            "入选理由": "\n".join(reasons),
-            "跟踪状态": "🟢 在选中",
-            "最近更新": int(datetime.now().timestamp() * 1000),
-        }
-        fields = {k: v for k, v in fields.items() if v not in (None, "")}
+        if feishu_write:
+            fields = {
+                "入选日期": today_ts,
+                "股票名称": s["name"],
+                "代码": s["code"],
+                "市场": s["market"] or "美股",
+                "入选评分": grade_label,
+                "综合得分": round(z * 100, 2),  # z 转成百分制方便对比
+                "AI关联度": ai_label,
+                "主题分类": theme,
+                "入选理由": "\n".join(reasons),
+                "跟踪状态": "🟢 在选中",
+                "最近更新": int(datetime.now().timestamp() * 1000),
+            }
+            fields = {k: v for k, v in fields.items() if v not in (None, "")}
 
-        r = requests.post(f"{PICKS_BASE}/records", headers=headers(token),
-                         json={"fields": fields})
-        d = r.json()
-        if d.get("code") == 0:
-            success += 1
-            print(f"    + {s['name']} ({s['code']}) → {grade_label}")
+            r = requests.post(f"{PICKS_BASE}/records", headers=headers(token),
+                             json={"fields": fields})
+            d = r.json()
+            if d.get("code") == 0:
+                success += 1
+                print(f"    + {s['name']} ({s['code']}) → {grade_label}")
+            else:
+                print(f"    ! 失败 [{s['name']}]: {d.get('msg')}")
         else:
-            print(f"    ! 失败 [{s['name']}]: {d.get('msg')}")
+            success += 1  # 仅作计数，DuckDB 一定写
 
         db_rows.append({
             "code": s["code"],
