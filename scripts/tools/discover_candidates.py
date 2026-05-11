@@ -44,7 +44,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "scripts", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "scripts", "pipeline"))  # sibling: daily_picks  # 2026-05-11 lib 迁移
 
-from feishu_auth import feishu_token
 from daily_picks import fetch_watchlist
 from factor_model import fetch_factors_for, combine_factors
 from early_signals import fetch_signals_for, score_analyst
@@ -184,12 +183,20 @@ def fetch_ishares_holdings(
 # Universe 构建
 # ============================================================
 def build_universe(skip_codes: set[str]) -> list[dict]:
-    """合并多个 ETF 的成分股 → 去重 → 排除已知 watchlist。
+    """合并多个数据源的成分股 → 去重 → 排除已知 watchlist。
+
+    数据源：
+      1. iShares ETF holdings（美股 + MCHI 中国）
+      2. A 股增强 universe (2026-05-12 起，方案 B):
+         - 沪深 300 科技子集 (~110)
+         - 科创 50 (~50,去重后约 30)
+         - 创业板指 (~100,去重后约 75)
 
     skip_codes 同时按 yfinance 格式（300308.SZ）和裸代码（300308）匹配，
     保证不论 watchlist 用哪种写法都能正确排除。
     """
     seen = {}
+    # ── 1. ETF holdings
     for symbol, slug, sector_filter in ISHARES_ETFS:
         try:
             print(f"  拉 {symbol} holdings...", end=" ", flush=True)
@@ -204,7 +211,6 @@ def build_universe(skip_codes: set[str]) -> list[dict]:
         for h in holdings:
             tk = h["ticker"]
             raw = h.get("raw_ticker", tk)
-            # watchlist 排除（同时按 yfinance 格式和裸代码两种方式匹配）
             if tk in skip_codes or raw in skip_codes:
                 continue
             if tk not in seen:
@@ -219,6 +225,67 @@ def build_universe(skip_codes: set[str]) -> list[dict]:
                 }
             seen[tk]["etfs"].append(symbol)
             seen[tk]["etf_weight_max"] = max(seen[tk]["etf_weight_max"], h["weight_pct"])
+
+    # ── 2. A 股增强 universe (方案 B)
+    try:
+        from stock_research.core.a_share_universe import fetch_a_share_tech_universe
+        print(f"  拉 A 股增强 universe (沪深 300 科技子集 + 科创 50 + 创业板指)...", end=" ", flush=True)
+        a_share = fetch_a_share_tech_universe()
+        print(f"{len(a_share)} 只")
+        n_new = 0
+        for item in a_share:
+            tk = item["ticker"]
+            raw = item["raw_ticker"]
+            if tk in skip_codes or raw in skip_codes:
+                continue
+            if tk not in seen:
+                seen[tk] = {
+                    "ticker": tk,
+                    "raw_ticker": raw,
+                    "name": item["name"],
+                    "sector": item["sector"],
+                    "location": item["location"],
+                    "etfs": [item["source"]],  # source 作为 "ETF" 标记追溯
+                    "etf_weight_max": 0.0,
+                }
+                n_new += 1
+            else:
+                # 已在 ETF 里见过 → 追加来源标签
+                seen[tk]["etfs"].append(item["source"])
+        print(f"    A 股新增 {n_new} 只(其余已在 ETF universe 里)")
+    except Exception as e:
+        print(f"  ⚠️ A 股 universe 失败(继续用 ETF only): {e}")
+
+    # ── 3. 港股科技龙头白名单(2026-05-11 新增,与 a_share_universe 对称)
+    try:
+        from stock_research.core.hk_universe import fetch_hk_tech_universe
+        print(f"  拉港股科技龙头白名单 (互联网/半导体/新能源车/创新药)...", end=" ", flush=True)
+        hk = fetch_hk_tech_universe()
+        print(f"{len(hk)} 只")
+        n_new = 0
+        for item in hk:
+            tk = item["ticker"]
+            raw = item["raw_ticker"]
+            # 港股 watchlist 可能写法不一(0700.HK / 00700.HK / 700.HK),三种都要排除
+            if tk in skip_codes or raw in skip_codes or f"0{raw}.HK" in skip_codes:
+                continue
+            if tk not in seen:
+                seen[tk] = {
+                    "ticker": tk,
+                    "raw_ticker": raw,
+                    "name": item["name"],
+                    "sector": item["sector"],
+                    "location": item["location"],
+                    "etfs": [item["source"]],
+                    "etf_weight_max": 0.0,
+                }
+                n_new += 1
+            else:
+                seen[tk]["etfs"].append(item["source"])
+        print(f"    港股新增 {n_new} 只(其余已在 ETF universe 里,如 MCHI 含的腾讯/小米)")
+    except Exception as e:
+        print(f"  ⚠️ 港股 universe 失败(继续): {e}")
+
     return list(seen.values())
 
 
@@ -272,9 +339,8 @@ def main():
     # ============================================================
     # 1. 当前 watchlist（避免推荐你已经研究过的）
     # ============================================================
-    print("\n[1/5] 拉当前 watchlist（用于排除）...")
-    token = feishu_token()
-    watchlist = fetch_watchlist(token)
+    print("\n[1/5] 拉当前 watchlist [DuckDB]（用于排除）...")
+    watchlist = fetch_watchlist()
     skip_codes = {r["code"].strip() for r in watchlist if r.get("code")}
     print(f"  watchlist 已有 {len(skip_codes)} 只（这些会被排除）")
 

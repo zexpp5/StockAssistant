@@ -355,6 +355,79 @@ def section_picks(plan: dict | None, a_share_picks: dict | None, history: dict |
 
 
 # ────────────────────────────────────────────────────────
+# Section 2.5: 周一专属 — 上周命中率回顾（评级 + AI 推荐）
+#   只在周一显示,其他 6 天为空
+#   回答用户"AI 给的评级/推荐到底准不准"
+# ────────────────────────────────────────────────────────
+
+def section_weekly_hitrate(today: date | None = None) -> str:
+    """只在周一(weekday=0)输出；汇总 reviews 表近 7 天 + discovery_tracking 近 7 天。"""
+    today = today or date.today()
+    if today.weekday() != 0:
+        return ""
+    try:
+        import sys
+        import os
+        _repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        sys.path.insert(0, os.path.join(_repo, "scripts", "lib"))
+        import stock_db
+    except Exception:
+        return ""
+    try:
+        conn = stock_db.get_db()
+    except Exception:
+        return ""
+    lines = ["#### 🧪 上周回顾 · AI 准不准（周一专属）"]
+    # ── 自选股评级 · 按 ⭐ 分档统计近 7 天
+    try:
+        rows = conn.execute("""
+          SELECT rating,
+                 COUNT(*) as n,
+                 ROUND(AVG(pct), 2) as avg_pct,
+                 ROUND(SUM(CASE WHEN pct > 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 0) as win_rate
+          FROM reviews
+          WHERE review_date >= ? AND pct IS NOT NULL
+          GROUP BY rating
+          ORDER BY avg_pct DESC
+        """, [today - timedelta(days=7)]).fetchall()
+        if rows:
+            lines.append("**自选股评级 · 按 ⭐ 分档（近 7 天）**")
+            lines.append(f"| 评级 | 样本 | 平均涨幅 | 胜率 |")
+            lines.append(f"|---|---:|---:|---:|")
+            for rating, n, avg_pct, win_rate in rows:
+                sign = "+" if (avg_pct or 0) >= 0 else ""
+                lines.append(f"| {rating} | {n} | {sign}{avg_pct}% | {int(win_rate)}% |")
+        else:
+            lines.append("_自选股评级：近 7 天暂无回顾数据（reviews 表为空或评级缺失）_")
+    except Exception as e:
+        lines.append(f"_自选股评级查询失败: {e}_")
+    # ── AI 推荐(discovery)准确度 · 5d/20d alpha
+    try:
+        rows = conn.execute("""
+          SELECT COUNT(*) as n,
+                 ROUND(AVG(alpha_5d), 2) as avg_5d,
+                 ROUND(AVG(alpha_20d), 2) as avg_20d,
+                 ROUND(SUM(CASE WHEN alpha_20d > 0 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(alpha_20d), 0), 0) as win_20d
+          FROM discovery_tracking
+          WHERE generated_date >= ?
+        """, [today - timedelta(days=30)]).fetchall()
+        n, a5, a20, w20 = rows[0] if rows else (0, None, None, None)
+        if n and (a5 is not None or a20 is not None):
+            lines.append("")
+            lines.append("**🤖 AI 推荐 · vs SPY alpha（近 30 天推荐）**")
+            sign5 = "+" if (a5 or 0) >= 0 else ""
+            sign20 = "+" if (a20 or 0) >= 0 else ""
+            lines.append(f"- 5d alpha：{sign5}{a5}% · 20d alpha：{sign20}{a20}% · 20d 胜率：{int(w20 or 0)}% · 样本 {n}")
+        else:
+            lines.append("")
+            lines.append("_AI 推荐 alpha：近 30 天暂无有效数据（discovery_tracking 待 evaluate_discovery 跑后填充）_")
+    except Exception as e:
+        lines.append(f"_AI 推荐查询失败: {e}_")
+    conn.close()
+    return "\n".join(lines) + "\n"
+
+
+# ────────────────────────────────────────────────────────
 # Section 3: AI alpha 跟踪
 # ────────────────────────────────────────────────────────
 
@@ -554,6 +627,12 @@ def build_brief(share_mode: bool = False) -> str:
         "\n",
         section_picks(plan, a_share_picks, history=history),
         "\n",
+    ])
+    # 周一专属:命中率回顾(评级 + AI 推荐准确度)
+    hitrate = section_weekly_hitrate()
+    if hitrate:
+        parts.extend([hitrate, "\n"])
+    parts.extend([
         section_ai_alpha(risk_metrics),
         "\n",
     ])

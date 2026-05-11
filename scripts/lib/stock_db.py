@@ -125,15 +125,22 @@ CREATE TABLE IF NOT EXISTS watchlist (
     chain_tier     VARCHAR,
     chain_role     VARCHAR,
     layman_intro   VARCHAR,
+    -- 2026-05-11 PM 第二轮:飞书 100% 退役,人工研究字段迁入 DuckDB
+    earnings        VARCHAR,
+    verification    VARCHAR,
+    info_breakdown  VARCHAR,
     created_at     TIMESTAMP  DEFAULT CURRENT_TIMESTAMP,
     updated_at     TIMESTAMP  DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 幂等 ALTER：兼容 schema 升级前已存在的库
-ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS chain        VARCHAR;
-ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS chain_tier   VARCHAR;
-ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS chain_role   VARCHAR;
-ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS layman_intro VARCHAR;
+ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS chain          VARCHAR;
+ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS chain_tier     VARCHAR;
+ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS chain_role     VARCHAR;
+ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS layman_intro   VARCHAR;
+ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS earnings       VARCHAR;
+ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS verification   VARCHAR;
+ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS info_breakdown VARCHAR;
 
 -- 2026-05-11 PM: 候选发现历史 + 推荐准确度跟踪
 --   discovery_history  每天 discover_candidates 跑完追加(不覆盖) → 永久快照
@@ -180,6 +187,23 @@ CREATE TABLE IF NOT EXISTS user_config (
     key        VARCHAR PRIMARY KEY,
     value      VARCHAR NOT NULL,  -- 任意 JSON 字符串
     updated_at TIMESTAMP
+);
+
+-- 2026-05-12: 持仓表 — 从 dashboard 的 localStorage 迁过来
+--   动机：让后端脚本 (trade_delta / risk_metrics / 等) 能读到真实持仓
+--   主键：一只股可以分批建仓(不同时间不同价)，所以用自增 id 而非 code
+--   source：'manual'(用户手填) / 'ai_plan'(从 AI 组合方案抄进来)
+CREATE SEQUENCE IF NOT EXISTS holdings_id_seq;
+CREATE TABLE IF NOT EXISTS holdings (
+    id          INTEGER   PRIMARY KEY DEFAULT nextval('holdings_id_seq'),
+    code        VARCHAR   NOT NULL,
+    entry_price DOUBLE    NOT NULL,
+    shares      DOUBLE    NOT NULL,
+    entry_date  DATE,
+    source      VARCHAR   DEFAULT 'manual',
+    notes       VARCHAR,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """
 
@@ -407,6 +431,89 @@ def upsert_reviews(
 
 
 # ============================================================
+# 飞书 picks/records 兼容读 — 2026-05-11 PM 第二轮:飞书 100% 退役
+# 这两个函数返回与原 extract_picks / extract_records 同 shape 的 dict,
+# 调用方(dashboard build / jobs) 改一行 import 即可切走飞书。
+# ============================================================
+
+
+def fetch_picks_view(*, conn: duckdb.DuckDBPyConnection | None = None) -> list[dict]:
+    """返回最近 review 的 picks 视图(reviews LEFT JOIN picks).
+
+    字段对齐原 extract_picks: code/name/rating/score/entry_price/current_price/
+    pct/days_held/grade/theme/ai_relevance/pick_date.
+    """
+    own = conn is None
+    if own:
+        conn = get_db()
+    rows = conn.execute("""
+        SELECT
+            r.code, r.name, r.rating, r.pick_date, r.entry_price, r.current_price,
+            r.pct, r.days_held, r.grade, r.theme,
+            p.total_score AS score, p.ai_relevance
+        FROM reviews r
+        LEFT JOIN picks p ON p.code = r.code AND p.pick_date = r.pick_date
+        WHERE r.review_date = (SELECT MAX(review_date) FROM reviews)
+        ORDER BY r.code
+    """).fetchall()
+    cols = ["code", "name", "rating", "pick_date", "entry_price", "current_price",
+            "pct", "days_held", "grade", "theme", "score", "ai_relevance"]
+    out = [dict(zip(cols, r)) for r in rows]
+    if own:
+        conn.close()
+    return out
+
+
+def fetch_records_view(*, conn: duckdb.DuckDBPyConnection | None = None) -> list[dict]:
+    """返回 watchlist LEFT JOIN 最新 prices 的视图.
+
+    字段对齐原 extract_records: 89 条 watchlist + 实时 enrichment(market_cap /
+    forward_pe / peg / ytd_pct 等) 来自 prices 表的最新一行.
+    """
+    own = conn is None
+    if own:
+        conn = get_db()
+    rows = conn.execute("""
+        WITH latest_price AS (
+            SELECT * FROM prices
+            WHERE (code, date) IN (
+                SELECT code, MAX(date) FROM prices GROUP BY code
+            )
+        )
+        SELECT
+            w.code, w.name, w.market, w.business, w.industry,
+            w.ai_relevance, w.ai_logic, w.conclusion, w.risks, w.peers,
+            w.rhythm, w.status, w.source, w.credibility,
+            w.earnings, w.verification, w.info_breakdown,
+            lp.price          AS latest_price,
+            lp.market_cap     AS yf_market_cap,
+            lp.forward_pe,
+            lp.peg_ratio      AS peg,
+            lp.earnings_growth_pct,
+            lp.ytd_pct,
+            lp.one_year_pct,
+            lp.one_month_pct,
+            lp.one_week_pct
+        FROM watchlist w
+        LEFT JOIN latest_price lp ON lp.code = w.code
+        ORDER BY w.code
+    """).fetchall()
+    cols = ["code", "name", "market", "business", "industry",
+            "ai_relevance", "ai_logic", "conclusion", "risks", "peers",
+            "rhythm", "status", "source", "credibility",
+            "earnings", "verification", "info_breakdown",
+            "latest_price", "yf_market_cap", "forward_pe", "peg",
+            "earnings_growth_pct", "ytd_pct", "one_year_pct",
+            "one_month_pct", "one_week_pct"]
+    out = [dict(zip(cols, r)) for r in rows]
+    # 注:旧 extract_records 还返回 market_cap (人工填写的"当前市值"字符串)
+    # DuckDB 不存,统一用 yf_market_cap 替代.调用方需要的话自己 fallback.
+    if own:
+        conn.close()
+    return out
+
+
+# ============================================================
 # Watchlist CRUD（2026-05-11 起：从飞书迁移到 DuckDB，权威源）
 # ============================================================
 
@@ -415,6 +522,7 @@ WATCHLIST_COLS = [
     "ai_relevance", "ai_logic", "theme", "conclusion", "risks",
     "peers", "rhythm", "status", "source", "credibility", "notes",
     "chain", "chain_tier", "chain_role", "layman_intro",
+    "earnings", "verification", "info_breakdown",
 ]
 
 
@@ -497,6 +605,41 @@ def upsert_watchlist(
     return n
 
 
+def update_watchlist_fields(
+    code: str,
+    fields: Mapping[str, Any],
+    *,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> int:
+    """部分字段更新(只更新传入的 keys,不动其它).
+
+    用于 enrich_watchlist / daily_audit 等 job 把分析结果落到 DuckDB 而非飞书。
+    返回更新的行数(0 表示 code 不在 watchlist 表里).
+    """
+    if not fields:
+        return 0
+    valid = {k: v for k, v in fields.items() if k in WATCHLIST_COLS and k != "code"}
+    if not valid:
+        return 0
+    own = conn is None
+    if own:
+        conn = get_db()
+    exists = conn.execute("SELECT 1 FROM watchlist WHERE code=?", [code]).fetchone()
+    if not exists:
+        if own:
+            conn.close()
+        return 0
+    set_clause = ", ".join(f"{c}=?" for c in valid)
+    values = list(valid.values()) + [code]
+    conn.execute(
+        f"UPDATE watchlist SET {set_clause}, updated_at=CURRENT_TIMESTAMP WHERE code=?",
+        values,
+    )
+    if own:
+        conn.close()
+    return 1
+
+
 def delete_watchlist_item(code: str, *, conn: duckdb.DuckDBPyConnection | None = None) -> int:
     own = conn is None
     if own:
@@ -506,6 +649,132 @@ def delete_watchlist_item(code: str, *, conn: duckdb.DuckDBPyConnection | None =
     if exists:
         conn.execute("DELETE FROM watchlist WHERE code = ?", [code])
         n = 1
+    if own:
+        conn.close()
+    return n
+
+
+# ============================================================
+# Holdings (2026-05-12: localStorage → DuckDB 迁移)
+# ============================================================
+
+HOLDINGS_COLS = ["code", "entry_price", "shares", "entry_date", "source", "notes"]
+HOLDINGS_FULL_COLS = ["id"] + HOLDINGS_COLS + ["created_at", "updated_at"]
+
+
+def fetch_all_holdings(*, conn: duckdb.DuckDBPyConnection | None = None) -> list[dict]:
+    """读全部持仓，按 entry_date 倒序。"""
+    own = conn is None
+    if own:
+        conn = get_db()
+    rows = conn.execute(
+        f"SELECT {','.join(HOLDINGS_FULL_COLS)} "
+        "FROM holdings ORDER BY entry_date DESC NULLS LAST, code"
+    ).fetchall()
+    out = [dict(zip(HOLDINGS_FULL_COLS, r)) for r in rows]
+    if own:
+        conn.close()
+    return out
+
+
+def get_holding(holding_id: int, *, conn: duckdb.DuckDBPyConnection | None = None) -> dict | None:
+    own = conn is None
+    if own:
+        conn = get_db()
+    row = conn.execute(
+        f"SELECT {','.join(HOLDINGS_FULL_COLS)} FROM holdings WHERE id = ?",
+        [holding_id],
+    ).fetchone()
+    if own:
+        conn.close()
+    return dict(zip(HOLDINGS_FULL_COLS, row)) if row else None
+
+
+def _normalize_holding(item: Mapping[str, Any]) -> list:
+    """item → SQL values 对齐 HOLDINGS_COLS。"""
+    code = item.get("code")
+    if not code:
+        raise ValueError("holding requires code")
+    return [
+        code,
+        float(item.get("entry_price") or 0),
+        float(item.get("shares") or 0),
+        _to_date(item.get("entry_date") or item.get("date")),
+        item.get("source") or "manual",
+        item.get("notes"),
+    ]
+
+
+def insert_holding(item: Mapping[str, Any], *, conn: duckdb.DuckDBPyConnection | None = None) -> int:
+    """新增持仓，返回生成的 id。"""
+    own = conn is None
+    if own:
+        conn = get_db()
+    vals = _normalize_holding(item)
+    conn.execute(
+        f"INSERT INTO holdings ({','.join(HOLDINGS_COLS)}, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+        vals,
+    )
+    new_id = int(conn.execute("SELECT currval('holdings_id_seq')").fetchone()[0])
+    if own:
+        conn.close()
+    return new_id
+
+
+def update_holding(
+    holding_id: int,
+    item: Mapping[str, Any],
+    *,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> int:
+    """更新指定 id 持仓。返回受影响行数。"""
+    own = conn is None
+    if own:
+        conn = get_db()
+    exists = conn.execute("SELECT 1 FROM holdings WHERE id = ?", [holding_id]).fetchone()
+    n = 0
+    if exists:
+        vals = _normalize_holding(item)
+        conn.execute(
+            "UPDATE holdings SET code=?, entry_price=?, shares=?, entry_date=?, source=?, notes=?, "
+            "updated_at=CURRENT_TIMESTAMP WHERE id = ?",
+            vals + [holding_id],
+        )
+        n = 1
+    if own:
+        conn.close()
+    return n
+
+
+def delete_holding(holding_id: int, *, conn: duckdb.DuckDBPyConnection | None = None) -> int:
+    own = conn is None
+    if own:
+        conn = get_db()
+    exists = conn.execute("SELECT 1 FROM holdings WHERE id = ?", [holding_id]).fetchone()
+    n = 0
+    if exists:
+        conn.execute("DELETE FROM holdings WHERE id = ?", [holding_id])
+        n = 1
+    if own:
+        conn.close()
+    return n
+
+
+def bulk_replace_holdings(
+    items: Iterable[Mapping[str, Any]],
+    *,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> int:
+    """整批替换持仓（清空 + 重插，用于从 localStorage 一次性导入）。返回插入条数。"""
+    own = conn is None
+    if own:
+        conn = get_db()
+    conn.execute("DELETE FROM holdings")
+    n = 0
+    for item in items:
+        insert_holding(item, conn=conn)
+        n += 1
     if own:
         conn.close()
     return n

@@ -40,129 +40,45 @@ sys.path.insert(0, _REPO)
 sys.path.insert(0, os.path.join(_REPO, "scripts", "lib"))  # 2026-05-11 lib 迁移
 import json
 import argparse
-import requests
 from datetime import datetime
 from pathlib import Path
 
-from feishu_auth import feishu_token, FEISHU_APP_TOKEN  # noqa: E402
-from stock_db import upsert_picks  # noqa: E402
-
-WATCHLIST_TABLE_ID = "tblaEuCPOlXBlSvP"
-PICKS_TABLE_ID = "tbl7K88JZ0ZMqPIE"
-WATCHLIST_BASE = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{FEISHU_APP_TOKEN}/tables/{WATCHLIST_TABLE_ID}"
-PICKS_BASE = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{FEISHU_APP_TOKEN}/tables/{PICKS_TABLE_ID}"
-
-
-def headers(token):
-    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-
-def normalize_field(v):
-    if v is None:
-        return ""
-    if isinstance(v, list):
-        if not v:
-            return ""
-        if isinstance(v[0], dict):
-            return v[0].get("text", "") or v[0].get("name", "")
-        return str(v[0])
-    if isinstance(v, dict):
-        return v.get("name", "") or v.get("text", "")
-    return str(v)
-
-
-def safe_float(v):
-    if v is None or v == "":
-        return None
-    try:
-        return float(v)
-    except (ValueError, TypeError):
-        return None
+from stock_db import upsert_picks, fetch_all_watchlist, get_db, latest_price  # noqa: E402
 
 
 def fetch_watchlist(token=None):
-    """拉 watchlist 记录。
+    """从 DuckDB watchlist + prices 读 records 喂给 daily_picks 打分.
 
-    2026-05-11 起优先从 DuckDB 读（single source of truth）；
-    DuckDB 表空时 fallback 到飞书表（向后兼容）。
-    token 参数保留只是为了 backward compatibility，DuckDB 模式忽略。
+    2026-05-11 PM 第二轮:飞书 100% 退役.token 参数仅为兼容旧 caller 保留.
     """
-    # 优先 DuckDB
-    try:
-        from stock_db import fetch_all_watchlist, get_db
-        from stock_db import latest_price as _latest_price_query
-        db_rows = fetch_all_watchlist()
-        if db_rows:
-            # 注入 prices 表的最新价格 / YTD 等行情字段，供下游 daily_picks 等用
-            conn = get_db()
-            out = []
-            for r in db_rows:
-                code = r.get("code")
-                px = _latest_price_query(code, conn=conn) if code else None
-                px = px or {}
-                out.append({
-                    "name": r.get("name"),
-                    "code": code,
-                    "market": r.get("market"),
-                    "ai_relevance": r.get("ai_relevance"),
-                    "ai_logic": r.get("ai_logic"),
-                    "industry": r.get("industry"),
-                    "conclusion": r.get("conclusion"),
-                    "risks": r.get("risks"),
-                    "credibility": r.get("credibility"),
-                    "latest_price": f"{px.get('price')} {px.get('currency') or ''}".strip() if px.get("price") else "",
-                    "ytd_pct": px.get("ytd_pct"),
-                    "one_year_pct": px.get("one_year_pct"),
-                    "one_month_pct": px.get("one_month_pct"),
-                    "one_week_pct": px.get("one_week_pct"),
-                    "forward_pe": px.get("forward_pe"),
-                    "peg": px.get("peg_ratio"),
-                    "earnings_growth_pct": px.get("earnings_growth_pct"),
-                })
-            conn.close()
-            return out
-    except Exception as e:
-        print(f"  ⚠️ DuckDB watchlist 读取失败 ({e}), fallback 到飞书表")
-
-    # Fallback 飞书表
-    if token is None:
-        from feishu_auth import feishu_token as _ft
-        token = _ft()
-    all_items = []
-    page_token = None
-    while True:
-        params = {"page_size": 100}
-        if page_token:
-            params["page_token"] = page_token
-        r = requests.get(f"{WATCHLIST_BASE}/records", headers=headers(token), params=params)
-        d = r.json()
-        all_items.extend(d.get("data", {}).get("items", []))
-        if not d.get("data", {}).get("has_more"):
-            break
-        page_token = d["data"]["page_token"]
-
+    db_rows = fetch_all_watchlist()
+    conn = get_db()
     out = []
-    for item in all_items:
-        f = item.get("fields", {})
+    for r in db_rows:
+        code = r.get("code")
+        px = latest_price(code, conn=conn) if code else None
+        px = px or {}
         out.append({
-            "name": normalize_field(f.get("股票名称")),
-            "code": normalize_field(f.get("代码")),
-            "market": normalize_field(f.get("市场")),
-            "ai_relevance": normalize_field(f.get("AI关联度")),
-            "ai_logic": normalize_field(f.get("AI关联逻辑")),
-            "industry": normalize_field(f.get("行业归类")),
-            "conclusion": normalize_field(f.get("研究结论")),
-            "risks": normalize_field(f.get("关键风险")),
-            "credibility": normalize_field(f.get("数据可信度")),
-            "latest_price": normalize_field(f.get("最新价格")),
-            "ytd_pct": safe_float(f.get("YTD涨幅%")),
-            "one_year_pct": safe_float(f.get("一年涨幅%")),
-            "one_month_pct": safe_float(f.get("1月涨幅%")),
-            "one_week_pct": safe_float(f.get("1周涨幅%")),
-            "forward_pe": safe_float(f.get("远期PE")),
-            "peg": safe_float(f.get("PEG")),
-            "earnings_growth_pct": safe_float(f.get("利润增速%")),
+            "name": r.get("name"),
+            "code": code,
+            "market": r.get("market"),
+            "ai_relevance": r.get("ai_relevance"),
+            "ai_logic": r.get("ai_logic"),
+            "industry": r.get("industry"),
+            "conclusion": r.get("conclusion"),
+            "risks": r.get("risks"),
+            "credibility": r.get("credibility"),
+            "latest_price": f"{px.get('price')} {px.get('currency') or ''}".strip()
+                            if px.get("price") else "",
+            "ytd_pct": px.get("ytd_pct"),
+            "one_year_pct": px.get("one_year_pct"),
+            "one_month_pct": px.get("one_month_pct"),
+            "one_week_pct": px.get("one_week_pct"),
+            "forward_pe": px.get("forward_pe"),
+            "peg": px.get("peg_ratio"),
+            "earnings_growth_pct": px.get("earnings_growth_pct"),
         })
+    conn.close()
     return out
 
 
@@ -404,74 +320,6 @@ def build_risks(rec):
 
 
 # ============================================================
-# 写飞书
-# ============================================================
-
-def fetch_existing_picks_today(token):
-    """查今天已有的入选记录（按入选日期 = 今天 + 代码 去重）。"""
-    today_ts = int(datetime.strptime(datetime.now().strftime("%Y-%m-%d"),
-                                     "%Y-%m-%d").timestamp() * 1000)
-    r = requests.get(f"{PICKS_BASE}/records", headers=headers(token), params={"page_size": 100})
-    items = r.json().get("data", {}).get("items", [])
-    today_codes = set()
-    for item in items:
-        f = item.get("fields", {})
-        d = f.get("入选日期")
-        c = normalize_field(f.get("代码"))
-        if d == today_ts and c:
-            today_codes.add(c)
-    return today_codes
-
-
-def write_pick(token, rec, scores, exclude_codes=None):
-    """写一条入选记录。"""
-    code = rec["code"]
-    if exclude_codes and code in exclude_codes:
-        print(f"    · 跳过（今日已入选）: {rec['name']}")
-        return None
-
-    today_ts = int(datetime.strptime(datetime.now().strftime("%Y-%m-%d"),
-                                     "%Y-%m-%d").timestamp() * 1000)
-    fields = {
-        "入选日期": today_ts,
-        "股票名称": rec["name"],
-        "代码": code,
-        "入选评分": grade(scores["total"]),
-        "综合得分": round(scores["total"], 2),
-        "入选时价格": rec["latest_price"],
-        "AI关联度": rec["ai_relevance"] if rec["ai_relevance"] else None,
-        "主题分类": THEME_MAPPING.get(code, ""),
-        "入选理由": build_reasons(rec, scores),
-        "关键看点（催化剂）": build_catalysts(rec),
-        "风险提示": build_risks(rec),
-        "跟踪状态": "🟢 在选中",
-        "最近更新": int(datetime.now().timestamp() * 1000),
-    }
-    if rec["market"]:
-        fields["市场"] = rec["market"]
-    if rec["peg"] is not None:
-        fields["入选时PEG"] = rec["peg"]
-    if rec["forward_pe"] is not None:
-        fields["入选时远期PE"] = rec["forward_pe"]
-    if rec["ytd_pct"] is not None:
-        fields["入选时YTD%"] = rec["ytd_pct"]
-    if rec["one_week_pct"] is not None:
-        fields["入选时1周%"] = rec["one_week_pct"]
-    if rec["one_year_pct"] is not None:
-        fields["入选时1Y%"] = rec["one_year_pct"]
-
-    fields = {k: v for k, v in fields.items() if v not in (None, "")}
-
-    r = requests.post(f"{PICKS_BASE}/records", headers=headers(token),
-                      json={"fields": fields})
-    d = r.json()
-    if d.get("code") == 0:
-        return d["data"]["record"]["record_id"]
-    print(f"    ! 写入失败 [{rec['name']}]: {d.get('msg')}")
-    return None
-
-
-# ============================================================
 # 主流程
 # ============================================================
 
@@ -517,15 +365,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--top", type=int, default=12, help="最多写入多少只")
     parser.add_argument("--min-score", type=float, default=50, help="最低入选分数")
-    parser.add_argument("--dry-run", action="store_true", help="不写飞书")
+    parser.add_argument("--dry-run", action="store_true", help="只打印,不写 DuckDB picks")
     args = parser.parse_args()
 
     print_calibration_status()
     print()
 
-    token = feishu_token()
-    print("[1/3] 拉取 watchlist...")
-    records = fetch_watchlist(token)
+    print("[1/3] 拉取 watchlist [DuckDB]...")
+    records = fetch_watchlist()
     print(f"  共 {len(records)} 条")
 
     print("\n[2/3] 打分排序...")
@@ -549,30 +396,8 @@ def main():
               f"{s['ai']:<6}{s['val']:<6}{s['trend']:<6}{s['cred']:<6}")
 
     if args.dry_run:
-        print("\n[Dry-Run] 未写入飞书")
+        print("\n[Dry-Run] 未写 DuckDB picks")
         return
-
-    # 2026-05-11 架构调整：飞书 picks 表已废弃为通知/查阅入口
-    # DuckDB 是 single source of truth（详见 stock_db.py 注释）
-    # 历史写入逻辑保留在 FEISHU_WRITE_TABLES=1 时才执行（应急用）
-    if os.environ.get("FEISHU_WRITE_TABLES", "0") == "1":
-        print("\n[4/4] 写入飞书「每日优选 · AI 投资」(FEISHU_WRITE_TABLES=1)...")
-        exclude_codes = fetch_existing_picks_today(token)
-        if exclude_codes:
-            print(f"  今日已存在 {len(exclude_codes)} 条，将跳过: {', '.join(list(exclude_codes)[:5])}...")
-
-        success = 0
-        for r, s in selected:
-            rid = write_pick(token, r, s, exclude_codes)
-            if rid:
-                success += 1
-                print(f"    + {r['name']} ({r['code']}) → {grade(s['total'])} (分数 {s['total']:.1f})")
-
-        print(f"\n✅ 已入选 {success} 只")
-        print(f"  飞书表：https://w5scrwkn9y.feishu.cn/base/{FEISHU_APP_TOKEN}?table={PICKS_TABLE_ID}")
-    else:
-        print("\n[4/4] 跳过飞书写入（FEISHU_WRITE_TABLES=0 · DuckDB 是 single source of truth）")
-        print("       如需写飞书 picks 表作应急快照：FEISHU_WRITE_TABLES=1 python3 daily_picks.py")
 
     # 落 DuckDB（无论是否新写入飞书，selected 名单都落库做历史回测用）
     if selected:

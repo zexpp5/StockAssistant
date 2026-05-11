@@ -19,21 +19,13 @@ sys.path.insert(0, os.path.join(_REPO, "scripts", "lib"))  # 2026-05-11 lib 迁�
 import json
 import time
 import argparse
-import requests
 from datetime import datetime
 
-from feishu_auth import feishu_token, FEISHU_APP_TOKEN  # noqa: E402
-from stock_db import upsert_prices  # noqa: E402
+from stock_db import upsert_prices, fetch_all_watchlist  # noqa: E402
 
 import yfinance as yf  # noqa: E402
 
-TABLE_ID = "tblaEuCPOlXBlSvP"
-BASE_URL = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{FEISHU_APP_TOKEN}/tables/{TABLE_ID}"
 DATA_DIR = _REPO
-
-
-def headers(token):
-    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 
 # ============================================================
@@ -82,38 +74,6 @@ def to_yfinance_ticker(code, market):
 # ============================================================
 # 拉飞书数据 + 写回飞书
 # ============================================================
-
-def fetch_watchlist(token):
-    all_items = []
-    page_token = None
-    while True:
-        params = {"page_size": 100}
-        if page_token:
-            params["page_token"] = page_token
-        r = requests.get(f"{BASE_URL}/records", headers=headers(token), params=params)
-        d = r.json()
-        all_items.extend(d.get("data", {}).get("items", []))
-        if not d.get("data", {}).get("has_more"):
-            break
-        page_token = d["data"]["page_token"]
-    return all_items
-
-
-def normalize_field(v):
-    if v is None:
-        return ""
-    if isinstance(v, list):
-        return v[0].get("text", "") if v and isinstance(v[0], dict) else ""
-    if isinstance(v, dict):
-        return v.get("name", "") or v.get("text", "")
-    return str(v)
-
-
-def update_record(token, record_id, fields):
-    url = f"{BASE_URL}/records/{record_id}"
-    r = requests.put(url, headers=headers(token), json={"fields": fields})
-    return r.json()
-
 
 # ============================================================
 # yfinance 抓取
@@ -218,12 +178,11 @@ def format_market_cap(mc, currency):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--code", help="只更新某只股票")
-    parser.add_argument("--dry-run", action="store_true", help="不写飞书，只打印")
+    parser.add_argument("--dry-run", action="store_true", help="只打印,不写 DuckDB")
     args = parser.parse_args()
 
-    token = feishu_token()
-    print("[1/3] 拉取 watchlist...")
-    items = fetch_watchlist(token)
+    print("[1/3] 拉取 watchlist [DuckDB]...")
+    items = fetch_all_watchlist()
     print(f"  共 {len(items)} 条")
 
     print("\n[2/3] 抓取价格（yfinance）...")
@@ -232,11 +191,9 @@ def main():
     fail_codes = []
 
     for item in items:
-        f = item.get("fields", {})
-        name = normalize_field(f.get("股票名称"))
-        code = normalize_field(f.get("代码"))
-        market = normalize_field(f.get("市场"))
-        record_id = item["record_id"]
+        name = item.get("name") or ""
+        code = item.get("code") or ""
+        market = item.get("market") or ""
 
         if args.code and args.code != code:
             continue
@@ -262,32 +219,13 @@ def main():
         peg_str = f"{data['peg_ratio']}" if data["peg_ratio"] else "N/A"
         print(f"{price_str} · 1W {wk_str} · YTD {ytd_str} · 1Y {oy_str} · PEG {peg_str}")
 
-        result = {
+        results.append({
             "code": code,
             "name": name,
             "yf_ticker": yf_code,
             "fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
             **data,
-        }
-        results.append(result)
-
-        # 写回飞书 watchlist 表（2026-05-11 起默认跳过，DuckDB 是 single source of truth）
-        # FEISHU_WRITE_TABLES=1 时启用（应急更新 watchlist 展示字段用）
-        if not args.dry_run and os.environ.get("FEISHU_WRITE_TABLES", "0") == "1":
-            update_fields = {
-                "最新价格": f"{data['price']} {data['currency']}" if data["price"] else "",
-                "YTD涨幅%": data["ytd_pct"] if data["ytd_pct"] is not None else None,
-                "一年涨幅%": data["one_year_pct"] if data["one_year_pct"] is not None else None,
-                "1月涨幅%": data["one_month_pct"] if data["one_month_pct"] is not None else None,
-                "1周涨幅%": data["one_week_pct"] if data["one_week_pct"] is not None else None,
-                "远期PE": data["forward_pe"] if data["forward_pe"] is not None else None,
-                "PEG": data["peg_ratio"] if data["peg_ratio"] is not None else None,
-                "利润增速%": data["earnings_growth_pct"] if data["earnings_growth_pct"] is not None else None,
-                "yf市值": format_market_cap(data["market_cap"], data["currency"]),
-                "价格更新时间": int(datetime.now().timestamp() * 1000),
-            }
-            update_fields = {k: v for k, v in update_fields.items() if v not in (None, "")}
-            update_record(token, record_id, update_fields)
+        })
 
         time.sleep(0.5)  # 别太快
 

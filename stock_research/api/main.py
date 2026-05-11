@@ -24,7 +24,6 @@ import sys
 
 from .. import config
 from ..core import edgar, audit
-from ..adapters import feishu
 
 # 让 stock_db.py（在 repo 根）能被 import
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -61,10 +60,13 @@ def create_app():
     # ────────── 健康检查 ──────────
     @app.get("/health")
     def health():
+        from .. import config as _c
+        wl_n = len(stock_db.fetch_all_watchlist())
         return {
             "status": "ok",
-            "investors_tracked": len(config.INVESTORS_13F),
-            "watchlist_table": config.WATCHLIST_TABLE_ID,
+            "investors_tracked": len(_c.INVESTORS_13F),
+            "watchlist_rows": wl_n,
+            "data_source": "DuckDB (飞书 Bitable 已 100% 退役)",
         }
 
     # ────────── 13F 查询 ──────────
@@ -150,6 +152,52 @@ def create_app():
         if not code:
             raise HTTPException(400, "code is required")
         return enrich_one(code, item.get("name"))
+
+    # ────────── 持仓 holdings（2026-05-12 从 dashboard localStorage 迁过来） ──────────
+    @app.get("/api/holdings")
+    def list_holdings() -> list[dict[str, Any]]:
+        """读全部持仓，按 entry_date 倒序。"""
+        import stock_db
+        rows = stock_db.fetch_all_holdings()
+        for r in rows:
+            if r.get("entry_date"):
+                r["entry_date"] = r["entry_date"].isoformat()
+            for k in ("created_at", "updated_at"):
+                if r.get(k):
+                    r[k] = r[k].isoformat()
+        return rows
+
+    @app.post("/api/holdings")
+    def create_holding(item: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        """新增持仓一条。body: {code, entry_price, shares, date, source?, notes?}"""
+        import stock_db
+        if not item.get("code"):
+            raise HTTPException(400, "code is required")
+        new_id = stock_db.insert_holding(item)
+        return {"status": "ok", "id": new_id}
+
+    @app.put("/api/holdings/{holding_id}")
+    def update_holding_one(holding_id: int, item: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        import stock_db
+        n = stock_db.update_holding(holding_id, item)
+        if n == 0:
+            raise HTTPException(404, f"holding id not found: {holding_id}")
+        return {"status": "ok", "id": holding_id, "rows_affected": n}
+
+    @app.delete("/api/holdings/{holding_id}")
+    def delete_holding_one(holding_id: int) -> dict[str, Any]:
+        import stock_db
+        n = stock_db.delete_holding(holding_id)
+        if n == 0:
+            raise HTTPException(404, f"holding id not found: {holding_id}")
+        return {"status": "ok", "id": holding_id, "rows_deleted": n}
+
+    @app.post("/api/holdings/bulk-replace")
+    def bulk_replace_holdings_endpoint(items: list[dict[str, Any]] = Body(...)) -> dict[str, Any]:
+        """整批替换持仓（清空 + 重插）。用于从 localStorage 一次性迁移。"""
+        import stock_db
+        n = stock_db.bulk_replace_holdings(items)
+        return {"status": "ok", "rows_inserted": n}
 
     # ────────── 投资方案配置（DuckDB user_config 表 · 2026-05-11 PM 起） ──────────
     @app.get("/api/config")

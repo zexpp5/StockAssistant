@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Any
 
 from .. import config
-from ..adapters import feishu, store
+from ..adapters import legacy_shim as feishu, store
 from ..core import picks_audit
 
 logger = logging.getLogger("stock_research.jobs.audit_picks")

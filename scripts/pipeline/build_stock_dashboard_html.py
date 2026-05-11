@@ -11,112 +11,11 @@ _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 sys.path.insert(0, _REPO)
 sys.path.insert(0, os.path.join(_REPO, "scripts", "lib"))  # 2026-05-11 lib 迁移
 import json
-import requests
 from datetime import datetime
 
-from feishu_auth import feishu_token, FEISHU_APP_TOKEN  # noqa: E402
-
-# 表 ID 走 .env，缺失时回退到本地默认（避免 .env 不全时仪表盘跑不起来）
-TABLE_ID = os.environ.get("FEISHU_WATCHLIST_TABLE_ID") or "tblaEuCPOlXBlSvP"
-PICKS_TABLE_ID = os.environ.get("FEISHU_PICKS_TABLE_ID") or "tbl7K88JZ0ZMqPIE"
-BASE_URL = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{FEISHU_APP_TOKEN}/tables/{TABLE_ID}"
-PICKS_URL = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{FEISHU_APP_TOKEN}/tables/{PICKS_TABLE_ID}"
+# 2026-05-11 PM 第二轮:飞书 100% 退役 — 不再从 Bitable 拉数据
+# records / picks 全部来自 DuckDB(watchlist + reviews JOIN picks + prices)
 OUTPUT = os.path.join(_REPO, "stock_dashboard.html")
-
-
-def headers(token):
-    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-
-def fetch_records(token, base_url=None):
-    all_items = []
-    page_token = None
-    url = (base_url or BASE_URL)
-    while True:
-        params = {"page_size": 100}
-        if page_token:
-            params["page_token"] = page_token
-        resp = requests.get(f"{url}/records", headers=headers(token), params=params)
-        d = resp.json()
-        all_items.extend(d.get("data", {}).get("items", []))
-        if not d.get("data", {}).get("has_more"):
-            break
-        page_token = d["data"]["page_token"]
-    return all_items
-
-
-def extract_picks(items):
-    """提取自选股·今日 Top记录关键字段。"""
-    out = []
-    for item in items:
-        f = item.get("fields", {})
-        out.append({
-            "name": normalize_field(f.get("股票名称")),
-            "code": normalize_field(f.get("代码")),
-            "rating": normalize_field(f.get("入选评分")),
-            "score": f.get("综合得分"),
-            "entry_price": normalize_field(f.get("入选时价格")),
-            "current_price": normalize_field(f.get("当前价格")),
-            "pct": f.get("累计涨跌%"),
-            "days_held": f.get("持有天数"),
-            "grade": normalize_field(f.get("命中评级")),
-            "theme": normalize_field(f.get("主题分类")),
-            "ai_relevance": normalize_field(f.get("AI关联度")),
-            "pick_date": f.get("入选日期"),
-        })
-    return out
-
-
-def normalize_field(v):
-    if v is None:
-        return ""
-    if isinstance(v, list):
-        out = []
-        for item in v:
-            if isinstance(item, dict):
-                out.append(item.get("text", "") or item.get("name", ""))
-            else:
-                out.append(str(item))
-        return "\n".join(out)
-    if isinstance(v, dict):
-        return v.get("name", "") or v.get("text", "") or json.dumps(v, ensure_ascii=False)
-    return str(v)
-
-
-def extract_records(items):
-    out = []
-    for item in items:
-        f = item.get("fields", {})
-        out.append({
-            "name": normalize_field(f.get("股票名称")),
-            "code": normalize_field(f.get("代码")),
-            "market": normalize_field(f.get("市场")),
-            "business": normalize_field(f.get("主营业务")),
-            "industry": normalize_field(f.get("行业归类")),
-            "ai_relevance": normalize_field(f.get("AI关联度")),
-            "ai_logic": normalize_field(f.get("AI关联逻辑")),
-            "market_cap": normalize_field(f.get("当前市值")),
-            "earnings": normalize_field(f.get("最近季度业绩")),
-            "conclusion": normalize_field(f.get("研究结论")),
-            "risks": normalize_field(f.get("关键风险")),
-            "peers": normalize_field(f.get("可比公司")),
-            "rhythm": normalize_field(f.get("跟踪节奏")),
-            "status": normalize_field(f.get("研究状态")),
-            "source": normalize_field(f.get("数据来源")),
-            "credibility": normalize_field(f.get("数据可信度")),
-            "verification": normalize_field(f.get("双源验证")),
-            "info_breakdown": normalize_field(f.get("信息构成")),
-            "latest_price": normalize_field(f.get("最新价格")),
-            "ytd_pct": f.get("YTD涨幅%"),
-            "one_year_pct": f.get("一年涨幅%"),
-            "one_month_pct": f.get("1月涨幅%"),
-            "one_week_pct": f.get("1周涨幅%"),
-            "forward_pe": f.get("远期PE"),
-            "peg": f.get("PEG"),
-            "earnings_growth_pct": f.get("利润增速%"),
-            "yf_market_cap": normalize_field(f.get("yf市值")),
-        })
-    return out
 
 
 # ============================================================
@@ -1675,6 +1574,18 @@ function switchDiscoveryView(view) {
           <label class="text-xs text-slate-500 block mb-1">关键风险</label>
           <textarea id="wl-risks" rows="2" class="w-full px-3 py-2 border border-slate-300 rounded text-sm"></textarea>
         </div>
+        <div class="md:col-span-2">
+          <label class="text-xs text-slate-500 block mb-1">最近季度业绩 (Q? 营收/利润/EPS/指引)</label>
+          <textarea id="wl-earnings" rows="3" class="w-full px-3 py-2 border border-slate-300 rounded text-sm font-mono" placeholder="Q1 2026:\n· 营收 $XB (+XX% YoY)\n· 净利 $XB (+XX% YoY)\n· EPS $X.XX"></textarea>
+        </div>
+        <div>
+          <label class="text-xs text-slate-500 block mb-1">双源验证</label>
+          <input id="wl-verification" type="text" class="w-full px-3 py-2 border border-slate-300 rounded text-sm" placeholder="✅ 双源(≥2 个来源) / ⚠️ 单源 / ❓ 待补">
+        </div>
+        <div class="md:col-span-2">
+          <label class="text-xs text-slate-500 block mb-1">信息构成 (多源 enrichment 摘要,通常自动生成)</label>
+          <textarea id="wl-info-breakdown" rows="4" class="w-full px-3 py-2 border border-slate-300 rounded text-sm font-mono" placeholder="📊 实时事实 / 🧑‍💼 内部人交易 / 📰 近 7 天新闻 ... (enrich_watchlist 自动填充)"></textarea>
+        </div>
         <div>
           <label class="text-xs text-slate-500 block mb-1">可比公司</label>
           <input id="wl-peers" type="text" class="w-full px-3 py-2 border border-slate-300 rounded text-sm" placeholder="逗号分隔 ticker">
@@ -2596,6 +2507,9 @@ function openWatchlistEditor(code) {
     document.getElementById("wl-credibility").value = row.credibility || "";
     document.getElementById("wl-conclusion").value = row.conclusion || "";
     document.getElementById("wl-risks").value = row.risks || "";
+    document.getElementById("wl-earnings").value = row.earnings || "";
+    document.getElementById("wl-verification").value = row.verification || "";
+    document.getElementById("wl-info-breakdown").value = row.info_breakdown || "";
     document.getElementById("wl-peers").value = row.peers || "";
     document.getElementById("wl-rhythm").value = row.rhythm || "";
     document.getElementById("wl-notes").value = row.notes || "";
@@ -2632,6 +2546,9 @@ async function saveWatchlistItem() {
     credibility: document.getElementById("wl-credibility").value.trim() || null,
     conclusion: document.getElementById("wl-conclusion").value.trim() || null,
     risks: document.getElementById("wl-risks").value.trim() || null,
+    earnings: document.getElementById("wl-earnings").value.trim() || null,
+    verification: document.getElementById("wl-verification").value.trim() || null,
+    info_breakdown: document.getElementById("wl-info-breakdown").value.trim() || null,
     peers: document.getElementById("wl-peers").value.trim() || null,
     rhythm: document.getElementById("wl-rhythm").value.trim() || null,
     notes: document.getElementById("wl-notes").value.trim() || null,
@@ -6103,15 +6020,30 @@ def audit_panel_html(snap):
 '''
 
 
+def _fmt_market_cap(usd: float | None) -> str:
+    """yfinance market_cap (USD float) → "$1.23T" / "$45.6B" / "$8.7M"."""
+    if not usd or usd <= 0:
+        return ""
+    abs_u = float(usd)
+    if abs_u >= 1e12:
+        return f"${abs_u/1e12:.2f}T"
+    if abs_u >= 1e9:
+        return f"${abs_u/1e9:.1f}B"
+    if abs_u >= 1e6:
+        return f"${abs_u/1e6:.1f}M"
+    return f"${abs_u:,.0f}"
+
+
 def build():
-    print("[1/3] 拉取飞书数据...")
-    token = feishu_token()
-    items = fetch_records(token)
-    records = extract_records(items)
-    print(f"  共 {len(records)} 条 watchlist")
-    pick_items = fetch_records(token, PICKS_URL)
-    picks = extract_picks(pick_items)
-    print(f"  共 {len(picks)} 条自选股·今日 Top")
+    print("[1/3] 拉取数据 [DuckDB]...")
+    from stock_db import fetch_records_view, fetch_picks_view
+    records = fetch_records_view()
+    # 兼容旧 schema: market_cap 字段(人工填写"$2.8T")现在格式化自 yf_market_cap
+    for r in records:
+        r["market_cap"] = _fmt_market_cap(r.get("yf_market_cap"))
+    print(f"  共 {len(records)} 条 watchlist (含 prices JOIN)")
+    picks = fetch_picks_view()
+    print(f"  共 {len(picks)} 条自选股·今日 Top (来自 reviews JOIN picks)")
 
     # 读取模拟结果（如果存在）
     sim_file = os.path.join(_REPO, "simulation_plan_a.json")
@@ -6316,8 +6248,8 @@ def build():
     except Exception as e:
         print(f"  ⚠️ AI 评级加载失败: {e}")
     html = html.replace("{WATCHLIST_RATINGS_JSON}", json.dumps(watchlist_ratings, ensure_ascii=False))
-    html = html.replace("{RECORDS_JSON}", json.dumps(records, ensure_ascii=False))
-    html = html.replace("{PICKS_JSON}", json.dumps(picks, ensure_ascii=False))
+    html = html.replace("{RECORDS_JSON}", json.dumps(records, ensure_ascii=False, default=str))
+    html = html.replace("{PICKS_JSON}", json.dumps(picks, ensure_ascii=False, default=str))
     html = html.replace("{SIMULATION_JSON}", json.dumps(simulation, ensure_ascii=False))
     html = html.replace("{RISK_METRICS_JSON_DB}", json.dumps(risk_metrics_db, ensure_ascii=False))
     html = html.replace("{TRACK_13F_JSON_DB}", json.dumps(track_13f_db, ensure_ascii=False))

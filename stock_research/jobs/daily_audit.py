@@ -22,7 +22,7 @@ from typing import Any
 
 from .. import config
 from ..core import audit, edgar
-from ..adapters import feishu, store
+from ..adapters import legacy_shim as feishu, store
 
 logger = logging.getLogger("stock_research.jobs.daily_audit")
 
@@ -115,17 +115,19 @@ def run_audit(only_code: str | None = None) -> dict[str, Any]:
         else:
             dual = "❓ 待补"
 
-        fields: dict[str, Any] = {}
+        # 2026-05-11 PM 第二轮:飞书 100% 退役 → 直接 UPDATE DuckDB watchlist.
+        db_fields: dict[str, Any] = {"verification": dual}
         if cred_select:
-            fields[config.Fields.CREDIBILITY] = cred_select
-        fields[config.Fields.DUAL_SOURCE] = dual
-        # 把审计摘要追加到信息构成（保留原有 enrichment 内容会更好，这里只追加最后一行）
-        fields[config.Fields.SNAPSHOT_DATE] = feishu.ts_today_ms()
-
-        updates.append({"record_id": w["record_id"], "fields": fields})
+            db_fields["credibility"] = cred_select
+        updates.append({"code": code, "fields": db_fields})
 
     store.save_json(audits, config.AUDIT_DIR, "audit")
-    summary = feishu.batch_update(updates) if updates else {"success": 0, "failed": 0}
+
+    import sys as _sys
+    _sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[2] / "scripts" / "lib"))
+    from stock_db import update_watchlist_fields as _update_wl
+    db_updated = sum(_update_wl(u["code"], u["fields"]) for u in updates)
+    summary = {"success": db_updated, "failed": len(updates) - db_updated}
 
     # 跨市场风险快照（SPY × CSI300 相关性 + USDCNY 敞口）
     # 单独跑：python3 -m stock_research.jobs.cross_market_risk

@@ -32,7 +32,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
 
 from .. import config
-from ..adapters import feishu, store
+from ..adapters import legacy_shim as feishu, store
 from ..core import defense_signals
 
 logger = logging.getLogger("stock_research.jobs.realtime_defense")
@@ -51,79 +51,23 @@ def _macos_notify(title: str, msg: str) -> None:
         pass
 
 
-def _write_alerts_to_feishu(stop_alerts: list[dict[str, Any]]) -> dict[str, int]:
-    """把单股止损警报写入 picks 表的「风险提示」字段（追加，不覆盖）。
-
-    使用 picks 表的 record_id 直接 update。
-    """
-    if not stop_alerts:
-        return {"updated": 0, "failed": 0}
-
-    picks = feishu.fetch_picks()
-    by_code = {(p["normalized"].get("code") or "").upper(): p for p in picks}
-
-    updated = 0
-    failed = 0
-    today = datetime.now().strftime("%Y-%m-%d")
-    for a in stop_alerts:
-        code = (a.get("ticker") or "").upper()
-        if not code:
-            continue
-        # 找到 picks 表里最新的（持有天数最大的）那条记录
-        candidates = [p for c, p in by_code.items() if c == code]
-        if not candidates:
-            continue
-        # 简化：取第一条（实际可以选 days_held 最大那条）
-        rec = candidates[0]
-
-        # 拼"风险提示"新文本
-        old_risk = ""
-        f = rec.get("fields", {})
-        v = f.get("风险提示", "")
-        if isinstance(v, list) and v:
-            old_risk = v[0].get("text", "") if isinstance(v[0], dict) else str(v[0])
-        elif isinstance(v, str):
-            old_risk = v
-
-        alert_line = (f"🚨 [{today}] STOP-LOSS 触发：{a['current_drop_pct']:+.1f}% ≤ "
-                      f"{a['threshold_pct']:+.0f}% · {a['suggested_action']}")
-        # 避免重复追加（如果今天已经写过）
-        if alert_line.split("·")[0] in old_risk:
-            continue
-        new_risk = (alert_line + "\n\n" + old_risk) if old_risk else alert_line
-
-        try:
-            resp = feishu.update_record(
-                rec["record_id"],
-                {"风险提示": new_risk},
-                table_id=config.DAILY_PICKS_TABLE_ID,
-            )
-            if resp.get("code") == 0:
-                updated += 1
-            else:
-                failed += 1
-                logger.warning("更新失败 %s: %s", code, resp.get("msg"))
-        except Exception as e:
-            failed += 1
-            logger.warning("更新异常 %s: %s", code, e)
-
-    return {"updated": updated, "failed": failed}
-
-
 # ─────────── 主流程 ───────────
+# 2026-05-11 PM 第二轮:_write_alerts_to_feishu 已删 — 飞书 Bitable 100% 退役.
+# alerts 已通过 3 个渠道留存:webhook 推送(defense_watcher) + JSON 快照
+# (AUDIT_DIR/realtime_defense.json) + DuckDB snapshots(category='audit').
 
-def run(write_feishu: bool = True, notify: bool = True) -> dict:
+def run(notify: bool = True, **_legacy_kwargs) -> dict:
     print(f"\n{'='*80}")
     print(f"  🛡 实盘防御检查 · {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print(f"{'='*80}\n")
 
-    # 1. 拉今日 picks
-    print("[1/3] 拉飞书 picks 表...")
-    picks_raw = feishu.fetch_picks()
+    # 1. 拉今日 picks (DuckDB)
+    print("[1/2] 拉 picks [DuckDB]...")
+    picks_raw = feishu.fetch_picks()  # shim 内部走 DuckDB
     print(f"  共 {len(picks_raw)} 条")
 
     # 2. 综合诊断
-    print("\n[2/3] 检查市场层（VIX + 200MA）+ 个股层（-15% 止损）...")
+    print("\n[2/2] 检查市场层（VIX + 200MA）+ 个股层（-15% 止损）...")
     result = defense_signals.diagnose_all(picks_raw)
 
     severity = result["severity"]
@@ -151,16 +95,6 @@ def run(write_feishu: bool = True, notify: bool = True) -> dict:
     if not result["alerts"]:
         print(f"\n  🟢 没有触发任何防御信号 — 市场和持仓都健康")
 
-    # 3. 写飞书 + 通知
-    if write_feishu and result["stop_loss_alerts"]:
-        print(f"\n[3/3] 写入飞书 picks 表「风险提示」字段...")
-        wr = _write_alerts_to_feishu(result["stop_loss_alerts"])
-        print(f"  更新 {wr['updated']} / 失败 {wr['failed']}")
-    elif not write_feishu:
-        print(f"\n[3/3] 跳过飞书写入（--no-feishu）")
-    else:
-        print(f"\n[3/3] 无止损警报，跳过飞书写入")
-
     if notify and severity in ("HIGH", "CRITICAL"):
         n = len(result["alerts"])
         _macos_notify(f"{icon} 实盘防御 · {severity}",
@@ -183,10 +117,11 @@ def run(write_feishu: bool = True, notify: bool = True) -> dict:
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s")
     p = argparse.ArgumentParser(description="实盘防御检查（C 终极版）")
-    p.add_argument("--no-feishu", action="store_true", help="不写飞书")
+    p.add_argument("--no-feishu", action="store_true",
+                   help="(deprecated 2026-05-11 PM,飞书已退役,留参数兼容旧 cron)")
     p.add_argument("--no-notify", action="store_true", help="不弹 macOS 通知")
     args = p.parse_args()
-    run(write_feishu=not args.no_feishu, notify=not args.no_notify)
+    run(notify=not args.no_notify)
     return 0
 
 

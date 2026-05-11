@@ -46,7 +46,7 @@ from .. import config
 from ..core import neutralization as nz
 from ..core import portfolio_constraints as pc
 from ..core import portfolio_optimizer_pro as opt_pro
-from ..adapters import store, feishu  # noqa: F401
+from ..adapters import store, legacy_shim as feishu  # noqa: F401
 
 import pandas as pd
 

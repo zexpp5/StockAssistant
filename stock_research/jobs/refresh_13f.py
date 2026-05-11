@@ -16,7 +16,7 @@ from typing import Any
 
 from .. import config
 from ..core import edgar
-from ..adapters import feishu, store
+from ..adapters import legacy_shim as feishu, store
 
 logger = logging.getLogger("stock_research.jobs.refresh_13f")
 
@@ -74,8 +74,10 @@ def run_crossref() -> dict[str, Any]:
     by_ticker = edgar.aggregate_signals_by_ticker(snaps)
     print(f"[13F] 聚合后 {len(by_ticker)} 只股票有信号")
 
-    watchlist = feishu.fetch_watchlist()
-    updates = []
+    # 2026-05-11 PM 第二轮:飞书 Bitable 100% 退役.
+    # 13F 信号已落 snapshots(category='13f/...') + track_13f.json,dashboard 直接读那两个源.
+    # 不再回写飞书 watchlist 的 INSTITUTIONAL_13F 字段.
+    watchlist = feishu.fetch_watchlist()  # shim 读 DuckDB
     matched = 0
     for w in watchlist:
         code = (w["normalized"]["code"] or "").upper().strip()
@@ -84,21 +86,14 @@ def run_crossref() -> dict[str, Any]:
         signals = by_ticker.get(code)
         if not signals:
             continue
-        text = edgar.format_signal_text(signals)
-        updates.append({
-            "record_id": w["record_id"],
-            "fields": {config.Fields.INSTITUTIONAL_13F: text},
-        })
         matched += 1
         print(f"  · {w['normalized']['name']} ({code}): {len(signals)} 条信号")
 
-    result = feishu.batch_update(updates) if updates else {"success": 0, "failed": 0}
-    print(f"[13F] watchlist 命中 {matched} 只 · 写入 {result['success']} 成功 / {result['failed']} 失败")
+    print(f"[13F] watchlist 命中 {matched} 只 (信号已在 snapshots / track_13f.json,无需回写飞书)")
     return {
         "snapshots_used": len(snaps),
         "tickers_with_signals": len(by_ticker),
         "watchlist_matched": matched,
-        **result,
     }
 
 

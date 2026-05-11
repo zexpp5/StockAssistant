@@ -155,15 +155,19 @@ class APickEntry:
 # ─────────── watchlist 读取（兼容 daily_picks.py 的接口）───────────
 
 def fetch_a_share_watchlist() -> list[dict]:
-    """从飞书 watchlist 拉所有 A 股（市场字段含"A股"或代码 6 位纯数字）。"""
-    from feishu_auth import feishu_token
-    from daily_picks import fetch_watchlist
-    token = feishu_token()
-    records = fetch_watchlist(token)
+    """从 DuckDB watchlist 拉所有 A 股(市场字段含"A股"或代码 6 位纯数字).
+
+    2026-05-11 PM 第二轮:飞书 100% 退役,直接读 DuckDB.
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[2] / "scripts" / "lib"))
+    from stock_db import fetch_all_watchlist
+    records = fetch_all_watchlist()
     out = []
     for r in records:
-        code = r.get("code", "")
-        market = r.get("market", "") or ""
+        code = r.get("code") or ""
+        market = r.get("market") or ""
         is_a = (
             "A股" in market or "A 股" in market or
             "深交所" in market or "上交所" in market or

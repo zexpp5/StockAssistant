@@ -474,7 +474,7 @@ with tab_watchlist:
 
             st.caption(
                 f"显示 {len(df_view)} / 总 {len(df)} 只 · "
-                "增删股票去飞书 watchlist base 表（tblaEuCPOlXBlSvP），保存后下次 daily_refresh 生效"
+                "增删股票走 dashboard 的 ⚙️ Watchlist 编辑(直接 UPDATE DuckDB),保存即生效"
             )
 
 

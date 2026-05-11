@@ -1,70 +1,34 @@
 """
-每日优选 · 回顾刷新器
+每日优选 · 回顾刷新器  (2026-05-11 PM 第二轮:飞书 100% 退役)
 ─────────────────────────────────────────
-扫描「每日优选 · AI 投资」表的所有记录，对每只股票：
+从 DuckDB picks 表读所有入选记录,对每只股票:
 1. 用 yfinance 拉当前价
 2. 计算累计涨跌%（vs 入选时价格）
 3. 更新「持有天数」
 4. 自动判断「命中评级」
-5. 输出本周 / 本月 / 全部回顾报告
+5. 输出本周 / 本月 / 全部回顾报告 + 写入 DuckDB reviews 表
 
-用法：
+用法:
   python3 weekly_review.py              # 刷新所有记录 + 终端打印报告
   python3 weekly_review.py --period 7   # 仅看最近 7 天的入选
-  python3 weekly_review.py --dry-run    # 不写飞书
+  python3 weekly_review.py --dry-run    # 不写 DuckDB reviews
 """
 import sys
 import os
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
 sys.path.insert(0, _REPO)
 sys.path.insert(0, os.path.join(_REPO, "scripts", "lib"))  # 2026-05-11 lib 迁移
-import re
 import json
 import time
 import argparse
-import requests
 from datetime import datetime, timedelta
 from collections import defaultdict
 
-from feishu_auth import feishu_token, FEISHU_APP_TOKEN  # noqa: E402
-from stock_db import upsert_reviews  # noqa: E402
+from stock_db import upsert_reviews, get_db  # noqa: E402
 
 import yfinance as yf  # noqa: E402
 
-PICKS_TABLE_ID = "tbl7K88JZ0ZMqPIE"
-PICKS_BASE = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{FEISHU_APP_TOKEN}/tables/{PICKS_TABLE_ID}"
 DATA_DIR = _REPO
-
-
-def headers(token):
-    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-
-def normalize_field(v):
-    if v is None:
-        return ""
-    if isinstance(v, list):
-        if not v:
-            return ""
-        if isinstance(v[0], dict):
-            return v[0].get("text", "") or v[0].get("name", "")
-        return str(v[0])
-    if isinstance(v, dict):
-        return v.get("name", "") or v.get("text", "")
-    return str(v)
-
-
-def parse_price(price_str):
-    """从 '215.2 USD' 这样的字符串提取数字。"""
-    if not price_str:
-        return None
-    m = re.search(r"([\d,]+\.?\d*)", price_str.replace(",", ""))
-    if m:
-        try:
-            return float(m.group(1))
-        except (ValueError, TypeError):
-            return None
-    return None
 
 
 def to_yfinance_ticker(code, market):
@@ -90,30 +54,19 @@ def to_yfinance_ticker(code, market):
     return None
 
 
-def fetch_picks(token):
-    all_items = []
-    page_token = None
-    while True:
-        params = {"page_size": 100}
-        if page_token:
-            params["page_token"] = page_token
-        r = requests.get(f"{PICKS_BASE}/records", headers=headers(token), params=params)
-        d = r.json()
-        all_items.extend(d.get("data", {}).get("items", []))
-        if not d.get("data", {}).get("has_more"):
-            break
-        page_token = d["data"]["page_token"]
-    return all_items
-
-
-def update_record(token, record_id, fields):
-    # 2026-05-11 起默认跳过飞书写入（DuckDB 是 single source of truth）
-    # FEISHU_WRITE_TABLES=1 时启用（应急更新飞书 picks 表跟踪状态）
-    if os.environ.get("FEISHU_WRITE_TABLES", "0") != "1":
-        return {"code": 0, "_skipped": "FEISHU_WRITE_TABLES=0"}
-    url = f"{PICKS_BASE}/records/{record_id}"
-    r = requests.put(url, headers=headers(token), json={"fields": fields})
-    return r.json()
+def fetch_picks_from_db():
+    """从 DuckDB picks 表读所有入选记录."""
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT pick_date, code, name, market, entry_price, entry_currency,
+               rating, theme, ai_relevance
+        FROM picks ORDER BY pick_date DESC, code
+    """).fetchall()
+    cols = ["pick_date", "code", "name", "market", "entry_price",
+            "entry_currency", "rating", "theme", "ai_relevance"]
+    out = [dict(zip(cols, r)) for r in rows]
+    conn.close()
+    return out
 
 
 def fetch_current_price(yf_ticker):
@@ -146,36 +99,32 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    token = feishu_token()
-    print("[1/3] 拉取「每日优选」所有记录...")
-    items = fetch_picks(token)
+    print("[1/3] 拉取 picks [DuckDB]...")
+    items = fetch_picks_from_db()
     print(f"  共 {len(items)} 条入选记录")
 
     print("\n[2/3] 抓当前价格 + 计算回顾...")
-    today_ts = int(datetime.now().timestamp() * 1000)
     today_date = datetime.now().date()
     period_cutoff = None
     if args.period:
-        period_cutoff = (datetime.now() - timedelta(days=args.period)).timestamp() * 1000
+        period_cutoff = today_date - timedelta(days=args.period)
 
     results = []
     for item in items:
-        f = item.get("fields", {})
-        record_id = item["record_id"]
-        name = normalize_field(f.get("股票名称"))
-        code = normalize_field(f.get("代码"))
-        market = normalize_field(f.get("市场"))
-        pick_date_ts = f.get("入选日期")
-        entry_price_str = normalize_field(f.get("入选时价格"))
+        name = item.get("name") or ""
+        code = item.get("code") or ""
+        market = item.get("market") or ""
+        pick_date = item.get("pick_date")  # DuckDB DATE -> python date
+        entry_price = item.get("entry_price")
+        currency = item.get("entry_currency") or "USD"
 
-        if not pick_date_ts or not code:
+        if not pick_date or not code:
             continue
 
         # 期限过滤
-        if period_cutoff and pick_date_ts < period_cutoff:
+        if period_cutoff and pick_date < period_cutoff:
             continue
 
-        entry_price = parse_price(entry_price_str)
         if not entry_price:
             print(f"  [跳过] {name} — 无入选价")
             continue
@@ -193,16 +142,10 @@ def main():
 
         # 计算
         pct = round((current - entry_price) / entry_price * 100, 2)
-        pick_date = datetime.fromtimestamp(pick_date_ts / 1000).date()
         days_held = (today_date - pick_date).days
         grade = grade_hit(pct)
 
-        # 货币：从入选价里提取
-        currency_match = re.search(r"\b([A-Z]{3})\b", entry_price_str)
-        currency = currency_match.group(1) if currency_match else "USD"
-
-        result = {
-            "record_id": record_id,
+        results.append({
             "name": name,
             "code": code,
             "entry_price": entry_price,
@@ -211,23 +154,12 @@ def main():
             "days_held": days_held,
             "grade": grade,
             "pick_date": pick_date.strftime("%Y-%m-%d"),
-            "rating": normalize_field(f.get("入选评分")),
-            "theme": normalize_field(f.get("主题分类")),
-            "ai_relevance": normalize_field(f.get("AI关联度")),
-        }
-        results.append(result)
+            "rating": item.get("rating") or "",
+            "theme": item.get("theme") or "",
+            "ai_relevance": item.get("ai_relevance") or "",
+        })
         sign = "+" if pct > 0 else ""
         print(f"{current} {currency} · {sign}{pct:.1f}% · {days_held} 天 · {grade}")
-
-        if not args.dry_run:
-            update_fields = {
-                "当前价格": f"{current} {currency}",
-                "累计涨跌%": pct,
-                "持有天数": days_held,
-                "命中评级": grade,
-                "最近回顾时间": today_ts,
-            }
-            update_record(token, record_id, update_fields)
         time.sleep(0.4)
 
     print(f"\n[3/3] 回顾报告")
@@ -325,7 +257,6 @@ def main():
             "results": results,
         }, fout, ensure_ascii=False, indent=2, default=str)
     print(f"\n  快照已保存：{out_file}")
-    print(f"  飞书表：https://w5scrwkn9y.feishu.cn/base/{FEISHU_APP_TOKEN}?table={PICKS_TABLE_ID}")
 
 
 if __name__ == "__main__":

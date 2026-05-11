@@ -26,7 +26,7 @@ from typing import Any
 
 from .. import config
 from ..core import akshare_client, finnhub_client, trends, baostock_client
-from ..adapters import feishu, store
+from ..adapters import legacy_shim as feishu, store
 
 logger = logging.getLogger("stock_research.jobs.enrich_watchlist")
 
@@ -140,10 +140,11 @@ def _format_for_feishu(enriched: dict[str, Any]) -> dict[str, str]:
 
     source_text = "\n".join(f"· {s}" for s in dict.fromkeys(sources))
 
+    # 2026-05-11 PM 第二轮:飞书已退役,直接返回 DuckDB watchlist 列名 dict.
+    # 调用方改用 stock_db.update_watchlist_fields(code, ...) 写库.
     return {
-        config.Fields.INFO_COMPOSITION: info_text,
-        config.Fields.DATA_SOURCE: source_text,
-        config.Fields.SNAPSHOT_DATE: feishu.ts_today_ms(),
+        "info_breakdown": info_text,
+        "source": source_text,
     }
 
 
@@ -154,8 +155,13 @@ def run_all(only_code: str | None = None, do_trends: bool = True,
     watchlist = feishu.fetch_watchlist()
     print(f"[enrich] watchlist {len(watchlist)} 只")
 
+    # 2026-05-11 PM 第二轮:飞书 100% 退役,enrichment 直接 UPDATE DuckDB watchlist.
+    import sys as _sys
+    _sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[2] / "scripts" / "lib"))
+    from stock_db import update_watchlist_fields as _update_wl
+
     results = []
-    feishu_updates = []
+    db_updated = 0
     for w in watchlist:
         code = w["normalized"]["code"]
         name = w["normalized"]["name"]
@@ -173,22 +179,19 @@ def run_all(only_code: str | None = None, do_trends: bool = True,
             logger.warning("enrich_one failed for %s: %s", code, e)
             continue
         results.append(enriched)
-        fields = _format_for_feishu(enriched)
+        fields = _format_for_feishu(enriched)  # 现在返回 DuckDB 列名 dict
         if fields:
-            feishu_updates.append({"record_id": w["record_id"], "fields": fields})
+            db_updated += _update_wl(code, fields)
             print(f"     ✓ 多源 [{', '.join(enriched['sources_used']) or '无'}]")
         time.sleep(sleep_sec)
 
     if results:
         store.save_json(results, config.ENRICH_DIR, "watchlist")
 
-    # 写飞书
-    write_summary = feishu.batch_update(feishu_updates) if feishu_updates else {"success": 0, "failed": 0}
-
-    print(f"\n[enrich] 抓取 {len(results)} / 写飞书 {write_summary['success']} 成功 / {write_summary['failed']} 失败")
+    print(f"\n[enrich] 抓取 {len(results)} / UPDATE DuckDB watchlist {db_updated} 行")
     return {
         "fetched": len(results),
-        **write_summary,
+        "db_updated": db_updated,
     }
 
 

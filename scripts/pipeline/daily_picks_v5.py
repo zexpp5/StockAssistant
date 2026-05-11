@@ -33,18 +33,13 @@ sys.path.insert(0, os.path.join(_REPO, "scripts", "pipeline"))  # sibling: daily
 import json
 import argparse
 import time
-import requests
 from datetime import datetime
 import pandas as pd
 
-from feishu_auth import feishu_token, FEISHU_APP_TOKEN
 from factor_model import fetch_factors_for, combine_factors
 from early_signals import fetch_signals_for, score_analyst, score_insider
 from gics_classifier import classify, score_to_label
-from daily_picks import (
-    fetch_watchlist, fetch_existing_picks_today,
-    PICKS_TABLE_ID, PICKS_BASE, headers,
-)
+from daily_picks import fetch_watchlist
 from stock_db import upsert_picks
 
 
@@ -99,9 +94,8 @@ def main():
             print("   或：使用 --bypass-audit-gate 强行通过（不推荐）\n")
             args.dry_run = True
 
-    token = feishu_token()
-    print("[1/5] 拉 watchlist...")
-    records = fetch_watchlist(token)
+    print("[1/5] 拉 watchlist [DuckDB]...")
+    records = fetch_watchlist()
     print(f"  共 {len(records)} 条")
 
     # 只保留 yfinance 财报齐全的美股（排除 .HK / .SS / .SZ / .KS / .AX）
@@ -213,31 +207,15 @@ def main():
     selected = selected[:args.top]
 
     if args.dry_run:
-        print(f"\n[Dry-Run] 不写入飞书。共 {len(selected)} 只候选")
+        print(f"\n[Dry-Run] 不写 DuckDB。共 {len(selected)} 只候选")
         return
 
     # ============================================================
-    # 5. 写入飞书（可选）+ DuckDB（权威）
+    # 4-5. 写 DuckDB picks (2026-05-11 PM 第二轮:飞书 100% 退役)
     # ============================================================
-    # 2026-05-11 架构调整：飞书 picks 表废弃为通知入口，DuckDB 是 single source of truth
-    # 飞书写入用 FEISHU_WRITE_TABLES=1 应急启用，默认跳过
-    feishu_write = os.environ.get("FEISHU_WRITE_TABLES", "0") == "1"
-    if feishu_write:
-        print(f"\n[4/5] 写入飞书「每日优选」(FEISHU_WRITE_TABLES=1)...")
-    else:
-        print(f"\n[4/5] 跳过飞书写入（FEISHU_WRITE_TABLES=0 · DuckDB 是 single source of truth）")
-    # v6 学术因子模型与 v1 旧体系并存，不互相跳过 —— 用「入选评分」字段区分
-    exclude_codes = set()
-
-    today_ts = int(datetime.strptime(today, "%Y-%m-%d").timestamp() * 1000)
-    success = 0
     db_rows = []
-
+    success = 0
     for s in selected:
-        if s["code"] in exclude_codes:
-            print(f"    · 跳过（今日已入选）: {s['name']}")
-            continue
-
         # GICS 客观分类
         ai_score, theme, sector, industry, source = classify(s["code"])
         ai_label = score_to_label(ai_score)
@@ -251,59 +229,22 @@ def main():
         else:
             grade_label = "⭐ 关注"
 
-        reasons = [
-            f"📊 综合 z-score = {z:+.2f}（排名 {s['rank']} / {len(composite_df)}）",
-            f"📚 因子组合（学术 4 因子）：",
-            f"  · Piotroski F-Score = {s['f_score']}/9（盈利质量）",
-            f"  · 12-1 月动量 = {s['momentum_12_1']:+.1f}%（趋势确认）",
-            f"  · 1 月反转 = {s['reversal_1m']:+.1f}%（短期 mean reversion）",
-            f"  · 分析师上修 90d = {s['analyst_score']}/15 分",
-            f"  · 内部人净买入 6m = {s['insider_score']}/15 分（参考）",
-            f"🏷 GICS 分类：{ai_label} ({source})",
-        ]
-
-        if feishu_write:
-            fields = {
-                "入选日期": today_ts,
-                "股票名称": s["name"],
-                "代码": s["code"],
-                "市场": s["market"] or "美股",
-                "入选评分": grade_label,
-                "综合得分": round(z * 100, 2),  # z 转成百分制方便对比
-                "AI关联度": ai_label,
-                "主题分类": theme,
-                "入选理由": "\n".join(reasons),
-                "跟踪状态": "🟢 在选中",
-                "最近更新": int(datetime.now().timestamp() * 1000),
-            }
-            fields = {k: v for k, v in fields.items() if v not in (None, "")}
-
-            r = requests.post(f"{PICKS_BASE}/records", headers=headers(token),
-                             json={"fields": fields})
-            d = r.json()
-            if d.get("code") == 0:
-                success += 1
-                print(f"    + {s['name']} ({s['code']}) → {grade_label}")
-            else:
-                print(f"    ! 失败 [{s['name']}]: {d.get('msg')}")
-        else:
-            success += 1  # 仅作计数，DuckDB 一定写
-
         db_rows.append({
             "code": s["code"],
             "name": s["name"],
             "market": s["market"] or "美股",
             "rating": grade_label,
             "total_score": round(z * 100, 2),
-            "ai_score": ai_score * 10,  # 0-3 → 0-30
-            "val_score": s["f_score"] * 3,  # 0-9 → 0-27
+            "ai_score": ai_score * 10,
+            "val_score": s["f_score"] * 3,
             "trend_score": min(int(abs(s["momentum_12_1"])), 25) if s["momentum_12_1"] else 0,
             "cred_score": s["analyst_score"],
             "ai_relevance": ai_label,
             "theme": theme,
         })
+        success += 1
 
-    print(f"\n[5/5] 写 DuckDB...")
+    print(f"\n[4/5] 写 DuckDB picks...")
     if db_rows:
         try:
             n = upsert_picks(db_rows)
@@ -311,8 +252,7 @@ def main():
         except Exception as e:
             print(f"  DuckDB 失败: {e}")
 
-    print(f"\n✅ 已入选 {success} 只（v5 学术因子驱动）")
-    print(f"  飞书表：https://w5scrwkn9y.feishu.cn/base/{FEISHU_APP_TOKEN}?table={PICKS_TABLE_ID}")
+    print(f"\n✅ 已入选 {success} 只（v5 学术因子驱动 · DuckDB picks 已落地）")
 
 
 if __name__ == "__main__":

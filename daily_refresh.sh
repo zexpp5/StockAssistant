@@ -1,15 +1,14 @@
 #!/bin/bash
-# AI 股票看板每日自动刷新（25 步）
+# AI 股票看板每日自动刷新
 #
-# 🏛️ 2026-05-11 架构调整：飞书表降级为通知入口，DuckDB 是 single source of truth
-#   ▸ daily_picks / daily_picks_v5 / write_*_to_feishu / fetch_stock_prices / weekly_review
-#     默认都不再写飞书 picks/trade_delta/价格/watchlist 表（仅写 DuckDB）
-#   ▸ 飞书继续承担：watchlist 人工编辑入口 + 早安简报机器人推送
-#   ▸ Dashboard 默认从 DuckDB 读
-#   ▸ 应急写回飞书表：export FEISHU_WRITE_TABLES=1 再跑（不推荐）
+# 🏛️ 2026-05-11 PM 第二轮:飞书 Bitable 100% 退役 — DuckDB 是 single source of truth
+#   ▸ 所有数据读写都走 stock_history.duckdb,飞书 Bitable 不再被读也不再被写
+#   ▸ 飞书剩余角色:morning_brief / defense_watcher 通过 webhook 推送群机器人卡片
+#   ▸ Dashboard 数据全部来自 DuckDB (records + picks + prices JOIN)
+#   ▸ Watchlist 编辑入口:dashboard 内联 CRUD modal (写 DuckDB)
 #
 # 流程：抓价格 → SEC 13F → 13F→json → enrichment → 跨源审计 → v1 优选 → picks 反向审查
-#       → 历史回顾 → v6 学术因子选股 → Markowitz 仓位优化 → 调整清单 → 写飞书
+#       → 历史回顾 → v6 学术因子选股 → Markowitz 仓位优化 → 调整清单
 #       → 风险指标 → 优化方法对比 → 实盘防御 → OpenBB 综合情报
 #       → [A 股] IPO 日历 + 事件日历 + 政策事件
 #       → [A 股] 选股闭环 + plan_a 后处理约束
@@ -19,7 +18,7 @@
 # 安装到 cron（推荐双时段，否则 A 股闭环跑出脏数据）：
 #   crontab -e
 # 然后添加（路径改成你机器上的实际位置）：
-#   # 早上 7:30 — 美股 + 全部不依赖 A 股盘后数据的步骤；A 股闭环（21/21b/22）会自动 skip
+#   # 早上 7:30 — 美股 + 全部不依赖 A 股盘后数据的步骤；A 股闭环（21/22）会自动 skip
 #   30 7  * * * /Users/yanli/我的代码_新/线性视界/StockAssistant/daily_refresh.sh >> /Users/yanli/我的代码_新/线性视界/StockAssistant/daily_refresh.log 2>&1
 #   # 16:30 工作日 — 仅跑 A 股闭环。北向 T+1 + 龙虎榜盘后才出，必须等收盘后跑
 #   30 16 * * 1-5 /Users/yanli/我的代码_新/线性视界/StockAssistant/daily_refresh.sh --a-share-only >> /Users/yanli/我的代码_新/线性视界/StockAssistant/daily_refresh.log 2>&1
@@ -92,7 +91,8 @@ echo "================================================"
 echo "  ⏰ $TIMESTAMP — 每日刷新开始（mode=$MODE, a_share_ready=$A_SHARE_READY）"
 echo "================================================"
 
-# ── A 股闭环步骤封装（21/21b/22）：单独定义以便两种模式复用 ──
+# ── A 股闭环步骤封装（21/22）：单独定义以便两种模式复用 ──
+# Step 21b (写飞书 A 股优选) 已废 (2026-05-11 PM 第二轮): 飞书 Bitable 100% 退役
 run_a_share_steps() {
     if [ "$MODE" = "skip_a_share" ]; then
         echo ""
@@ -104,13 +104,11 @@ run_a_share_steps() {
         echo "[21/25 A 股优选] 跳过 — 当前 ${HOUR}:00 非 A 股收盘后时段（要求 ≥16:00 工作日 或 周末）"
         echo "  原因：北向资金 T+1、龙虎榜盘后才发布，盘前/盘中跑会用 T-1 数据污染选股"
         echo "  收盘后请单独跑：./daily_refresh.sh --a-share-only"
-        echo "[21b/25 写飞书 A 股优选] 跳过 — 同上"
         echo "[22/25 plan_a 后处理] 跳过 — 同上"
         return
     fi
     # require-after-close：python 层再做一次防御，万一 cron 配错也不会跑出脏数据
     run_step "21/25 A 股优选（6 因子闭环）" "-m stock_research.jobs.a_share_picks --dry-run --require-after-close"
-    run_step "21b/25 写飞书（A 股优选）" "scripts/tools/write_a_share_picks_to_feishu.py"
     run_step "22/25 plan_a 后处理（A 股实战约束）" "-m stock_research.jobs.apply_a_share_constraints"
 }
 
@@ -147,10 +145,10 @@ run_step "7/25 picks 反向审查" "-m stock_research.jobs.audit_picks --fast"
 run_step "8/25 历史回顾" "scripts/pipeline/weekly_review.py"
 
 # v6 学术因子流水线（Piotroski + 12-1 动量 + 1 月反转 + PEAD + 分析师）
-run_step "9/25 v6 学术因子选股 + 写飞书" "scripts/pipeline/daily_picks_v5.py"
+run_step "9/25 v6 学术因子选股（已落 DuckDB picks）" "scripts/pipeline/daily_picks_v5.py"
 run_step "10/25 Markowitz 仓位优化（方案 A v6）" "scripts/pipeline/build_plan_a_v5.py"
 run_step "11/25 调整清单（卖/买/调）→ trade_delta.json" "scripts/pipeline/trade_delta.py"
-run_step "12/25 写飞书（trade_delta → 每日优选表）" "scripts/tools/write_trade_delta_to_feishu.py"
+# Step 12 已废 (2026-05-11 PM 第二轮): 飞书 Bitable 100% 退役,trade_delta 走 JSON+DuckDB
 
 # 专业分析数据
 run_step "13/25 风险指标 (VaR/Sharpe/Calmar)" "scripts/pipeline/risk_metrics.py"
@@ -228,9 +226,6 @@ fi
 echo "  📋 主入口 — 早安简报：$DIR/morning_brief.md"
 echo "  HTML（调试）：$DIR/stock_dashboard.html"
 echo "  DuckDB（数据落地）：$DIR/stock_history.duckdb"
-if [ -n "$FEISHU_BASE_TOKEN" ] && [ -n "$FEISHU_PICKS_TABLE_ID" ]; then
-    echo "  每日优选：https://w5scrwkn9y.feishu.cn/base/$FEISHU_BASE_TOKEN?table=$FEISHU_PICKS_TABLE_ID"
-fi
 
 # log 文件 > 5MB 时滚动一次（保留 .1 备份）
 LOG="$DIR/daily_refresh.log"

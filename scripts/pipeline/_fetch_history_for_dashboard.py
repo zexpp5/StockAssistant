@@ -30,10 +30,7 @@ from datetime import datetime
 from pathlib import Path
 
 import yfinance as yf
-from feishu_auth import feishu_token, FEISHU_APP_TOKEN
-import requests
-
-WATCHLIST_TABLE_ID = "tblaEuCPOlXBlSvP"
+from stock_db import fetch_all_watchlist
 
 
 def to_yfinance_ticker(code: str, market: str) -> str | None:
@@ -60,47 +57,25 @@ def to_yfinance_ticker(code: str, market: str) -> str | None:
     return None
 
 
-def fetch_codes_from_feishu():
-    """读飞书 watchlist 拿所有股票（含美股/A股/港股）。"""
-    token = feishu_token()
-    url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{FEISHU_APP_TOKEN}/tables/{WATCHLIST_TABLE_ID}/records"
-    headers = {"Authorization": f"Bearer {token}"}
+def fetch_codes_from_db():
+    """从 DuckDB watchlist 拿所有股票(含美股/A股/港股).
+
+    2026-05-11 PM 第二轮:飞书 100% 退役,直接读 DuckDB.
+    """
+    rows = fetch_all_watchlist()
     out = []
-    page = None
-    while True:
-        params = {"page_size": 100}
-        if page:
-            params["page_token"] = page
-        r = requests.get(url, headers=headers, params=params)
-        d = r.json().get("data", {})
-        for it in d.get("items", []):
-            f = it.get("fields", {}) or {}
-            code_v = f.get("代码")
-            if isinstance(code_v, list) and code_v:
-                code = code_v[0].get("text", "")
-            else:
-                code = str(code_v or "")
-            name_v = f.get("股票名称")
-            if isinstance(name_v, list) and name_v:
-                name = name_v[0].get("text", "")
-            else:
-                name = str(name_v or "")
-            market_v = f.get("市场")
-            if isinstance(market_v, list) and market_v:
-                market = market_v[0].get("text", "") if isinstance(market_v[0], dict) else str(market_v[0])
-            elif isinstance(market_v, dict):
-                market = market_v.get("text", "") or market_v.get("name", "")
-            else:
-                market = str(market_v or "")
-            code = code.strip()
-            yf_ticker = to_yfinance_ticker(code, market)
-            if yf_ticker:
-                # 用原始飞书代码作为 dashboard key，但用 yfinance ticker 拉数据
-                out.append({"feishu_code": code.upper() if yf_ticker == code.upper() else code,
-                            "yf_ticker": yf_ticker, "name": name, "market": market})
-        if not d.get("has_more"):
-            break
-        page = d.get("page_token")
+    for r in rows:
+        code = (r.get("code") or "").strip()
+        if not code:
+            continue
+        name = r.get("name") or ""
+        market = r.get("market") or ""
+        yf_ticker = to_yfinance_ticker(code, market)
+        if yf_ticker:
+            # 保持 dashboard 用的 key 形态:纯字母美股大写,其它保留原样
+            key = code.upper() if yf_ticker == code.upper() else code
+            out.append({"feishu_code": key, "yf_ticker": yf_ticker,
+                        "name": name, "market": market})
     return out
 
 
@@ -121,8 +96,8 @@ def fetch_history(ticker: str, period: str = "2y") -> dict | None:
 
 
 def main():
-    print("[1/3] 拉飞书 watchlist 全市场代码...")
-    stocks = fetch_codes_from_feishu()
+    print("[1/3] 拉 DuckDB watchlist 全市场代码...")
+    stocks = fetch_codes_from_db()
     # 主题按钮 + 核心标的兜底（防止 watchlist 漏录）
     extras = [
         ("NVDA", "Nvidia", "美股"), ("TSM", "TSMC", "美股"), ("AMD", "AMD", "美股"), ("AVGO", "Broadcom", "美股"),
