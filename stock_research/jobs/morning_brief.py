@@ -73,11 +73,9 @@ def _is_a_share(ticker: str) -> bool:
 
 
 # ────────────────────────────────────────────────────────
-# Sparkline helpers — 把 60d 价格画成 Unicode 缩略线
+# 趋势可视化 — emoji 5 档 + 百分比（取代 Unicode block sparkline，
+# 原因：飞书 markdown 字体只渲染 ▁ 和 █ 两档，中间字符被画成同高度实心块）
 # ────────────────────────────────────────────────────────
-
-_SPARK_BARS = "▁▂▃▄▅▆▇█"
-
 
 def _load_history() -> dict:
     """读 history_data.json 的 tickers map，缺则返回空 dict。"""
@@ -87,37 +85,54 @@ def _load_history() -> dict:
     return d.get("tickers") or {}
 
 
-def _sparkline(values: list[float], length: int = 10) -> str:
-    """价格序列降采样到 length 个点，渲染成 8 级 Unicode 缩略线。"""
-    if not values or len(values) < 2:
-        return "—"
-    n = len(values)
-    if n > length:
-        step = n / length
-        sampled = [values[min(n - 1, int(i * step))] for i in range(length)]
-    else:
-        sampled = list(values)
-    lo, hi = min(sampled), max(sampled)
-    if hi == lo:
-        return _SPARK_BARS[3] * len(sampled)
-    span = hi - lo
-    return "".join(_SPARK_BARS[min(7, int((v - lo) / span * 7))] for v in sampled)
+def _trend_emoji(pct: float | None) -> str:
+    """根据涨跌幅% 选 7 档趋势 emoji（区分度比 5 档更高）。"""
+    if pct is None:
+        return "❓"
+    if pct >= 50:
+        return "🚀"  # 飙涨 ≥50%
+    if pct >= 15:
+        return "📈"  # 强涨 15-50%
+    if pct >= 3:
+        return "↗️"  # 小涨 3-15%
+    if pct > -3:
+        return "➡️"  # 横盘 -3 ~ +3%
+    if pct > -15:
+        return "↘️"  # 小跌 -15 ~ -3%
+    if pct > -50:
+        return "📉"  # 强跌 -50 ~ -15%
+    return "💀"  # 暴跌 ≤-50%
+
+
+# 卡片自带的趋势图例（新人能看懂——配合 _trend_emoji 7 档同步使用）
+TREND_LEGEND_SHORT = (
+    "📖 **60d 趋势图例**："
+    "🚀 ≥+50% 飙涨 ｜ 📈 +15~50% 强涨 ｜ ↗️ +3~15% 小涨 ｜ "
+    "➡️ ±3% 横盘 ｜ ↘️ -3~-15% 小跌 ｜ 📉 -15~-50% 强跌 ｜ 💀 ≤-50% 暴跌"
+)
 
 
 def _ticker_sparkline(history: dict, ticker: str, window: int = 60) -> tuple[str, float | None]:
-    """返回 (sparkline, window 天涨跌%)。缺数据时返回 ('—', None)。"""
+    """返回 (趋势 emoji, window 天涨跌%)。
+
+    注：函数名保留 "sparkline" 避免大改 caller 签名，但内部已改用 emoji。
+    飞书 markdown 不能稳定渲染 ▁▂▃▄▅▆▇█，emoji 跨平台兼容性更好。
+    """
     if not history or ticker not in history:
-        return "—", None
+        return "❓", None
     closes = history[ticker].get("close") or []
     if len(closes) < 2:
-        return "—", None
+        return "❓", None
     recent = closes[-window:]
     pct = ((recent[-1] - recent[0]) / recent[0] * 100) if recent[0] else None
-    return _sparkline(recent, length=10), pct
+    return _trend_emoji(pct), pct
 
 
 def _nav_sparkline(risk_metrics: dict | None, length: int = 15) -> dict | None:
-    """组合 NAV 时序压缩成 sparkline。返回 dict 含 spark/total/start/end/maxdd_pct，或 None。"""
+    """组合 NAV 时序 → 趋势 emoji + 关键指标。返回 dict 或 None。
+
+    注：保留 spark 字段名（caller 已用），但内容改为 emoji 趋势。
+    """
     if not risk_metrics:
         return None
     daily = risk_metrics.get("daily_values") or []
@@ -126,10 +141,14 @@ def _nav_sparkline(risk_metrics: dict | None, length: int = 15) -> dict | None:
     values = [float(d.get("value", 0)) for d in daily]
     if not values or values[0] <= 0:
         return None
-    spark = _sparkline(values, length=length)
     total_pct = (values[-1] - values[0]) / values[0] * 100
+    # 算阶段分析：最近 30d 趋势
+    recent_30 = values[-30:] if len(values) >= 30 else values
+    pct_30 = ((recent_30[-1] - recent_30[0]) / recent_30[0] * 100) if recent_30[0] else 0
     return {
-        "spark": spark,
+        "spark": _trend_emoji(total_pct),
+        "spark_30d": _trend_emoji(pct_30),
+        "pct_30d": pct_30,
         "total_pct": total_pct,
         "start_date": daily[0].get("date", "?"),
         "end_date": daily[-1].get("date", "?"),
@@ -329,6 +348,9 @@ def section_picks(plan: dict | None, a_share_picks: dict | None, history: dict |
         if a_lines:
             lines.append(f"**🇨🇳 A 股 ({len(a_lines)} 只 · 盘前数据，16:30 后更准)**")
             lines.extend(a_lines)
+    # 趋势图例（让新人能看懂每只股后面那个 emoji 是什么意思）
+    lines.append("")
+    lines.append(TREND_LEGEND_SHORT)
     return "\n".join(lines) + "\n"
 
 
@@ -364,12 +386,12 @@ def section_ai_alpha(risk_metrics: dict | None) -> str:
         rm = risk_metrics
         lines.append("")
         lines.append("_历史回测参考（不代表未来；崩盘期实测 alpha = **-9.77%**）_")
-        # NAV 净值曲线 — 让用户一眼看到一年时序，比单点 Sharpe 直观
+        # NAV 净值趋势 — emoji 双时间窗（近 30d + 总累计）
         nav = _nav_sparkline(rm)
         if nav:
             lines.append(
-                f"💰 **NAV** {nav['spark']} {nav['total_pct']:+.1f}% · "
-                f"{nav['start_date']} → {nav['end_date']} ({nav['n_days']}d)"
+                f"💰 **NAV 趋势** · 近 30d {nav['spark_30d']} {nav['pct_30d']:+.1f}% · "
+                f"总累计 {nav['spark']} {nav['total_pct']:+.1f}% ({nav['n_days']}d)"
             )
         lines.append(
             f"Sharpe **{rm.get('sharpe', '?')}** · "
@@ -808,6 +830,13 @@ def _build_card_payload() -> dict:
                     section2.append(_two_col_lines(a_lines_pre[:half_a], a_lines_pre[half_a:]))
                 else:
                     section2.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(a_lines_pre)}})
+        # 趋势图例 — note 元素（灰色小字，参照"灯色对照"的展示模式）
+        section2.append({"tag": "note", "elements": [
+            {"tag": "plain_text", "content": (
+                "📖 60d 趋势图例：🚀 ≥+50% 飙涨 ｜ 📈 +15~50% 强涨 ｜ ↗️ +3~15% 小涨 ｜ "
+                "➡️ ±3% 横盘 ｜ ↘️ -3~-15% 小跌 ｜ 📉 -15~-50% 强跌 ｜ 💀 ≤-50% 暴跌"
+            )}
+        ]})
         blocks.extend(section2)
         blocks.append({"tag": "hr"})
 
@@ -845,12 +874,14 @@ def _build_card_payload() -> dict:
         rm = risk_metrics
         section3.append({"tag": "div", "text": {"tag": "lark_md", "content":
             "_历史回测参考（仅参考，不代表未来）_"}})
-        # NAV 净值曲线 — 一年时序压缩 sparkline
+        # NAV 净值趋势 — emoji 双时间窗（近 30d + 总累计）
         nav = _nav_sparkline(rm)
         if nav:
             section3.append({"tag": "div", "text": {"tag": "lark_md", "content":
-                f"💰 **NAV 净值曲线** {nav['spark']} **{nav['total_pct']:+.1f}%**\n"
-                f"{nav['start_date']} → {nav['end_date']} ({nav['n_days']} 天)"}})
+                f"💰 **NAV 净值趋势**\n"
+                f"近 30 天 {nav['spark_30d']} **{nav['pct_30d']:+.1f}%** · "
+                f"总累计 {nav['spark']} **{nav['total_pct']:+.1f}%**\n"
+                f"_{nav['start_date']} → {nav['end_date']} ({nav['n_days']} 天)_"}})
         section3.append(_kpi_row([
             ("回测 Sharpe", str(rm.get("sharpe", "?"))),
             ("Max DD", f"{rm.get('max_drawdown_pct', '?')}%"),
