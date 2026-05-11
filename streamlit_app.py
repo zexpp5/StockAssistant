@@ -136,10 +136,12 @@ st.divider()
 
 # ─────────── Tabs ───────────
 
-(tab_overview, tab_picks, tab_audit, tab_factors, tab_intel, tab_stress,
- tab_a_share, tab_ipo) = st.tabs([
+(tab_overview, tab_picks, tab_charts, tab_watchlist, tab_audit, tab_factors,
+ tab_intel, tab_stress, tab_a_share, tab_ipo) = st.tabs([
     "📌 概览",
     "⭐ 每日推荐",
+    "📈 K 线图表",
+    "🔭 Watchlist",
     "🛡 反向审查",
     "📊 因子治理",
     "🌐 OpenBB 情报",
@@ -220,7 +222,247 @@ with tab_picks:
         st.warning("无 picks 归档；先跑 daily_picks_v5.py + jobs.archive_picks")
 
 
-# ───── Tab 3: 反向审查 ─────
+# ───── Tab 3: K 线图表 + 因子叠加（TV 替代位）─────
+
+@st.cache_data(ttl=300)
+def load_history_data() -> dict:
+    """读 history_data.json 的 tickers map，缺则返回空 dict。"""
+    p = _REPO_ROOT / "history_data.json"
+    if not p.exists():
+        return {}
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+        return d.get("tickers", {}) if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=300)
+def load_plan_v5() -> dict | None:
+    """读 plan_a_v5_constrained 优先，回退 plan_a_v5。"""
+    for fn in ("plan_a_v5_constrained.json", "plan_a_v5.json"):
+        f = _REPO_ROOT / fn
+        if f.exists():
+            try:
+                return json.loads(f.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+    return None
+
+
+with tab_charts:
+    st.header("📈 K 线图表 + 因子叠加")
+    st.caption("替代 TradingView 的最简形态——价格 + 移动均线，叠加你自己系统的观点（权重 / F-Score / regime）")
+
+    hist = load_history_data()
+    plan = load_plan_v5()
+
+    if not hist:
+        st.warning("无 history_data.json — 先跑 `python3 fetch_stock_prices.py` 拉历史价格")
+    else:
+        plan_v5 = (plan.get("plan_v5") or []) if plan else []
+        plan_meta = {e.get("ticker"): e for e in plan_v5}
+
+        col_l, col_m, col_r = st.columns([2, 1, 2])
+        with col_l:
+            all_tickers = sorted(hist.keys())
+            held = [t for t in all_tickers if t in plan_meta]
+            others = [t for t in all_tickers if t not in plan_meta]
+            options = held + others
+            default_idx = 0 if options else None
+            selected = st.selectbox(
+                "选股票（⭐ 标记 = 当前建议组合）",
+                options=options,
+                index=default_idx,
+                format_func=lambda t: f"⭐ {t}" if t in plan_meta else t,
+            )
+        with col_m:
+            window = st.selectbox("时间窗口", [30, 60, 120, 250, 500], index=2)
+        with col_r:
+            show_ma = st.multiselect("移动均线", ["MA20", "MA60", "MA200"],
+                                      default=["MA20", "MA60"])
+
+        ticker_data = hist.get(selected, {})
+        ts = ticker_data.get("ts", [])
+        closes = ticker_data.get("close", [])
+        if not ts or not closes or len(ts) < 5:
+            st.warning(f"{selected} 数据不足（{len(closes)} 天）")
+        else:
+            df = pd.DataFrame({"date": pd.to_datetime(ts), "close": closes}).set_index("date")
+            # 移动均线先在全量上算，再切窗口（避免边界 NaN）
+            if "MA20" in show_ma:
+                df["MA20"] = df["close"].rolling(20).mean()
+            if "MA60" in show_ma:
+                df["MA60"] = df["close"].rolling(60).mean()
+            if "MA200" in show_ma:
+                df["MA200"] = df["close"].rolling(200).mean()
+            df_win = df.tail(window)
+
+            # KPI 行
+            start_p = float(df_win["close"].iloc[0])
+            end_p = float(df_win["close"].iloc[-1])
+            ret_pct = ((end_p - start_p) / start_p * 100) if start_p else 0.0
+            high_p = float(df_win["close"].max())
+            low_p = float(df_win["close"].min())
+            maxdd_pct = float(((df_win["close"] / df_win["close"].cummax() - 1) * 100).min())
+
+            k1, k2, k3, k4, k5 = st.columns(5)
+            k1.metric(f"{window}d 涨跌", f"{ret_pct:+.1f}%", f"${end_p:.2f}")
+            k2.metric(f"{window}d 高", f"${high_p:.2f}")
+            k3.metric(f"{window}d 低", f"${low_p:.2f}")
+            k4.metric(f"{window}d 最大回撤", f"{maxdd_pct:.1f}%")
+            meta = plan_meta.get(selected, {})
+            if meta:
+                w = (meta.get("v5_weight") or meta.get("weight") or 0) * 100
+                k5.metric("⭐ 系统权重", f"{w:.1f}%", f"F-Score {meta.get('f_score', '?')}")
+            else:
+                k5.metric("系统权重", "—", "未在建议组合")
+
+            # 主图（price + MA）
+            st.line_chart(df_win, use_container_width=True, height=420)
+
+            # 系统观点叠加（针对持仓股）
+            st.divider()
+            if meta:
+                st.subheader(f"🤖 系统对 {selected} 的观点")
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.markdown(
+                        f"- **当前建议权重**: {(meta.get('v5_weight') or meta.get('weight') or 0)*100:.2f}%\n"
+                        f"- **F-Score**: {meta.get('f_score', '?')} / 9\n"
+                        f"- **综合 Z 分**: {meta.get('composite_z', meta.get('composite', 0)):+.2f}\n"
+                        f"- **行业**: {meta.get('sector', '—')}"
+                    )
+                with c2:
+                    fpe = meta.get("forward_pe")
+                    peg = meta.get("peg_ratio")
+                    st.markdown(
+                        f"- **Forward P/E**: {fpe if fpe else '—'}\n"
+                        f"- **PEG**: {peg if peg else '—'}\n"
+                        f"- **1Y 涨跌**: {meta.get('one_year_pct', meta.get('y1', '?'))}%\n"
+                        f"- **1M 涨跌**: {meta.get('one_month_pct', meta.get('m1', '?'))}%"
+                    )
+            else:
+                st.info(f"ℹ️ **{selected}** 不在当前建议组合 — 仅展示价格走势，无系统观点")
+
+
+# ───── Tab 4: Watchlist 概览（编辑走飞书 base，本视图只浏览）─────
+
+_SPARK_BARS = "▁▂▃▄▅▆▇█"
+
+
+def _sparkline_str(values: list[float], length: int = 10) -> str:
+    if not values or len(values) < 2:
+        return "—"
+    n = len(values)
+    if n > length:
+        step = n / length
+        sampled = [values[min(n - 1, int(i * step))] for i in range(length)]
+    else:
+        sampled = list(values)
+    lo, hi = min(sampled), max(sampled)
+    if hi == lo:
+        return _SPARK_BARS[3] * len(sampled)
+    span = hi - lo
+    return "".join(_SPARK_BARS[min(7, int((v - lo) / span * 7))] for v in sampled)
+
+
+with tab_watchlist:
+    st.header("🔭 Watchlist 概览")
+    st.caption(
+        "全部已抓价的关注股 + 60d sparkline。"
+        "**编辑**（增删）请去飞书 watchlist base 表 — 此处只读浏览，避免双轨制。"
+    )
+
+    hist = load_history_data()
+    plan = load_plan_v5()
+
+    if not hist:
+        st.warning("无 history_data.json — 先跑 `python3 fetch_stock_prices.py`")
+    else:
+        plan_v5 = (plan.get("plan_v5") or []) if plan else []
+        plan_meta = {e.get("ticker"): e for e in plan_v5}
+
+        rows = []
+        for tkr, td in hist.items():
+            closes = td.get("close") or []
+            if len(closes) < 2:
+                continue
+            recent = closes[-60:]
+            pct60 = ((recent[-1] - recent[0]) / recent[0] * 100) if recent[0] else None
+            pct20 = None
+            if len(closes) >= 20:
+                v20 = closes[-20:]
+                pct20 = ((v20[-1] - v20[0]) / v20[0] * 100) if v20[0] else None
+            meta = plan_meta.get(tkr, {})
+            weight = (meta.get("v5_weight") or meta.get("weight") or 0) * 100
+            rows.append({
+                "ticker": tkr,
+                "name": td.get("name", ""),
+                "market": td.get("market", "") or ("US" if not any(td.get("yf_ticker","").endswith(s) for s in (".SS",".SZ",".BJ",".HK",".KS")) else td.get("yf_ticker","").split(".")[-1]),
+                "sparkline 60d": _sparkline_str(recent, length=12),
+                "60d %": round(pct60, 1) if pct60 is not None else None,
+                "20d %": round(pct20, 1) if pct20 is not None else None,
+                "在建议组合": "⭐" if tkr in plan_meta else "",
+                "权重 %": round(weight, 2) if weight else None,
+                "F-Score": meta.get("f_score") if meta else None,
+                "数据天数": len(closes),
+                "最新价": round(float(closes[-1]), 2),
+            })
+
+        if not rows:
+            st.warning("history_data 里没找到可用 ticker")
+        else:
+            df = pd.DataFrame(rows)
+            # KPI
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("关注总数", len(df))
+            c2.metric("在建议组合", int((df["在建议组合"] == "⭐").sum()))
+            c3.metric("60d 上涨", int((df["60d %"].dropna() > 0).sum()))
+            c4.metric("60d 下跌", int((df["60d %"].dropna() < 0).sum()))
+
+            # 过滤
+            col_f1, col_f2, col_f3 = st.columns([1, 1, 2])
+            with col_f1:
+                only_held = st.checkbox("仅看建议组合", value=False)
+            with col_f2:
+                market_filter = st.multiselect(
+                    "市场",
+                    options=sorted(df["market"].dropna().unique().tolist()),
+                    default=[],
+                )
+            with col_f3:
+                search = st.text_input("ticker 搜索", placeholder="例：NVDA / 600 / 0700")
+
+            df_view = df.copy()
+            if only_held:
+                df_view = df_view[df_view["在建议组合"] == "⭐"]
+            if market_filter:
+                df_view = df_view[df_view["market"].isin(market_filter)]
+            if search:
+                m = df_view["ticker"].str.contains(search, case=False, na=False) | \
+                    df_view["name"].astype(str).str.contains(search, case=False, na=False)
+                df_view = df_view[m]
+
+            st.dataframe(
+                df_view.sort_values("60d %", ascending=False, na_position="last"),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "60d %": st.column_config.NumberColumn(format="%.1f%%"),
+                    "20d %": st.column_config.NumberColumn(format="%.1f%%"),
+                    "权重 %": st.column_config.NumberColumn(format="%.2f%%"),
+                    "最新价": st.column_config.NumberColumn(format="$%.2f"),
+                },
+            )
+
+            st.caption(
+                f"显示 {len(df_view)} / 总 {len(df)} 只 · "
+                "增删股票去飞书 watchlist base 表（tblaEuCPOlXBlSvP），保存后下次 daily_refresh 生效"
+            )
+
+
+# ───── Tab 5: 反向审查 ─────
 with tab_audit:
     st.header("🛡 反向审查")
     if audit_snap:

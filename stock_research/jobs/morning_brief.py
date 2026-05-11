@@ -116,6 +116,30 @@ def _ticker_sparkline(history: dict, ticker: str, window: int = 60) -> tuple[str
     return _sparkline(recent, length=10), pct
 
 
+def _nav_sparkline(risk_metrics: dict | None, length: int = 15) -> dict | None:
+    """组合 NAV 时序压缩成 sparkline。返回 dict 含 spark/total/start/end/maxdd_pct，或 None。"""
+    if not risk_metrics:
+        return None
+    daily = risk_metrics.get("daily_values") or []
+    if len(daily) < 5:
+        return None
+    values = [float(d.get("value", 0)) for d in daily]
+    if not values or values[0] <= 0:
+        return None
+    spark = _sparkline(values, length=length)
+    total_pct = (values[-1] - values[0]) / values[0] * 100
+    return {
+        "spark": spark,
+        "total_pct": total_pct,
+        "start_date": daily[0].get("date", "?"),
+        "end_date": daily[-1].get("date", "?"),
+        "start_value": values[0],
+        "end_value": values[-1],
+        "n_days": len(values),
+        "maxdd_pct": risk_metrics.get("max_drawdown_pct"),
+    }
+
+
 # ────────────────────────────────────────────────────────
 # Section 0: 今天 / 3 天内会发生什么（持仓 earnings + 高相关政策）
 # ────────────────────────────────────────────────────────
@@ -340,6 +364,13 @@ def section_ai_alpha(risk_metrics: dict | None) -> str:
         rm = risk_metrics
         lines.append("")
         lines.append("_历史回测参考（不代表未来；崩盘期实测 alpha = **-9.77%**）_")
+        # NAV 净值曲线 — 让用户一眼看到一年时序，比单点 Sharpe 直观
+        nav = _nav_sparkline(rm)
+        if nav:
+            lines.append(
+                f"💰 **NAV** {nav['spark']} {nav['total_pct']:+.1f}% · "
+                f"{nav['start_date']} → {nav['end_date']} ({nav['n_days']}d)"
+            )
         lines.append(
             f"Sharpe **{rm.get('sharpe', '?')}** · "
             f"MaxDD **{rm.get('max_drawdown_pct', '?')}%** · "
@@ -814,6 +845,12 @@ def _build_card_payload() -> dict:
         rm = risk_metrics
         section3.append({"tag": "div", "text": {"tag": "lark_md", "content":
             "_历史回测参考（仅参考，不代表未来）_"}})
+        # NAV 净值曲线 — 一年时序压缩 sparkline
+        nav = _nav_sparkline(rm)
+        if nav:
+            section3.append({"tag": "div", "text": {"tag": "lark_md", "content":
+                f"💰 **NAV 净值曲线** {nav['spark']} **{nav['total_pct']:+.1f}%**\n"
+                f"{nav['start_date']} → {nav['end_date']} ({nav['n_days']} 天)"}})
         section3.append(_kpi_row([
             ("回测 Sharpe", str(rm.get("sharpe", "?"))),
             ("Max DD", f"{rm.get('max_drawdown_pct', '?')}%"),
