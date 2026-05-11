@@ -46,6 +46,109 @@ import pandas as pd
 import numpy as np
 
 
+# ────────────────────────────────────────────────────────
+# 港股财报 via akshare (2026-05-11 新增,补 yfinance 港股 fundamentals 空白)
+# ────────────────────────────────────────────────────────
+
+# Piotroski 9 项需要的字段 → akshare 港股科目名映射
+# 港股字段名(中文)从 akshare stock_financial_hk_report_em probe 出来,与 yfinance 英文 schema 对齐
+_HK_BS_MAP = {
+    "Total Assets": "总资产",
+    "Current Assets": "流动资产合计",
+    "Total Current Assets": "流动资产合计",
+    "Current Liabilities": "流动负债合计",
+    "Total Current Liabilities": "流动负债合计",
+    "Long Term Debt": "长期贷款",
+    "Ordinary Shares Number": "股本",
+    "Share Issued": "股本",
+}
+_HK_FIN_MAP = {
+    "Net Income": "股东应占溢利",
+    "Net Income Common Stockholders": "股东应占溢利",
+    "Total Revenue": "营运收入",
+    "Operating Revenue": "营运收入",
+    "Gross Profit": "毛利",
+}
+_HK_CF_MAP = {
+    "Operating Cash Flow": "经营业务现金净额",
+    "Total Cash From Operating Activities": "经营业务现金净额",
+    "Cash Flow From Continuing Operating Activities": "经营业务现金净额",
+}
+
+
+def _hk_long_to_wide(df_long: "pd.DataFrame", date_col: str) -> "pd.DataFrame":
+    """akshare 港股财报是长表(每行 = 科目×日期),转成 yfinance 宽表结构(行=科目,列=日期降序)。"""
+    df = df_long.copy()
+    df[date_col] = pd.to_datetime(df[date_col])
+    # 同期同科目多条(港股财报偶有修订)→ 取最新一条
+    df = df.drop_duplicates(subset=["STD_ITEM_NAME", date_col], keep="last")
+    wide = df.pivot(index="STD_ITEM_NAME", columns=date_col, values="AMOUNT")
+    # 列(日期)降序: 最新在前,与 yfinance 一致
+    wide = wide.reindex(sorted(wide.columns, reverse=True), axis=1)
+    return wide
+
+
+def _apply_field_map(wide: "pd.DataFrame", field_map: dict) -> "pd.DataFrame":
+    """把宽表的中文科目行重命名为 yfinance 英文 schema。
+
+    返回 DataFrame 同时含中文行(向后兼容)+ 英文行(yfinance 兼容)。
+    piotroski_f_score 通过 _get_row(candidates=[英文, 中文]) 优先匹配英文。
+    """
+    out_rows = {}
+    for en_name, cn_name in field_map.items():
+        if cn_name in wide.index:
+            out_rows[en_name] = wide.loc[cn_name]
+    if not out_rows:
+        return wide
+    en_df = pd.DataFrame(out_rows).T
+    en_df.columns = wide.columns
+    # concat: 英文行在前,piotroski 优先取到
+    return pd.concat([en_df, wide], axis=0)
+
+
+def _fetch_hk_financials_akshare(ticker: str, retries: int = 1):
+    """拉港股三大表,返回 (fin, bs, cf) 三个 yfinance-style DataFrame。
+
+    Args:
+      ticker: "0700.HK" / "0700" / "00700.HK" 都接受,会规范化成 akshare 需要的 5 位前导零格式
+
+    Returns:
+      (fin, bs, cf): 三个 DataFrame; 失败时对应位置为 None
+    """
+    import akshare as ak
+    # 规范化 ticker: akshare stock_financial_hk_report_em 接受 "00700" 5 位前导零
+    raw = ticker.upper().replace(".HK", "").lstrip("0")
+    ak_code = raw.zfill(5)
+
+    def _safe_fetch(symbol: str):
+        for attempt in range(retries + 1):
+            try:
+                df = ak.stock_financial_hk_report_em(stock=ak_code, symbol=symbol, indicator="年度")
+                if df is None or df.empty:
+                    return None
+                return df
+            except Exception:
+                if attempt < retries:
+                    time.sleep(1.0)
+                    continue
+                return None
+
+    df_bs = _safe_fetch("资产负债表")
+    df_fin = _safe_fetch("利润表")
+    df_cf = _safe_fetch("现金流量表")
+
+    # 资产负债表 用 STD_REPORT_DATE; 利润表/现金流量表 用 REPORT_DATE (akshare 表现不一致)
+    bs = _apply_field_map(_hk_long_to_wide(df_bs, "STD_REPORT_DATE"), _HK_BS_MAP) if df_bs is not None else None
+    fin = _apply_field_map(_hk_long_to_wide(df_fin, "REPORT_DATE"), _HK_FIN_MAP) if df_fin is not None else None
+    cf = _apply_field_map(_hk_long_to_wide(df_cf, "REPORT_DATE"), _HK_CF_MAP) if df_cf is not None else None
+
+    return fin, bs, cf
+
+
+def _is_hk_ticker(ticker: str) -> bool:
+    return ticker.upper().endswith(".HK")
+
+
 def _safe(v):
     try:
         f = float(v)
@@ -72,6 +175,9 @@ def revenue_acceleration_pead(ticker, retries=2):
        论文: Ball-Brown 1968 JAR / Lakonishok 1994 JF
        逻辑: 业绩加速后 60-90 天股票平均跑赢 5%
     """
+    # 港股只有年报+半年报,没季度数据 → PEAD 不可算,优雅返回 None
+    if _is_hk_ticker(ticker):
+        return {"acceleration": None, "error": "hk: no quarterly data"}
     for attempt in range(retries + 1):
         try:
             t = yf.Ticker(ticker)
@@ -132,10 +238,14 @@ def piotroski_f_score(ticker, retries=2):
     """
     for attempt in range(retries + 1):
         try:
-            t = yf.Ticker(ticker)
-            fin = t.financials  # income statement
-            bs = t.balance_sheet
-            cf = t.cashflow
+            # 港股走 akshare(yfinance fundamentals 对港股 404),其余走 yfinance
+            if _is_hk_ticker(ticker):
+                fin, bs, cf = _fetch_hk_financials_akshare(ticker)
+            else:
+                t = yf.Ticker(ticker)
+                fin = t.financials
+                bs = t.balance_sheet
+                cf = t.cashflow
 
             if fin is None or bs is None or cf is None:
                 return {"f_score": None, "details": {}, "data_quality": "fail",

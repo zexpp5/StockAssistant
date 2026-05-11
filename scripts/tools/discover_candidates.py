@@ -118,6 +118,9 @@ def to_yfinance_ticker(raw_tk: str, location: str, exchange: str) -> str | None:
                 break
     if not suffix:
         return None
+    # 港股 yfinance 要求 4 位带前导零 (700→0700 / 09988→9988 / 03690→3690)
+    if suffix == ".HK" and raw_tk.isdigit():
+        raw_tk = raw_tk.lstrip("0").zfill(4)
     return f"{raw_tk}{suffix}"
 
 
