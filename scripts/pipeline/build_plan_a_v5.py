@@ -23,11 +23,12 @@
 """
 import sys
 import os
+_REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
+sys.path.insert(0, _REPO)
 import json
 import numpy as np
 from datetime import datetime, timedelta
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import yfinance as yf
 
 # 用户当前手编方案 A（用于对比）
@@ -100,7 +101,7 @@ def main():
     # ============================================================
     # 1. 从 v5 daily_picks 缓存里拿 Top N 美股
     # ============================================================
-    cache_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "factor_scores_today.json")
+    cache_file = os.path.join(_REPO, "factor_scores_today.json")
     if not os.path.exists(cache_file):
         print(f"❌ 找不到 {cache_file}，先运行 daily_picks_v5.py")
         return
@@ -108,7 +109,7 @@ def main():
     cached = json.load(open(cache_file, encoding="utf-8"))
     factors = cached["factors"]
 
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, _REPO)
     from factor_model import combine_factors
     from early_signals import score_analyst
 
@@ -246,7 +247,7 @@ def main():
         "plan_v5": plan_v5,
         "out_of_v5": [{"name": n, "ticker": t, "current_weight": w} for n, t, w in out_of_v5],
     }
-    out_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plan_a_v5.json")
+    out_file = os.path.join(_REPO, "plan_a_v5.json")
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2, default=str)
     print(f"\n✅ {out_file}")

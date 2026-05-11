@@ -26,6 +26,9 @@ v1 的 daily_picks.py 是 LEGACY，保留作对照基线。
 """
 import sys
 import os
+_REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
+sys.path.insert(0, _REPO)
+sys.path.insert(0, os.path.join(_REPO, "scripts", "pipeline"))  # sibling: daily_picks
 import json
 import argparse
 import time
@@ -33,7 +36,6 @@ import requests
 from datetime import datetime
 import pandas as pd
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from feishu_auth import feishu_token, FEISHU_APP_TOKEN
 from factor_model import fetch_factors_for, combine_factors
 from early_signals import fetch_signals_for, score_analyst, score_insider
@@ -89,7 +91,7 @@ def main():
     # ============================================================
     # 2. 因子拉取（带缓存，避免重复跑 yfinance）
     # ============================================================
-    cache_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), args.cache)
+    cache_file = os.path.join(_REPO, args.cache)
     today = datetime.now().strftime("%Y-%m-%d")
     use_cache = False
     if os.path.exists(cache_file):

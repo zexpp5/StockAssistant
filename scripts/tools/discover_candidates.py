@@ -40,7 +40,7 @@ from datetime import datetime
 import csv
 import requests
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))  # repo root
 
 from feishu_auth import feishu_token
 from daily_picks import fetch_watchlist

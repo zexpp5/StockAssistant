@@ -27,6 +27,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+# 让 stock_research package 可 import（脚本在 scripts/migrate/ 下）
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 import duckdb
 
 from stock_research import config
@@ -35,7 +38,7 @@ from stock_research.adapters.store import _ensure_snapshots_schema
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("migrate_pipeline")
 
-REPO = Path(__file__).resolve().parent
+REPO = Path(__file__).resolve().parents[2]  # repo root
 
 ROOT_FILES = [
     "factor_scores_today.json",

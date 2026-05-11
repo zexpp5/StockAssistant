@@ -10,7 +10,7 @@ import json
 import requests
 from datetime import datetime
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))  # repo root
 from feishu_auth import feishu_token, FEISHU_APP_TOKEN
 
 PICKS_TABLE_ID = "tbl7K88JZ0ZMqPIE"

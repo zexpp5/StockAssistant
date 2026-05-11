@@ -18,6 +18,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+# 让 stock_research package 可 import（脚本在 scripts/migrate/ 下）
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 import duckdb
 
 from stock_research import config

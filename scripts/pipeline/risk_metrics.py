@@ -17,10 +17,11 @@
 ⚠️ 历史数据不代表未来；这些指标只是统计描述
 """
 import sys, os, json, argparse
+_REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
+sys.path.insert(0, _REPO)
 import numpy as np
 from datetime import datetime, timedelta
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import yfinance as yf
 
 # 运行时从 plan_a_v5.json 动态加载（v6 当前推荐组合）
@@ -51,7 +52,7 @@ def load_portfolio_from_plan():
       [(name, ticker, amount_rmb, ccy, weight), ...]
     其中 name 用 ticker 顶替（plan_a_v5.json 无中文名字段），ccy 由后缀推断。
     """
-    plan_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plan_a_v5.json")
+    plan_file = os.path.join(_REPO, "plan_a_v5.json")
     if not os.path.exists(plan_file):
         print(f"❌ {plan_file} 不存在 — 请先跑：python3 build_plan_a_v5.py")
         sys.exit(1)
@@ -303,7 +304,7 @@ def main():
         "daily_values": [{"date": str(d), "value": float(v)} for d, v in portfolio_values],
     }
 
-    out_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "risk_metrics.json")
+    out_file = os.path.join(_REPO, "risk_metrics.json")
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
     print(f"\n✅ 完整数据：{out_file}")

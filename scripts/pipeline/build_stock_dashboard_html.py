@@ -7,11 +7,12 @@ AI 投资研究 Dashboard - 专业研究报告风格
 """
 import sys
 import os
+_REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
+sys.path.insert(0, _REPO)
 import json
 import requests
 from datetime import datetime
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from feishu_auth import feishu_token, FEISHU_APP_TOKEN  # noqa: E402
 
 # 表 ID 走 .env，缺失时回退到本地默认（避免 .env 不全时仪表盘跑不起来）
@@ -19,7 +20,7 @@ TABLE_ID = os.environ.get("FEISHU_WATCHLIST_TABLE_ID") or "tblaEuCPOlXBlSvP"
 PICKS_TABLE_ID = os.environ.get("FEISHU_PICKS_TABLE_ID") or "tbl7K88JZ0ZMqPIE"
 BASE_URL = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{FEISHU_APP_TOKEN}/tables/{TABLE_ID}"
 PICKS_URL = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{FEISHU_APP_TOKEN}/tables/{PICKS_TABLE_ID}"
-OUTPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_dashboard.html")
+OUTPUT = os.path.join(_REPO, "stock_dashboard.html")
 
 
 def headers(token):
@@ -4029,7 +4030,7 @@ def theme_section_html(theme, all_records):
 
 def load_calibration_snapshot():
     """读最新的因子权重校准（stock_research.jobs.calibrate_pick_weights 写出）。"""
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+    path = os.path.join(_REPO,
                         "data", "factor_weights.json")
     if not os.path.exists(path):
         return None
@@ -4292,7 +4293,7 @@ def scoring_rules_panel_html(calib):
 
 def _find_plan_inception_date() -> str | None:
     """DuckDB 里最早的 v6 plan snapshot 日期（YYYY-MM-DD）—— 即 v6 方向定下来那天。"""
-    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_history.duckdb")
+    db_path = os.path.join(_REPO, "stock_history.duckdb")
     if os.path.exists(db_path):
         try:
             import duckdb
@@ -4307,7 +4308,7 @@ def _find_plan_inception_date() -> str | None:
         except Exception:
             pass
     try:
-        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "plan_a_v5.json")) as f:
+        with open(os.path.join(_REPO, "plan_a_v5.json")) as f:
             return (json.load(f).get("generated_at") or "")[:10] or None
     except Exception:
         return None
@@ -4320,7 +4321,7 @@ def _load_inception_plan_from_duckdb() -> dict | None:
     避免 look-ahead bias：之前用今天最新 plan_a_v5.json 的 tickers + 5-08 锚定，
     会把后换入的股票回填到锁定日轨迹里（不可实操、用了未来信息）。
     """
-    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_history.duckdb")
+    db_path = os.path.join(_REPO, "stock_history.duckdb")
     if not os.path.exists(db_path):
         return None
     try:
@@ -4345,7 +4346,7 @@ def _load_plan_v6_at_or_before(date_str: str) -> dict | None:
     用于 P1 动态 rebalance：每周一找"截至本周一最新的推荐方案"调仓。
     若当天没有快照（系统未跑日 / 节假日），自然 fallback 到上一次落库的方案。
     """
-    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_history.duckdb")
+    db_path = os.path.join(_REPO, "stock_history.duckdb")
     if not os.path.exists(db_path):
         return None
     try:
@@ -4773,7 +4774,7 @@ def compute_plan_forward_track(plan: dict, history: dict, benchmark: str = "SPY"
     # 从最新 audit 快照取 ticker → 中文公司名（78 只 watchlist 全覆盖）
     name_map: dict = {}
     try:
-        audit_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+        audit_dir = os.path.join(_REPO,
                                  "data", "snapshots", "audit")
         if os.path.isdir(audit_dir):
             audit_files = sorted([f for f in os.listdir(audit_dir)
@@ -4840,7 +4841,7 @@ compute_plan_backtest = compute_plan_forward_track
 
 def load_audit_snapshot():
     """读最新一次 picks 反向审查快照（JSON 文件路径）。"""
-    audit_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+    audit_dir = os.path.join(_REPO,
                              "data", "snapshots", "audit")
     if not os.path.isdir(audit_dir):
         return None
@@ -4857,7 +4858,7 @@ def load_audit_snapshot():
 
 def load_audit_snapshot_from_db():
     """读最新一次 picks 反向审查快照（DuckDB snapshots 表）。"""
-    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+    db_path = os.path.join(_REPO,
                            "stock_history.duckdb")
     if not os.path.exists(db_path):
         return None
@@ -5038,7 +5039,7 @@ def build():
     print(f"  共 {len(picks)} 条每日优选")
 
     # 读取模拟结果（如果存在）
-    sim_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "simulation_plan_a.json")
+    sim_file = os.path.join(_REPO, "simulation_plan_a.json")
     simulation = {}
     if os.path.exists(sim_file):
         with open(sim_file, encoding="utf-8") as f:
@@ -5047,7 +5048,7 @@ def build():
 
     # 读取专业分析数据 —— 双源：本地 JSON 文件 + DuckDB pipeline 镜像
     def _load_json(name):
-        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
+        p = os.path.join(_REPO, name)
         if os.path.exists(p):
             with open(p, encoding="utf-8") as f:
                 return json.load(f)
@@ -5055,7 +5056,7 @@ def build():
 
     def _load_pipeline_db(name_no_ext):
         """从 DuckDB snapshots 表读 category='pipeline' 最新快照。"""
-        db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stock_history.duckdb")
+        db_path = os.path.join(_REPO, "stock_history.duckdb")
         if not os.path.exists(db_path):
             return {}
         try:

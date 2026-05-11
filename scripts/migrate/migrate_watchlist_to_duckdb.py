@@ -13,7 +13,7 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root（让 feishu_auth / stock_db 可 import）
 
 import requests
 

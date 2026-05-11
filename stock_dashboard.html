@@ -93,7 +93,7 @@
         <span title="数据源">数据源</span>
         <span class="text-[10px] font-mono px-2 py-0.5 rounded border border-emerald-300 bg-emerald-50 text-emerald-800" title="2026-05-11 起 DuckDB 是 single source of truth · 飞书仅作通知">DuckDB</span>
       </div>
-      <div class="text-[10px] text-slate-400">2026-05-11 11:35</div>
+      <div class="text-[10px] text-slate-400">2026-05-11 12:10</div>
       <div class="text-[10px] text-slate-400 leading-snug pt-2 border-t border-slate-100">⚠️ 不构成投资建议<br>崩盘期 alpha = -9.77%</div>
     </div>
   </div>
@@ -104,7 +104,7 @@
   <div class="max-w-7xl mx-auto px-6 py-10">
     <div class="flex items-center gap-3 mb-3">
       <span class="bg-violet-500/20 text-violet-300 text-xs font-bold px-3 py-1 rounded-full">AI 投资研究 · 资深分析员视角</span>
-      <span class="text-slate-400 text-sm">数据更新 2026-05-11 11:35</span>
+      <span class="text-slate-400 text-sm">数据更新 2026-05-11 12:10</span>
     </div>
     <h1 class="text-4xl md:text-5xl font-bold mb-3 leading-tight">AI 主线已轮动到「下一波稀缺资源」拐点</h1>
     <p class="text-lg text-slate-300 max-w-4xl mb-6">算力（NVDA）→ 网络（COHR）→ 电力（GEV/VST）→ 内存（SK Hynix）→ 存储（SanDisk）都已发生。下一波最可能的「百倍候选」在：水冷、稀土、铀、SMR、AI 数据。</p>
@@ -3969,6 +3969,26 @@
     <span id="watchlist-count" class="ml-auto text-xs text-slate-500"></span>
   </div>
 
+  <!-- 链条 / 层级 / 角色 多重筛选 -->
+  <div class="flex items-center gap-2 mb-3 flex-wrap text-xs">
+    <span class="text-slate-500">筛选:</span>
+    <select id="wl-filter-chain" onchange="loadWatchlistTable()" class="px-2 py-1 border border-slate-300 rounded">
+      <option value="">全部链条</option>
+    </select>
+    <select id="wl-filter-tier" onchange="loadWatchlistTable()" class="px-2 py-1 border border-slate-300 rounded">
+      <option value="">全部层级</option>
+      <option value="核心">核心</option>
+      <option value="一线">一线</option>
+      <option value="二线">二线</option>
+      <option value="三线">三线</option>
+      <option value="N/A">N/A</option>
+    </select>
+    <select id="wl-filter-role" onchange="loadWatchlistTable()" class="px-2 py-1 border border-slate-300 rounded">
+      <option value="">全部角色</option>
+    </select>
+    <input id="wl-filter-keyword" oninput="loadWatchlistTable()" type="text" placeholder="搜代码/名称/一句话…" class="px-2 py-1 border border-slate-300 rounded w-48">
+  </div>
+
   <!-- 主表格 -->
   <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
     <table class="w-full text-sm">
@@ -3976,11 +3996,12 @@
         <tr>
           <th class="px-3 py-2 text-left">代码</th>
           <th class="px-3 py-2 text-left">名称</th>
+          <th class="px-3 py-2 text-left">链条</th>
+          <th class="px-3 py-2 text-left">层级</th>
+          <th class="px-3 py-2 text-left">角色</th>
+          <th class="px-3 py-2 text-left">一句话解释(新手向)</th>
           <th class="px-3 py-2 text-left">市场</th>
-          <th class="px-3 py-2 text-left">行业</th>
-          <th class="px-3 py-2 text-left">AI 关联</th>
-          <th class="px-3 py-2 text-left">研究状态</th>
-          <th class="px-3 py-2 text-left">数据可信度</th>
+          <th class="px-3 py-2 text-left">状态</th>
           <th class="px-3 py-2 text-right">操作</th>
         </tr>
       </thead>
@@ -4537,7 +4558,7 @@
   <div class="max-w-7xl mx-auto px-6 text-sm">
     <p class="mb-2"><strong class="text-white">免责声明</strong>：本看板由 Claude AI 基于公开信息生成，仅作研究学习参考，<strong class="text-rose-300">绝不构成任何投资建议</strong>。</p>
     <p class="mb-2">投资有风险，所有交易决策需自行判断、自负盈亏。本看板的数据可能滞后、错误或解读偏差。</p>
-    <p class="text-slate-500">数据源：飞书「股票研究 Watchlist」表 · WebSearch 抓取的最新公司财报 · 数据更新时间 2026-05-11 11:35</p>
+    <p class="text-slate-500">数据源：飞书「股票研究 Watchlist」表 · WebSearch 抓取的最新公司财报 · 数据更新时间 2026-05-11 12:10</p>
   </div>
 </footer>
 

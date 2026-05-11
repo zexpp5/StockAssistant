@@ -18,10 +18,11 @@
 输出：optimization_result.json
 """
 import sys, os, json
+_REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
+sys.path.insert(0, _REPO)
 import numpy as np
 from datetime import datetime, timedelta
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import yfinance as yf
 
 # 方案 A 当前仓位（v2 含北方稀土）
@@ -243,7 +244,7 @@ def main():
         },
     }
 
-    out_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "optimization_result.json")
+    out_file = os.path.join(_REPO, "optimization_result.json")
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2, default=str)
     print(f"\n✅ 完整数据：{out_file}")

@@ -13,13 +13,14 @@ yfinance 价格抓取器
 """
 import sys
 import os
+_REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
+sys.path.insert(0, _REPO)
 import json
 import time
 import argparse
 import requests
 from datetime import datetime
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from feishu_auth import feishu_token, FEISHU_APP_TOKEN  # noqa: E402
 from stock_db import upsert_prices  # noqa: E402
 
@@ -27,7 +28,7 @@ import yfinance as yf  # noqa: E402
 
 TABLE_ID = "tblaEuCPOlXBlSvP"
 BASE_URL = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{FEISHU_APP_TOKEN}/tables/{TABLE_ID}"
-DATA_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = _REPO
 
 
 def headers(token):

@@ -17,7 +17,7 @@ from pathlib import Path
 
 import requests
 
-REPO = Path(__file__).resolve().parent
+REPO = Path(__file__).resolve().parents[2]  # repo root
 sys.path.insert(0, str(REPO))
 
 from feishu_auth import feishu_token, FEISHU_APP_TOKEN

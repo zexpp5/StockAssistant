@@ -5,9 +5,10 @@
 import json
 import sys
 import os
+_REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
+sys.path.insert(0, _REPO)
 from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from stock_research import config
 from stock_research.core import edgar
 from stock_research.adapters import store
@@ -65,7 +66,7 @@ def main():
         }
 
     # 4. 写到根目录
-    out_path = Path(os.path.dirname(os.path.abspath(__file__))) / "track_13f.json"
+    out_path = Path(_REPO) / "track_13f.json"
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
     print(f"✅ Wrote {out_path}: {out_path.stat().st_size:,} bytes")

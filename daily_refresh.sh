@@ -110,7 +110,7 @@ run_a_share_steps() {
     fi
     # require-after-close：python 层再做一次防御，万一 cron 配错也不会跑出脏数据
     run_step "21/25 A 股优选（6 因子闭环）" "-m stock_research.jobs.a_share_picks --dry-run --require-after-close"
-    run_step "21b/25 写飞书（A 股优选）" "write_a_share_picks_to_feishu.py"
+    run_step "21b/25 写飞书（A 股优选）" "scripts/tools/write_a_share_picks_to_feishu.py"
     run_step "22/25 plan_a 后处理（A 股实战约束）" "-m stock_research.jobs.apply_a_share_constraints"
 }
 
@@ -121,8 +121,8 @@ if [ "$MODE" = "a_share_only" ]; then
         exit 1
     fi
     run_a_share_steps
-    run_step "24/25 DuckDB pipeline 同步" "migrate_pipeline_to_duckdb.py"
-    run_step "25/25 重建 HTML" "build_stock_dashboard_html.py"
+    run_step "24/25 DuckDB pipeline 同步" "scripts/migrate/migrate_pipeline_to_duckdb.py"
+    run_step "25/25 重建 HTML" "scripts/pipeline/build_stock_dashboard_html.py"
     run_step "26 早安简报（主入口 · 每天打开看这一份）" "-m stock_research.jobs.morning_brief"
     DONE_TS=$(date '+%Y-%m-%d %H:%M:%S')
     echo ""
@@ -137,25 +137,25 @@ if [ "$MODE" = "a_share_only" ]; then
     exit $?
 fi
 
-run_step "1/25 抓价格" "fetch_stock_prices.py"
+run_step "1/25 抓价格" "scripts/pipeline/fetch_stock_prices.py"
 run_step "2/25 SEC 13F 刷新" "-m stock_research.jobs.refresh_13f"
-run_step "3/25 SEC 13F → track_13f.json（dashboard 用）" "_build_track_13f_from_sec.py"
+run_step "3/25 SEC 13F → track_13f.json（dashboard 用）" "scripts/pipeline/_build_track_13f_from_sec.py"
 run_step "4/25 多源 enrichment" "-m stock_research.jobs.enrich_watchlist --skip-trends"
 run_step "5/25 跨源审计" "-m stock_research.jobs.daily_audit"
-run_step "6/25 每日优选 v1（旧体系）" "daily_picks.py"
+run_step "6/25 每日优选 v1（旧体系）" "scripts/pipeline/daily_picks.py"
 run_step "7/25 picks 反向审查" "-m stock_research.jobs.audit_picks --fast"
-run_step "8/25 历史回顾" "weekly_review.py"
+run_step "8/25 历史回顾" "scripts/pipeline/weekly_review.py"
 
 # v6 学术因子流水线（Piotroski + 12-1 动量 + 1 月反转 + PEAD + 分析师）
-run_step "9/25 v6 学术因子选股 + 写飞书" "daily_picks_v5.py"
-run_step "10/25 Markowitz 仓位优化（方案 A v6）" "build_plan_a_v5.py"
-run_step "11/25 调整清单（卖/买/调）→ trade_delta.json" "trade_delta.py"
-run_step "12/25 写飞书（trade_delta → 每日优选表）" "write_trade_delta_to_feishu.py"
+run_step "9/25 v6 学术因子选股 + 写飞书" "scripts/pipeline/daily_picks_v5.py"
+run_step "10/25 Markowitz 仓位优化（方案 A v6）" "scripts/pipeline/build_plan_a_v5.py"
+run_step "11/25 调整清单（卖/买/调）→ trade_delta.json" "scripts/pipeline/trade_delta.py"
+run_step "12/25 写飞书（trade_delta → 每日优选表）" "scripts/tools/write_trade_delta_to_feishu.py"
 
 # 专业分析数据
-run_step "13/25 风险指标 (VaR/Sharpe/Calmar)" "risk_metrics.py"
-run_step "14/25 仓位优化方法对比" "optimize_portfolio_legacy.py"
-run_step "15/25 历史数据预拉（dashboard 历史 tab 用）" "_fetch_history_for_dashboard.py"
+run_step "13/25 风险指标 (VaR/Sharpe/Calmar)" "scripts/pipeline/risk_metrics.py"
+run_step "14/25 仓位优化方法对比" "scripts/pipeline/optimize_portfolio_legacy.py"
+run_step "15/25 历史数据预拉（dashboard 历史 tab 用）" "scripts/pipeline/_fetch_history_for_dashboard.py"
 
 # v7 实盘防御（C 终极版：VIX + 200MA + 单股 -15% 止损 + 宏观 + PCR）
 run_step "16/25 实盘防御检查" "-m stock_research.jobs.realtime_defense"
@@ -190,7 +190,7 @@ if [ -f "$DISC_FILE" ]; then
     fi
 fi
 if [ "$DISC_STALE" = "1" ]; then
-    run_step "23/25 候选发现（每周）" "discover_candidates.py"
+    run_step "23/25 候选发现（每周）" "scripts/tools/discover_candidates.py"
 else
     AGE_DAY=$(( AGE_SEC / 86400 ))
     echo ""
@@ -201,9 +201,9 @@ fi
 # / history_data / optimization_result / factor_scores_today / reverse_validation_*）
 # 增量插入到 stock_history.duckdb 的 snapshots(category='pipeline') 表，
 # 使「数据源切换 = DuckDB」的看板能拿到当天数据。脚本幂等，按 mtime 时间戳去重。
-run_step "24/25 DuckDB pipeline 同步" "migrate_pipeline_to_duckdb.py"
+run_step "24/25 DuckDB pipeline 同步" "scripts/migrate/migrate_pipeline_to_duckdb.py"
 
-run_step "25/25 重建 HTML" "build_stock_dashboard_html.py"
+run_step "25/25 重建 HTML" "scripts/pipeline/build_stock_dashboard_html.py"
 
 # 26 早安简报 — 这是真正的"主入口"，把所有 JSON 拼成一份每天能读完的 markdown。
 # 设了 FEISHU_BRIEF_WEBHOOK 还会自动推送到飞书群机器人。
