@@ -217,14 +217,23 @@ def run_hk_picks(top_k: int = 12, mode: str = "tertile", dry_run: bool = False,
             mom = momentum.get("momentum_12_1")
             rev = momentum.get("reversal_1m")
 
-            # 南向资金信号（聚合 + 截面）— standby 时直接给中性空值
+            # 南向资金信号（聚合 + 截面）— standby 时给同类型 SouthFlowSignal 对象
+            # 七审 P0：下游 line 237-239 用 south_sig.individual_pct/rank/score（属性访问），
+            # 之前返回 dict 会在 weight=0 默认状态下抛 AttributeError
             if south_weight > 0:
                 south_sig = compute_south_flow_signal(
                     tk, south_components, south_agg, south_all_pcts
                 )
             else:
-                south_sig = {"score": 0.5, "regime": "standby",
-                             "individual_pct": None, "individual_rank": None}
+                from stock_research.core.south_flow_signals import SouthFlowSignal
+                south_sig = SouthFlowSignal(
+                    code=tk,
+                    aggregate_regime="standby",
+                    individual_pct=None,
+                    individual_rank=0.5,
+                    score=0.5,
+                    notes=["standby (FACTOR_WEIGHTS.south_flow=0)"],
+                )
 
             entry = HKPickEntry(
                 code=tk,
