@@ -109,7 +109,9 @@ run_a_share_steps() {
         return
     fi
     # require-after-close：python 层再做一次防御，万一 cron 配错也不会跑出脏数据
-    run_step "21/25 A 股优选（6 因子闭环）" "-m stock_research.jobs.a_share_picks --dry-run --require-after-close"
+    # 2026-05-12 三审：去掉 --dry-run，让 a_share_picks 真写 DuckDB picks 表
+    # （并行会话 b65a488 已加 A 股入 DuckDB 逻辑，不开 dry-run 才能生效）
+    run_step "21/25 A 股优选（6 因子闭环，写 DuckDB）" "-m stock_research.jobs.a_share_picks --require-after-close"
 }
 
 # ── --a-share-only 模式：只跑 A 股闭环 + DuckDB 同步 + 重建 HTML，跳过其他 ──
@@ -148,6 +150,9 @@ run_step "8/25 历史回顾" "scripts/pipeline/weekly_review.py"
 
 # v6 学术因子流水线（Piotroski + 12-1 动量 + 1 月反转 + PEAD + 分析师）
 run_step "9/25 v6 学术因子选股（已落 DuckDB picks）" "scripts/pipeline/daily_picks_v5.py"
+# 9b 港股 picks (b65a488 并行会话新建)：3 因子 + akshare 年报 + yfinance entry
+# 早班可跑（无 spot 依赖），与美股 daily_picks_v5 同时段
+run_step "9b/25 港股 picks（3 因子 + DuckDB picks 表）" "scripts/pipeline/hk_picks.py"
 run_step "10/25 Markowitz 仓位优化（方案 A v6）" "scripts/pipeline/build_plan_a_v5.py"
 # 2026-05-12: step 22 (apply_a_share_constraints) 从 run_a_share_steps 拆出来挪到这里
 #   它的输入是 plan_a_v5.json（美股 plan），输出 plan_a_v5_constrained.json
