@@ -962,6 +962,64 @@ def section_ai_alpha(risk_metrics: dict | None) -> str:
 # Section 3.5: 组合风格暴露 + 因子层 stress（2026-05-12 三审 P0.5）
 # ────────────────────────────────────────────────────────
 
+def _fetch_stock_meta_for_exposure(tickers: list[str]) -> tuple[dict, dict]:
+    """拉 market_cap + beta（per-ticker），传给 factor_exposure 算 size + beta 暴露。
+
+    cache 到 data/cache/stock_meta.json，TTL 7 天（这两个字段月度稳定）。
+    yfinance.Ticker.info 慢（~1-2s/股），12 只组合 ~12-24s 加到 morning_brief；
+    有 cache 后只在 cache miss / TTL 过期时拉。
+    """
+    cache_path = REPO / "data" / "cache" / "stock_meta.json"
+    cache: dict = {}
+    if cache_path.exists():
+        try:
+            cache = json.loads(cache_path.read_text(encoding="utf-8"))
+        except Exception:
+            cache = {}
+
+    cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+    market_caps: dict[str, float] = {}
+    betas: dict[str, float] = {}
+    n_new = 0
+    for tk in tickers:
+        entry = cache.get(tk)
+        if entry and entry.get("fetched_at", "") > cutoff:
+            if entry.get("market_cap"):
+                market_caps[tk] = float(entry["market_cap"])
+            if entry.get("beta"):
+                betas[tk] = float(entry["beta"])
+            continue
+        # cache miss / 过期 → 拉 yfinance.info
+        try:
+            import yfinance as yf
+            info = yf.Ticker(tk).info or {}
+            mc = info.get("marketCap")
+            b = info.get("beta")
+            entry = {
+                "market_cap": float(mc) if mc else None,
+                "beta": float(b) if b else None,
+                "fetched_at": datetime.now().isoformat(timespec="seconds"),
+            }
+            cache[tk] = entry
+            if entry["market_cap"]:
+                market_caps[tk] = entry["market_cap"]
+            if entry["beta"]:
+                betas[tk] = entry["beta"]
+            n_new += 1
+        except Exception as e:
+            logger.debug("yfinance.info 失败 %s: %s", tk, e)
+
+    if n_new > 0:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            cache_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2),
+                                  encoding="utf-8")
+        except Exception as e:
+            logger.warning("stock_meta cache 写入失败: %s", e)
+
+    return market_caps, betas
+
+
 def section_factor_risk(plan: dict | None, factor_scores: dict | None) -> str:
     """组合层 Factor Exposure + Factor Stress 摘要。
 
@@ -992,7 +1050,14 @@ def section_factor_risk(plan: dict | None, factor_scores: dict | None) -> str:
     weights = {p["ticker"]: p.get("v5_weight", 0) or 0 for p in plan_entries}
     if not weights:
         return ""
-    factor_records = build_factor_records_from_pipeline(factors_list)
+
+    # 拉 yfinance.info 的 market_cap + beta（per-ticker），传给 factor_exposure
+    # 让 5 维风格暴露真完整，不只 momentum 单维有数（七审 P1）
+    # cache 30 天（market_cap / beta 月度稳定，避免每次 brief 多 12-24s）
+    market_caps, betas = _fetch_stock_meta_for_exposure(list(weights.keys()))
+    factor_records = build_factor_records_from_pipeline(
+        factors_list, market_caps=market_caps, betas=betas,
+    )
     try:
         exposures = compute_portfolio_exposures(weights, factor_records)
         stress = simulate_factor_stress(exposures)

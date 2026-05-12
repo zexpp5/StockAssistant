@@ -1374,6 +1374,30 @@ function switchDiscoveryView(view) {
             title="日股/韩股/台股/澳股/英股等非美A港的全球 AI 主线扩展标的（稀土 LYC、铀 KAP、内存 SK Hynix、半导体设备 8035/6857、AI 服务器电源 2308 等）">🌏 全球 AI 主线 <span class="text-xs text-slate-400 ml-1" id="db-mkt-cnt-其他">-</span></button>
   </div>
 
+  <!-- 筛选 chips：来源 + 评级（缩小关注范围）-->
+  <div class="flex items-center gap-2 mb-3 flex-wrap text-xs">
+    <span class="text-slate-500">筛选：</span>
+    <button onclick="setDbExplorerFilter('all')" id="db-filter-btn-all"
+            class="db-filter-btn px-2.5 py-1 rounded-full border bg-violet-100 border-violet-300 text-violet-700 font-semibold"
+            title="所有出现在 DB 任意一张表里的股票（130 只）">🌍 全部 <span id="db-filter-cnt-all">-</span></button>
+    <button onclick="setDbExplorerFilter('watchlist')" id="db-filter-btn-watchlist"
+            class="db-filter-btn px-2.5 py-1 rounded-full border bg-white border-slate-300 text-slate-600 hover:bg-violet-50"
+            title="只看你主动加进自选股的标的（watchlist 表）">⭐ 我的自选 <span id="db-filter-cnt-watchlist">-</span></button>
+    <button onclick="setDbExplorerFilter('candidate')" id="db-filter-btn-candidate"
+            class="db-filter-btn px-2.5 py-1 rounded-full border bg-white border-slate-300 text-slate-600 hover:bg-violet-50"
+            title="候选池：DB 里有数据但 watchlist 没收录的（hk_picks 港股白名单 + discovery 美股 AI ETF 候选 + a_share_picks 额外评的）">💎 候选 <span id="db-filter-cnt-candidate">-</span></button>
+    <button onclick="setDbExplorerFilter('star3')" id="db-filter-btn-star3"
+            class="db-filter-btn px-2.5 py-1 rounded-full border bg-white border-slate-300 text-slate-600 hover:bg-violet-50"
+            title="只看 ⭐⭐⭐ 强烈推荐">🔥 ⭐⭐⭐ <span id="db-filter-cnt-star3">-</span></button>
+    <button onclick="setDbExplorerFilter('star_any')" id="db-filter-btn-star_any"
+            class="db-filter-btn px-2.5 py-1 rounded-full border bg-white border-slate-300 text-slate-600 hover:bg-violet-50"
+            title="任何评级（⭐ ⭐⭐ ⭐⭐⭐ 都算，排除无评级的）">⭐ 任意评级 <span id="db-filter-cnt-star_any">-</span></button>
+    <button onclick="setDbExplorerFilter('ai_strong')" id="db-filter-btn-ai_strong"
+            class="db-filter-btn px-2.5 py-1 rounded-full border bg-white border-slate-300 text-slate-600 hover:bg-violet-50"
+            title="AI 关联强度 = 极强（核心标的）/ 强（直接受益）">🤖 AI 强关联 <span id="db-filter-cnt-ai_strong">-</span></button>
+    <span class="text-slate-400 ml-2 text-[11px]">筛选作用于当前市场 tab；与搜索框组合生效</span>
+  </div>
+
   <!-- 主表（代码 + 名称列 sticky 固定，其他列横向滚动；whitespace-nowrap 不串行；表头随页面滚动也固定）-->
   <style>
     #db-explorer-table-wrap td, #db-explorer-table-wrap th { white-space: nowrap; }
@@ -2867,6 +2891,63 @@ async function addDiscoveryToWatchlist(ticker, btnEl) {
 let _dbExplorerData = null;       // {as_of, counts, groups: {美股:[], A股:[], 港股:[], 其他:[]}}
 let _dbExplorerMarket = "美股";    // 当前选中的市场子 tab
 let _dbExplorerExpanded = new Set(); // 当前展开详情的 code 集合
+let _dbExplorerFilter = "all";    // all / watchlist / candidate / star3 / star_any / ai_strong
+
+// 来源 badge：watchlist / picks_only / discovery_only（七审 P2-2 补）
+// API /api/db/all-stocks 已返回 _source_origin 字段，前端这里渲染对应小 badge
+function _originBadge(origin) {
+  const o = origin || "watchlist";
+  if (o === "picks_only") {
+    return `<span class="inline-flex ml-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-50 text-violet-700 ring-1 ring-violet-200" title="picks 表里有，但不在 watchlist 自选股 — 系统 AI 推荐产生">🤖 picks</span>`;
+  }
+  if (o === "discovery_only") {
+    return `<span class="inline-flex ml-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700 ring-1 ring-amber-200" title="discovery 候选发现里有，但既不在自选股也不在 picks — 待人工 review">🔍 discover</span>`;
+  }
+  // watchlist 默认不显示 badge（避免视觉噪音）
+  return "";
+}
+
+// 筛选 chip 判断：一只股票是否符合当前 filter
+function _dbPassesFilter(r, filter) {
+  if (filter === "all") return true;
+  if (filter === "watchlist") return (r._source_origin || "watchlist") === "watchlist";
+  if (filter === "candidate") return (r._source_origin || "") !== "watchlist";
+  if (filter === "star3") return String(r.pick_rating || "").includes("⭐⭐⭐");
+  if (filter === "star_any") return String(r.pick_rating || "").includes("⭐");
+  if (filter === "ai_strong") {
+    const a = String(r.ai_relevance || "");
+    return a.includes("极强") || (a.includes("强") && !a.includes("非"));
+  }
+  return true;
+}
+
+function setDbExplorerFilter(filter) {
+  _dbExplorerFilter = filter;
+  _dbExplorerExpanded = new Set();
+  // 更新 chip 视觉
+  document.querySelectorAll(".db-filter-btn").forEach(b => {
+    const active = b.id === "db-filter-btn-" + filter;
+    b.classList.toggle("bg-violet-100", active);
+    b.classList.toggle("border-violet-300", active);
+    b.classList.toggle("text-violet-700", active);
+    b.classList.toggle("font-semibold", active);
+    b.classList.toggle("bg-white", !active);
+    b.classList.toggle("border-slate-300", !active);
+    b.classList.toggle("text-slate-600", !active);
+  });
+  renderDbExplorerTable();
+}
+
+// 更新筛选 chip 上的命中数（在所有市场 tab union 内统计）
+function _updateFilterChipCounts() {
+  if (!_dbExplorerData) return;
+  const allRows = ["美股","A股","港股","其他"].flatMap(m => _dbExplorerData.groups[m] || []);
+  const filters = ["all","watchlist","candidate","star3","star_any","ai_strong"];
+  filters.forEach(f => {
+    const el = document.getElementById("db-filter-cnt-" + f);
+    if (el) el.textContent = allRows.filter(r => _dbPassesFilter(r, f)).length;
+  });
+}
 
 async function loadDbExplorer() {
   const tbody = document.getElementById("db-explorer-tbody");
@@ -2910,6 +2991,62 @@ async function forceReloadDbExplorer() {
   _dbExplorerData = null;
   _dbExplorerExpanded = new Set();
   await loadDbExplorer();
+}
+
+async function viewTable(name) {
+  const viewer = document.getElementById("db-table-viewer");
+  const loadingEl = document.getElementById("db-table-viewer-loading");
+  const bodyEl = document.getElementById("db-table-viewer-body");
+  const nameEl = document.getElementById("db-table-viewer-name");
+  const countEl = document.getElementById("db-table-viewer-count");
+  if (!viewer) return;
+  nameEl.textContent = name;
+  bodyEl.innerHTML = "";
+  loadingEl.style.display = "";
+  viewer.classList.remove("hidden");
+  viewer.scrollIntoView({ behavior: "smooth", block: "start" });
+  try {
+    const data = await _watchlistApiCall("GET", "/api/db/table/" + encodeURIComponent(name));
+    loadingEl.style.display = "none";
+    countEl.textContent = data.limited
+      ? `返回 ${data.returned} / 共 ${data.total_in_db} 行（截到前 2000 行）`
+      : `共 ${data.returned} 行 · 全部展示`;
+    const cols = data.columns || [];
+    const rows = data.rows || [];
+    if (rows.length === 0) {
+      bodyEl.innerHTML = '<div class="text-slate-400 text-sm py-8 text-center">表为空</div>';
+      return;
+    }
+    // 渲染：每个 cell 截到 200 字符避免 watchlist 等长文本撑爆
+    bodyEl.innerHTML = `
+      <table class="min-w-full text-xs">
+        <thead class="bg-slate-50 text-slate-500 uppercase sticky top-0">
+          <tr>${cols.map(c => `<th class="px-3 py-2 text-left whitespace-nowrap font-mono">${_esc(c)}</th>`).join("")}</tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          ${rows.map(row => `
+            <tr class="hover:bg-violet-50">
+              ${cols.map(c => {
+                const v = row[c];
+                if (v === null || v === undefined) return '<td class="px-3 py-1.5 text-slate-300">—</td>';
+                const s = String(v);
+                const truncated = s.length > 200;
+                const display = truncated ? s.slice(0, 200) + "…" : s;
+                return `<td class="px-3 py-1.5 font-mono text-[11px] whitespace-nowrap ${truncated ? 'cursor-help' : ''}"
+                              ${truncated ? `title="${_esc(s)}"` : ""}>${_esc(display)}</td>`;
+              }).join("")}
+            </tr>`).join("")}
+        </tbody>
+      </table>`;
+  } catch (e) {
+    loadingEl.style.display = "none";
+    bodyEl.innerHTML = `<div class="text-rose-600 text-sm p-4">加载失败: ${_esc(e.message)}</div>`;
+  }
+}
+
+function hideTableViewer() {
+  const viewer = document.getElementById("db-table-viewer");
+  if (viewer) viewer.classList.add("hidden");
 }
 
 function clearDbExplorerSearch() {
@@ -2985,11 +3122,18 @@ function renderDbExplorerTable() {
   const emptyEl = document.getElementById("db-explorer-empty");
   const countEl = document.getElementById("db-explorer-result-count");
   if (!tbody || !_dbExplorerData) return;
-  const rows = (_dbExplorerData.groups[_dbExplorerMarket] || []).slice();
-  const total = rows.length;
-  // 搜索过滤
+  // 1. 当前市场 tab 的所有行
+  const rowsAll = (_dbExplorerData.groups[_dbExplorerMarket] || []).slice();
+  // 2. origin filter（来源 chip）先过一遍
+  const rowsAfterFilter = rowsAll.filter(r => _dbPassesFilter(r, _dbExplorerFilter));
+  const rows = rowsAfterFilter;
+  const total = rowsAfterFilter.length;
+  // 3. 再搜索过滤
   const q = (document.getElementById("db-explorer-search")?.value || "").trim().toLowerCase();
   const filtered = !q ? rows : rows.filter(r => _dbMatchesQuery(r, q));
+
+  // 同步刷新筛选 chip 命中数（跨所有市场 tab）
+  _updateFilterChipCounts();
 
   // 跨 tab 命中数：搜索时每个市场 sub tab 标签上显示「命中数 / 总数」
   ["美股","A股","港股","其他"].forEach(mkt => {
@@ -3043,7 +3187,7 @@ function renderDbExplorerTable() {
     const mainRow = `
       <tr class="hover-row cursor-pointer" onclick="toggleDbExplorerRow('${_esc(r.code)}')">
         <td class="sticky-code px-3 py-2 font-mono text-xs font-semibold text-slate-700">
-          <span class="inline-block text-slate-400 select-none mr-1 w-3">${arrow}</span>${_esc(r.code || "—")}
+          <span class="inline-block text-slate-400 select-none mr-1 w-3">${arrow}</span>${_esc(r.code || "—")}${_originBadge(r._source_origin)}
         </td>
         <td class="sticky-name px-3 py-2 text-slate-800">${_esc(r.name || "—")}</td>
         <td class="px-3 py-2 text-xs text-slate-500">${r.market ? _esc(r.market) : '<span class="text-amber-600" title="watchlist.market 字段为空，自选股编辑里补全 market">⚠️ 未分类</span>'}</td>
