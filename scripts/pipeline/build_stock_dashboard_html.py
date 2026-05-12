@@ -3284,6 +3284,7 @@ function renderStockDetail(data) {
             <th class="px-3 py-2 text-right">一月%</th>
             <th class="px-3 py-2 text-right">一周%</th>
             <th class="px-3 py-2 text-left">币种</th>
+            <th class="px-3 py-2 text-left" title="该股票 AI 元数据最近一次分析/刷新时间（watchlist.updated_at）">分析时间</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-slate-100">
@@ -3307,6 +3308,7 @@ function renderStockDetail(data) {
                 <td class="px-3 py-1.5 text-right font-mono">${_dbFmtPct(p.one_month_pct)}</td>
                 <td class="px-3 py-1.5 text-right font-mono">${_dbFmtPct(p.one_week_pct)}</td>
                 <td class="px-3 py-1.5 text-xs text-slate-500">${_esc(p.currency || "—")}</td>
+                <td class="px-3 py-1.5 text-[10px] font-mono text-slate-400">${_esc(wl.updated_at || "—")}</td>
               </tr>`;
           }).join("")}
         </tbody>
@@ -3338,6 +3340,7 @@ function renderStockDetail(data) {
             <th class="px-3 py-2 text-right">入选时 PEG</th>
             <th class="px-3 py-2 text-right">入选时 fpe</th>
             <th class="px-3 py-2 text-right">入选时 YTD%</th>
+            <th class="px-3 py-2 text-left" title="该股票 AI 元数据最近一次分析/刷新时间（watchlist.updated_at）">分析时间</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-slate-100">
@@ -3355,6 +3358,7 @@ function renderStockDetail(data) {
               <td class="px-3 py-1.5 text-right font-mono">${_dbFmtNum(p.peg_at_pick)}</td>
               <td class="px-3 py-1.5 text-right font-mono">${_dbFmtNum(p.fpe_at_pick)}</td>
               <td class="px-3 py-1.5 text-right font-mono">${_dbFmtPct(p.ytd_at_pick)}</td>
+              <td class="px-3 py-1.5 text-[10px] font-mono text-slate-400">${_esc(wl.updated_at || "—")}</td>
             </tr>`).join("")}
         </tbody>
       </table>
@@ -3382,6 +3386,7 @@ function renderStockDetail(data) {
             <th class="px-3 py-2 text-left">grade</th>
             <th class="px-3 py-2 text-left">评级</th>
             <th class="px-3 py-2 text-left">主题</th>
+            <th class="px-3 py-2 text-left" title="该股票 AI 元数据最近一次分析/刷新时间（watchlist.updated_at）">分析时间</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-slate-100">
@@ -3396,6 +3401,7 @@ function renderStockDetail(data) {
               <td class="px-3 py-1.5">${_esc(r.grade || "—")}</td>
               <td class="px-3 py-1.5">${_esc(r.rating || "—")}</td>
               <td class="px-3 py-1.5">${_esc(r.theme || "—")}</td>
+              <td class="px-3 py-1.5 text-[10px] font-mono text-slate-400">${_esc(wl.updated_at || "—")}</td>
             </tr>`).join("")}
         </tbody>
       </table>
@@ -3423,6 +3429,7 @@ function renderStockDetail(data) {
             <th class="px-3 py-2 text-right">PEAD</th>
             <th class="px-3 py-2 text-right">分析师</th>
             <th class="px-3 py-2 text-right">市值 USD</th>
+            <th class="px-3 py-2 text-left" title="该股票 AI 元数据最近一次分析/刷新时间（watchlist.updated_at）">分析时间</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-slate-100">
@@ -3437,6 +3444,7 @@ function renderStockDetail(data) {
               <td class="px-3 py-1.5 text-right font-mono">${_dbFmtNum(d.pead)}</td>
               <td class="px-3 py-1.5 text-right font-mono">${_dbFmtNum(d.analyst_score)}</td>
               <td class="px-3 py-1.5 text-right font-mono">${_dbFmtCap(d.market_cap_usd)}</td>
+              <td class="px-3 py-1.5 text-[10px] font-mono text-slate-400">${_esc(wl.updated_at || "—")}</td>
             </tr>`).join("")}
         </tbody>
       </table>
@@ -3447,48 +3455,242 @@ function renderStockDetail(data) {
       ${discoveryTable}
     </div>`;
 
-  // 6) earnings_history 季报历史归档（每季一行，归档纵深）
-  const earningsTable = eh.length === 0
+  // 6) earnings_history 季报历史归档（每季一行 + QoQ + 趋势标记 + 文字分析）
+  // eh 是按 fiscal_period 倒序，所以 eh[i+1] 是 eh[i] 的"上一季"
+  const _qoq = (curr, prev) => {
+    if (curr == null || prev == null || prev === 0) return null;
+    return (Number(curr) - Number(prev)) / Math.abs(Number(prev)) * 100;
+  };
+  const _trendLabel = (rev_yoy, rev_qoq, eps_yoy, eps_qoq) => {
+    const r = rev_yoy != null ? rev_yoy : rev_qoq;
+    const e = eps_yoy != null ? eps_yoy : eps_qoq;
+    if (r == null && e == null) return null;
+    const rPos = r != null && r > 20;
+    const rNeg = r != null && r < -10;
+    const ePos = e != null && e > 30;
+    const eNeg = e != null && e < -20;
+    if (rPos && ePos) return "🚀 极强";
+    if (rPos && e != null && e > 0) return "📈 加速";
+    if (r != null && r > 0 && e != null && e > 0) return "↗ 增长";
+    if (rNeg && eNeg) return "💀 极弱";
+    if (rNeg || eNeg) return "📉 减速";
+    if (r != null && Math.abs(r) < 5 && e != null && Math.abs(e) < 5) return "↔ 持平";
+    return "🟡 混合";
+  };
+  const _fmtPctTxt = (v) => v == null ? null : `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`;
+  const _analyzeQuarter = (q, idx, totalQ) => {
+    // 没任何对比数据：标"基期"
+    const hasYoY = q.revenue_yoy_pct != null || q.net_income_yoy_pct != null || q.eps_yoy_pct != null;
+    const hasQoQ = q.revenue_qoq_pct != null || q.net_income_qoq_pct != null || q.eps_qoq_pct != null;
+    if (!hasYoY && !hasQoQ) {
+      return {
+        label: "📍 基期",
+        labelCls: "text-slate-500",
+        detail: idx === totalQ - 1
+          ? "DB 里最早的一季，无更早数据可对比（yfinance 只给 5 季历史，再早需 SEC EDGAR 原文）"
+          : "前一季 / 同期数据缺失，无法计算 YoY / QoQ",
+      };
+    }
+    // 拼分析文字
+    const segs = [];
+    const pushSeg = (name, yoy, qoq) => {
+      const yoy_s = _fmtPctTxt(yoy);
+      const qoq_s = _fmtPctTxt(qoq);
+      if (yoy_s && qoq_s)     segs.push(`${name} YoY ${yoy_s} · QoQ ${qoq_s}`);
+      else if (yoy_s)         segs.push(`${name} YoY ${yoy_s}`);
+      else if (qoq_s)         segs.push(`${name} QoQ ${qoq_s}`);
+    };
+    pushSeg("营收", q.revenue_yoy_pct, q.revenue_qoq_pct);
+    pushSeg("净利", q.net_income_yoy_pct, q.net_income_qoq_pct);
+    pushSeg("EPS",  q.eps_yoy_pct, q.eps_qoq_pct);
+
+    const trend = _trendLabel(q.revenue_yoy_pct, q.revenue_qoq_pct, q.eps_yoy_pct, q.eps_qoq_pct);
+    // 颜色：按趋势分
+    const cls =
+      (trend && trend.includes("极强")) ? "text-emerald-700 font-semibold" :
+      (trend && (trend.includes("加速") || trend.includes("增长"))) ? "text-emerald-700" :
+      (trend && (trend.includes("减速") || trend.includes("极弱"))) ? "text-rose-700" :
+      (trend && trend.includes("持平")) ? "text-slate-600" :
+      "text-amber-700";
+    return {
+      label: trend || "—",
+      labelCls: cls,
+      detail: segs.join(" · ") || "—",
+    };
+  };
+
+  // 计算每季的 QoQ 和趋势
+  const ehAnno = eh.map((q, i) => {
+    const prev = eh[i + 1];   // 上一季（倒序：i+1 比 i 早）
+    return {
+      ...q,
+      revenue_qoq_pct: prev ? _qoq(q.revenue, prev.revenue) : null,
+      net_income_qoq_pct: prev ? _qoq(q.net_income, prev.net_income) : null,
+      eps_qoq_pct: prev ? _qoq(q.diluted_eps, prev.diluted_eps) : null,
+    };
+  });
+
+  // 多源原始财报链接（按市场分发）
+  const code = data.code || "";
+  const market = wl.market || "";
+  const codeUpper = code.toUpperCase();
+  const sourceLinks = [];
+  // Yahoo Finance 财务报表页
+  const yfTicker = _yahooLink(code, market).replace("https://finance.yahoo.com/quote/", "");
+  sourceLinks.push({
+    label: "📊 Yahoo Finance 财务",
+    href: `https://finance.yahoo.com/quote/${yfTicker}/financials`,
+    desc: "yfinance 数据原始来源",
+  });
+  if (market.includes("美股")) {
+    sourceLinks.push({
+      label: "🏛 SEC EDGAR",
+      href: `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${codeUpper}&type=10-Q&dateb=&owner=include&count=40`,
+      desc: "10-Q / 10-K 原始报告（美股法定披露）",
+    });
+    sourceLinks.push({
+      label: "📰 SEC EDGAR 全文",
+      href: `https://efts.sec.gov/LATEST/search-index?q=%22${codeUpper}%22&dateRange=custom&forms=10-Q,10-K`,
+      desc: "EDGAR 全文搜索",
+    });
+  } else if (market.includes("A股")) {
+    const aShareCode = code.replace(/\.(SS|SZ|BJ)$/i, "");
+    sourceLinks.push({
+      label: "📄 巨潮资讯",
+      href: `http://www.cninfo.com.cn/new/fulltextSearch?notautosubmit=&keyWord=${aShareCode}`,
+      desc: "A 股法定披露官方平台（年报/季报 PDF）",
+    });
+    sourceLinks.push({
+      label: "📊 东方财富 F10",
+      href: `https://emweb.securities.eastmoney.com/PC_HSF10/NewFinanceAnalysis/Index?type=web&code=${aShareCode}`,
+      desc: "东方财富 财务分析（含历次财报快照）",
+    });
+  } else if (market.includes("港股")) {
+    const hkPad = code.replace(/\.HK$/i, "").replace(/^0+/, "").padStart(5, "0");
+    sourceLinks.push({
+      label: "📄 港交所披露易",
+      href: `https://www1.hkexnews.hk/search/titlesearch.xhtml?lang=zh&stockCode=${hkPad}&t1=-2`,
+      desc: "HKEXNews（港股法定披露）",
+    });
+  } else if (market.includes("台股") || code.endsWith(".TW")) {
+    const twCode = code.replace(/\.TW$/i, "");
+    sourceLinks.push({
+      label: "📄 公开资讯观测站",
+      href: `https://mops.twse.com.tw/mops/web/t05st02_q1?co_id=${twCode}`,
+      desc: "台股 MOPS 法定披露",
+    });
+  } else if (code.endsWith(".T")) {
+    sourceLinks.push({
+      label: "📄 EDINET",
+      href: `https://disclosure.edinet-fsa.go.jp/E01EW/main`,
+      desc: "日本金融厅披露平台（自行搜证券代码）",
+    });
+  } else if (code.endsWith(".KS")) {
+    sourceLinks.push({
+      label: "📄 DART",
+      href: `https://englishdart.fss.or.kr/`,
+      desc: "韩国金融监督院 DART",
+    });
+  }
+
+  const linksHtml = sourceLinks.map(l =>
+    `<a href="${_esc(l.href)}" target="_blank" title="${_esc(l.desc)}"
+        class="text-xs px-3 py-1.5 rounded bg-white border border-slate-300 text-slate-700 hover:bg-violet-50 hover:border-violet-300 hover:text-violet-700">
+       ${_esc(l.label)} ↗
+     </a>`
+  ).join("");
+
+  // CSS：前两列 sticky 固定（季度末 + 分析），其余横滑
+  const stickyCss = `
+    <style>
+      .earnings-tbl td, .earnings-tbl th { white-space: nowrap; }
+      .earnings-tbl .e-sticky-1, .earnings-tbl .e-sticky-2 { position: sticky; z-index: 2; background: #ffffff; }
+      .earnings-tbl .e-sticky-1 { left: 0;     min-width: 110px; }
+      .earnings-tbl .e-sticky-2 { left: 110px; min-width: 340px; box-shadow: 1px 0 0 rgba(15,23,42,0.06); white-space: normal; }
+      .earnings-tbl thead .e-sticky-1, .earnings-tbl thead .e-sticky-2 { background: #f8fafc; z-index: 3; }
+      .earnings-tbl tbody tr:hover .e-sticky-1, .earnings-tbl tbody tr:hover .e-sticky-2 { background: #f5f3ff; }
+    </style>`;
+
+  const earningsTable = ehAnno.length === 0
     ? '<div class="text-slate-400 text-sm py-4">— 未拉到季报历史 —</div>'
     : `
-    <div class="overflow-x-auto">
-      <table class="min-w-full text-xs">
+    ${stickyCss}
+    <div class="overflow-x-auto border border-slate-200 rounded">
+      <table class="min-w-full text-xs earnings-tbl">
         <thead class="bg-slate-50 text-slate-500 uppercase">
           <tr>
-            <th class="px-3 py-2 text-left">季度末</th>
+            <th class="e-sticky-1 px-3 py-2 text-left">季度末</th>
+            <th class="e-sticky-2 px-3 py-2 text-left">分析</th>
             <th class="px-3 py-2 text-right">营收</th>
-            <th class="px-3 py-2 text-right">营收 YoY</th>
+            <th class="px-3 py-2 text-right" title="YoY = 同比上年同季">YoY</th>
+            <th class="px-3 py-2 text-right" title="QoQ = 环比上一季（行业有季节性时不能直接看，仅作参考）">QoQ</th>
             <th class="px-3 py-2 text-right">净利润</th>
-            <th class="px-3 py-2 text-right">净利润 YoY</th>
+            <th class="px-3 py-2 text-right">YoY</th>
+            <th class="px-3 py-2 text-right">QoQ</th>
             <th class="px-3 py-2 text-right">摊薄 EPS</th>
-            <th class="px-3 py-2 text-right">EPS YoY</th>
+            <th class="px-3 py-2 text-right">YoY</th>
+            <th class="px-3 py-2 text-right">QoQ</th>
             <th class="px-3 py-2 text-left">币种</th>
             <th class="px-3 py-2 text-left">source</th>
-            <th class="px-3 py-2 text-left">抓取时间</th>
+            <th class="px-3 py-2 text-left" title="prices/财报数据从 yfinance 拉到本地 DB 的时间（按 (code, fiscal_period) upsert，每次 backfill 会刷新）">抓取时间</th>
+            <th class="px-3 py-2 text-left" title="该股票 AI 元数据最近一次分析/刷新时间（来自 watchlist.updated_at，跟主表「分析时间」一致）">分析时间</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-slate-100">
-          ${eh.map(q => `
-            <tr class="hover:bg-violet-50">
-              <td class="px-3 py-1.5 font-mono font-semibold">${_esc(q.fiscal_period || "—")}</td>
+          ${ehAnno.map((q, i) => {
+            const a = _analyzeQuarter(q, i, ehAnno.length);
+            return `
+            <tr>
+              <td class="e-sticky-1 px-3 py-1.5 font-mono font-semibold">${_esc(q.fiscal_period || "—")}</td>
+              <td class="e-sticky-2 px-3 py-1.5">
+                <div class="${a.labelCls} text-xs font-semibold">${_esc(a.label)}</div>
+                <div class="text-[11px] text-slate-600 mt-0.5 leading-snug">${_esc(a.detail)}</div>
+              </td>
               <td class="px-3 py-1.5 text-right font-mono">${_dbFmtCap(q.revenue)} ${_esc(q.currency || "")}</td>
               <td class="px-3 py-1.5 text-right font-mono">${_dbFmtPct(q.revenue_yoy_pct)}</td>
+              <td class="px-3 py-1.5 text-right font-mono text-slate-500">${_dbFmtPct(q.revenue_qoq_pct)}</td>
               <td class="px-3 py-1.5 text-right font-mono">${_dbFmtCap(q.net_income)} ${_esc(q.currency || "")}</td>
               <td class="px-3 py-1.5 text-right font-mono">${_dbFmtPct(q.net_income_yoy_pct)}</td>
+              <td class="px-3 py-1.5 text-right font-mono text-slate-500">${_dbFmtPct(q.net_income_qoq_pct)}</td>
               <td class="px-3 py-1.5 text-right font-mono">${_dbFmtNum(q.diluted_eps)}</td>
               <td class="px-3 py-1.5 text-right font-mono">${_dbFmtPct(q.eps_yoy_pct)}</td>
+              <td class="px-3 py-1.5 text-right font-mono text-slate-500">${_dbFmtPct(q.eps_qoq_pct)}</td>
               <td class="px-3 py-1.5 text-xs text-slate-500">${_esc(q.currency || "—")}</td>
               <td class="px-3 py-1.5 text-xs text-slate-500">${_esc(q.source || "—")}</td>
               <td class="px-3 py-1.5 text-[10px] font-mono text-slate-400">${_esc(q.fetched_at || "—")}</td>
-            </tr>`).join("")}
+              <td class="px-3 py-1.5 text-[10px] font-mono text-slate-400">${_esc(wl.updated_at || "—")}</td>
+            </tr>`;
+          }).join("")}
         </tbody>
       </table>
     </div>`;
+
+  // 存储说明：放在卡片顶部，告诉用户数据存哪 + 如何看原始报告
+  const storageNote = `
+    <div class="bg-slate-50 border border-slate-200 rounded p-3 mb-3 text-xs text-slate-600 leading-relaxed">
+      <div class="font-semibold text-slate-700 mb-1">📦 数据来源 & 存储位置</div>
+      <ul class="space-y-0.5 ml-1">
+        <li>· yfinance 抓取的 quarterly_income_stmt 字段（Revenue / Net Income / Diluted EPS）— <strong>非原始 10-Q PDF</strong>，是 yfinance 解析后的结构化数字</li>
+        <li>· 存在本地 DuckDB：<code class="font-mono bg-white px-1 py-0.5 rounded">stock_history.duckdb → earnings_history 表</code>（按 <code>(code, fiscal_period)</code> upsert，不删历史）</li>
+        <li>· 摘要文本存在 <code class="font-mono bg-white px-1 py-0.5 rounded">watchlist.earnings</code> 字段（每次覆盖，看板用）</li>
+        <li>· <strong>要看完整原始报告（10-Q/年报 PDF）</strong>请点下方链接到法定披露平台</li>
+      </ul>
+      <div class="mt-2 flex gap-2 flex-wrap">${linksHtml}</div>
+    </div>`;
+
+  // 分析标记说明
+  const trendLegend = `
+    <div class="text-[10px] text-slate-400 mb-2">
+      分析标记：🚀 极强(rev YoY/QoQ &gt;20% &amp; eps &gt;30%) · 📈 加速 · ↗ 增长 · ↔ 持平 · 🟡 混合 · 📉 减速 · 💀 极弱 · 📍 基期（无对比数据）。优先按 YoY 判，YoY 缺则按 QoQ。
+    </div>`;
+
   const earningsCard = `
     <div class="bg-white border border-slate-200 rounded-lg p-4">
       <h3 class="text-base font-bold text-slate-800 mb-3">💰 earnings_history 季报历史（${eh.length} 季 · 倒序）</h3>
-      <p class="text-xs text-slate-500 mb-3">从 yfinance.quarterly_income_stmt 归档；每季 1 行，按 (code, fiscal_period) upsert，<strong>不会被后续刷新覆盖</strong>，可看历次同比与纵深趋势。</p>
+      ${storageNote}
+      ${trendLegend}
       ${earningsTable}
+      <p class="text-[10px] text-slate-400 mt-2">⚠️ YoY 需要 4 季前的同期数据，当前 yfinance 只给 5 季历史，所以多数老季的 YoY 暂为「—」；DB 每周累积后会自动补齐。QoQ（环比）对季节性行业仅供参考。前两列「季度末 + 分析」固定，其余列可横向滚动查看。</p>
     </div>`;
 
   content.innerHTML = wlMetaCard + earningsCard + pricesCard + picksCard + reviewsCard + discoveryCard;
