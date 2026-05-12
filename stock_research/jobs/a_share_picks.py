@@ -140,6 +140,11 @@ class APickEntry:
     tradable: bool = True
     block_reasons: list[str] = None
 
+    # 软红旗（Altman Z'' / Beneish M，2026-05-12 P0-3b 接入）
+    altman_z: float | None = None
+    beneish_m: float | None = None
+    risk_flags: list[str] = None
+
     # 备注
     notes: list[str] = None
 
@@ -149,6 +154,8 @@ class APickEntry:
             d["notes"] = []
         if d.get("block_reasons") is None:
             d["block_reasons"] = []
+        if d.get("risk_flags") is None:
+            d["risk_flags"] = []
         return d
 
 
@@ -275,6 +282,8 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
 
     # 4. 逐股算因子 + 信号 (北向是 per-stock API，无法批量；其他都已批量)
     print(f"\n[6/7] 逐股计算因子 ({len(records)} 只)...")
+    # PIT (C-5)：as_of=今日，让 factor_model_china 过滤"今天还没披露的"年报
+    as_of_today = datetime.now().strftime("%Y-%m-%d")
     entries: list[APickEntry] = []
     raw_metrics = []  # 用于横截面归一化
     for i, r in enumerate(records, 1):
@@ -284,7 +293,7 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
 
         # Piotroski + 动量 + 反转
         try:
-            f_data = fetch_factors_a_share(code)
+            f_data = fetch_factors_a_share(code, as_of=as_of_today)
             f_score = f_data["piotroski"].get("f_score")
             mom = f_data["momentum"].get("momentum_12_1")
             rev = f_data["momentum"].get("reversal_1m")
@@ -333,6 +342,24 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
         lhb = lhb_factors.get(code)
         lhb_score = lhb.score if lhb else 0.5
 
+        # Altman Z'' / Beneish M 软红旗 — P0-3b (2026-05-12)
+        # 失败不阻塞主流程；金融/地产用 a_share_industry GICS 标记跳过 Z 校验
+        try:
+            from stock_research.core.a_share_fundamental_deep import (
+                altman_z_double_prime_a, beneish_m_score_a, build_a_share_risk_flags,
+            )
+            from stock_research.core.a_share_industry import get_industry as _get_ind
+            altman = altman_z_double_prime_a(code)
+            beneish = beneish_m_score_a(code)
+            ind_info = _get_ind(code) or {}
+            z_inapp = ind_info.get("z_prime_inapplicable", False)
+            risk_flags = build_a_share_risk_flags(altman, beneish, z_prime_inapplicable=z_inapp)
+            altman_z_val = altman.get("z_score") if not altman.get("error") else None
+            beneish_m_val = beneish.get("m_score_adjusted") if not beneish.get("error") else None
+        except Exception as fe:
+            logger.debug("a_share_fundamental_deep failed for %s: %s", code, fe)
+            altman_z_val, beneish_m_val, risk_flags = None, None, []
+
         entry = APickEntry(
             code=_strip_code(code), name=name,
             market=r.get("market", "A 股") or "A 股",
@@ -347,6 +374,9 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
             event_risk_score=event_risk,
             tradable=tradable,
             block_reasons=block_reasons,
+            altman_z=altman_z_val,
+            beneish_m=beneish_m_val,
+            risk_flags=risk_flags,
             notes=[],
         )
         entries.append(entry)
@@ -449,12 +479,42 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
     print(f"\n✅ JSON: {out}")
 
     if dry_run:
-        print("  (dry-run 模式，跳过飞书写入)")
+        print("  (dry-run 模式，跳过 DuckDB picks 写入)")
         return 0
 
-    # 10. 写飞书（复用 daily_picks_v5 的写入逻辑会复杂，先只写 JSON；
-    #     未来可单独加 write_a_share_picks_to_feishu.py）
-    print("  (飞书写入暂未启用 — 后续可加 write_a_share_picks_to_feishu.py)")
+    # 写 DuckDB picks（让 dashboard #picks tab 自动展示 A 股优选 · 2026-05-12 三线独立化）
+    try:
+        from stock_db import upsert_picks
+        db_rows = []
+        for e in selected:
+            if e.composite >= 0.70:
+                grade_label = "⭐⭐⭐ 强烈推荐（综合 ≥0.70）"
+            elif e.composite >= 0.55:
+                grade_label = "⭐⭐ 推荐（综合 ≥0.55）"
+            else:
+                grade_label = "⭐ 关注"
+            risk_flags = getattr(e, "risk_flags", None) or []
+            if risk_flags:
+                grade_label = grade_label + " · " + "｜".join(risk_flags)
+            f_score_val = int((e.f_score_norm or 0) * 9) if e.f_score_norm is not None else 0
+            db_rows.append({
+                "code": e.code,
+                "name": e.name,
+                "market": e.market or "A 股",
+                "rating": grade_label,
+                "total_score": round(e.composite * 100, 2),
+                "ai_score": f_score_val * 10,
+                "val_score": f_score_val * 3,
+                "trend_score": 0,
+                "cred_score": 0,
+                "ai_relevance": e.industry or "—",
+                "theme": e.industry or "A 股",
+            })
+        if db_rows:
+            n = upsert_picks(db_rows)
+            print(f"  ✅ DuckDB picks 写入 {n} 行（市场=A 股）")
+    except Exception as db_e:
+        print(f"  ⚠️  DuckDB picks 写入失败: {db_e}")
     return 0
 
 

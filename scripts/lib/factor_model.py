@@ -169,11 +169,14 @@ def _get_row(df, candidates):
     return None
 
 
-def revenue_acceleration_pead(ticker, retries=2):
+def revenue_acceleration_pead(ticker, as_of=None, retries=2):
     """PEAD 因子（Post-Earnings-Announcement Drift）
        公式: 最近 1 季度 YoY 增速 - 上 1 季度 YoY 增速
        论文: Ball-Brown 1968 JAR / Lakonishok 1994 JF
        逻辑: 业绩加速后 60-90 天股票平均跑赢 5%
+
+       PIT (2026-05-12 C-5)：as_of 给定时，过滤 quarterly columns 到
+       fiscal_date <= as_of - 45 天（季报披露滞后保守估计）
     """
     # 港股只有年报+半年报,没季度数据 → PEAD 不可算,优雅返回 None
     if _is_hk_ticker(ticker):
@@ -185,6 +188,14 @@ def revenue_acceleration_pead(ticker, retries=2):
             if qf is None or qf.shape[1] < 5:
                 return {"acceleration": None, "error": "not enough quarters"}
             cols = sorted(qf.columns, reverse=True)  # 新 → 旧
+
+            # PIT 过滤：仅保留 as_of - 45 天 之前的财报列
+            if as_of is not None:
+                cutoff = pd.to_datetime(as_of) - pd.Timedelta(days=45)
+                cols = [c for c in cols if pd.to_datetime(c) <= cutoff]
+                if len(cols) < 5:
+                    return {"acceleration": None,
+                            "error": f"PIT filter (as_of={as_of}, lag=45d): <5 quarters"}
             rev = _get_row(qf, ["Total Revenue", "Operating Revenue"])
             if rev is None:
                 return {"acceleration": None, "error": "no revenue row"}
@@ -230,11 +241,14 @@ def revenue_acceleration_pead(ticker, retries=2):
             return {"acceleration": None, "error": str(e)}
 
 
-def piotroski_f_score(ticker, retries=2):
+def piotroski_f_score(ticker, as_of=None, retries=2):
     """计算 Piotroski F-Score（0-9）
 
     要求：至少 2 期年度财报（当期 + 上期）
     返回: {'f_score': int, 'details': dict, 'data_quality': 'full'/'partial'/'fail'}
+
+    PIT (2026-05-12 C-5)：as_of 给定时，过滤年报 columns 到
+    fiscal_date <= as_of - 滞后天数（美股 65 / 港股 120 / 其它 90 天）
     """
     for attempt in range(retries + 1):
         try:
@@ -253,6 +267,22 @@ def piotroski_f_score(ticker, retries=2):
             if fin.shape[1] < 2 or bs.shape[1] < 2:
                 return {"f_score": None, "details": {}, "data_quality": "fail",
                         "error": "less than 2 periods"}
+
+            # PIT 过滤：仅保留 as_of - 滞后天数 之前的年报列
+            if as_of is not None:
+                lag_days = 120 if _is_hk_ticker(ticker) else 65
+                cutoff = pd.to_datetime(as_of) - pd.Timedelta(days=lag_days)
+                def _filter(df):
+                    if df is None or df.empty:
+                        return df
+                    valid = [c for c in df.columns if pd.to_datetime(c) <= cutoff]
+                    return df[valid] if valid else df.iloc[:, :0]
+                fin = _filter(fin)
+                bs = _filter(bs)
+                cf = _filter(cf)
+                if fin.shape[1] < 2 or bs.shape[1] < 2:
+                    return {"f_score": None, "details": {}, "data_quality": "fail",
+                            "error": f"PIT filter (as_of={as_of}, lag={lag_days}d): <2 periods"}
 
             # 取最近两年（columns 是日期，左到右一般是新到旧）
             # 但顺序不一定，确保按日期降序
@@ -359,7 +389,14 @@ def piotroski_f_score(ticker, retries=2):
             details["9_dat>0"] = (at_cur is not None and at_prev is not None and at_cur > at_prev)
             score += 1 if details["9_dat>0"] else 0
 
-            return {"f_score": score, "details": details, "data_quality": "full"}
+            # PIT 暴露：让 PIT 测试 / audit 能查"用了哪一年的财报"
+            try:
+                details["latest_fiscal_date"] = pd.Timestamp(cur_y).strftime("%Y-%m-%d")
+            except Exception:
+                details["latest_fiscal_date"] = str(cur_y)
+
+            return {"f_score": score, "details": details, "data_quality": "full",
+                    "as_of": as_of}
         except Exception as e:
             if attempt < retries:
                 time.sleep(2 + attempt * 2)
@@ -407,13 +444,105 @@ def momentum_12_1(ticker, as_of=None, retries=2):
             return {"momentum_12_1": None, "reversal_1m": None, "error": str(e)}
 
 
+def compute_quality_factors(ticker, as_of=None, retries=2):
+    """ROIC / FCFY / Accruals 三个学术质量因子（C-2 2026-05-12）。
+
+    - ROIC = NOPAT / Invested Capital
+      Koller-Goedhart-Wessels (2020) "Valuation"：ROIC 是衡量经营效率黄金标准
+    - FCFY = FCF / Market Cap
+      自由现金流收益率（低估值 + 真现金，避免 PE 受会计调整影响）
+    - Accruals = (Net Income - CFO) / Total Assets
+      Sloan (1996) AR：应计高的公司未来收益显著低（被广泛复现的会计异象）
+
+    PIT (C-5)：as_of 给定时，过滤 columns 到 fiscal_date <= as_of - 65 天。
+    港股 / A 股走各自专版（_is_hk_ticker → 返回 not_supported；A 股见 factor_model_china）
+    """
+    if _is_hk_ticker(ticker):
+        return {"roic": None, "fcfy": None, "accruals": None,
+                "error": "hk: use factor_model_china equivalent"}
+    for attempt in range(retries + 1):
+        try:
+            t = yf.Ticker(ticker)
+            fin = t.financials
+            bs = t.balance_sheet
+            cf = t.cashflow
+            info = t.info or {}
+            market_cap = info.get("marketCap")
+
+            if fin is None or bs is None or cf is None or fin.empty or bs.empty:
+                return {"roic": None, "fcfy": None, "accruals": None,
+                        "error": "missing financials"}
+
+            # PIT 过滤
+            if as_of is not None:
+                cutoff = pd.to_datetime(as_of) - pd.Timedelta(days=65)
+                def _filter(df):
+                    if df is None or df.empty:
+                        return df
+                    valid = [c for c in df.columns if pd.to_datetime(c) <= cutoff]
+                    return df[valid] if valid else df.iloc[:, :0]
+                fin = _filter(fin); bs = _filter(bs); cf = _filter(cf)
+                if fin.shape[1] < 1 or bs.shape[1] < 1 or cf.shape[1] < 1:
+                    return {"roic": None, "fcfy": None, "accruals": None,
+                            "error": f"PIT filter (as_of={as_of}): insufficient periods"}
+
+            cur_y = sorted(fin.columns, reverse=True)[0]
+            bs_cur = sorted(bs.columns, reverse=True)[0]
+            cf_cur = sorted(cf.columns, reverse=True)[0]
+
+            ebit_row = _get_row(fin, ["EBIT", "Operating Income"])
+            ebit = _safe(ebit_row[cur_y]) if ebit_row is not None else None
+
+            ta_row = _get_row(bs, ["Total Assets"])
+            cl_row = _get_row(bs, ["Current Liabilities", "Total Current Liabilities"])
+            ta = _safe(ta_row[bs_cur]) if ta_row is not None else None
+            cl = _safe(cl_row[bs_cur]) if cl_row is not None else None
+            invested_cap = (ta - cl) if (ta is not None and cl is not None) else None
+
+            ni_row = _get_row(fin, ["Net Income", "Net Income Common Stockholders"])
+            ni = _safe(ni_row[cur_y]) if ni_row is not None else None
+
+            ocf_row = _get_row(cf, ["Operating Cash Flow",
+                                    "Cash Flow From Continuing Operating Activities"])
+            ocf = _safe(ocf_row[cf_cur]) if ocf_row is not None else None
+            capex_row = _get_row(cf, ["Capital Expenditure"])
+            capex = _safe(capex_row[cf_cur]) if capex_row is not None else None
+            # yfinance capex 一般是负数（投入），fcf = ocf + capex（负数）
+            fcf = (ocf + capex) if (ocf is not None and capex is not None) else None
+
+            # ROIC: NOPAT / Invested Capital；NOPAT = EBIT × (1 - 美国企业税率 21%)
+            nopat = ebit * (1 - 0.21) if ebit is not None else None
+            roic = (nopat / invested_cap * 100) if (nopat is not None and invested_cap and invested_cap > 0) else None
+
+            # FCFY: FCF / Market Cap
+            fcfy = (fcf / market_cap * 100) if (fcf is not None and market_cap and market_cap > 0) else None
+
+            # Accruals: (NI - CFO) / Total Assets（Sloan 1996）
+            accruals = ((ni - ocf) / ta) if (ni is not None and ocf is not None and ta and ta > 0) else None
+
+            return {
+                "roic": round(roic, 2) if roic is not None else None,
+                "fcfy": round(fcfy, 2) if fcfy is not None else None,
+                "accruals": round(accruals, 4) if accruals is not None else None,
+                "fiscal_date": pd.Timestamp(cur_y).strftime("%Y-%m-%d"),
+                "as_of": as_of,
+                "source": "Koller 2020 (ROIC) + Sloan 1996 (Accruals)",
+            }
+        except Exception as e:
+            if attempt < retries:
+                time.sleep(2 + attempt * 2)
+                continue
+            return {"roic": None, "fcfy": None, "accruals": None, "error": str(e)[:120]}
+
+
 def fetch_factors_for(ticker, as_of=None):
     return {
         "ticker": ticker,
         "as_of": as_of,
-        "piotroski": piotroski_f_score(ticker),
+        "piotroski": piotroski_f_score(ticker, as_of=as_of),
         "momentum": momentum_12_1(ticker, as_of=as_of),
-        "pead": revenue_acceleration_pead(ticker),
+        "pead": revenue_acceleration_pead(ticker, as_of=as_of),
+        "quality": compute_quality_factors(ticker, as_of=as_of),
     }
 
 

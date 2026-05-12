@@ -142,18 +142,20 @@ def main():
         fundamentals_results = cached.get("fundamentals", [])  # 旧 cache 无此字段
     else:
         print(f"\n[2/5] 拉因子（Piotroski + 动量 + 反转 + 分析师 + 内部人 + Z/M-Score）...")
+        # PIT (C-5)：as_of=今日，让 factor_model 过滤掉"今天还没披露的"财报
+        as_of_today = datetime.now().strftime("%Y-%m-%d")
         factor_results, signal_results, fundamentals_results = [], [], []
         for r in us_records:
             tk = r["code"]
             print(f"  · {tk:8} ", end="", flush=True)
             try:
-                f = fetch_factors_for(tk, as_of=None)
+                f = fetch_factors_for(tk, as_of=as_of_today)
                 factor_results.append(f)
                 f_score = f["piotroski"].get("f_score")
                 mom = f["momentum"].get("momentum_12_1")
                 print(f"F={f_score} M={mom}%", end=" ")
                 time.sleep(1.0)
-                s = fetch_signals_for(tk, as_of=None, lookback_days=90)
+                s = fetch_signals_for(tk, as_of=as_of_today, lookback_days=90)
                 signal_results.append(s)
                 ana_ok = s.get("analyst") and "error" not in (s.get("analyst") or {})
                 print(f"分析师={'OK' if ana_ok else '-'}", end=" ")

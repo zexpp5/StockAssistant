@@ -45,7 +45,13 @@ def _get_period(df, period_str):
     return rows.iloc[0]
 
 
-def piotroski_a_share(code, retries=2):
+def piotroski_a_share(code, as_of=None, retries=2):
+    """A 股 Piotroski F-Score（akshare 数据源）。
+
+    PIT (2026-05-12 C-5)：as_of 给定时，过滤年报报告日到 报告日 + 120 天 ≤ as_of
+    （A 股年报披露窗口 1-4 月，120 天滞后保守估计；理想是用真实"披露日"字段
+     但 akshare stock_financial_report_sina 不提供，需 tushare pro 升级）
+    """
     for attempt in range(retries + 1):
         try:
             ak_code = _normalize_a_share_code(code)
@@ -59,6 +65,20 @@ def piotroski_a_share(code, retries=2):
 
             year_ends = bs[bs["报告日"].astype(str).str.endswith("1231")]["报告日"].astype(str).unique()
             year_ends = sorted(year_ends, reverse=True)
+
+            # PIT 过滤：仅保留 报告日 + 120 天 ≤ as_of 的年报
+            if as_of is not None:
+                import pandas as _pd
+                target = _pd.to_datetime(as_of)
+                cutoff = target - _pd.Timedelta(days=120)
+                year_ends = [
+                    y for y in year_ends
+                    if _pd.to_datetime(y, format="%Y%m%d", errors="coerce") <= cutoff
+                ]
+                if len(year_ends) < 2:
+                    return {"f_score": None, "data_quality": "fail",
+                            "error": f"PIT filter (as_of={as_of}, lag=120d): <2 annual reports"}
+
             if len(year_ends) < 2:
                 return {"f_score": None, "data_quality": "fail", "error": "less than 2 annual reports"}
 
@@ -194,12 +214,110 @@ def momentum_a_share(code, as_of=None, retries=2):
             return {"momentum_12_1": None, "reversal_1m": None, "error": str(e)}
 
 
+def quality_a_share(code, as_of=None, retries=2):
+    """A 股质量因子（C-2 2026-05-12）：ROIC / Accruals / FCFY。
+
+    数据源：akshare 三表 + yfinance Ticker.info（拿 marketCap）。
+    A 股年报披露窗口长 120 天，与 piotroski_a_share 同样 PIT 过滤。
+
+    论文：
+      - ROIC: Koller-Goedhart-Wessels (2020) "Valuation"
+      - Accruals: Sloan (1996) AR
+    """
+    import pandas as _pd
+    for attempt in range(retries + 1):
+        try:
+            ak_code = _normalize_a_share_code(code)
+            bs = ak.stock_financial_report_sina(stock=ak_code, symbol="资产负债表")
+            inc = ak.stock_financial_report_sina(stock=ak_code, symbol="利润表")
+            time.sleep(0.5)
+            cf = ak.stock_financial_report_sina(stock=ak_code, symbol="现金流量表")
+            if bs is None or inc is None or cf is None:
+                return {"roic": None, "fcfy": None, "accruals": None,
+                        "error": "missing reports"}
+
+            year_ends = bs[bs["报告日"].astype(str).str.endswith("1231")]["报告日"].astype(str).unique()
+            year_ends = sorted(year_ends, reverse=True)
+
+            # PIT 过滤：120 天 A 股披露滞后
+            if as_of is not None:
+                cutoff = _pd.to_datetime(as_of) - _pd.Timedelta(days=120)
+                year_ends = [
+                    y for y in year_ends
+                    if _pd.to_datetime(y, format="%Y%m%d", errors="coerce") <= cutoff
+                ]
+                if not year_ends:
+                    return {"roic": None, "fcfy": None, "accruals": None,
+                            "error": f"PIT filter (as_of={as_of}, lag=120d): no annual report"}
+
+            if not year_ends:
+                return {"roic": None, "fcfy": None, "accruals": None,
+                        "error": "no annual report"}
+
+            cur_y_yyyy = year_ends[0][:4]
+            period = f"{cur_y_yyyy}1231"
+            bs_cur = _get_period(bs, period)
+            inc_cur = _get_period(inc, period)
+            cf_cur = _get_period(cf, period)
+            if bs_cur is None or inc_cur is None or cf_cur is None:
+                return {"roic": None, "fcfy": None, "accruals": None,
+                        "error": "missing period"}
+
+            ni = _safe(inc_cur.get("净利润"))
+            op_profit = _safe(inc_cur.get("营业利润"))
+            ebit = op_profit  # A 股营业利润 ≈ EBIT（近似，未严格扣减利息）
+            ta = _safe(bs_cur.get("资产总计"))
+            cl = _safe(bs_cur.get("流动负债合计"))
+            cfo = _safe(cf_cur.get("经营活动产生的现金流量净额"))
+            capex = _safe(cf_cur.get("购建固定资产、无形资产和其他长期资产支付的现金"))
+
+            invested_cap = (ta - cl) if (ta is not None and cl is not None) else None
+            # NOPAT：A 股企业所得税率 25%
+            nopat = ebit * (1 - 0.25) if ebit is not None else None
+            roic = (nopat / invested_cap * 100) if (nopat is not None and invested_cap and invested_cap > 0) else None
+            accruals = ((ni - cfo) / ta) if (ni is not None and cfo is not None and ta and ta > 0) else None
+            # FCF = CFO - CapEx（A 股 capex 通常正数 = 流出，所以是减）
+            fcf = (cfo - capex) if (cfo is not None and capex is not None) else None
+
+            # marketCap 走 yfinance（akshare 实时市值要单独 API）
+            market_cap = None
+            try:
+                import yfinance as _yf
+                yf_code = _normalize_a_share_code(code).replace("sh", "").replace("sz", "")
+                if code.startswith("6"):
+                    yf_tk = f"{yf_code}.SS"
+                elif code.startswith(("0", "3")):
+                    yf_tk = f"{yf_code}.SZ"
+                else:
+                    yf_tk = f"{yf_code}.BJ"
+                info = _yf.Ticker(yf_tk).info or {}
+                market_cap = info.get("marketCap")
+            except Exception:
+                pass
+            fcfy = (fcf / market_cap * 100) if (fcf is not None and market_cap and market_cap > 0) else None
+
+            return {
+                "roic": round(roic, 2) if roic is not None else None,
+                "fcfy": round(fcfy, 2) if fcfy is not None else None,
+                "accruals": round(accruals, 4) if accruals is not None else None,
+                "fiscal_year": cur_y_yyyy,
+                "as_of": as_of,
+                "source": "akshare + yfinance marketCap",
+            }
+        except Exception as e:
+            if attempt < retries:
+                time.sleep(2 + attempt * 2)
+                continue
+            return {"roic": None, "fcfy": None, "accruals": None, "error": str(e)[:120]}
+
+
 def fetch_factors_a_share(code, as_of=None):
     return {
         "ticker": code,
         "as_of": as_of,
-        "piotroski": piotroski_a_share(code),
+        "piotroski": piotroski_a_share(code, as_of=as_of),
         "momentum": momentum_a_share(code, as_of=as_of),
+        "quality": quality_a_share(code, as_of=as_of),
     }
 
 
