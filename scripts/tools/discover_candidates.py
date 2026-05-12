@@ -378,13 +378,17 @@ def main():
 
     factors = []
     signals = {}
+    factor_detail_map: dict[str, dict] = {}   # ticker -> piotroski/momentum/pead 完整 dict
+    signal_detail_map: dict[str, dict] = {}   # ticker -> insider/analyst 完整 dict
     for i, u in enumerate(universe, 1):
         tk = u["ticker"]
         try:
             print(f"  [{i}/{len(universe)}] {tk:6}", end=" ", flush=True)
             f = fetch_factors_for(tk)
             factors.append(f)
+            factor_detail_map[tk] = f
             sig = fetch_signals_for(tk)
+            signal_detail_map[tk] = sig
             ana_score, _ = score_analyst(sig.get("analyst"))
             signals[tk] = ana_score
             f_v = f["piotroski"]["f_score"]
@@ -411,6 +415,8 @@ def main():
     for _, row in df.head(args.top).iterrows():
         tk = row["ticker"]
         meta = meta_map.get(tk, {})
+        fd = factor_detail_map.get(tk, {}) or {}
+        sd = signal_detail_map.get(tk, {}) or {}
         candidates.append({
             "ticker": tk,
             "name": meta.get("name", ""),
@@ -424,6 +430,14 @@ def main():
             "analyst_score": float(row["analyst"]),
             "composite_z": float(row["composite"]),
             "rank": int(row["rank"]),
+            # 详细分解 — dashboard expand 区用于组装 ✅ 推荐理由 + ⚠️ 风险点
+            "detail": {
+                "piotroski_details": (fd.get("piotroski") or {}).get("details", {}),
+                "momentum": fd.get("momentum") or {},
+                "pead": fd.get("pead") or {},
+                "analyst": sd.get("analyst") or {},
+                "insider": sd.get("insider") or {},
+            },
         })
 
     print()
@@ -442,7 +456,8 @@ def main():
         print("\n[Dry-Run] 未写 JSON")
         return
 
-    out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), args.out)
+    # args.out 可以是绝对路径或相对当前 cwd 的路径（之前误用 dirname(__file__) 导致写到 scripts/tools/data/）
+    out_path = args.out if os.path.isabs(args.out) else os.path.abspath(args.out)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     payload = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),

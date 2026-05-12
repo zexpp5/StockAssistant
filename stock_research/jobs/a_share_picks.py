@@ -485,6 +485,42 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
     # 写 DuckDB picks（让 dashboard #picks tab 自动展示 A 股优选 · 2026-05-12 三线独立化）
     try:
         from stock_db import upsert_picks
+        # A 股当前价：优先 snapshot.by_code（akshare 快照），缺失则 fallback 到 yfinance
+        # 盘前 / 节假日 snapshot 可能拿不到价格 — yfinance 兜底
+        price_map = {}
+        missing = []
+        if selected and snapshot is not None and hasattr(snapshot, "by_code"):
+            try:
+                for e in selected:
+                    status = snapshot.by_code.get(e.code)
+                    if status and status.price is not None:
+                        try:
+                            v = float(status.price)
+                            price_map[e.code] = v if v == v else None
+                        except Exception:
+                            price_map[e.code] = None
+                    else:
+                        missing.append(e.code)
+            except Exception as pe:
+                logger.warning(f"从 snapshot.by_code 取 A 股价格失败: {pe}")
+                missing = [e.code for e in selected]
+        else:
+            missing = [e.code for e in selected]
+        # yfinance fallback（盘前 / snapshot 失败时兜底）
+        if missing:
+            try:
+                import yfinance as yf
+                for code in missing:
+                    yf_code = code + ('.SS' if code.startswith(('60', '68')) else '.SZ' if code.startswith(('00', '30', '20')) else '.BJ')
+                    try:
+                        h = yf.Ticker(yf_code).history(period="2d")
+                        if not h.empty:
+                            price_map[code] = float(h["Close"].iloc[-1])
+                    except Exception:
+                        pass
+                logger.info(f"yfinance fallback 补齐 {len([c for c in missing if price_map.get(c) is not None])}/{len(missing)} 只")
+            except Exception as ye:
+                logger.warning(f"yfinance fallback 失败: {ye}")
         db_rows = []
         for e in selected:
             if e.composite >= 0.70:
@@ -509,6 +545,8 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
                 "cred_score": 0,
                 "ai_relevance": e.industry or "—",
                 "theme": e.industry or "A 股",
+                "entry_price": price_map.get(e.code),
+                "entry_currency": "CNY",
             })
         if db_rows:
             n = upsert_picks(db_rows)

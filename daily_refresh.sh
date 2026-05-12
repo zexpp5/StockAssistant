@@ -91,8 +91,10 @@ echo "================================================"
 echo "  ⏰ $TIMESTAMP — 每日刷新开始（mode=$MODE, a_share_ready=$A_SHARE_READY）"
 echo "================================================"
 
-# ── A 股闭环步骤封装（21/22）：单独定义以便两种模式复用 ──
+# ── A 股闭环步骤封装：单独定义以便两种模式复用 ──
 # Step 21b (写飞书 A 股优选) 已废 (2026-05-11 PM 第二轮): 飞书 Bitable 100% 退役
+# 2026-05-12: step 22 (apply_a_share_constraints) 拆出独立跑 — 它处理的是美股 plan_v5
+#   不是 A 股 picks，不该被 A 股收盘时间锁；之前合在这里导致美股 plan_constrained 卡 33 小时
 run_a_share_steps() {
     if [ "$MODE" = "skip_a_share" ]; then
         echo ""
@@ -104,12 +106,10 @@ run_a_share_steps() {
         echo "[21/25 A 股优选] 跳过 — 当前 ${HOUR}:00 非 A 股收盘后时段（要求 ≥16:00 工作日 或 周末）"
         echo "  原因：北向资金 T+1、龙虎榜盘后才发布，盘前/盘中跑会用 T-1 数据污染选股"
         echo "  收盘后请单独跑：./daily_refresh.sh --a-share-only"
-        echo "[22/25 plan_a 后处理] 跳过 — 同上"
         return
     fi
     # require-after-close：python 层再做一次防御，万一 cron 配错也不会跑出脏数据
     run_step "21/25 A 股优选（6 因子闭环）" "-m stock_research.jobs.a_share_picks --dry-run --require-after-close"
-    run_step "22/25 plan_a 后处理（A 股实战约束）" "-m stock_research.jobs.apply_a_share_constraints"
 }
 
 # ── --a-share-only 模式：只跑 A 股闭环 + DuckDB 同步 + 重建 HTML，跳过其他 ──
@@ -119,6 +119,8 @@ if [ "$MODE" = "a_share_only" ]; then
         exit 1
     fi
     run_a_share_steps
+    # a_share_picks 跑完后重跑约束器 — A 股 holdings 可能变化，需要刷新美股 plan_constrained
+    run_step "10b/25 plan_a 后处理（美股仓位约束）" "-m stock_research.jobs.apply_a_share_constraints"
     run_step "24/25 DuckDB pipeline 同步" "scripts/migrate/migrate_pipeline_to_duckdb.py"
     run_step "25/25 重建 HTML" "scripts/pipeline/build_stock_dashboard_html.py"
     run_step "26 早安简报（主入口 · 每天打开看这一份）" "-m stock_research.jobs.morning_brief"
@@ -147,6 +149,11 @@ run_step "8/25 历史回顾" "scripts/pipeline/weekly_review.py"
 # v6 学术因子流水线（Piotroski + 12-1 动量 + 1 月反转 + PEAD + 分析师）
 run_step "9/25 v6 学术因子选股（已落 DuckDB picks）" "scripts/pipeline/daily_picks_v5.py"
 run_step "10/25 Markowitz 仓位优化（方案 A v6）" "scripts/pipeline/build_plan_a_v5.py"
+# 2026-05-12: step 22 (apply_a_share_constraints) 从 run_a_share_steps 拆出来挪到这里
+#   它的输入是 plan_a_v5.json（美股 plan），输出 plan_a_v5_constrained.json
+#   命名上叫 "a_share_constraints" 但实际处理美股仓位约束（A 股 holdings → 美股 plan），
+#   不该和 A 股 picks 绑定收盘时间。早班 7:30 就要跑出最新 constrained 版供 dashboard 用。
+run_step "10b/25 plan_a 后处理（美股仓位约束）" "-m stock_research.jobs.apply_a_share_constraints"
 run_step "11/25 调整清单（卖/买/调）→ trade_delta.json" "scripts/pipeline/trade_delta.py"
 # Step 12 已废 (2026-05-11 PM 第二轮): 飞书 Bitable 100% 退役,trade_delta 走 JSON+DuckDB
 
@@ -169,31 +176,17 @@ run_step "18/25 IPO 打新日历" "-m stock_research.jobs.ipo_daily"
 run_step "19/25 事件日历（解禁/减持/财报）" "-m stock_research.jobs.event_calendar_daily"
 run_step "20/25 产业政策事件扫描" "-m stock_research.jobs.policy_scan_daily"
 
-# v9.0 A 股选股闭环（新增）：
+# v9.0 A 股选股闭环：
 #   - a_share_picks: 6 因子合成（Piotroski + 动量 + 反转 + LHB + 北向 + PEAD + 政策）
 #                    + 风险加权 + ST/涨停过滤 + sector_cap → data/a_share_picks.json
-#   - apply_a_share_constraints: 对 plan_a_v5.json 的 A 股仓位应用实战约束 → plan_a_v5_constrained.json
 # ⚠️ 仅在收盘后（≥16:00 工作日 或 周末）执行；早班 7:30 跑会被 A_SHARE_READY=0 跳过
+# 注：apply_a_share_constraints 已从此处拆出（见 step 10b），不再受收盘时间锁
 run_a_share_steps
 
 # 候选发现：扫 SOXX/IGM/IRBO/BAI 找 watchlist 之外的因子高分股。
-# 每只股票要拉 yfinance 财报+价格+分析师，全跑一次 ~20-30 分钟，每周刷新一次足够。
-# 触发条件：data/discovery_candidates.json 不存在 或 mtime 距今 ≥ 6 天。
-DISC_FILE="$DIR/data/discovery_candidates.json"
-DISC_STALE=1
-if [ -f "$DISC_FILE" ]; then
-    AGE_SEC=$(( $(date +%s) - $(stat -f%m "$DISC_FILE" 2>/dev/null || stat -c%Y "$DISC_FILE") ))
-    if [ "$AGE_SEC" -lt 518400 ]; then  # 6 days
-        DISC_STALE=0
-    fi
-fi
-if [ "$DISC_STALE" = "1" ]; then
-    run_step "23/25 候选发现（每周）" "scripts/tools/discover_candidates.py"
-else
-    AGE_DAY=$(( AGE_SEC / 86400 ))
-    echo ""
-    echo "[23/25 候选发现] 跳过 — 上次 $AGE_DAY 天前刚跑过（< 6 天，无需重跑）"
-fi
+# 每只股票要拉 yfinance 财报+价格+分析师，全跑一次 ~20-30 分钟。
+# 2026-05-12 改为每天跑（原来每 6 天）— tab 名「今日候选」需要每日更新对齐 generated_at。
+run_step "23/25 候选发现（每日）" "scripts/tools/discover_candidates.py"
 
 # 2026-05-11 PM: 推荐准确度评估 — 每天跑(即使 discovery 本身跳过),
 # 因为要给过去 70 天的所有推荐刷新 1d/5d/20d/60d alpha 数据。

@@ -450,14 +450,17 @@ def fetch_picks_view(*, conn: duckdb.DuckDBPyConnection | None = None) -> list[d
         SELECT
             r.code, r.name, r.rating, r.pick_date, r.entry_price, r.current_price,
             r.pct, r.days_held, r.grade, r.theme,
-            p.total_score AS score, p.ai_relevance
+            p.total_score AS score, p.ai_relevance,
+            -- 2026-05-12 加：dashboard 卡片 reason 行需要 4 个子分数 + total_score 派生理由
+            p.total_score, p.ai_score, p.val_score, p.trend_score, p.cred_score
         FROM reviews r
         LEFT JOIN picks p ON p.code = r.code AND p.pick_date = r.pick_date
         WHERE r.review_date = (SELECT MAX(review_date) FROM reviews)
         ORDER BY r.code
     """).fetchall()
     cols = ["code", "name", "rating", "pick_date", "entry_price", "current_price",
-            "pct", "days_held", "grade", "theme", "score", "ai_relevance"]
+            "pct", "days_held", "grade", "theme", "score", "ai_relevance",
+            "total_score", "ai_score", "val_score", "trend_score", "cred_score"]
     out = [dict(zip(cols, r)) for r in rows]
     if own:
         conn.close()

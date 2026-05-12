@@ -339,6 +339,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <a href="#chain" data-tab="chain" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🌳 产业链地图</a>
       <a href="#audit" data-tab="audit" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🛡 反向审查</a>
       <a href="#professional" data-tab="professional" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">📊 专业分析</a>
+      <a href="#db-explorer" data-tab="db-explorer" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🗄 DB 全库浏览</a>
     </div>
 
     <hr class="my-4 border-slate-200">
@@ -1320,6 +1321,112 @@ function switchDiscoveryView(view) {
       <div id="chart-opt" style="height:380px"></div>
     </div>
   </div>
+</section>
+
+<!-- ============ 🗄 DB 全库浏览（深度研究 → 数据库内全部股票，按市场分组）============ -->
+<section id="db-explorer" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
+  <div class="mb-6">
+    <div class="flex items-center gap-3 mb-2">
+      <span class="text-3xl">🗄</span>
+      <h2 class="text-2xl font-bold text-slate-900">DB 全库浏览</h2>
+      <span id="db-explorer-as-of" class="ml-2 text-xs font-mono text-slate-500"></span>
+    </div>
+    <p class="text-sm text-slate-600">
+      列出 <code class="text-xs font-mono bg-slate-100 px-1.5 py-0.5 rounded">stock_history.duckdb</code> 里全部股票（按市场分组）。
+      合并三张表：<strong>watchlist</strong>（25 列元数据）+ 最新一行 <strong>prices</strong>（行情/估值/涨幅）+ 最新一行 <strong>picks</strong>（AI 评分）。
+      点行展开看完整字段。
+    </p>
+  </div>
+
+  <!-- API 状态条 -->
+  <div class="flex items-center gap-2 mb-4 text-xs">
+    <span class="text-slate-500">数据源</span>
+    <code class="font-mono bg-slate-100 px-2 py-1 rounded">GET /api/db/all-stocks</code>
+    <span id="db-explorer-status" class="px-2 py-0.5 rounded bg-slate-100 text-slate-500">检测中…</span>
+    <button onclick="forceReloadDbExplorer()"
+            title="清前端缓存，重新调 /api/db/all-stocks 从 DuckDB 取最新数据。第一次进 tab 会拉一次然后缓存；如果在自选股那边新增/编辑了股票、或日终 refresh 跑过，点这个能看到最新。"
+            class="ml-auto text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">🔄 从数据库重新拉取</button>
+  </div>
+
+  <!-- 搜索框（独立一行，更醒目）-->
+  <div class="mb-3 flex items-center gap-2">
+    <div class="relative flex-1 max-w-2xl">
+      <span class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">🔍</span>
+      <input id="db-explorer-search" type="text"
+             placeholder="按代码 / 名称 / 行业 / 链条 / 业务 / 主题搜索…(跨市场 tab 命中数会显示在每个 tab 上)"
+             class="w-full pl-10 pr-9 py-2 text-sm border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-violet-300 focus:border-violet-400"
+             oninput="renderDbExplorerTable()">
+      <button onclick="clearDbExplorerSearch()" title="清空搜索框内容"
+              class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-sm leading-none px-1">✕</button>
+    </div>
+    <button onclick="resetDbExplorer()"
+            title="清空搜索框 + 收起所有展开的详情行，回到刚进 tab 的状态"
+            class="text-xs px-3 py-2 rounded border border-slate-300 text-slate-700 hover:bg-slate-50 whitespace-nowrap">↻ 重置视图</button>
+    <span id="db-explorer-result-count" class="text-xs text-slate-500 whitespace-nowrap"></span>
+  </div>
+
+  <!-- 市场子 tab -->
+  <div class="flex gap-2 mb-4 border-b border-slate-200">
+    <button onclick="switchDbExplorerMarket('美股')"  id="db-mkt-btn-美股"  class="db-mkt-btn px-4 py-2 text-sm font-medium border-b-2 border-violet-500 text-violet-700 -mb-px">🇺🇸 美股 <span class="text-xs text-slate-400 ml-1" id="db-mkt-cnt-美股">-</span></button>
+    <button onclick="switchDbExplorerMarket('A股')"   id="db-mkt-btn-A股"   class="db-mkt-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-violet-600 -mb-px">🇨🇳 A 股 <span class="text-xs text-slate-400 ml-1" id="db-mkt-cnt-A股">-</span></button>
+    <button onclick="switchDbExplorerMarket('港股')"  id="db-mkt-btn-港股"  class="db-mkt-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-violet-600 -mb-px">🇭🇰 港股 <span class="text-xs text-slate-400 ml-1" id="db-mkt-cnt-港股">-</span></button>
+    <button onclick="switchDbExplorerMarket('其他')"  id="db-mkt-btn-其他"  class="db-mkt-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-violet-600 -mb-px">🌐 其他 <span class="text-xs text-slate-400 ml-1" id="db-mkt-cnt-其他">-</span></button>
+  </div>
+
+  <!-- 主表（代码 + 名称列 sticky 固定，其他列横向滚动；whitespace-nowrap 不串行；表头随页面滚动也固定）-->
+  <style>
+    #db-explorer-table-wrap td, #db-explorer-table-wrap th { white-space: nowrap; }
+    /* 表头 sticky top：向下滚长列表时仍可见列名 */
+    #db-explorer-table-wrap thead th { position: sticky; top: 0; background: #f8fafc; z-index: 4; box-shadow: 0 1px 0 rgba(15,23,42,0.06); }
+    #db-explorer-table-wrap .sticky-code,
+    #db-explorer-table-wrap .sticky-name { position: sticky; z-index: 2; background: #ffffff; }
+    #db-explorer-table-wrap .sticky-code { left: 0; min-width: 110px; }
+    #db-explorer-table-wrap .sticky-name { left: 110px; min-width: 170px; box-shadow: 1px 0 0 rgba(15,23,42,0.06); }
+    /* 表头 + sticky 列交叉处：z-index 要更高 */
+    #db-explorer-table-wrap thead th.sticky-code,
+    #db-explorer-table-wrap thead th.sticky-name { background: #f8fafc; z-index: 5; }
+    #db-explorer-table-wrap tbody tr.hover-row:hover .sticky-code,
+    #db-explorer-table-wrap tbody tr.hover-row:hover .sticky-name { background: #f5f3ff; }
+    #db-explorer-table-wrap tbody tr.detail-row td { white-space: normal; }
+  </style>
+  <div id="db-explorer-table-wrap" class="bg-white rounded-lg border border-slate-200 overflow-x-auto">
+    <table class="min-w-full text-sm">
+      <thead class="text-xs uppercase text-slate-500">
+        <tr>
+          <th class="sticky-code px-3 py-2 text-left">代码</th>
+          <th class="sticky-name px-3 py-2 text-left">名称</th>
+          <th class="px-3 py-2 text-left">市场</th>
+          <th class="px-3 py-2 text-left">行业 / 链条</th>
+          <th class="px-3 py-2 text-right">价格</th>
+          <th class="px-3 py-2 text-right">日涨跌</th>
+          <th class="px-3 py-2 text-right">YTD</th>
+          <th class="px-3 py-2 text-right">一年</th>
+          <th class="px-3 py-2 text-right">市值</th>
+          <th class="px-3 py-2 text-right">PE(F)</th>
+          <th class="px-3 py-2 text-right">PEG</th>
+          <th class="px-3 py-2 text-left">AI 强度</th>
+          <th class="px-3 py-2 text-left">评级</th>
+          <th class="px-3 py-2 text-right">总分</th>
+          <th class="px-3 py-2 text-left">状态</th>
+          <th class="px-3 py-2 text-left" title="prices.fetched_at — 行情/估值数据抓取时间">抓取时间</th>
+          <th class="px-3 py-2 text-left" title="watchlist.updated_at — AI 分析/元数据最近一次刷新时间">分析时间</th>
+        </tr>
+      </thead>
+      <tbody id="db-explorer-tbody" class="divide-y divide-slate-100"></tbody>
+    </table>
+  </div>
+  <div id="db-explorer-empty" class="hidden text-center text-slate-400 py-12 text-sm">没有匹配的股票</div>
+  <div id="db-explorer-loading" class="text-center text-slate-400 py-12 text-sm">⏳ 加载中…</div>
+
+  <!-- 字段说明（折叠在底部） -->
+  <details class="mt-4 text-xs text-slate-500">
+    <summary class="cursor-pointer hover:text-slate-700">📖 字段说明 / 数据来源</summary>
+    <div class="mt-2 pl-4 space-y-1">
+      <p><strong>watchlist</strong>（25 列）：代码/名称/市场/业务/行业/AI 关联/AI 逻辑/主题/结论/风险/可比/节奏/状态/源/可信度/notes/链条/链层/角色/小白介绍/最新财报/双源校验/全信息分项</p>
+      <p><strong>prices</strong>（最新一行）：价格/前收/币种/市值/Forward-PE/Trailing-PE/PEG/营收增长/EPS 增长/YTD/一年/一月/一周/抓取时间</p>
+      <p><strong>picks</strong>（最新一次入选）：pick_date/rating/total_score/ai_score/val_score/trend_score/cred_score/entry_price/peg_at_pick/fpe_at_pick</p>
+    </div>
+  </details>
 </section>
 
 <!-- ============ 🌳 产业链全景 Tab（按链条聚类 watchlist，让新手看出层级 + 角色 + 一句话）============ -->
@@ -2738,6 +2845,348 @@ async function addDiscoveryToWatchlist(ticker, btnEl) {
 }
 
 
+// ============ 🗄 DB 全库浏览 ============
+// 复用 _watchlistApiCall（同一 API base）拉 /api/db/all-stocks
+let _dbExplorerData = null;       // {as_of, counts, groups: {美股:[], A股:[], 港股:[], 其他:[]}}
+let _dbExplorerMarket = "美股";    // 当前选中的市场子 tab
+let _dbExplorerExpanded = new Set(); // 当前展开详情的 code 集合
+
+async function loadDbExplorer() {
+  const tbody = document.getElementById("db-explorer-tbody");
+  const loading = document.getElementById("db-explorer-loading");
+  const statusEl = document.getElementById("db-explorer-status");
+  if (_dbExplorerData) {
+    if (loading) loading.style.display = "none";
+    renderDbExplorerTable();
+    return;
+  }
+  try {
+    if (loading) loading.style.display = "";
+    if (tbody) tbody.innerHTML = "";
+    const data = await _watchlistApiCall("GET", "/api/db/all-stocks");
+    _dbExplorerData = data;
+    if (statusEl) {
+      statusEl.textContent = "✅ 已连接";
+      statusEl.className = "px-2 py-0.5 rounded bg-emerald-100 text-emerald-700";
+    }
+    const asOfEl = document.getElementById("db-explorer-as-of");
+    if (asOfEl && data.as_of) {
+      asOfEl.textContent = `全库最新行情: ${data.as_of.prices_date || "—"}  ·  AI 最新入选: ${data.as_of.picks_date || "—"}  ·  共 ${data.counts.total} 只`;
+      asOfEl.title = "全库最新行情 = prices 表最新一行日期（每只股票自己的抓取时间见主表「抓取时间」列）。AI 最新入选 = picks 表最新入选日（具体每只见详情面板 picks 卡 → 入选日期）。";
+    }
+    ["美股","A股","港股","其他"].forEach(m => {
+      const cntEl = document.getElementById("db-mkt-cnt-" + m);
+      if (cntEl) cntEl.textContent = data.counts[m] || 0;
+    });
+    if (loading) loading.style.display = "none";
+    renderDbExplorerTable();
+  } catch (e) {
+    if (statusEl) {
+      statusEl.textContent = "✗ 失败: " + e.message;
+      statusEl.className = "px-2 py-0.5 rounded bg-rose-100 text-rose-700";
+    }
+    if (loading) loading.textContent = "加载失败：" + e.message;
+  }
+}
+
+async function forceReloadDbExplorer() {
+  _dbExplorerData = null;
+  _dbExplorerExpanded = new Set();
+  await loadDbExplorer();
+}
+
+function clearDbExplorerSearch() {
+  const el = document.getElementById("db-explorer-search");
+  if (el) { el.value = ""; el.focus(); }
+  renderDbExplorerTable();
+}
+
+function resetDbExplorer() {
+  // 清搜索框 + 收起全部展开行（但保留已经从 API 拉到的数据缓存，不重新请求）
+  const el = document.getElementById("db-explorer-search");
+  if (el) el.value = "";
+  _dbExplorerExpanded = new Set();
+  renderDbExplorerTable();
+}
+
+function switchDbExplorerMarket(market) {
+  _dbExplorerMarket = market;
+  _dbExplorerExpanded = new Set();
+  document.querySelectorAll(".db-mkt-btn").forEach(b => {
+    const active = b.id === "db-mkt-btn-" + market;
+    b.classList.toggle("border-violet-500", active);
+    b.classList.toggle("text-violet-700", active);
+    b.classList.toggle("border-transparent", !active);
+    b.classList.toggle("text-slate-500", !active);
+  });
+  renderDbExplorerTable();
+}
+
+function _dbFmtNum(v, digits) {
+  if (v === null || v === undefined || v === "") return '<span class="text-slate-300">—</span>';
+  const n = Number(v);
+  if (!isFinite(n)) return '<span class="text-slate-300">—</span>';
+  return n.toFixed(digits == null ? 2 : digits);
+}
+function _dbFmtPct(v) {
+  if (v === null || v === undefined || v === "") return '<span class="text-slate-300">—</span>';
+  const n = Number(v);
+  if (!isFinite(n)) return '<span class="text-slate-300">—</span>';
+  const cls = n >= 0 ? "text-emerald-700" : "text-rose-700";
+  const sign = n > 0 ? "+" : "";
+  return `<span class="${cls}">${sign}${n.toFixed(2)}%</span>`;
+}
+function _dbFmtCap(v) {
+  if (v === null || v === undefined || v === "") return '<span class="text-slate-300" title="数据源（yfinance/akshare）未返回市值。常见原因：① 股票未正式上市（招股书阶段）；② yfinance 对 LSE 哈萨克/部分英股 ADR、港股新股不返回 marketCap；③ akshare 限流。详情见自选股 enrich。">—</span>';
+  const n = Number(v);
+  if (!isFinite(n) || n <= 0) return '<span class="text-slate-300" title="市值为 0 或非数字，可能数据异常">—</span>';
+  if (n >= 1e12) return (n/1e12).toFixed(2) + "T";
+  if (n >= 1e9)  return (n/1e9).toFixed(2) + "B";
+  if (n >= 1e6)  return (n/1e6).toFixed(2) + "M";
+  return n.toFixed(0);
+}
+function _dbDayChange(price, prev) {
+  if (price == null || prev == null || prev == 0) return '<span class="text-slate-300">—</span>';
+  const pct = (Number(price) - Number(prev)) / Number(prev) * 100;
+  return _dbFmtPct(pct);
+}
+
+function _dbMatchesQuery(r, q) {
+  if (!q) return true;
+  // 短英文词（≤2 ASCII 字符，如 "ai" "ts"）只匹配 code/name，否则噪声过大（ai_relevance 字段全场都含 AI）。
+  // 中文 / 含非 ASCII 字符的搜索不受此限制（"极强" "算力" 这类已是有意义词）。
+  const isShortAscii = q.length <= 2 && /^[\x00-\x7f]+$/.test(q);
+  const fields = isShortAscii
+    ? [r.code, r.name]
+    : [r.code, r.name, r.industry, r.chain, r.chain_tier, r.chain_role, r.business, r.theme, r.ai_relevance, r.layman_intro, r.pick_rating, r.status];
+  const hay = fields.filter(Boolean).join(" ").toLowerCase();
+  return hay.includes(q);
+}
+
+function renderDbExplorerTable() {
+  const tbody = document.getElementById("db-explorer-tbody");
+  const emptyEl = document.getElementById("db-explorer-empty");
+  const countEl = document.getElementById("db-explorer-result-count");
+  if (!tbody || !_dbExplorerData) return;
+  const rows = (_dbExplorerData.groups[_dbExplorerMarket] || []).slice();
+  const total = rows.length;
+  // 搜索过滤
+  const q = (document.getElementById("db-explorer-search")?.value || "").trim().toLowerCase();
+  const filtered = !q ? rows : rows.filter(r => _dbMatchesQuery(r, q));
+
+  // 跨 tab 命中数：搜索时每个市场 sub tab 标签上显示「命中数 / 总数」
+  ["美股","A股","港股","其他"].forEach(mkt => {
+    const cntEl = document.getElementById("db-mkt-cnt-" + mkt);
+    if (!cntEl) return;
+    const all = _dbExplorerData.groups[mkt] || [];
+    if (q) {
+      const hits = all.filter(r => _dbMatchesQuery(r, q)).length;
+      cntEl.textContent = `${hits} / ${all.length}`;
+      cntEl.className = "text-xs ml-1 " + (hits > 0 ? "text-violet-600 font-semibold" : "text-slate-300");
+    } else {
+      cntEl.textContent = all.length;
+      cntEl.className = "text-xs text-slate-400 ml-1";
+    }
+  });
+  // 默认按 AI 评级降序：⭐⭐⭐ → ⭐⭐ → ⭐ → 无评级；同级再按总分降序；最后市值兜底
+  filtered.sort((a, b) => {
+    const sa = (String(a.pick_rating || "").match(/⭐/g) || []).length;
+    const sb = (String(b.pick_rating || "").match(/⭐/g) || []).length;
+    if (sa !== sb) return sb - sa;
+    const ta = Number(a.pick_total_score) || 0;
+    const tb = Number(b.pick_total_score) || 0;
+    if (ta !== tb) return tb - ta;
+    return (Number(b.price_market_cap) || 0) - (Number(a.price_market_cap) || 0);
+  });
+
+  if (countEl) {
+    countEl.textContent = q
+      ? `命中 ${filtered.length} / 共 ${total} 只`
+      : `共 ${total} 只`;
+  }
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = "";
+    if (emptyEl) emptyEl.classList.remove("hidden");
+    return;
+  }
+  if (emptyEl) emptyEl.classList.add("hidden");
+
+  const html = filtered.map(r => {
+    const expanded = _dbExplorerExpanded.has(r.code);
+    const arrow = expanded ? "▼" : "▶";
+    const ratingTxt = r.pick_rating || "—";
+    const ratingCls = ratingTxt.includes("⭐⭐⭐") ? "text-emerald-700 font-semibold"
+                    : ratingTxt.includes("⭐⭐") ? "text-amber-700"
+                    : ratingTxt.includes("⭐") ? "text-amber-600"
+                    : "text-slate-400";
+    const aiCls = String(r.ai_relevance || "").includes("极强") ? "text-rose-700 font-semibold"
+                 : String(r.ai_relevance || "").includes("强") ? "text-amber-700"
+                 : "text-slate-500";
+    const mainRow = `
+      <tr class="hover-row cursor-pointer" onclick="toggleDbExplorerRow('${_esc(r.code)}')">
+        <td class="sticky-code px-3 py-2 font-mono text-xs font-semibold text-slate-700">
+          <span class="inline-block text-slate-400 select-none mr-1 w-3">${arrow}</span>${_esc(r.code || "—")}
+        </td>
+        <td class="sticky-name px-3 py-2 text-slate-800">${_esc(r.name || "—")}</td>
+        <td class="px-3 py-2 text-xs text-slate-500">${r.market ? _esc(r.market) : '<span class="text-amber-600" title="watchlist.market 字段为空，自选股编辑里补全 market">⚠️ 未分类</span>'}</td>
+        <td class="px-3 py-2 text-xs text-slate-600">
+          <span>${_esc(r.industry || "—")}</span>
+          <span class="text-[10px] text-slate-400 ml-1">${_esc((r.chain || "") + (r.chain_tier ? " · " + r.chain_tier : "") + (r.chain_role ? " · " + r.chain_role : "")) || ""}</span>
+        </td>
+        <td class="px-3 py-2 text-right font-mono">${_dbFmtNum(r.price_price)}</td>
+        <td class="px-3 py-2 text-right font-mono text-xs">${_dbDayChange(r.price_price, r.price_prev_close)}</td>
+        <td class="px-3 py-2 text-right font-mono text-xs">${_dbFmtPct(r.price_ytd_pct)}</td>
+        <td class="px-3 py-2 text-right font-mono text-xs">${_dbFmtPct(r.price_one_year_pct)}</td>
+        <td class="px-3 py-2 text-right font-mono text-xs">${_dbFmtCap(r.price_market_cap)}</td>
+        <td class="px-3 py-2 text-right font-mono text-xs">${_dbFmtNum(r.price_forward_pe)}</td>
+        <td class="px-3 py-2 text-right font-mono text-xs">${_dbFmtNum(r.price_peg_ratio)}</td>
+        <td class="px-3 py-2 text-xs ${aiCls}">${_esc(r.ai_relevance || "—")}</td>
+        <td class="px-3 py-2 text-xs ${ratingCls}">${_esc(ratingTxt)}</td>
+        <td class="px-3 py-2 text-right font-mono text-xs">${_dbFmtNum(r.pick_total_score, 1)}</td>
+        <td class="px-3 py-2 text-xs text-slate-500">${_esc(r.status || "—")}</td>
+        <td class="px-3 py-2 text-[11px] font-mono text-slate-500" title="行情/估值数据抓取时间">${_esc(r.price_fetched_at || "—")}</td>
+        <td class="px-3 py-2 text-[11px] font-mono text-slate-500" title="AI 元数据最近一次刷新时间">${_esc(r.updated_at || "—")}</td>
+      </tr>
+    `;
+    if (!expanded) return mainRow;
+    return mainRow + _dbExplorerDetailRow(r);
+  }).join("");
+
+  tbody.innerHTML = html;
+}
+
+function toggleDbExplorerRow(code) {
+  if (_dbExplorerExpanded.has(code)) _dbExplorerExpanded.delete(code);
+  else _dbExplorerExpanded.add(code);
+  renderDbExplorerTable();
+}
+
+function _dbExplorerDetailRow(r) {
+  // 把 watchlist / prices / picks 全字段按分组显示
+  const groupWatchMeta = [
+    ["业务", r.business],
+    ["行业", r.industry],
+    ["主题", r.theme],
+    ["链条", r.chain],
+    ["链层", r.chain_tier],
+    ["链上角色", r.chain_role],
+    ["小白介绍", r.layman_intro],
+    ["AI 关联强度", r.ai_relevance],
+    ["AI 逻辑", r.ai_logic],
+    ["可比标的", r.peers],
+    ["节奏", r.rhythm],
+    ["状态", r.status],
+    ["可信度", r.credibility],
+    ["源", r.source],
+    ["双源校验", r.verification],
+    ["创建时间", r.created_at],
+    ["最后更新", r.updated_at],
+  ];
+  const groupWatchLong = [
+    ["📊 最新财报 (earnings)", r.earnings],
+    ["✅ 投研结论 (conclusion)", r.conclusion],
+    ["⚠️ 风险 (risks)", r.risks],
+    ["🔍 全信息分项 (info_breakdown)", r.info_breakdown],
+    ["📝 备注 (notes)", r.notes],
+  ];
+  const groupPrices = [
+    ["📅 数据日期", r.price_date],
+    ["💰 价格", r.price_price],
+    ["昨收", r.price_prev_close],
+    ["币种", r.price_currency],
+    ["市值", r.price_market_cap],
+    ["Forward PE", r.price_forward_pe],
+    ["Trailing PE", r.price_trailing_pe],
+    ["PEG", r.price_peg_ratio],
+    ["营收增长 (YoY)", r.price_revenue_growth_pct],
+    ["EPS 增长 (YoY)", r.price_earnings_growth_pct],
+    ["YTD", r.price_ytd_pct],
+    ["一年", r.price_one_year_pct],
+    ["一月", r.price_one_month_pct],
+    ["一周", r.price_one_week_pct],
+    ["yf_ticker", r.price_yf_ticker],
+    ["抓取时间", r.price_fetched_at],
+  ];
+  const groupPicks = [
+    ["📅 入选日期", r.pick_pick_date],
+    ["评级", r.pick_rating],
+    ["总分", r.pick_total_score],
+    ["AI 子分", r.pick_ai_score],
+    ["估值子分", r.pick_val_score],
+    ["趋势子分", r.pick_trend_score],
+    ["可信度子分", r.pick_cred_score],
+    ["入选主题", r.pick_theme],
+    ["入选价", r.pick_entry_price],
+    ["币种", r.pick_entry_currency],
+    ["入选时 PEG", r.pick_peg_at_pick],
+    ["入选时 Forward PE", r.pick_fpe_at_pick],
+    ["入选时 YTD", r.pick_ytd_at_pick],
+    ["入选时一周", r.pick_one_week_at_pick],
+    ["入选时一年", r.pick_one_year_at_pick],
+  ];
+
+  const kvBlock = (title, kv, cls = "") => {
+    const items = kv.map(([k, v]) => {
+      const display = (v === null || v === undefined || v === "") ? '<span class="text-slate-300">—</span>' : _esc(String(v));
+      return `<div class="flex justify-between gap-3 py-1 border-b border-slate-100 text-xs">
+                <span class="text-slate-500 whitespace-nowrap">${_esc(k)}</span>
+                <span class="text-slate-800 text-right font-mono break-all">${display}</span>
+              </div>`;
+    }).join("");
+    return `<div class="bg-white rounded p-3 border border-slate-200 ${cls}">
+              <div class="text-xs font-bold text-slate-700 mb-2">${_esc(title)}</div>
+              ${items}
+            </div>`;
+  };
+  const longBlock = (title, body) => {
+    const empty = (body === null || body === undefined || body === "");
+    return `<div class="bg-white rounded p-3 border border-slate-200">
+              <div class="text-xs font-bold text-slate-700 mb-2">${_esc(title)}</div>
+              <div class="text-xs text-slate-700 whitespace-pre-wrap leading-relaxed">${empty ? '<span class="text-slate-300">— 暂无</span>' : _esc(String(body))}</div>
+            </div>`;
+  };
+
+  const longCards = groupWatchLong.map(([k, v]) => longBlock(k, v)).join("");
+
+  return `
+    <tr class="detail-row bg-slate-50">
+      <td colspan="17" class="px-4 py-4">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+          ${kvBlock("📋 watchlist 元数据", groupWatchMeta)}
+          ${kvBlock("📈 prices 最新一行", groupPrices)}
+          ${kvBlock("🤖 picks 最新一次", groupPicks)}
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+          ${longCards}
+        </div>
+        <div class="mt-3 flex gap-2 flex-wrap">
+          <a class="text-xs px-3 py-1.5 rounded bg-white border border-slate-300 text-slate-700 hover:bg-slate-50"
+             href="${_esc(_yahooLink(r.code, r.market))}" target="_blank">📊 Yahoo Finance ↗</a>
+          <button class="text-xs px-3 py-1.5 rounded bg-white border border-slate-300 text-slate-700 hover:bg-slate-50"
+                  onclick="event.stopPropagation();location.hash='#watchlist-edit';setTimeout(()=>openWatchlistEditor('${_esc(r.code)}'),200)">
+            ✏️ 在自选股里编辑
+          </button>
+        </div>
+      </td>
+    </tr>
+  `;
+}
+
+function _yahooLink(code, market) {
+  if (!code) return "#";
+  const c = String(code).toUpperCase();
+  const m = market || "";
+  if (m.includes("港股")) {
+    const pad = c.replace(/^0+/, "").padStart(4, "0");
+    return `https://finance.yahoo.com/quote/${pad}.HK`;
+  }
+  if (m.includes("A股·上交所") || m.startsWith("60") || c.startsWith("6")) return `https://finance.yahoo.com/quote/${c}.SS`;
+  if (m.includes("A股") || c.startsWith("0") || c.startsWith("3")) return `https://finance.yahoo.com/quote/${c}.SZ`;
+  return `https://finance.yahoo.com/quote/${encodeURIComponent(c)}`;
+}
+
+
 // ============ Tab 切换框架 ============
 const TAB_SECTIONS = {
   about: ["about"],
@@ -2751,6 +3200,7 @@ const TAB_SECTIONS = {
   chain: ["chain-header", "chain-overview"],
   backtest: ["backtest"],
   professional: ["professional"],
+  "db-explorer": ["db-explorer"],
   upgrade: ["upgrade"],
   "init-config": ["init-config", "portfolio-config", "watchlist-edit"],
 };
@@ -2803,6 +3253,7 @@ function switchTab(tab) {
   if (tab === "portfolio") setTimeout(async () => { await _ensureHoldingsLoaded(); renderPortfolio(); }, 50);
   if (tab === "backtest") setTimeout(renderPlanBacktest, 100);
   if (tab === "professional") setTimeout(renderProfessional, 50);
+  if (tab === "db-explorer") setTimeout(loadDbExplorer, 50);
   if (tab === "chain") setTimeout(loadChainOverview, 50);
   if (tab === "init-config") setTimeout(() => switchInitSub(_initSubCurrent), 50);
 }
