@@ -217,19 +217,35 @@ def main():
 
     # ── 约束 4.5: A 股内部行业上限 — P0-4b (2026-05-12) ──
     # 单行业 ≤ A 股部分的 40% 或整组合 25%（取较紧的）；溢出转现金
-    # industry 映射从 watchlist 反查（A 股 watchlist 自带 industry 字段）
+    # industry 映射优先级：
+    #   1. a_share_industry GICS cache（A-6 2026-05-12 接入，更稳定准确）
+    #   2. watchlist 自带 industry 字段（用户手填）
+    #   3. "未分类" 兜底
+    industries_map_a: dict = {}
+    try:
+        from stock_research.core.a_share_industry import bulk_get_industry
+        codes = [_strip_code(a["ticker"]) for a in adjusted]
+        gics_map = bulk_get_industry(codes, throttle_seconds=0.0)  # 优先用 cache，throttle=0
+    except Exception as e:
+        logger.warning("a_share_industry GICS 拉取失败: %s", e)
+        gics_map = {}
+
     try:
         sys.path.insert(0, str(REPO / "scripts" / "lib"))
         from stock_db import fetch_all_watchlist  # type: ignore
         wl_by_code = {r["code"]: r for r in fetch_all_watchlist()}
-        industries_map_a = {
-            a["ticker"]: (wl_by_code.get(_strip_code(a["ticker"]), {}).get("industry")
-                          or "未分类")
-            for a in adjusted
-        }
     except Exception as e:
-        logger.warning("watchlist 拉取失败，跳过 A 股行业上限: %s", e)
-        industries_map_a = {}
+        logger.warning("watchlist 拉取失败: %s", e)
+        wl_by_code = {}
+
+    for a in adjusted:
+        code = _strip_code(a["ticker"])
+        gics = gics_map.get(code) or {}
+        # 优先 GICS sector，fallback watchlist industry，最后兜底
+        industry = (gics.get("sector")
+                    or wl_by_code.get(code, {}).get("industry")
+                    or "未分类")
+        industries_map_a[a["ticker"]] = industry
 
     a_industry_summary: dict = {}
     if industries_map_a:
