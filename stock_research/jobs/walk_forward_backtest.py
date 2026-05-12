@@ -55,8 +55,12 @@ class MonthResult:
     selected: list[str]                  # 当月持仓 (top-k)
     factor_weights: dict[str, float]     # 因子组合权重（用过去 N 月校准）
     monthly_return: float                # 当月组合等权收益（百分比）
-    benchmark_return: float              # 基准（如沪深 300 / 标普 500）
+    benchmark_return: float               # 基准（如沪深 300 / 标普 500）
     excess_return: float                 # 超额
+    # D-2 (2026-05-12) 加入仓位约束消融字段
+    n_kelly_capped: int = 0              # 被 kelly_cap 压权的股票数
+    n_atr_stopped: int = 0               # 月内触发 ATR 止损的股票数
+    deployed_weight: float = 1.0         # 实际投入仓位（< 1 = 有现金）
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -200,8 +204,27 @@ def walk_forward(
     train_lookback_months: int = 12,
     top_k: int = 5,
     price_source: str = "yfinance",
+    enable_atr_stop: bool = False,        # D-2: 月内日级模拟 ATR 止损
+    atr_stop_pct: float = 0.15,           # 默认 -15%（与生产 stop 对齐）
+    enable_kelly_cap: bool = False,       # D-2: 半 Kelly 单股 cap
+    kelly_fraction: float = 0.5,
+    max_weight: float = 0.15,
+    rf_annual: float = 0.045,             # 现金部分按 rf 计息
 ) -> WalkForwardResult:
-    """主入口。"""
+    """主入口。
+
+    D-2 仓位约束消融（2026-05-12）：
+      enable_atr_stop: 持仓期内若日级 close < entry × (1 - atr_stop_pct) 触发出局
+                       该只该月收益强制 = -atr_stop_pct（剩余现金按 rf 计息）
+      enable_kelly_cap: 等权 top-k 后 cap 单股 ≤ max_weight × kelly_fraction
+                        溢出仓位转入现金（rf 收益）
+
+    用法（消融对照）：
+      walk_forward(...)                                          # baseline
+      walk_forward(..., enable_kelly_cap=True)                   # +Kelly cap
+      walk_forward(..., enable_atr_stop=True)                    # +ATR stop
+      walk_forward(..., enable_kelly_cap=True, enable_atr_stop=True)  # 双开
+    """
     start_dt = pd.to_datetime(start_month + "-01")
     end_dt = (pd.to_datetime(end_month + "-01") + pd.offsets.MonthEnd(0)).date()
 
@@ -244,12 +267,53 @@ def walk_forward(
         if not selected:
             continue
 
-        # 3. 持有当月：等权
+        # 3. 持有当月（D-2 改造：支持 Kelly cap + ATR 止损）
         try:
-            this_month_ret = monthly.loc[month_end, selected].mean()
+            month_rets_series = monthly.loc[month_end, selected].copy()
         except KeyError:
             logger.warning("月份 %s: 无法取月度收益", month_label)
             continue
+
+        # 3a. 等权默认 → kelly cap 调权
+        n = len(selected)
+        weights = {tk: 1.0 / n for tk in selected}
+        n_kelly_capped = 0
+        if enable_kelly_cap:
+            cap_val = max_weight * kelly_fraction
+            for tk in selected:
+                if weights[tk] > cap_val + 1e-9:
+                    weights[tk] = cap_val
+                    n_kelly_capped += 1
+
+        # 3b. ATR 止损（简化：用持仓期内最低 close vs 月初 entry）
+        n_atr_stopped = 0
+        if enable_atr_stop:
+            try:
+                daily = universe_prices.loc[month_start:month_end, selected]
+                for tk in selected:
+                    if tk not in daily.columns:
+                        continue
+                    series = daily[tk].dropna()
+                    if len(series) < 2:
+                        continue
+                    entry_price = float(series.iloc[0])
+                    min_price = float(series.min())
+                    if entry_price > 0:
+                        dd = (min_price - entry_price) / entry_price
+                        if dd < -atr_stop_pct:
+                            # 触发止损：该只该月收益锁定 -atr_stop_pct
+                            month_rets_series.loc[tk] = -atr_stop_pct * 100
+                            n_atr_stopped += 1
+            except Exception as e:
+                logger.debug("ATR 止损模拟失败 %s: %s", month_label, e)
+
+        # 3c. 加权组合收益 + 现金部分按 rf
+        deployed = sum(weights.values())
+        cash_w = 1.0 - deployed
+        rf_monthly_pct = rf_annual / 12 * 100  # 月度 rf 百分比
+        stock_pnl = sum(weights[tk] * float(month_rets_series.get(tk, 0))
+                        for tk in selected)
+        portfolio_ret = stock_pnl + cash_w * rf_monthly_pct
 
         bench_ret = float(monthly_bench.loc[month_end]) if (monthly_bench is not None and month_end in monthly_bench.index) else 0.0
 
@@ -257,9 +321,12 @@ def walk_forward(
             month=month_label,
             selected=selected,
             factor_weights={"mom_3m": 0.5, "rev_1m": 0.5},
-            monthly_return=round(float(this_month_ret), 4),
+            monthly_return=round(portfolio_ret, 4),
             benchmark_return=round(bench_ret, 4),
-            excess_return=round(float(this_month_ret) - bench_ret, 4),
+            excess_return=round(portfolio_ret - bench_ret, 4),
+            n_kelly_capped=n_kelly_capped,
+            n_atr_stopped=n_atr_stopped,
+            deployed_weight=round(deployed, 4),
         ))
 
     return WalkForwardResult(
@@ -309,6 +376,13 @@ def main() -> int:
     parser.add_argument("--universe", nargs="*",
                         default=["NVDA", "TSM", "GOOGL", "MSFT", "AAPL", "AMD", "AVGO",
                                  "MRVL", "META", "AMZN", "VRT", "LRCX"])
+    parser.add_argument("--enable-atr-stop", action="store_true",
+                        help="D-2 消融：开启月内日级 ATR 止损（默认 -15 percent）")
+    parser.add_argument("--atr-stop-pct", type=float, default=0.15)
+    parser.add_argument("--enable-kelly-cap", action="store_true",
+                        help="D-2 消融：开启半 Kelly 单股 cap")
+    parser.add_argument("--kelly-fraction", type=float, default=0.5)
+    parser.add_argument("--max-weight", type=float, default=0.15)
     args = parser.parse_args()
 
     r = walk_forward(
@@ -318,6 +392,11 @@ def main() -> int:
         benchmark=args.benchmark,
         train_lookback_months=args.lookback,
         top_k=args.top_k,
+        enable_atr_stop=args.enable_atr_stop,
+        atr_stop_pct=args.atr_stop_pct,
+        enable_kelly_cap=args.enable_kelly_cap,
+        kelly_fraction=args.kelly_fraction,
+        max_weight=args.max_weight,
     )
 
     print(format_report(r))
