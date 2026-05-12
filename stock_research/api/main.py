@@ -158,6 +158,7 @@ def create_app():
         conn = stock_db.get_db()
         try:
             wl_rows = stock_db.fetch_all_watchlist(conn=conn)
+            wl_codes = {r["code"] for r in wl_rows}
 
             latest_prices_q = conn.execute(
                 """
@@ -177,18 +178,69 @@ def create_app():
             pick_cols = [d[0] for d in conn.description]
             picks_by_code = {r[pick_cols.index("code")]: dict(zip(pick_cols, r)) for r in latest_picks_q}
 
+            # earnings_history.fetched_at 最新值 — 每只股票"财报最近一次实际从 yfinance 抓取的时间"
+            # 跟 watchlist.updated_at（分析时间）不同：updated_at 还可能被 enrich/用户编辑等触发
+            earnings_fetched = {
+                code: dt for code, dt in conn.execute(
+                    "SELECT code, MAX(fetched_at) FROM earnings_history GROUP BY code"
+                ).fetchall()
+            }
+
+            # 找 picks 表里不在 watchlist 的标的（如 hk_picks 的 hk_universe.py 白名单股、a_share_picks 额外评的）
+            picks_only_q = conn.execute(
+                """
+                SELECT DISTINCT code, FIRST(name) AS name, FIRST(market) AS market FROM picks
+                WHERE code NOT IN (SELECT code FROM watchlist)
+                GROUP BY code
+                """
+            ).fetchall()
+            picks_only = [{"code": r[0], "name": r[1], "market": r[2]} for r in picks_only_q]
+
+            # 找 discovery_history 表里不在 watchlist 的标的（美股 AI ETF 扫出来的候选）
+            disc_only_q = conn.execute(
+                """
+                SELECT DISTINCT ticker AS code, FIRST(name) AS name, FIRST(sector) AS sector,
+                       FIRST(market) AS market FROM discovery_history
+                WHERE ticker NOT IN (SELECT code FROM watchlist)
+                  AND ticker NOT IN (SELECT code FROM picks)
+                GROUP BY ticker
+                """
+            ).fetchall()
+            disc_only = [{"code": r[0], "name": r[1], "industry": r[2], "market": r[3]} for r in disc_only_q]
+
             prices_date = conn.execute("SELECT MAX(date) FROM prices").fetchone()[0]
             picks_date = conn.execute("SELECT MAX(pick_date) FROM picks").fetchone()[0]
         finally:
             conn.close()
 
+        def _infer_market_from_code(code: str) -> str | None:
+            """从 code 后缀/前缀推断 market（用于 picks/discovery 外标的）"""
+            if not code:
+                return None
+            if code.endswith(".HK"): return "港股"
+            if code.endswith(".SS"): return "A股·上交所"
+            if code.endswith(".SZ"): return "A股·深交所"
+            if code.endswith(".BJ"): return "A股·北交所"
+            if code.endswith(".T"):  return "日股"
+            if code.endswith(".KS"): return "韩股"
+            if code.endswith(".TW"): return "台股"
+            if code.endswith(".AX"): return "澳股·ASX"
+            if code.endswith(".IL"): return "英股"
+            if code.isdigit() and len(code) == 6:
+                if code.startswith("6"): return "A股·上交所"
+                if code.startswith(("0", "3")): return "A股·深交所"
+                if code.startswith(("4", "8")): return "A股·北交所"
+            if code.isalpha() and 1 <= len(code) <= 5: return "美股"
+            return None
+
         def _classify(market: str | None) -> str:
-            m = market or ""
-            if "美股" in m:
+            m = (market or "")
+            m_low = m.lower()
+            if "美股" in m or "united states" in m_low or "nasdaq" in m_low or "nyse" in m_low:
                 return "美股"
-            if "A股" in m:
+            if "A股" in m or "上交" in m or "深交" in m or "北交" in m or "china" in m_low and "hong" not in m_low:
                 return "A股"
-            if "港股" in m:
+            if "港股" in m or "hong kong" in m_low or m.endswith(".HK") or m_low == "hk":
                 return "港股"
             return "其他"
 
@@ -202,9 +254,23 @@ def create_app():
                 return v.isoformat()
             return v
 
+        # 把 picks_only / disc_only 也合并进 wl_rows（伪 watchlist 行，标记 _source_origin）
+        for w in wl_rows:
+            w["_source_origin"] = "watchlist"
+        for r in picks_only:
+            r["_source_origin"] = "picks_only"
+            r["market"] = r.get("market") or _infer_market_from_code(r["code"])
+            wl_rows.append(r)
+        for r in disc_only:
+            r["_source_origin"] = "discovery_only"
+            r["market"] = r.get("market") or _infer_market_from_code(r["code"])
+            wl_rows.append(r)
+
         groups: dict[str, list[dict[str, Any]]] = {"美股": [], "A股": [], "港股": [], "其他": []}
         for w in wl_rows:
             code = w.get("code")
+            # 每行带上 earnings 真实抓取时间（earnings_history.fetched_at 的 max）
+            w["earnings_fetched_at"] = earnings_fetched.get(code)
             merged: dict[str, Any] = {}
             for k, v in w.items():
                 merged[k] = _jsonable(v)
@@ -227,6 +293,79 @@ def create_app():
             },
             "counts": {k: len(v) for k, v in groups.items()} | {"total": sum(len(v) for v in groups.values())},
             "groups": groups,
+        }
+
+    @app.get("/api/db/tables-overview")
+    def db_tables_overview() -> dict[str, Any]:
+        """DB 各表行数 + 一句话说明，给前端"数据总览"用。"""
+        import stock_db
+        conn = stock_db.get_db()
+        try:
+            descs = {
+                "watchlist":          "自选股清单（每只 1 行元数据，25 列）",
+                "prices":             "行情/估值快照（每只每天 1 行，含 PE/PEG/涨幅/市值）",
+                "picks":              "AI 评级历史（每只每次评级 1 行）",
+                "reviews":            "picks 跟踪记录（每只每天 1 行，含累计%/持仓天）",
+                "earnings_history":   "季报历史归档（每只每季 1 行，含 YoY）",
+                "discovery_history":  "AI 推荐池快照（每只每次推荐 1 行）",
+                "discovery_tracking": "推荐准确度跟踪（1d/5d/20d/60d alpha）",
+                "holdings":           "实际持仓（每只 1 行，含入场价/份数）",
+                "snapshots":          "pipeline JSON 归档（13F / audit / optimize）",
+                "user_config":        "用户配置（total_capital / stoploss_line）",
+            }
+            tbls = conn.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema='main' ORDER BY table_name"
+            ).fetchall()
+            out = []
+            for (t,) in tbls:
+                n = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                out.append({"name": t, "rows": n, "desc": descs.get(t, "")})
+            return {"tables": out, "total_rows": sum(t["rows"] for t in out)}
+        finally:
+            conn.close()
+
+    @app.get("/api/db/table/{name}")
+    def db_table_dump(name: str, limit: int = 2000) -> dict[str, Any]:
+        """直接返回某张表的全部行（按主键/日期倒序）。给「DB 数据总览」点击卡片展开用。"""
+        ALLOWED = {
+            "watchlist":          "ORDER BY updated_at DESC",
+            "prices":             "ORDER BY date DESC, fetched_at DESC",
+            "picks":              "ORDER BY pick_date DESC, total_score DESC",
+            "reviews":            "ORDER BY review_date DESC, days_held DESC",
+            "earnings_history":   "ORDER BY fiscal_period DESC, code",
+            "discovery_history":  "ORDER BY generated_date DESC, rank",
+            "discovery_tracking": "ORDER BY generated_date DESC",
+            "holdings":           "ORDER BY entry_date DESC",
+            "snapshots":          "ORDER BY captured_at DESC",
+            "user_config":        "ORDER BY key",
+        }
+        if name not in ALLOWED:
+            raise HTTPException(404, f"table not found: {name}")
+        import stock_db
+        conn = stock_db.get_db()
+        try:
+            order = ALLOWED[name]
+            cur = conn.execute(f"SELECT * FROM {name} {order} LIMIT ?", [limit])
+            cols = [d[0] for d in cur.description]
+            rows_raw = cur.fetchall()
+            total_count = conn.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0]
+        finally:
+            conn.close()
+
+        def _jsonify(v):
+            if v is None: return None
+            if hasattr(v, "isoformat"):
+                return v.isoformat(sep=" ", timespec="seconds") if hasattr(v, "hour") else v.isoformat()
+            return v
+
+        rows = [{k: _jsonify(v) for k, v in zip(cols, r)} for r in rows_raw]
+        return {
+            "table": name,
+            "columns": cols,
+            "rows": rows,
+            "returned": len(rows),
+            "total_in_db": total_count,
+            "limited": len(rows) < total_count,
         }
 
     @app.get("/api/db/stock-history/{code}")
