@@ -959,6 +959,86 @@ def section_ai_alpha(risk_metrics: dict | None) -> str:
 
 
 # ────────────────────────────────────────────────────────
+# Section 3.5: 组合风格暴露 + 因子层 stress（2026-05-12 三审 P0.5）
+# ────────────────────────────────────────────────────────
+
+def section_factor_risk(plan: dict | None, factor_scores: dict | None) -> str:
+    """组合层 Factor Exposure + Factor Stress 摘要。
+
+    数据流：
+      plan_a_v5_constrained.plan_v5  → weights
+      factor_scores_today.factors    → quality / momentum / pead 信号
+      yfinance (optional)            → market_cap / beta（当前 coverage 不足时 skip）
+
+    告警阈值：
+      |exposure z| > 1.0 → 风格集中
+      stress worst PnL < -10% → 严重
+    """
+    if not plan or not factor_scores:
+        return ""
+    plan_entries = plan.get("plan_v5") or []
+    factors_list = factor_scores.get("factors") or []
+    if not plan_entries or not factors_list:
+        return ""
+
+    try:
+        from stock_research.core.factor_exposure import (
+            compute_portfolio_exposures, simulate_factor_stress,
+            build_factor_records_from_pipeline,
+        )
+    except Exception:
+        return ""
+
+    weights = {p["ticker"]: p.get("v5_weight", 0) or 0 for p in plan_entries}
+    if not weights:
+        return ""
+    factor_records = build_factor_records_from_pipeline(factors_list)
+    try:
+        exposures = compute_portfolio_exposures(weights, factor_records)
+        stress = simulate_factor_stress(exposures)
+    except Exception:
+        return ""
+
+    # 仅在有真实告警或显著暴露时才展示（避免空版面）
+    has_alert = bool(exposures.get("alerts"))
+    worst = stress.get("worst")
+    severe_stress = worst and worst.get("expected_pnl_pct") is not None and abs(worst["expected_pnl_pct"]) >= 5.0
+    if not has_alert and not severe_stress:
+        return ""
+
+    lines = ["#### 3.5 组合风格暴露 + 因子 Stress（Fama-French + Carhart）"]
+    # 暴露
+    exp = exposures.get("exposure") or {}
+    cov = exposures.get("coverage") or {}
+    lines.append("**风格暴露 z-score**（>1 = 偏高 / <-1 = 偏低）：")
+    factor_names_zh = {"beta": "β市场", "size": "规模", "value": "价值",
+                       "momentum": "动量", "quality": "质量"}
+    for f in exposures.get("factor_list", []):
+        z = exp.get(f)
+        c = cov.get(f, 0)
+        z_str = f"{z:+.2f}" if z is not None else "—"
+        cov_flag = f"({c*100:.0f}%)" if c < 0.6 else ""
+        lines.append(f"• {factor_names_zh.get(f,f)} z={z_str} {cov_flag}")
+
+    if has_alert:
+        lines.append("")
+        lines.append("⚠️ 暴露告警：")
+        for a in exposures["alerts"][:5]:
+            lines.append(f"• {a}")
+
+    # Stress
+    if worst and worst.get("expected_pnl_pct") is not None:
+        lines.append("")
+        lines.append(f"💥 **单因子最差**：{factor_names_zh.get(worst['factor'], worst['factor'])} "
+                     f"shock {worst['shock_pct']:+.0f}% → 组合预期 **{worst['expected_pnl_pct']:+.2f}%** "
+                     f"{worst.get('severity','')}")
+        combined = stress.get("combined_stress_pct")
+        if combined is not None:
+            lines.append(f"💀 最差 3 因子叠加（保守相关性=1）：**{combined:+.2f}%**")
+    return "\n".join(lines) + "\n"
+
+
+# ────────────────────────────────────────────────────────
 # Section 4: 红旗
 # ────────────────────────────────────────────────────────
 
@@ -1135,6 +1215,10 @@ def build_brief(share_mode: bool = False) -> str:
         section_ai_alpha(risk_metrics),
         "\n",
     ])
+    # 3.5 组合风格暴露 + Factor Stress（仅在有告警时显示）
+    factor_risk = section_factor_risk(plan, factor_scores)
+    if factor_risk:
+        parts.extend([factor_risk, "\n"])
     red_flags = section_red_flags(plan, events, factor_scores, defense)
     if red_flags:
         parts.append(red_flags)

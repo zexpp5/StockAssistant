@@ -30,6 +30,9 @@ review_*.json
 *.duckdb.wal
 *.duckdb.tmp
 
+# 根目录 cache（daily_picks_v5 每天重写，不该入库）
+factor_scores_today.json
+
 # 日志
 *.log
 daily_refresh.log*
