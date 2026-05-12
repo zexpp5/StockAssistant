@@ -154,8 +154,37 @@ def fetch_components_snapshot() -> dict[str, float]:
     """所有港股通标的的当前南向持股 % 快照。
 
     返回 {code: pct}，code 是无前导 0 的统一格式（如 "700" 不是 "00700"）。
+
+    优先级（八审 P0 修：避免每次 hk_picks 都触发 8 分钟拉取）：
+      1. 读 data/cache/south_flow_components.json（独立 prefetch 写）
+      2. cache miss / 过期 → fallback 到 stock_hk_ggt_components_em（已知列名失效但保留）
+      3. 仍失败 → 返回空（个股 score 全 fallback 0.5）
+
+    跑 prefetch 见 scripts/tools/prefetch_south_flow.py（8 分钟，每周跑一次足够）。
     """
     out: dict[str, float] = {}
+
+    # 1. 优先读 cache
+    from pathlib import Path
+    import json as _json
+    import os as _os
+    cache_path = Path(__file__).resolve().parents[2] / "data" / "cache" / "south_flow_components.json"
+    if cache_path.exists():
+        try:
+            cache = _json.loads(cache_path.read_text(encoding="utf-8"))
+            ts = cache.get("fetched_at", "")
+            # 7 天 TTL
+            from datetime import datetime, timedelta
+            fresh_cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+            if ts > fresh_cutoff and cache.get("components"):
+                logger.info("south_flow components: cache HIT (%d 条, %s)",
+                            len(cache["components"]), ts)
+                return {k: float(v) for k, v in cache["components"].items()}
+            logger.info("south_flow components: cache STALE (ts=%s < %s)", ts, fresh_cutoff)
+        except Exception as e:
+            logger.warning("south_flow cache 读取失败: %s", e)
+
+    # 2. fallback 到旧 API（已知列名失效，但 graceful）
     try:
         import akshare as ak
         df = ak.stock_hk_ggt_components_em()
@@ -172,7 +201,8 @@ def fetch_components_snapshot() -> dict[str, float]:
             col_pct = c
             break
     if col_pct is None:
-        logger.warning("components snapshot 找不到持股%% 列: %s", list(df.columns)[:6])
+        logger.warning("components snapshot 找不到持股%% 列: %s — 跑 prefetch_south_flow.py 生成 cache",
+                       list(df.columns)[:6])
         return out
 
     for _, row in df.iterrows():
