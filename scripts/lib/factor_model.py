@@ -562,14 +562,22 @@ def fetch_factors_batch(tickers, as_of=None, sleep_sec=1.5):
 # ============================================================
 # 因子合成（横截面 z-score 等权）
 # ============================================================
-def combine_factors(records, analyst_signals=None, include_reversal=True):
-    """4 因子等权合成（z-score 标准化后等权）
+def combine_factors(records, analyst_signals=None, include_reversal=True,
+                    include_quality=True):
+    """6 因子等权合成（z-score 标准化后等权）。
 
     因子（全部来自顶刊学术论文）:
       1. Piotroski F-Score (Stanford 2000)
       2. 12-1 月动量 (Jegadeesh-Titman JF 1993)
-      3. 1 月反转 (Jegadeesh JF 1990) - include_reversal=True 时启用
+      3. 1 月反转 (Jegadeesh JF 1990)
       4. 分析师上修 (Stickel JF 1991, Womack JF 1996)
+      5. PEAD 收入加速 (Ball-Brown JAR 1968)
+      6. Quality 合成因子（2026-05-12 二审驱动接入）
+         - ROIC (Koller 2020)
+         - -Accruals (Sloan 1996 AR)：高应计 → 未来收益低，故取负
+         z_quality = (z_roic + z_(-accruals)) / 2
+
+    include_quality=False 时退回 5 因子（旧行为，用于消融对照）。
     """
     df = []
     for r in records:
@@ -578,6 +586,9 @@ def combine_factors(records, analyst_signals=None, include_reversal=True):
         rev = r["momentum"].get("reversal_1m")
         pead = (r.get("pead") or {}).get("acceleration")
         ana = (analyst_signals or {}).get(r["ticker"], 0)
+        q = r.get("quality") or {}
+        roic = q.get("roic") if not q.get("error") else None
+        accruals = q.get("accruals") if not q.get("error") else None
         df.append({
             "ticker": r["ticker"],
             "f_score": f,
@@ -585,6 +596,8 @@ def combine_factors(records, analyst_signals=None, include_reversal=True):
             "reversal": rev,
             "pead": pead,
             "analyst": ana,
+            "roic": roic,
+            "accruals_neg": (-accruals) if accruals is not None else None,  # Sloan 取负
         })
     df = pd.DataFrame(df)
 
@@ -612,7 +625,17 @@ def combine_factors(records, analyst_signals=None, include_reversal=True):
     df["z_rev"] = zscore(df["reversal"]).fillna(0)
     df["z_pead"] = zscore(df["pead"]).fillna(0)
     df["z_ana"] = zscore(df["analyst"]).fillna(0)
-    df["composite"] = (df["z_f"] + df["z_mom"] + df["z_rev"] + df["z_pead"] + df["z_ana"]) / 5
+
+    if include_quality:
+        df["z_roic"] = zscore(df["roic"]).fillna(0)
+        df["z_acc_neg"] = zscore(df["accruals_neg"]).fillna(0)
+        df["z_quality"] = (df["z_roic"] + df["z_acc_neg"]) / 2
+        df["composite"] = (df["z_f"] + df["z_mom"] + df["z_rev"]
+                           + df["z_pead"] + df["z_ana"] + df["z_quality"]) / 6
+    else:
+        df["composite"] = (df["z_f"] + df["z_mom"] + df["z_rev"]
+                           + df["z_pead"] + df["z_ana"]) / 5
+
     df = df.sort_values("composite", ascending=False).reset_index(drop=True)
     df["rank"] = df.index + 1
     return df

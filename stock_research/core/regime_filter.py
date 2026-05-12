@@ -297,6 +297,98 @@ def _breadth_advance_decline(history: dict | None = None,
     }
 
 
+def _market_new_high_new_low(history: dict | None = None,
+                              lookback: int = 252,
+                              window: int = 21,
+                              net_ratio_threshold: float = -0.10) -> tuple[bool, dict]:
+    """NHNL (New High - New Low) — 比 A/D Line 更能识别结构性熊市。
+
+    学术依据：
+      - Zweig (1986) "Winning on Wall Street" — 新低家数超过新高家数 = 大盘结构恶化先兆
+      - Fosback (1976) "Stock Market Logic" — NHNL 比 A/D 更看结构（趋势内部健康度）
+      - Whaley-Cooper (1991) JFR — NHNL 在主要顶部 / 底部领先 10-30 个交易日
+
+    定义：
+      - 当日新高 = 当日 close == 过去 lookback (252) 日最大
+      - 当日新低 = 当日 close == 过去 lookback (252) 日最小
+      - net_ratio = (新高家数 - 新低家数) / universe_size
+      - 取近 window (21) 日均值，< net_ratio_threshold (-10%) → 广度恶化
+
+    判读：
+      - 与 A/D Line 互补：A/D 看每日涨跌（短期），NHNL 看结构突破（长期）
+      - 大盘指数还在涨但 NHNL 净比例为负 → "narrow rally" 头部领涨、底部破位
+    """
+    if history is None:
+        try:
+            from pathlib import Path
+            import json as _json
+            repo = Path(__file__).resolve().parents[2]
+            hist_path = repo / "data" / "latest" / "history_data.json"
+            if hist_path.exists():
+                d = _json.loads(hist_path.read_text(encoding="utf-8"))
+                history = d.get("tickers") or {}
+            else:
+                return False, {"error": "history_data.json missing"}
+        except Exception as e:
+            return False, {"error": f"history load failed: {str(e)[:80]}"}
+
+    if not history:
+        return False, {"error": "empty history"}
+
+    # 每日新高 / 新低家数（最近 window 日）
+    daily_new_highs = [0] * window
+    daily_new_lows = [0] * window
+    daily_universe = [0] * window
+
+    for ticker, data in history.items():
+        closes = (data or {}).get("close") or []
+        # 需要 lookback + window 长度（每个 window 内日点都要往前看 lookback 日）
+        if len(closes) < lookback + window:
+            continue
+        # 对最近 window 日，分别判断该日 close 是否为过去 lookback 日的 max/min
+        for i in range(window):
+            idx = len(closes) - window + i  # 该 window 日在 closes 里的位置
+            cur = closes[idx]
+            if cur is None:
+                continue
+            past = closes[idx - lookback:idx + 1]  # 包含当日，往前 lookback 日
+            past_valid = [c for c in past if c is not None]
+            if len(past_valid) < lookback // 2:  # 数据太稀疏跳过
+                continue
+            daily_universe[i] += 1
+            if cur >= max(past_valid):
+                daily_new_highs[i] += 1
+            elif cur <= min(past_valid):
+                daily_new_lows[i] += 1
+
+    universe_size = max(daily_universe) if daily_universe else 0
+    if universe_size < 20:
+        return False, {"error": f"universe too small ({universe_size})"}
+
+    net_ratios = [
+        ((nh - nl) / u) if u > 0 else 0.0
+        for nh, nl, u in zip(daily_new_highs, daily_new_lows, daily_universe)
+    ]
+    avg_net = sum(net_ratios) / window
+
+    # 累计 NHNL 趋势变化
+    cum_nh = sum(daily_new_highs)
+    cum_nl = sum(daily_new_lows)
+
+    breadth_bad = avg_net < net_ratio_threshold
+    return breadth_bad, {
+        "avg_net_ratio_21d": round(avg_net * 100, 1),  # 单位 %
+        "cum_new_highs": cum_nh,
+        "cum_new_lows": cum_nl,
+        "universe_size": universe_size,
+        "lookback_days": lookback,
+        "window_days": window,
+        "threshold_pct": round(net_ratio_threshold * 100, 1),
+        "interpretation": ("结构恶化 - 新低家数超新高" if breadth_bad
+                           else "结构健康 - 新高家数占优"),
+    }
+
+
 def _breadth_weak(as_of: str | None = None,
                   spread_threshold_pct: float = -3.0) -> tuple[bool, dict]:
     """市场广度 proxy：RSP（等权 S&P 500）vs SPY（市值加权）近 21 个交易日相对收益。
@@ -372,22 +464,30 @@ def get_dynamic_gross_exposure(as_of: str | None = None,
     spy_ok, ma_info = _spy_above_200ma(as_of)
     _, vix_info = _vix_below_panic(as_of, panic_threshold=vix_threshold_panic)
     yc_inverted, yc_info = _yield_curve_inverted(as_of)
-    # 广度信号：两个独立维度，OR 触发但合并占 1 个 trigger 槽位
-    # - 真 A/D Line (Zweig 1986)：watchlist universe 涨跌家数
+    # 广度信号：3 个独立维度，OR 触发但合并占 1 个 trigger 槽位
+    # - 真 A/D Line (Zweig 1986)：universe 每日涨跌家数
     # - RSP-SPY spread (头部集中)：S&P 内部分布健康度
-    # 两者测不同的东西，互相补充
+    # - NHNL (Zweig/Fosback)：252 日新高/新低家数 — 结构性恶化先兆
+    # 三者测不同维度，互相补充
     ad_bad, ad_info = _breadth_advance_decline()
     spread_bad, spread_info = _breadth_weak(
         as_of, spread_threshold_pct=breadth_spread_threshold_pct,
     )
-    breadth_bad = ad_bad or spread_bad
+    nhnl_bad, nhnl_info = _market_new_high_new_low()
+    breadth_bad = ad_bad or spread_bad or nhnl_bad
     breadth_msgs = []
     if ad_bad and not ad_info.get("error"):
         breadth_msgs.append(f"A/D {ad_info.get('avg_pct_advancing_21d','?')}% 涨")
     if spread_bad and not spread_info.get("error"):
         breadth_msgs.append(f"RSP-SPY {spread_info.get('spread_pct','?')}%")
+    if nhnl_bad and not nhnl_info.get("error"):
+        breadth_msgs.append(f"NHNL {nhnl_info.get('avg_net_ratio_21d','?')}%")
     breadth_trigger_msg = "广度差 (" + " / ".join(breadth_msgs) + ")" if breadth_msgs else ""
-    breadth_info = {"advance_decline": ad_info, "rsp_spy_spread": spread_info}
+    breadth_info = {
+        "advance_decline": ad_info,
+        "rsp_spy_spread": spread_info,
+        "new_high_new_low": nhnl_info,
+    }
     vix_value = vix_info.get("vix_close")
 
     triggers = []

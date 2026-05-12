@@ -80,10 +80,12 @@ def fetch_codes_from_db():
 
 
 def fetch_history(ticker: str, period: str = "2y") -> dict | None:
-    """拉单只股票 2 年日 K（含 high/low 供真 ATR 计算）。
+    """拉单只股票 2 年日 K（含 high/low/volume）。
 
-    2026-05-12 升级：补 high / low 字段（C-4），原 close 字段保持不变。
-    前端 dashboard 只读 close，所以兼容；后端 ATR 真版可用 high/low。
+    2026-05-12 升级：
+      - C-4 补 high / low 字段（真 ATR 计算）
+      - 二审 P0-2 补 volume 字段（AVWAP / 量价指标基础）
+    原 close 字段保持不变，前端 dashboard 兼容。
     """
     try:
         t = yf.Ticker(ticker)
@@ -92,11 +94,15 @@ def fetch_history(ticker: str, period: str = "2y") -> dict | None:
             return None
         def _fmt(series):
             return [None if v != v else round(float(v), 4) for v in series.tolist()]
+        def _fmt_vol(series):
+            # volume 是整数，但 yfinance 返回 float；保持整数兼容性，None 留 None
+            return [None if v != v else int(v) for v in series.tolist()]
         return {
             "ts": [d.strftime("%Y-%m-%d") for d in h.index],
             "close": _fmt(h["Close"]),
             "high": _fmt(h["High"]),
             "low": _fmt(h["Low"]),
+            "volume": _fmt_vol(h["Volume"]),
         }
     except Exception as e:
         print(f"  ❌ {ticker}: {e}")

@@ -85,6 +85,37 @@ def _load_history() -> dict:
     return d.get("tickers") or {}
 
 
+def _fmt_ts(iso: str | None) -> str:
+    """格式化各 picks JSON 的 generated_at → "🕐 算于 MM-DD HH:MM (Y 小时前)"。
+
+    阈值与 dashboard 端的 _fmtTs 对齐：≥24 小时 标 ⚠️ 已过期。
+    用途：让用户一眼判断这批推荐是不是今天最新算的，防止误用陈旧数据。
+    """
+    if not iso:
+        return "🕐 算于 ?"
+    try:
+        if "T" in iso:
+            dt = datetime.fromisoformat(iso.split(".")[0])
+        else:
+            dt = datetime.strptime(iso[:10], "%Y-%m-%d")
+    except Exception:
+        return f"🕐 算于 {iso[:16]}"
+    now = datetime.now()
+    delta_s = (now - dt).total_seconds()
+    short = dt.strftime("%m-%d %H:%M")
+    hrs = int(delta_s / 3600)
+    days = int(delta_s / 86400)
+    if days >= 2:
+        age = f"（{days} 天前 ⚠️ 已过期）"
+    elif hrs >= 24:
+        age = f"（{hrs} 小时前 ⚠️ 已过期）"
+    elif hrs >= 1:
+        age = f"（{hrs} 小时前）"
+    else:
+        age = "（刚刚）"
+    return f"🕐 算于 {short} {age}"
+
+
 def _trend_emoji(pct: float | None) -> str:
     """根据涨跌幅% 选 7 档趋势 emoji（区分度比 5 档更高）。"""
     if pct is None:
@@ -247,6 +278,7 @@ def section_holdings_stoploss(history: dict | None = None,
         from stock_research.core.portfolio_constraints import (
             check_stop_loss_breach, volatility_adaptive_stop_pct,
         )
+        from stock_research.core.technical_indicators import anchored_vwap
         holdings = stock_db.fetch_all_holdings()
     except Exception:
         return ""
@@ -257,16 +289,20 @@ def section_holdings_stoploss(history: dict | None = None,
     history = history or {}
     breached: list[dict] = []
     watched: list[dict] = []
+    avwap_alerts: list[dict] = []  # AVWAP 跌破成本线告警（与 -15% 止损独立）
 
     for h in holdings:
         code = h.get("code")
         entry = h.get("entry_price")
+        entry_date = h.get("entry_date")  # datetime / str / None
         if not code or entry is None:
             continue
         ticker_hist = history.get(code) or {}
         closes = ticker_hist.get("close") or []
         highs = ticker_hist.get("high") or None
         lows = ticker_hist.get("low") or None
+        volumes = ticker_hist.get("volume") or None
+        ts_list = ticker_hist.get("ts") or []
         if not closes:
             continue
         current = closes[-1]
@@ -284,10 +320,29 @@ def section_holdings_stoploss(history: dict | None = None,
         elif dd <= -dyn_watch:
             watched.append(row)
 
-    if not breached and not watched:
+        # AVWAP 锚定 entry_date 之后的成交量加权均价（事件成本线）
+        # 跌破 AVWAP = "买入以来市场平均成本"已失守，比绝对回撤更敏感
+        if volumes and entry_date and ts_list:
+            try:
+                entry_str = str(entry_date)[:10]
+                anchor_idx = next((i for i, d in enumerate(ts_list) if d >= entry_str), None)
+                if anchor_idx is not None and anchor_idx < len(closes) - 5:
+                    avw = anchored_vwap(closes, volumes, anchor_idx=anchor_idx)
+                    if avw.get("avwap") is not None and avw.get("deviation_pct") is not None:
+                        dev = avw["deviation_pct"]
+                        if dev < -3.0:  # 现价低于 AVWAP > 3%
+                            avwap_alerts.append({
+                                "code": code, "avwap": avw["avwap"],
+                                "current": current, "dev_pct": dev,
+                                "days": avw.get("days_since_anchor", 0),
+                            })
+            except Exception:
+                pass
+
+    if not breached and not watched and not avwap_alerts:
         return ""
 
-    lines = ["#### 1.5 持仓止损告警（ATR-proxy 动态止损 · 跨标的可比）"]
+    lines = ["#### 1.5 持仓止损告警（ATR-proxy + AVWAP 成本线双闸门）"]
     if breached:
         lines.append(f"🔴 **{len(breached)} 只破各自动态止损线**（建议清仓或减半）：")
         for r in breached[:10]:
@@ -300,6 +355,14 @@ def section_holdings_stoploss(history: dict | None = None,
         for r in watched[:10]:
             lines.append(f"• {r['code']} {r['dd_pct']:+.1f}% (止损线 -{r['stop_pct']:.0f}%) · "
                          f"entry {r['entry']:.2f} → now {r['current']:.2f}")
+    if avwap_alerts:
+        if breached or watched:
+            lines.append("")
+        lines.append(f"⚠️ **{len(avwap_alerts)} 只跌破 entry 后 AVWAP 成本线** "
+                     f"(市场平均买入成本已失守 > 3%)：")
+        for r in avwap_alerts[:10]:
+            lines.append(f"• {r['code']} 现价 {r['current']:.2f} vs AVWAP {r['avwap']:.2f} "
+                         f"({r['dev_pct']:+.1f}%, 持有 {r['days']}d)")
     return "\n".join(lines) + "\n"
 
 
@@ -586,11 +649,11 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
     """
     if not plan and not hk_picks and not a_share_picks:
         return (
-            "#### 2. AI 优选（三线独立）\n"
+            "#### 2. 🔝 自选股·AI 优选（三线独立）\n"
             "⚠️ 美股/港股/A 股三套数据源全部缺失 — 检查 daily_refresh.sh 是否跑完。\n"
         )
 
-    head = "#### 2. AI 优选（三线独立 · 每只股附 ✅ 推荐理由 + ⚠️ 风险点）"
+    head = "#### 2. 🔝 自选股·AI 优选（三线独立 · 每只股附 ✅ 推荐理由 + ⚠️ 风险点）"
     if plan:
         pm = plan.get("portfolio_metrics") or {}
         if pm:
@@ -606,7 +669,9 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
         plan_v5 = plan.get("plan_v5") or []
         us_lines = _humanize_picks(plan_v5, a_share=False, history=history, factor_scores=factor_scores)
         if us_lines:
-            lines.append(f"**🇺🇸 美股 ({sum(1 for l in us_lines if l.startswith('•'))} 只 · 4 因子 + Markowitz 客观仓位)**")
+            n_us = sum(1 for l in us_lines if l.startswith("•"))
+            ts_us = _fmt_ts(plan.get("generated_at"))
+            lines.append(f"**🇺🇸 美股 ({n_us} 只 · 4 因子 + Markowitz 客观仓位)** · {ts_us}")
             lines.extend(us_lines)
         else:
             lines.append("**🇺🇸 美股** — _plan_v5 为空_")
@@ -614,7 +679,8 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
     # 🇭🇰 港股（hk_picks · 3 因子 akshare 财报）
     if hk_picks and hk_picks.get("selected"):
         sel = hk_picks["selected"][:10]
-        lines.append(f"**🇭🇰 港股 ({len(sel)} 只 · 3 因子 + akshare 港股年报)**")
+        ts_hk = _fmt_ts(hk_picks.get("generated_at"))
+        lines.append(f"**🇭🇰 港股 ({len(sel)} 只 · 3 因子 + akshare 港股年报)** · {ts_hk}")
         for entry in sel:
             ticker = entry.get("code", "?")
             name = entry.get("name", "")
@@ -632,7 +698,8 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
     # 🇨🇳 A 股（a_share_picks · 6 因子）
     if a_share_picks and a_share_picks.get("selected"):
         sel = a_share_picks["selected"][:10]
-        lines.append(f"**🇨🇳 A 股 ({len(sel)} 只 · 6 因子 + 盘后龙虎榜+北向)**")
+        ts_cn = _fmt_ts(a_share_picks.get("generated_at"))
+        lines.append(f"**🇨🇳 A 股 ({len(sel)} 只 · 6 因子 + 盘后龙虎榜+北向)** · {ts_cn}")
         for entry in sel:
             ticker = entry.get("ticker", entry.get("code", "?"))
             name = entry.get("name", "")
@@ -1296,11 +1363,11 @@ def _build_card_payload() -> dict:
     })
     blocks.append({"tag": "hr"})
 
-    # ─── Section 2: AI 优选（三线独立 · 白底）───
+    # ─── Section 2: 🔝 自选股·AI 优选（三线独立 · 白底）───
     if plan or hk_picks or a_share_picks:
         section2: list[dict] = [
             {"tag": "div", "text": {"tag": "lark_md", "content":
-                "**📦 AI 优选（三线独立）**\n"
+                "**🔝 自选股·AI 优选（三线独立）**\n"
                 "_🇺🇸 美股 4 因子+Markowitz · 🇭🇰 港股 3 因子+akshare 年报 · 🇨🇳 A 股 6 因子+龙虎榜+北向_"}}
         ]
         if plan:
@@ -1312,64 +1379,83 @@ def _build_card_payload() -> dict:
                     ("波动", f"{pm.get('annual_vol_pct', '?')}%"),
                 ]))
 
-        # 🇺🇸 美股
+        # 🇺🇸 美股 — 每只股聚合多行 (ticker + ✅/⚠️ reason)，再 2 列拆分
         plan_v5 = (plan or {}).get("plan_v5") or []
-        us_lines = _humanize_picks(plan_v5, a_share=False, history=history) if plan else []
-        if us_lines:
+        us_blocks = _humanize_picks_grouped(plan_v5, a_share=False, history=history,
+                                            factor_scores=factor_scores) if plan else []
+        if us_blocks:
+            ts_us = _fmt_ts((plan or {}).get("generated_at"))
             section2.append({"tag": "div", "text": {"tag": "lark_md",
-                "content": f"**🇺🇸 美股 ({len(us_lines)} 只)**"}})
-            half = (len(us_lines) + 1) // 2
-            section2.append(_two_col_lines(us_lines[:half], us_lines[half:]))
+                "content": f"**🇺🇸 美股 ({len(us_blocks)} 只)** · {ts_us}\n_每只股附 ✅ 推荐理由 + ⚠️ 风险点_"}})
+            half = (len(us_blocks) + 1) // 2
+            # 块间用空行分隔，避免上下两只股的 reasons 粘连
+            section2.append(_two_col_lines(
+                ["\n".join(["", b]) if i > 0 else b for i, b in enumerate(us_blocks[:half])],
+                ["\n".join(["", b]) if i > 0 else b for i, b in enumerate(us_blocks[half:])],
+            ))
 
-        # 🇭🇰 港股
+        # 🇭🇰 港股 — 每只股聚合 ticker + reasons
         if hk_picks and hk_picks.get("selected"):
             hk_sel = hk_picks["selected"][:10]
-            hk_lines = []
+            hk_blocks: list[str] = []
             for e in hk_sel:
                 t = e.get("code", "?")
                 spark, pct60 = _ticker_sparkline(history or {}, t)
                 spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
                 f_score = e.get("f_score")
                 f_str = f" · F={f_score}" if f_score is not None else ""
-                hk_lines.append(
-                    f"• **{t}** {e.get('name','')} · {e.get('composite', 0):.2f}{f_str}{spark_str}"
-                )
+                head = f"• **{t}** {e.get('name','')} · {e.get('composite', 0):.2f}{f_str}{spark_str}"
+                pros, cons = _build_hk_reasons(e)
+                rl = _format_reason_lines(pros, cons)
+                hk_blocks.append("\n".join([head] + rl) if rl else head)
+            ts_hk = _fmt_ts(hk_picks.get("generated_at"))
             section2.append({"tag": "div", "text": {"tag": "lark_md",
-                "content": f"**🇭🇰 港股 ({len(hk_sel)} 只)**"}})
-            if len(hk_lines) >= 4:
-                half_h = (len(hk_lines) + 1) // 2
-                section2.append(_two_col_lines(hk_lines[:half_h], hk_lines[half_h:]))
+                "content": f"**🇭🇰 港股 ({len(hk_sel)} 只)** · {ts_hk}\n_每只股附 ✅ 推荐理由 + ⚠️ 风险点_"}})
+            if len(hk_blocks) >= 4:
+                half_h = (len(hk_blocks) + 1) // 2
+                section2.append(_two_col_lines(
+                    ["\n".join(["", b]) if i > 0 else b for i, b in enumerate(hk_blocks[:half_h])],
+                    ["\n".join(["", b]) if i > 0 else b for i, b in enumerate(hk_blocks[half_h:])],
+                ))
             else:
-                section2.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(hk_lines)}})
+                section2.append({"tag": "div", "text": {"tag": "lark_md",
+                    "content": "\n\n".join(hk_blocks)}})
 
-        # 🇨🇳 A 股
+        # 🇨🇳 A 股 — 每只股聚合 ticker + reasons
         if a_share_picks and a_share_picks.get("selected"):
             sel = a_share_picks["selected"][:10]
-            a_lines = []
+            a_blocks: list[str] = []
             for e in sel:
                 t = e.get("ticker", e.get("code", "?"))
                 spark, pct60 = _ticker_sparkline(history or {}, t)
                 spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
-                a_lines.append(
-                    f"• **{t}** {e.get('name','')} · {e.get('composite', 0):.2f}{spark_str}"
-                )
+                head = f"• **{t}** {e.get('name','')} · {e.get('composite', 0):.2f}{spark_str}"
+                pros, cons = _build_a_share_reasons(e)
+                rl = _format_reason_lines(pros, cons)
+                a_blocks.append("\n".join([head] + rl) if rl else head)
+            ts_cn = _fmt_ts(a_share_picks.get("generated_at"))
             section2.append({"tag": "div", "text": {"tag": "lark_md",
-                "content": f"**🇨🇳 A 股 ({len(sel)} 只)**"}})
-            if len(a_lines) >= 4:
-                half_a = (len(a_lines) + 1) // 2
-                section2.append(_two_col_lines(a_lines[:half_a], a_lines[half_a:]))
+                "content": f"**🇨🇳 A 股 ({len(sel)} 只)** · {ts_cn}\n_每只股附 ✅ 推荐理由 + ⚠️ 风险点_"}})
+            if len(a_blocks) >= 4:
+                half_a = (len(a_blocks) + 1) // 2
+                section2.append(_two_col_lines(
+                    ["\n".join(["", b]) if i > 0 else b for i, b in enumerate(a_blocks[:half_a])],
+                    ["\n".join(["", b]) if i > 0 else b for i, b in enumerate(a_blocks[half_a:])],
+                ))
             else:
-                section2.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(a_lines)}})
-        elif plan:
-            a_lines_pre = _humanize_picks(plan_v5, a_share=True, history=history)
-            if a_lines_pre:
                 section2.append({"tag": "div", "text": {"tag": "lark_md",
-                    "content": f"**🇨🇳 A 股 ({len(a_lines_pre)} 只 · 盘前 · 16:30 后更准)**"}})
-                if len(a_lines_pre) >= 4:
-                    half_a = (len(a_lines_pre) + 1) // 2
-                    section2.append(_two_col_lines(a_lines_pre[:half_a], a_lines_pre[half_a:]))
+                    "content": "\n\n".join(a_blocks)}})
+        elif plan:
+            a_blocks_pre = _humanize_picks_grouped(plan_v5, a_share=True, history=history)
+            if a_blocks_pre:
+                section2.append({"tag": "div", "text": {"tag": "lark_md",
+                    "content": f"**🇨🇳 A 股 ({len(a_blocks_pre)} 只 · 盘前 · 16:30 后更准)**"}})
+                if len(a_blocks_pre) >= 4:
+                    half_a = (len(a_blocks_pre) + 1) // 2
+                    section2.append(_two_col_lines(a_blocks_pre[:half_a], a_blocks_pre[half_a:]))
                 else:
-                    section2.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(a_lines_pre)}})
+                    section2.append({"tag": "div", "text": {"tag": "lark_md",
+                        "content": "\n\n".join(a_blocks_pre)}})
         # 趋势图例 — note 元素（灰色小字，参照"灯色对照"的展示模式）
         section2.append({"tag": "note", "elements": [
             {"tag": "plain_text", "content": (
@@ -1378,6 +1464,49 @@ def _build_card_payload() -> dict:
             )}
         ]})
         blocks.extend(section2)
+        blocks.append({"tag": "hr"})
+
+    # ─── Section 2.5: A 股被拒 top 20（审计约束器是否过严）───
+    rejected_pool = _rejected_a_share_entries(a_share_picks, top_n=20)
+    if rejected_pool:
+        rej_blocks: list[str] = []
+        for e in rejected_pool:
+            code = e.get("code", "?")
+            name = e.get("name", "")
+            comp = float(e.get("composite") or 0)
+            industry = e.get("industry", "")
+            ind_str = f" [{industry}]" if industry else ""
+            head = f"• **{code}** {name}{ind_str} · 综合 {comp:.3f}"
+            pros, cons = _build_a_share_reasons(e)
+            reject_lines: list[str] = []
+            for br in (e.get("block_reasons") or [])[:2]:
+                if br:
+                    reject_lines.append(f"  ❌ 约束器：{br}")
+            for rf in (e.get("risk_flags") or [])[:1]:
+                if rf:
+                    reject_lines.append(f"  ⚠️ 红旗：{rf}")
+            if not reject_lines:
+                for c in cons[:2]:
+                    reject_lines.append(f"  ⚠️ {c}")
+            if pros:
+                reject_lines.append(f"  ✅ {pros[0]}（综合分高的原因）")
+            if not reject_lines:
+                tradable = e.get("tradable", True)
+                reject_lines.append(f"  ❌ {'不可买' if not tradable else '分数未达 cutoff'}")
+            rej_blocks.append("\n".join([head] + reject_lines))
+
+        blocks.append({"tag": "div", "text": {"tag": "lark_md", "content":
+            f"**🚫 A 股候选但被拒 · top {len(rej_blocks)}**\n"
+            "_审计用：好票频繁出现在这里 → 约束器可能过严，可对照原因调阈值_"}})
+        if len(rej_blocks) >= 4:
+            half_r = (len(rej_blocks) + 1) // 2
+            blocks.append(_two_col_lines(
+                ["\n".join(["", b]) if i > 0 else b for i, b in enumerate(rej_blocks[:half_r])],
+                ["\n".join(["", b]) if i > 0 else b for i, b in enumerate(rej_blocks[half_r:])],
+            ))
+        else:
+            blocks.append({"tag": "div", "text": {"tag": "lark_md",
+                "content": "\n\n".join(rej_blocks)}})
         blocks.append({"tag": "hr"})
 
     # ─── Section 3: 两个方案对比（核心 — 让新人一眼看懂"AI 有没有用"）───

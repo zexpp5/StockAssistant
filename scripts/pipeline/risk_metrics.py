@@ -219,8 +219,11 @@ def main():
     cvar_95 = daily_pnl[daily_pnl <= var_95].mean()
     cvar_99 = daily_pnl[daily_pnl <= var_99].mean()
 
-    # Beta（vs SPY）
+    # Beta（vs SPY）+ Tracking Error + Information Ratio（二审 P0.5-B）
     beta = None
+    tracking_error = None
+    info_ratio = None
+    alpha_annual = None
     if spy is not None and len(spy) > 50:
         spy_returns = spy.pct_change().dropna().values
         # 对齐长度
@@ -231,6 +234,16 @@ def main():
             cov = np.cov(r, sr)[0, 1]
             var_spy = sr.var()
             beta = cov / var_spy if var_spy > 0 else None
+
+            # 组合层 Tracking Error / Information Ratio (Grinold-Kahn 2000)
+            #   TE = std(r_portfolio - r_benchmark) × √252
+            #   IR = (μ_portfolio - μ_benchmark) × 252 / TE
+            # 当前是绝对收益策略，这两个指标作"如果未来转指数增强"的预备数据
+            excess_daily = r - sr
+            tracking_error = float(excess_daily.std() * np.sqrt(TRADING_DAYS))
+            mean_excess_annual = float(excess_daily.mean() * TRADING_DAYS)
+            alpha_annual = mean_excess_annual
+            info_ratio = (mean_excess_annual / tracking_error) if tracking_error > 0 else None
 
     # 4) 报告
     print("\n" + "=" * 70)
@@ -297,6 +310,9 @@ def main():
         "sortino": round(sortino, 2),
         "calmar": round(calmar, 2),
         "beta_vs_spy": round(beta, 2) if beta else None,
+        "tracking_error_annual_pct": round(tracking_error * 100, 2) if tracking_error else None,
+        "alpha_annual_pct": round(alpha_annual * 100, 2) if alpha_annual is not None else None,
+        "information_ratio": round(info_ratio, 2) if info_ratio is not None else None,
         "var_95_rmb": round(float(var_95), 0),
         "var_99_rmb": round(float(var_99), 0),
         "cvar_95_rmb": round(float(cvar_95), 0),
