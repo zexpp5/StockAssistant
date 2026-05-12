@@ -283,6 +283,21 @@ def main():
         impact_bps_per_pct_adv=A_SHARE_IMPACT_BPS_PER_PCT_ADV,
     )
 
+    # A-5 (2026-05-12)：把 industry / 单股成本明细 reverse-map 到 entries，
+    # 让 dashboard / morning_brief 不用反查 constraints_summary 就能显示
+    cost_by_ticker: dict[str, dict] = {}
+    for b in a_cost.get("breakdowns", []):
+        cost_by_ticker[b.ticker] = {
+            "delta_weight_pp": round(b.delta_weight * 100, 3),
+            "delta_yuan": round(b.delta_dollars, 2),
+            "pct_of_adv": round(b.pct_of_adv, 2),
+            "total_cost_bps": round(b.total_cost_bps, 2),
+            "total_cost_yuan": round(b.total_cost_dollars, 2),
+        }
+    for a in adjusted:
+        a["industry"] = industries_map_a.get(a["ticker"], "未分类")
+        a["cost"] = cost_by_ticker.get(a["ticker"])  # 可能 None（无调仓的标的）
+
     # 重新组合：调整后的 A 股 + 原始美股 + 现金（含 spillover）
     constraints_summary = {
         "n_a_share_blocked": sum(1 for a in adjusted if a["v5_weight"] == 0 and a["original_weight"] > 0),

@@ -225,6 +225,78 @@ def _yield_curve_inverted(as_of: str | None = None) -> tuple[bool, dict]:
     }
 
 
+def _breadth_advance_decline(history: dict | None = None,
+                              lookback: int = 21,
+                              pct_advance_threshold: float = 0.45,
+                              ) -> tuple[bool, dict]:
+    """真 A/D Line：从 history_data.json universe 算每日涨/跌家数。
+
+    学术依据：
+      - Zweig (1986) "Winning on Wall Street" — 涨跌家数广度领先于市值指数
+      - Fosback (1976) "Stock Market Logic" — A/D Line 是大盘健康度首要指标
+      - Whaley & Cooper (1991) JFR — 实证 NYSE A/D 在大盘转折点领先 5-15 个交易日
+
+    阈值：21 日均"涨家数比 < 45%" 即广度差（保守，因 50% 已意味着多空均衡）。
+    缺数据时由调用方 fallback 到 RSP-SPY spread 代理（_breadth_weak）。
+    """
+    if history is None:
+        try:
+            from pathlib import Path
+            import json as _json
+            repo = Path(__file__).resolve().parents[2]
+            hist_path = repo / "data" / "latest" / "history_data.json"
+            if hist_path.exists():
+                d = _json.loads(hist_path.read_text(encoding="utf-8"))
+                history = d.get("tickers") or {}
+            else:
+                return False, {"error": "history_data.json missing"}
+        except Exception as e:
+            return False, {"error": f"history load failed: {str(e)[:80]}"}
+
+    if not history:
+        return False, {"error": "empty history"}
+
+    daily_advances = [0] * lookback
+    daily_total = [0] * lookback
+
+    for ticker, data in history.items():
+        closes = (data or {}).get("close") or []
+        if len(closes) < lookback + 1:
+            continue
+        recent = closes[-(lookback + 1):]
+        for i in range(lookback):
+            prev_c = recent[i]
+            cur_c = recent[i + 1]
+            if prev_c is None or cur_c is None or prev_c <= 0:
+                continue
+            daily_total[i] += 1
+            if cur_c > prev_c:
+                daily_advances[i] += 1
+
+    universe_size = max(daily_total) if daily_total else 0
+    if universe_size < 20:
+        return False, {"error": f"universe too small ({universe_size})"}
+
+    pct_advancing = [
+        (a / t) if t > 0 else 0.5
+        for a, t in zip(daily_advances, daily_total)
+    ]
+    avg_pct = sum(pct_advancing) / lookback
+    # A/D Line 21 日累计变化 = sum(advancing - declining)
+    ad_line_chg = sum((a - (t - a)) for a, t in zip(daily_advances, daily_total))
+
+    breadth_bad = avg_pct < pct_advance_threshold
+    return breadth_bad, {
+        "avg_pct_advancing_21d": round(avg_pct * 100, 1),
+        "ad_line_change_21d": ad_line_chg,
+        "universe_size": universe_size,
+        "threshold_pct": round(pct_advance_threshold * 100, 1),
+        "method": "advance_decline_real",
+        "interpretation": ("广度差 - 跌家数偏多" if breadth_bad
+                           else "广度健康 - 涨家数充足"),
+    }
+
+
 def _breadth_weak(as_of: str | None = None,
                   spread_threshold_pct: float = -3.0) -> tuple[bool, dict]:
     """市场广度 proxy：RSP（等权 S&P 500）vs SPY（市值加权）近 21 个交易日相对收益。
@@ -300,9 +372,22 @@ def get_dynamic_gross_exposure(as_of: str | None = None,
     spy_ok, ma_info = _spy_above_200ma(as_of)
     _, vix_info = _vix_below_panic(as_of, panic_threshold=vix_threshold_panic)
     yc_inverted, yc_info = _yield_curve_inverted(as_of)
-    breadth_bad, breadth_info = _breadth_weak(
+    # 广度信号：两个独立维度，OR 触发但合并占 1 个 trigger 槽位
+    # - 真 A/D Line (Zweig 1986)：watchlist universe 涨跌家数
+    # - RSP-SPY spread (头部集中)：S&P 内部分布健康度
+    # 两者测不同的东西，互相补充
+    ad_bad, ad_info = _breadth_advance_decline()
+    spread_bad, spread_info = _breadth_weak(
         as_of, spread_threshold_pct=breadth_spread_threshold_pct,
     )
+    breadth_bad = ad_bad or spread_bad
+    breadth_msgs = []
+    if ad_bad and not ad_info.get("error"):
+        breadth_msgs.append(f"A/D {ad_info.get('avg_pct_advancing_21d','?')}% 涨")
+    if spread_bad and not spread_info.get("error"):
+        breadth_msgs.append(f"RSP-SPY {spread_info.get('spread_pct','?')}%")
+    breadth_trigger_msg = "广度差 (" + " / ".join(breadth_msgs) + ")" if breadth_msgs else ""
+    breadth_info = {"advance_decline": ad_info, "rsp_spy_spread": spread_info}
     vix_value = vix_info.get("vix_close")
 
     triggers = []
@@ -313,7 +398,7 @@ def get_dynamic_gross_exposure(as_of: str | None = None,
     if yc_inverted:
         triggers.append("10Y-13W 倒挂 (Estrella-Mishkin)")
     if breadth_bad:
-        triggers.append(f"广度差 (RSP-SPY spread {breadth_info.get('spread_pct','?')}%)")
+        triggers.append(breadth_trigger_msg)
 
     # 档位判定（VIX 极端绕过信号计数；信号数门槛对应 4 信号体系微调）
     if vix_value is not None and vix_value >= vix_threshold_panic:
