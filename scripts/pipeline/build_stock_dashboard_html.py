@@ -322,7 +322,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <div class="text-base font-bold text-slate-800 mb-2 px-2">🗂️ 我的池子</div>
       <a href="#portfolio" data-tab="portfolio" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">💼 我的持仓</a>
       <a href="#watchlist-edit" data-tab="init-config" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">⭐ 自选股</a>
-      <a href="#picks" data-tab="picks" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🔝 自选股·今日 Top</a>
+      <a href="#picks" data-tab="picks" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🔝 自选股·AI 优选</a>
     </div>
 
     <!-- 🧠 AI 助手 = AI 推荐(个股) + AI 组合方案(组合层 含模拟回测) -->
@@ -725,64 +725,87 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <!-- ============ 打分规则说明（动态由 scoring_rules_panel_html 渲染） ============ -->
 {SCORING_RULES_PANEL}
 
-<!-- ============ 自选股·今日 Top回顾 ============ -->
+<!-- ============ 自选股·AI 优选回顾 ============ -->
 <section id="picks-review" class="max-w-7xl mx-auto px-6 py-10 bg-gradient-to-br from-amber-50 to-orange-50 rounded-2xl my-6">
   <div class="flex items-start justify-between mb-4 gap-4">
     <div class="flex-1">
       <div class="flex items-center gap-3 mb-1">
         <span class="text-3xl">⭐</span>
-        <h2 class="text-2xl font-bold text-slate-900">自选股·今日 Top</h2>
+        <h2 class="text-2xl font-bold text-slate-900">自选股·AI 优选</h2>
       </div>
       <p class="text-slate-700 text-sm">
-        <strong class="text-violet-700">顶部 = 今日 top picks</strong>（系统综合评分最高的几只 · 飞书早安简报也会推送一份）·
+        <strong class="text-violet-700">顶部 = 今日入选</strong>（从你的自选股池子里 AI 综合评分最高的几只 · 飞书早安简报也会推送一份）·
         <strong class="text-slate-600">下方 = 30 天历史回顾</strong>（检验系统打分是否真的越高越涨）
       </p>
     </div>
     <div id="picks-summary" class="text-right flex-shrink-0"></div>
   </div>
 
-  <!-- 🌟 今日 top picks 横幅（最新一批入选）-->
+  <!-- 🌟 今日 top picks 横幅（最新一批入选 · 三线独立 2026-05-12 起）-->
   <div class="mb-6 bg-gradient-to-r from-violet-100 to-fuchsia-50 border-2 border-violet-300 rounded-xl p-5">
-    <div class="flex items-center gap-2 mb-3">
+    <div class="flex items-center gap-2 mb-3 flex-wrap">
       <span class="text-2xl">🌟</span>
-      <h3 class="text-lg font-bold text-violet-900">今日 top picks</h3>
+      <h3 class="text-lg font-bold text-violet-900">今日入选</h3>
       <span id="picks-today-meta" class="text-xs text-violet-700"></span>
+      <!-- 市场过滤 segment（三线独立）-->
+      <div class="ml-auto flex items-center gap-1 bg-white rounded-lg border border-violet-200 p-0.5">
+        <button onclick="filterPicksMarket('all')" id="picks-mkt-all"
+          class="picks-mkt-btn px-3 py-1 text-xs font-medium rounded bg-violet-500 text-white">🌐 全部</button>
+        <button onclick="filterPicksMarket('us')" id="picks-mkt-us"
+          class="picks-mkt-btn px-3 py-1 text-xs font-medium rounded text-slate-600 hover:bg-violet-50">🇺🇸 美股</button>
+        <button onclick="filterPicksMarket('hk')" id="picks-mkt-hk"
+          class="picks-mkt-btn px-3 py-1 text-xs font-medium rounded text-slate-600 hover:bg-violet-50">🇭🇰 港股</button>
+        <button onclick="filterPicksMarket('cn')" id="picks-mkt-cn"
+          class="picks-mkt-btn px-3 py-1 text-xs font-medium rounded text-slate-600 hover:bg-violet-50">🇨🇳 A 股</button>
+      </div>
     </div>
     <div id="picks-today-list" class="grid grid-cols-1 md:grid-cols-3 gap-3"></div>
   </div>
 
-  <!-- 历史回顾分隔 -->
-  <div class="border-t border-amber-200 pt-5 mb-3">
-    <h3 class="text-base font-semibold text-slate-700">📊 30 天历史回顾 — 系统打分准不准</h3>
-    <p class="text-xs text-slate-500 mt-1">关键看下方"⭐ 评分 vs 实际表现"是否单调（⭐⭐⭐ 平均涨幅 > ⭐⭐ > ⭐）</p>
+  <!-- 显眼分隔横条：上面是今天的，下面是历史回顾，视觉一刀两断 -->
+  <div class="my-6">
+    <div class="border-t-4 border-dashed border-slate-300"></div>
+    <div class="flex items-center justify-center -mt-3.5">
+      <span class="bg-amber-50 px-4 py-1 text-xs text-slate-500 tracking-widest uppercase">↓ 以下为历史回顾 ·  Not Today  ↓</span>
+    </div>
+  </div>
+  <div class="bg-slate-50 rounded-xl p-4 mb-3 border border-slate-200">
+    <h3 class="text-lg font-bold text-slate-800">📊 30 天历史回顾 — 系统打分准不准</h3>
+    <p class="text-sm text-slate-600 mt-1">
+      <strong class="text-slate-700">这块不是今天的入选！</strong>
+      这是过去 30 天 AI 选过的所有股的<strong>事后跟踪</strong>——专门用来检验"AI 当时选得对不对"。
+      重点看：<strong>⭐⭐⭐ 平均涨幅是否 &gt; ⭐⭐ &gt; ⭐</strong>，单调 = 评级有效。
+    </p>
   </div>
 
   <!-- 整体统计 -->
   <div id="picks-stats" class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4"></div>
 
-  <!-- 评分 vs 实际 + 主题表现 -->
+  <!-- 评分 vs 实际 + 主题表现（纯展示信息卡：无 shadow / 浅边框 / 无 hover）-->
   <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+    <div class="bg-white rounded-xl border border-slate-100 p-4">
       <h3 class="text-sm font-semibold text-slate-700 mb-2">⭐ 评分 vs 实际表现</h3>
       <p class="text-xs text-slate-500 mb-2">⭐⭐⭐ 是否真的更准？</p>
       <div id="picks-by-rating"></div>
     </div>
-    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+    <div class="bg-white rounded-xl border border-slate-100 p-4">
       <h3 class="text-sm font-semibold text-slate-700 mb-2">🗂 主题表现</h3>
       <p class="text-xs text-slate-500 mb-2">哪类主题最准</p>
       <div id="picks-by-theme"></div>
     </div>
   </div>
 
-  <!-- 表现 Top / Bottom -->
+  <!-- 表现 Top / Bottom（雪球持仓表样式：代码/名称/评级 + 入选日/入选价/现价/涨跌）-->
   <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-    <div class="bg-white rounded-xl shadow-sm border-2 border-emerald-300 p-4">
-      <h3 class="text-sm font-semibold text-emerald-700 mb-2">🚀 选股表现 Top 5</h3>
-      <div id="picks-top" class="space-y-1"></div>
+    <div class="bg-emerald-50/60 rounded-xl border border-emerald-100 p-4">
+      <h3 class="text-sm font-semibold text-emerald-700">🚀 选股表现 Top 5</h3>
+      <p class="text-[11px] text-slate-500 mb-2">AI 选完之后涨最多的 5 只 · 显示入选日 @ 入选价 → 当前价</p>
+      <div id="picks-top"></div>
     </div>
-    <div class="bg-white rounded-xl shadow-sm border-2 border-rose-300 p-4">
-      <h3 class="text-sm font-semibold text-rose-700 mb-2">📉 选股表现 Bottom 5</h3>
-      <div id="picks-bottom" class="space-y-1"></div>
+    <div class="bg-rose-50/60 rounded-xl border border-rose-100 p-4">
+      <h3 class="text-sm font-semibold text-rose-700">📉 选股表现 Bottom 5</h3>
+      <p class="text-[11px] text-slate-500 mb-2">AI 选完之后跌最多的 5 只 · 反向验证 AI 是否踩雷</p>
+      <div id="picks-bottom"></div>
     </div>
   </div>
 </section>
@@ -841,6 +864,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <th class="px-3 py-2 text-right" title="入选后 5 天涨幅 - 同期 SPY 涨幅">5d α</th>
             <th class="px-3 py-2 text-right" title="入选后 20 天涨幅 - 同期 SPY 涨幅">20d α</th>
             <th class="px-3 py-2 text-left">来源</th>
+            <th class="px-3 py-2 text-center" title="AI 系统跑这批推荐的实际时间 — 防止误以为是实时数据">推荐时间</th>
             <th class="px-3 py-2 text-center">操作</th>
           </tr>
         </thead>
@@ -1798,7 +1822,7 @@ function switchDiscoveryView(view) {
       <h4 class="text-lg font-bold text-amber-700 mb-3">🟡 在做但未完成（等数据/时间）</h4>
       <ul class="space-y-2 text-sm">
         <li class="bg-white rounded p-3 border border-amber-200"><strong>因子 IC 验证</strong> — 框架就位，需累积 30+ 天历史才有意义</li>
-        <li class="bg-white rounded p-3 border border-amber-200"><strong>自选股·今日 Top hit rate 真实回测</strong> — picks 已积累 3 天 (2026-05-09 / 05-10 / 05-11 多次 snapshot)，仍需 1 个月数据才能可信验证</li>
+        <li class="bg-white rounded p-3 border border-amber-200"><strong>自选股·AI 优选 hit rate 真实回测</strong> — picks 已积累 3 天 (2026-05-09 / 05-10 / 05-11 多次 snapshot)，仍需 1 个月数据才能可信验证</li>
         <li class="bg-white rounded p-3 border border-amber-200"><strong>B 路线 Phase 2-4</strong> — quarterly_trends / earnings_call / dcf_scenarios / forward_valuation 代码就绪，等付费数据源（FMP Starter / Tushare Pro）激活</li>
       </ul>
     </div>
@@ -2101,6 +2125,9 @@ function switchDiscoveryView(view) {
 // RECORDS / PICKS / SIMULATION 来自飞书 watchlist API 实时拉（仍保留），其余全部走 DuckDB。
 const RECORDS      = {RECORDS_JSON};
 const PICKS        = {PICKS_JSON};
+// 2026-05-12 加：各市场 picks JSON 的 generated_at — 让用户知道每条推荐是什么时候算的
+// {us: ISO 时间, hk: ISO 时间, cn: ISO 时间}；某市场没数据时为 null
+const PICKS_TIMESTAMPS = {PICKS_TIMESTAMPS_JSON};
 const WATCHLIST_RATINGS = {WATCHLIST_RATINGS_JSON};  // {code: {rating, total_score, ai_score}}  来自 picks 最新一日
 const SIMULATION   = {SIMULATION_JSON};
 // 2026-05-11 PM: watchlist 链条定位信息(chain/chain_tier/chain_role/layman_intro)
@@ -2179,11 +2206,17 @@ function _wlRatingBadge(code) {
   }
   const r = String(info.rating);
   const score = info.total_score != null ? ` · ${info.total_score}` : "";
+  // 风险红旗：grade_label 把 risk_flags 拼在 · 后面（🚨 Altman Z'' / 🚨 Beneish M）
+  // 提取并叠加小红角标（不挡评级主标，hover 看详情）
+  const hasFlag = r.includes("🚨");
+  const flagBadge = hasFlag
+    ? `<span class="inline-flex ml-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-700 ring-1 ring-rose-300" title="${_esc(r)}">🚨 风险</span>`
+    : "";
   if (r.includes("⭐⭐⭐")) {
-    return `<span class="inline-flex px-2 py-0.5 rounded text-xs font-bold bg-emerald-100 text-emerald-700" title="${_esc(r)}${score}">✅ 推荐</span>`;
+    return `<span class="inline-flex items-center"><span class="inline-flex px-2 py-0.5 rounded text-xs font-bold bg-emerald-100 text-emerald-700" title="${_esc(r)}${score}">✅ 推荐</span>${flagBadge}</span>`;
   }
   if (r.includes("⭐⭐") || r.includes("⭐")) {
-    return `<span class="inline-flex px-2 py-0.5 rounded text-xs font-bold bg-amber-100 text-amber-700" title="${_esc(r)}${score}">⚠️ 观察</span>`;
+    return `<span class="inline-flex items-center"><span class="inline-flex px-2 py-0.5 rounded text-xs font-bold bg-amber-100 text-amber-700" title="${_esc(r)}${score}">⚠️ 观察</span>${flagBadge}</span>`;
   }
   return '<span class="text-slate-400 text-xs">— 未评级</span>';
 }
@@ -3199,11 +3232,11 @@ function renderPortfolio() {
       <div class="text-2xl font-bold text-violet-900">${totalValue.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
       <div class="text-xs text-violet-700 mt-1">当前股票市值 RMB <span class="text-violet-500">(现价 × 股数)</span></div>
     </div>
-    <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200">
+    <div class="bg-slate-50 rounded-lg p-3 border border-slate-100">
       <div class="text-2xl font-bold ${stockColor}">${total_pnl >= 0 ? '+' : ''}${total_pnl.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
       <div class="text-xs text-slate-500 mt-1">股票仓盈亏 <span class="text-slate-400">(市值 - 成本)</span></div>
     </div>
-    <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200">
+    <div class="bg-slate-50 rounded-lg p-3 border border-slate-100">
       <div class="text-2xl font-bold ${stockColor}">${total_pnl_pct >= 0 ? '+' : ''}${total_pnl_pct.toFixed(2)}%</div>
       <div class="text-xs text-slate-500 mt-1">股票仓收益率</div>
     </div>
@@ -3211,7 +3244,7 @@ function renderPortfolio() {
       <div class="text-2xl font-bold text-slate-900">${cash.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
       <div class="text-xs text-slate-500 mt-1">未持仓现金 RMB <span class="text-slate-400">(本金 - 成本)</span></div>
     </div>
-    <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200">
+    <div class="bg-slate-50 rounded-lg p-3 border border-slate-100">
       <div class="text-2xl font-bold text-slate-900">${holdings.length}</div>
       <div class="text-xs text-slate-500 mt-1">持仓数量</div>
     </div>
@@ -4167,24 +4200,172 @@ function _pctBadge(pct) {
   return `<span class="text-xs font-mono font-bold ${cls}">${sign}${v.toFixed(2)}%</span>`;
 }
 
-document.getElementById("picks-today-list").innerHTML = todayPicks.length > 0
-  ? todayPicks.map(p => `
-      <div class="bg-white rounded-lg p-3 border border-violet-200 hover:border-violet-400 transition">
-        <div class="flex items-center justify-between gap-2 mb-1.5">
-          <span class="font-bold text-slate-900 truncate font-mono">${p.code || "?"}</span>
+// 市场识别 + emoji（与 trade_delta.py _market_of 对齐）
+function _pickMarket(p) {
+  const c = String(p.code || "").toUpperCase();
+  const m = String(p.market || "");
+  if (c.endsWith(".HK") || m.includes("港股")) return "hk";
+  if (/^\d{6}$/.test(c) || m.includes("A股") || m.includes("A 股") || c.endsWith(".SS") || c.endsWith(".SZ") || c.endsWith(".BJ")) return "cn";
+  return "us";
+}
+function _marketEmoji(p) {
+  return {us: "🇺🇸", hk: "🇭🇰", cn: "🇨🇳"}[_pickMarket(p)] || "🌐";
+}
+
+// 推荐理由组装 — 用 picks 表已有的 4 个子分数派生
+// ai_score (0-100 = ai_relevance × 10) / val_score (0-27 = F-Score × 3)
+// trend_score (0-25 = |momentum_12_1| capped) / cred_score (0-~30 = analyst_score 美股)
+function _buildPickReasons(p) {
+  const pros = [], cons = [];
+  const total = parseFloat(p.total_score) || 0;
+  const ai = parseFloat(p.ai_score) || 0;
+  const val = parseFloat(p.val_score) || 0;
+  const trend = parseFloat(p.trend_score) || 0;
+  const cred = parseFloat(p.cred_score) || 0;
+  const theme = (p.theme || p.ai_relevance || "").toString().trim();
+
+  // 综合分档位
+  if (total >= 85) pros.push(`综合分 ${total.toFixed(0)}/100 顶级推荐`);
+  else if (total >= 70) pros.push(`综合分 ${total.toFixed(0)}/100 强推荐`);
+
+  // F-Score（val_score = F × 3，所以 ÷3 还原）
+  const fScore = Math.round(val / 3);
+  if (fScore >= 7) pros.push(`F-Score ${fScore}/9 基本面优`);
+  else if (fScore >= 5) pros.push(`F-Score ${fScore}/9 基本面中性`);
+  else if (fScore > 0 && fScore <= 4) cons.push(`F-Score ${fScore}/9 基本面偏弱`);
+
+  // AI 主题相关度
+  if (ai >= 70 && theme) pros.push(`AI 主题强相关：${theme}`);
+  else if (ai >= 50 && theme) pros.push(`主题：${theme}`);
+
+  // 趋势分（美股有，A 股=0 跳过）
+  if (trend >= 20) pros.push(`12-1 月动量 +${trend.toFixed(0)}% 强势`);
+  else if (trend >= 10) pros.push(`12-1 月动量 +${trend.toFixed(0)}% 中强`);
+
+  // 分析师上修（美股有，A 股=0 跳过）
+  if (cred >= 20) pros.push(`分析师上修信号强 (${cred.toFixed(0)})`);
+  else if (cred >= 10) pros.push(`分析师上修信号 (${cred.toFixed(0)})`);
+
+  // 从 rating 提取红旗（grade_label 把 risk_flags 拼在了 · 后面，如 "⭐⭐⭐ 强烈推荐 · Altman Z'' 偏低｜Beneish M >-1.78"）
+  const rating = String(p.rating || "");
+  const sep = rating.indexOf(" · ");
+  if (sep > 0) {
+    const flagsPart = rating.slice(sep + 3).trim();
+    flagsPart.split(/[｜|]/).forEach(f => {
+      const t = f.trim();
+      if (t) cons.push(t);
+    });
+  }
+
+  return { pros, cons };
+}
+
+// 格式化 ISO 时间戳 → "MM-DD HH:MM"（紧凑）+ 提供完整时间作为 title
+// 警告阈值：picks / discovery 应每天跑一次，所以 ≥24h 就该标红警告（不要等 2 天）
+function _fmtTs(iso) {
+  if (!iso) return { short: "?", full: "未知", age: "", stale: false };
+  const s = String(iso);
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/);
+  if (!m) return { short: s, full: s, age: "", stale: false };
+  const [, Y, MM, DD, hh, mm] = m;
+  const short = (hh && mm) ? `${MM}-${DD} ${hh}:${mm}` : `${MM}-${DD}`;
+  const full = (hh && mm) ? `${Y}-${MM}-${DD} ${hh}:${mm}` : `${Y}-${MM}-${DD}`;
+  let age = "", stale = false;
+  const t = Date.parse(s);
+  if (!isNaN(t)) {
+    const ms = Date.now() - t;
+    const hrs = Math.floor(ms / 3600000);
+    const days = Math.floor(ms / 86400000);
+    if (days >= 2) { age = `（${days} 天前 ⚠️ 已过期）`; stale = true; }
+    else if (hrs >= 24) { age = `（${hrs} 小时前 ⚠️ 已过期）`; stale = true; }  // 24-48 小时也算过期
+    else if (hrs >= 12) age = `（${hrs} 小时前）`;       // 12-24 小时：留意
+    else if (hrs >= 2)  age = `（${hrs} 小时前）`;
+    else if (hrs >= 1)  age = "（1 小时前）";
+    else                age = "（刚刚）";
+  }
+  return { short, full, age, stale };
+}
+
+function _pickReasonsHtml(p) {
+  const { pros, cons } = _buildPickReasons(p);
+  const mkt = _pickMarket(p);  // us / hk / cn
+  const ts = (typeof PICKS_TIMESTAMPS !== "undefined") ? PICKS_TIMESTAMPS[mkt] : null;
+  const tsFmt = _fmtTs(ts || p.pick_date);
+  const lines = [];
+  pros.slice(0, 2).forEach(t =>
+    lines.push(`<div class="text-[11px] text-emerald-700 leading-tight" title="${_esc(t)}">✅ ${t}</div>`));
+  // cons 里的"🚨 风险红旗"全显示（红色高亮），其他普通 cons 只显示第一条（黄色）
+  // 红旗源自 grade_label 拼接的 risk_flags（Altman Z'' / Beneish M），避免被截断埋没
+  const flagCons = cons.filter(t => t.includes("🚨"));
+  const otherCons = cons.filter(t => !t.includes("🚨"));
+  flagCons.forEach(t =>
+    lines.push(`<div class="text-[11px] text-rose-700 leading-tight font-medium" title="${_esc(t)}">${t}</div>`));
+  otherCons.slice(0, 1).forEach(t =>
+    lines.push(`<div class="text-[11px] text-amber-700 leading-tight" title="${_esc(t)}">⚠️ ${t}</div>`));
+  // 始终显示 AI 计算时间（即使没有 pros/cons 也要让用户知道这条是什么时候算的）
+  const ageCls = tsFmt.age.includes("⚠️") ? "text-rose-600 font-medium" : "text-slate-400";
+  lines.push(`<div class="text-[10px] ${ageCls} mt-1" title="${_esc(tsFmt.full)}">🕐 AI 算于 ${tsFmt.short} ${tsFmt.age}</div>`);
+  return `<div class="mt-2 pt-2 border-t border-violet-50 space-y-0.5">${lines.join("")}</div>`;
+}
+
+// 三线独立后 top picks 把美股+港股+A 股混在一起；按市场过滤展示
+window._todayPicksAll = todayPicks;
+window._todayPicksFilter = "all";
+
+function renderTodayPicksList() {
+  const f = window._todayPicksFilter;
+  const list = (f === "all") ? window._todayPicksAll
+                              : window._todayPicksAll.filter(p => _pickMarket(p) === f);
+  const node = document.getElementById("picks-today-list");
+  if (list.length === 0) {
+    node.innerHTML = '<div class="col-span-3 text-center text-slate-500 text-sm py-4">该市场暂无入选 — 跑完对应市场 picks 后会显示</div>';
+    return;
+  }
+  node.innerHTML = list.map(p => {
+    const pickDate = _formatPickDate(p.pick_date);
+    const entry = _formatPrice(p.entry_price);
+    const current = _formatPrice(p.current_price);
+    const days = p.days_held || 0;
+    const v = parseFloat(p.pct);
+    let priceLine;
+    if (days > 0 && p.current_price != null && !isNaN(v)) {
+      const color = v > 0 ? "text-emerald-600" : "text-rose-600";
+      const sign = v > 0 ? "+" : "";
+      priceLine = `${pickDate} @ ${entry} → 现 ${current} · <span class="${color} font-bold">${sign}${v.toFixed(1)}%</span> <span class="text-slate-400">(${days}天)</span>`;
+    } else {
+      priceLine = `${pickDate} 入选 @ ${entry} · <span class="text-slate-400">当日新选</span>`;
+    }
+    return `<div class="bg-white rounded-lg p-3 border border-violet-100">
+        <div class="flex items-center justify-between gap-2 mb-1">
+          <span class="font-bold text-slate-900 truncate font-mono">${_marketEmoji(p)} ${p.code || "?"}</span>
           ${_ratingBadge(p.rating)}
         </div>
-        <div class="text-xs text-slate-700 truncate mb-1.5">${p.name || ""}</div>
-        <div class="flex items-center justify-between text-xs gap-2">
-          <span class="text-slate-500 truncate">${p.theme || ""}</span>
-          ${_pctBadge(p.pct)}
-        </div>
-      </div>
-    `).join("")
-  : '<div class="col-span-3 text-center text-slate-500 text-sm py-4">暂无入选数据 — daily_picks_v5 跑完后会显示</div>';
+        <div class="text-xs text-slate-700 truncate mb-1">${p.name || ""}</div>
+        <div class="text-[11px] text-slate-500 font-mono mb-1">${priceLine}</div>
+        <div class="text-[10px] text-slate-400 truncate mb-1">${p.theme || ""}</div>
+        ${_pickReasonsHtml(p)}
+      </div>`;
+  }).join("");
+}
+
+function filterPicksMarket(market) {
+  window._todayPicksFilter = market;
+  document.querySelectorAll(".picks-mkt-btn").forEach(b => {
+    b.classList.remove("bg-violet-500", "text-white");
+    b.classList.add("text-slate-600");
+  });
+  const active = document.getElementById("picks-mkt-" + market);
+  if (active) {
+    active.classList.add("bg-violet-500", "text-white");
+    active.classList.remove("text-slate-600");
+  }
+  renderTodayPicksList();
+}
+
+renderTodayPicksList();
 
 
-// ============ 自选股·今日 Top回顾 ============
+// ============ 自选股·AI 优选回顾 ============
 const validPicks = PICKS.filter(p => p.pct != null && p.pct !== "");
 const totalPicks = PICKS.length;
 const validCount = validPicks.length;
@@ -4207,23 +4388,23 @@ document.getElementById("picks-summary").innerHTML = totalPicks > 0
   : "";
 
 document.getElementById("picks-stats").innerHTML = totalPicks > 0 ? `
-  <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200">
+  <div class="bg-slate-50 rounded-lg p-3 border border-slate-100">
     <div class="text-2xl font-bold text-slate-900">${uniqueStocks30d}</div>
     <div class="text-xs text-slate-500 mt-1">不重复股票数（30 天内被选过）</div>
   </div>
-  <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200">
+  <div class="bg-slate-50 rounded-lg p-3 border border-slate-100">
     <div class="text-2xl font-bold ${avgPct > 0 ? 'text-emerald-600' : 'text-rose-600'}">${avgPct > 0 ? '+' : ''}${avgPct.toFixed(2)}%</div>
     <div class="text-xs text-slate-500 mt-1">入选后平均涨跌</div>
   </div>
-  <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200">
+  <div class="bg-slate-50 rounded-lg p-3 border border-slate-100">
     <div class="text-2xl font-bold text-emerald-600">${winRate.toFixed(0)}%</div>
     <div class="text-xs text-slate-500 mt-1">大涨命中率（>+5%）</div>
   </div>
-  <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200">
+  <div class="bg-slate-50 rounded-lg p-3 border border-slate-100">
     <div class="text-lg font-bold"><span class="text-emerald-600">${winCount}</span> <span class="text-amber-500">/ ${flatCount}</span> <span class="text-rose-600">/ ${lossCount}</span></div>
     <div class="text-[11px] text-slate-500 mt-1">命中 <span class="text-slate-400">/</span> 跟随 (±5%) <span class="text-slate-400">/</span> 失败 (&lt;-5%)</div>
   </div>
-  <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200">
+  <div class="bg-slate-50 rounded-lg p-3 border border-slate-100">
     <div class="text-2xl font-bold text-slate-900">${validCount}</div>
     <div class="text-xs text-slate-500 mt-1">有持有天数的样本（可统计涨跌）</div>
   </div>
@@ -4276,18 +4457,48 @@ for (const p of validPicks) {
   }
 }
 const sortedPicks = [...dedupByCode.values()].sort((a, b) => parseFloat(b.pct) - parseFloat(a.pct));
+// 价格格式化：≥10000 用千分位整数（韩股/A 股大数），其他保留 2 位小数
+function _formatPrice(p) {
+  if (p == null || isNaN(p)) return "—";
+  const n = parseFloat(p);
+  if (n >= 10000) return n.toLocaleString("zh-CN", {maximumFractionDigits: 0});
+  if (n >= 100) return n.toFixed(2);
+  return n.toFixed(2);
+}
+// 日期格式：YYYY-MM-DD → MM-DD
+function _formatPickDate(d) {
+  if (!d) return "?";
+  const s = String(d);
+  return s.length >= 10 ? s.slice(5, 10) : s;
+}
+// 评级 → 仅保留 ⭐ 字符串（去掉「强烈推荐（z≥1）」尾巴）
+function _shortRating(r) {
+  if (!r) return "";
+  const m = r.match(/^⭐+/);
+  return m ? m[0] : "";
+}
+
+// 参考雪球持仓表：每只股两行 — 主行（代码/名称/评级 + 涨跌%）+ 详情行（入选日 @ 入选价 → 现价 · 持有天数）
 function pickRow(p) {
   const v = parseFloat(p.pct);
   const color = v > 0 ? "text-emerald-600" : "text-rose-600";
   const sign = v > 0 ? "+" : "";
-  return `<div class="flex items-center justify-between py-1 px-2 rounded hover:bg-slate-50 text-sm">
-    <div class="flex items-center gap-2 min-w-0 flex-1">
-      <span class="font-mono text-xs text-slate-500 w-12 truncate">${p.code}</span>
-      <span class="text-slate-700 truncate">${p.name}</span>
+  const pickDate = _formatPickDate(p.pick_date);
+  const entry = _formatPrice(p.entry_price);
+  const current = _formatPrice(p.current_price);
+  const days = p.days_held || 0;
+  const rating = _shortRating(p.rating);
+  return `<div class="py-2 px-2 border-b border-slate-100 last:border-b-0">
+    <div class="flex items-center justify-between gap-2 mb-1">
+      <div class="flex items-center gap-2 min-w-0 flex-1">
+        <span class="font-mono text-xs text-slate-500">${p.code}</span>
+        <span class="text-slate-800 font-medium text-sm truncate">${p.name}</span>
+        <span class="text-[11px] flex-shrink-0">${rating}</span>
+      </div>
+      <span class="${color} font-mono font-bold text-base flex-shrink-0">${sign}${v.toFixed(1)}%</span>
     </div>
-    <div class="flex items-center gap-2 flex-shrink-0">
-      <span class="text-xs text-slate-400">${p.days_held || 0}天</span>
-      <span class="${color} font-mono font-bold text-sm">${sign}${v.toFixed(1)}%</span>
+    <div class="text-[11px] text-slate-500 font-mono pl-1">
+      ${pickDate} 入选 @ ${entry} → 现 ${current} · 持 ${days}天
     </div>
   </div>`;
 }
@@ -4301,6 +4512,112 @@ function _fmtAlpha(v) {
   const sign = v >= 0 ? "+" : "";
   const cls = v >= 0 ? "text-emerald-600" : "text-rose-600";
   return `<span class="font-mono ${cls}">${sign}${v.toFixed(1)}%</span>`;
+}
+
+// 推荐理由组装 — 与 morning_brief.py 的 _build_us_reasons 同维度同档位
+// 输入 candidate.detail（piotroski_details / momentum / pead / analyst / insider）
+// 返回 { pros: string[], cons: string[] }
+function _buildDiscoveryReasons(detail) {
+  const pros = [], cons = [];
+  if (!detail || typeof detail !== "object") return { pros, cons };
+
+  // Piotroski 9 项布尔分解
+  const piotDet = detail.piotroski_details || {};
+  const piotKeys = Object.keys(piotDet);
+  if (piotKeys.length) {
+    const green = piotKeys.filter(k => piotDet[k]).length;
+    const total = piotKeys.length;
+    if (green >= 7) pros.push(`F-Score ${green}/${total} 基本面优 (${green} 项绿灯)`);
+    else if (green >= 5) pros.push(`F-Score ${green}/${total} 基本面中性 (${green} 项绿灯)`);
+    else cons.push(`F-Score ${green}/${total} 基本面偏弱 (仅 ${green} 项绿灯)`);
+  }
+
+  // 12-1 月动量
+  const mom = (detail.momentum || {}).momentum_12_1;
+  if (typeof mom === "number") {
+    if (mom >= 200) cons.push(`12-1 月动量 +${mom.toFixed(0)}% 异常高（可能数据问题/拆股，注意均值回归）`);
+    else if (mom >= 30) pros.push(`12-1 月动量 +${mom.toFixed(0)}% 强势`);
+    else if (mom <= -20) cons.push(`12-1 月动量 ${mom > 0 ? "+" : ""}${mom.toFixed(0)}% 下行`);
+  }
+
+  // PEAD 盈利加速度
+  const pead = detail.pead || {};
+  const acc = pead.acceleration;
+  if (typeof acc === "number") {
+    const qNow = pead.qoq_now_pct, qPrev = pead.qoq_prev_pct;
+    if (acc >= 3) {
+      const ctx = (typeof qNow === "number" && typeof qPrev === "number")
+        ? `（本季 QoQ ${qNow.toFixed(1)}% vs 上季 ${qPrev.toFixed(1)}%）` : "";
+      pros.push(`PEAD 盈利加速 +${acc.toFixed(1)}%${ctx}`);
+    } else if (acc <= -3) {
+      cons.push(`PEAD 盈利减速 ${acc > 0 ? "+" : ""}${acc.toFixed(1)}%`);
+    }
+  }
+
+  // 分析师评级（近 90d）
+  const an = detail.analyst || {};
+  const raises = an.raises || 0, lowers = an.lowers || 0;
+  const tgt = an.avg_target_raise_pct;
+  if (raises + lowers >= 3) {
+    if (raises >= 5 && raises >= 3 * Math.max(lowers, 1)) {
+      const tgtStr = typeof tgt === "number" ? `，平均目标价 +${tgt.toFixed(0)}%` : "";
+      pros.push(`近 90d ${raises} 家分析师上调 vs ${lowers} 家下调${tgtStr}`);
+    } else if (lowers >= 3 && lowers > raises) {
+      cons.push(`近 90d ${lowers} 家分析师下调 vs ${raises} 家上调`);
+    }
+  }
+
+  // 内部人交易（6m 美元口径）
+  const ins = detail.insider || {};
+  const netVal = ins.net_value_usd_approx;
+  if (typeof netVal === "number" && Math.abs(netVal) >= 1e7) {
+    const mn = netVal / 1e6;
+    if (mn > 0) pros.push(`内部人 6m 净买入 $${mn.toFixed(0)}M（管理层看好信号）`);
+    else cons.push(`内部人 6m 净卖出 $${(-mn).toFixed(0)}M（注意管理层抛售）`);
+  }
+
+  return { pros, cons };
+}
+
+// 渲染 ticker 对应的 detail row HTML 内容（content cell only，不含 <tr>）
+function _renderReasonPanel(c) {
+  const { pros, cons } = _buildDiscoveryReasons(c.detail || {});
+  const ts = _fmtTs((typeof DISCOVERY !== "undefined") ? DISCOVERY.generated_at : null);
+  const ageCls = ts.age.includes("⚠️") ? "bg-rose-50 text-rose-700 border-rose-200" : "bg-sky-50 text-sky-700 border-sky-200";
+  const tsBanner = `<div class="px-4 py-2 ${ageCls} border-b text-xs flex items-center gap-2" title="${_esc(ts.full)}">
+    <span>🕐</span>
+    <span><strong>AI 算于 ${ts.short}</strong> ${ts.age}</span>
+    ${ts.age.includes("⚠️") ? '<span class="ml-auto text-[11px]">⚠️ 数据已过期 — 跑 daily_refresh.sh 刷新</span>' : ''}
+  </div>`;
+  if (!pros.length && !cons.length) {
+    return tsBanner + `<div class="text-xs text-slate-400 py-2 px-3">_未拉到详细因子分解（detail 字段缺失，需重跑 discover_candidates.py）_</div>`;
+  }
+  const prosHtml = pros.length
+    ? `<div class="space-y-1">
+         <div class="text-xs font-semibold text-emerald-700 mb-1">✅ 推荐理由</div>
+         ${pros.map(p => `<div class="text-sm text-slate-700 pl-4">• ${p}</div>`).join("")}
+       </div>`
+    : "";
+  const consHtml = cons.length
+    ? `<div class="space-y-1">
+         <div class="text-xs font-semibold text-amber-700 mb-1">⚠️ 风险点</div>
+         ${cons.map(p => `<div class="text-sm text-slate-700 pl-4">• ${p}</div>`).join("")}
+       </div>`
+    : "";
+  return tsBanner + `<div class="bg-slate-50 px-4 py-3 grid grid-cols-1 md:grid-cols-2 gap-4">
+    ${prosHtml}
+    ${consHtml}
+  </div>`;
+}
+
+// 切换 detail row 显隐
+function toggleDiscoveryDetail(ticker) {
+  const row = document.getElementById("disc-detail-" + ticker);
+  const btn = document.getElementById("disc-toggle-" + ticker);
+  if (!row) return;
+  const willShow = row.classList.contains("hidden");
+  row.classList.toggle("hidden");
+  if (btn) btn.textContent = willShow ? "▼" : "▶";
 }
 
 // 工具:从 DISCOVERY_HISTORY 找 (date, ticker) 对应的 alpha 记录
@@ -4428,11 +4745,16 @@ function _computeDiscoveryStats() {
     if (wrap) wrap.classList.add("hidden");
     if (empty) empty.classList.remove("hidden");
   } else {
-    meta.innerHTML = `生成于 <strong>${DISCOVERY.generated_at || "?"}</strong> · `
+    const _metaTs = _fmtTs(DISCOVERY.generated_at);
+    const _ageColor = _metaTs.age.includes("⚠️") ? "text-rose-700 font-bold bg-rose-50 px-1.5 py-0.5 rounded" : "text-emerald-700 font-medium";
+    meta.innerHTML = `<span class="${_ageColor}" title="${_metaTs.full}">🕐 AI 算于 ${_metaTs.short} ${_metaTs.age}</span> · `
       + `universe ${DISCOVERY.universe_size || "?"} 只(已排除 watchlist ${DISCOVERY.watchlist_excluded || "?"} 只) · `
       + `数据源 ${(DISCOVERY.etf_sources || []).join(" / ")} · `
       + `市值门槛 $${((DISCOVERY.min_market_cap_usd || 0) / 1e9).toFixed(0)}B`;
-    tbody.innerHTML = cands.map(c => {
+    // 整批 candidates 是同一次 discover_candidates.py 跑出来的，时间相同；算一次复用
+    const _discoveryTs = _fmtTs(DISCOVERY.generated_at);
+    tbody.innerHTML = cands.map((c, idx) => {
+      const isFirst = idx === 0;  // 第一行默认展开 reason 面板
       const cap = c.market_cap_usd ? (c.market_cap_usd / 1e9).toFixed(1) : "-";
       const f = c.f_score == null ? "-" : Math.round(c.f_score);
       const fColor = c.f_score >= 7 ? "text-emerald-600" : (c.f_score >= 4 ? "text-amber-600" : "text-rose-600");
@@ -4456,10 +4778,18 @@ function _computeDiscoveryStats() {
       const track = _lookupTrackingForToday(c.ticker);
       const alpha5 = track ? track.alpha_5d : null;
       const alpha20 = track ? track.alpha_20d : null;
+      const tk = _esc(c.ticker);
       return `<tr class="hover:bg-slate-50">
-        <td class="px-3 py-2 font-mono text-slate-500">${c.rank}</td>
-        <td class="px-3 py-2 font-mono font-semibold text-slate-900">${c.ticker}</td>
-        <td class="px-3 py-2 text-slate-700">
+        <td class="px-3 py-2 font-mono text-slate-500">
+          <button id="disc-toggle-${tk}" onclick="toggleDiscoveryDetail('${tk}')"
+                  class="text-violet-600 hover:text-violet-800 mr-1 font-bold"
+                  title="展开/折叠推荐理由">${isFirst ? "▼" : "▶"}</button>
+          ${c.rank}
+        </td>
+        <td class="px-3 py-2 font-mono font-semibold text-slate-900 cursor-pointer"
+            onclick="toggleDiscoveryDetail('${tk}')">${c.ticker}</td>
+        <td class="px-3 py-2 text-slate-700 cursor-pointer"
+            onclick="toggleDiscoveryDetail('${tk}')">
           <div>${c.name || ""}</div>
           <div class="mt-0.5">${stockPill(c.ticker, {layout: "mini"})}</div>
         </td>
@@ -4473,13 +4803,22 @@ function _computeDiscoveryStats() {
         <td class="px-3 py-2 text-right">${_fmtAlpha(alpha5)}</td>
         <td class="px-3 py-2 text-right">${_fmtAlpha(alpha20)}</td>
         <td class="px-3 py-2">${etfs}</td>
+        <td class="px-3 py-2 text-center text-xs whitespace-nowrap" title="${_esc(_discoveryTs.full)}">
+          <span class="${_discoveryTs.age.includes('⚠️') ? 'text-rose-600 font-medium' : 'text-slate-500'}">
+            🕐 ${_discoveryTs.short}
+          </span>
+          <div class="text-[10px] ${_discoveryTs.age.includes('⚠️') ? 'text-rose-500' : 'text-slate-400'}">${_discoveryTs.age}</div>
+        </td>
         <td class="px-3 py-2 text-center">
-          <button data-ticker="${_esc(c.ticker)}"
-                  onclick="addDiscoveryToWatchlist('${_esc(c.ticker)}', this)"
+          <button data-ticker="${tk}"
+                  onclick="addDiscoveryToWatchlist('${tk}', this)"
                   class="discovery-add-btn px-2 py-1 text-xs bg-violet-600 hover:bg-violet-700 text-white rounded transition whitespace-nowrap">
             ➕ 加自选
           </button>
         </td>
+      </tr>
+      <tr id="disc-detail-${tk}" class="${isFirst ? '' : 'hidden'}">
+        <td colspan="15" class="p-0 border-t border-slate-100">${_renderReasonPanel(c)}</td>
       </tr>`;
     }).join("");
 
@@ -5054,7 +5393,7 @@ def _uncal_badge(reason_short):
 
 
 def scoring_rules_panel_html(calib):
-    """渲染「自选股·今日 Top · 打分规则」面板。
+    """渲染「自选股·AI 优选 · 打分规则」面板。
 
     calib=None 时显示"未校准"警告 + 全部维度标⚪未实证
     calib 存在时按 factor_weights.json 内容动态展示每个因子的 IC 实证状态
@@ -5127,7 +5466,7 @@ def scoring_rules_panel_html(calib):
         <div>
           <h2 class="text-2xl font-bold text-slate-900 flex items-center gap-3">
             <span class="text-3xl">📐</span>
-            自选股·今日 Top · 打分规则（透明 + IC 实证）
+            自选股·AI 优选 · 打分规则（透明 + IC 实证）
           </h2>
           <p class="text-sm text-slate-600 mt-1 ml-12">点击展开 — 看每个维度有没有数据实证支撑</p>
         </div>
@@ -5415,7 +5754,9 @@ def compute_dynamic_rebalance_track(history: dict, benchmark: str = "SPY",
     ticker_close: dict[str, dict[str, float]] = {}
     for tkr, d in tickers_data.items():
         if d and d.get("ts") and d.get("close"):
-            ticker_close[tkr] = dict(zip(d["ts"], [float(c) for c in d["close"]]))
+            ticker_close[tkr] = {
+                ts: float(c) for ts, c in zip(d["ts"], d["close"]) if c is not None
+            }
 
     # common_dates：所有 initial_tickers 都有价格的日期交集
     common: set | None = None
@@ -6043,7 +6384,22 @@ def build():
         r["market_cap"] = _fmt_market_cap(r.get("yf_market_cap"))
     print(f"  共 {len(records)} 条 watchlist (含 prices JOIN)")
     picks = fetch_picks_view()
-    print(f"  共 {len(picks)} 条自选股·今日 Top (来自 reviews JOIN picks)")
+    print(f"  共 {len(picks)} 条自选股·AI 优选 (来自 reviews JOIN picks)")
+
+    # 各市场 AI 计算时间 — 让用户知道这批推荐是"什么时候算的"（防止误以为是实时数据）
+    # picks 表只存 pick_date 日期，时分秒要从对应 picks JSON 读
+    picks_timestamps: dict[str, str | None] = {"us": None, "hk": None, "cn": None}
+    for key, fname in (("us", "data/latest/plan_a_v5_constrained.json"),
+                       ("hk", "data/latest/hk_picks.json"),
+                       ("cn", "data/a_share_picks.json")):
+        fpath = os.path.join(_REPO, fname)
+        if os.path.exists(fpath):
+            try:
+                with open(fpath, encoding="utf-8") as f:
+                    picks_timestamps[key] = json.load(f).get("generated_at")
+            except Exception:
+                pass
+    print(f"  picks 各市场计算时间: {picks_timestamps}")
 
     # 读取模拟结果（如果存在）
     sim_file = os.path.join(_REPO, "simulation_plan_a.json")
@@ -6117,9 +6473,9 @@ def build():
           f"opt={'✓' if optimization_db else '✗'} plan={'✓' if plan_a_v6_db else '✗'} "
           f"hist={'✓' if history_data_db else '✗'}")
 
-    us_count = sum(1 for r in records if "美股" in r["market"])
+    us_count = sum(1 for r in records if "美股" in (r["market"] or ""))
     cn_count = len(records) - us_count
-    high_ai = sum(1 for r in records if "极强" in r["ai_relevance"] or "强（直接受益）" == r["ai_relevance"])
+    high_ai = sum(1 for r in records if "极强" in (r["ai_relevance"] or "") or "强（直接受益）" == (r["ai_relevance"] or ""))
 
     print("[2/3] 渲染 HTML...")
     html = HTML_TEMPLATE
@@ -6250,6 +6606,7 @@ def build():
     html = html.replace("{WATCHLIST_RATINGS_JSON}", json.dumps(watchlist_ratings, ensure_ascii=False))
     html = html.replace("{RECORDS_JSON}", json.dumps(records, ensure_ascii=False, default=str))
     html = html.replace("{PICKS_JSON}", json.dumps(picks, ensure_ascii=False, default=str))
+    html = html.replace("{PICKS_TIMESTAMPS_JSON}", json.dumps(picks_timestamps, ensure_ascii=False))
     html = html.replace("{SIMULATION_JSON}", json.dumps(simulation, ensure_ascii=False))
     html = html.replace("{RISK_METRICS_JSON_DB}", json.dumps(risk_metrics_db, ensure_ascii=False))
     html = html.replace("{TRACK_13F_JSON_DB}", json.dumps(track_13f_db, ensure_ascii=False))
