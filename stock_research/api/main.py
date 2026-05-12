@@ -61,6 +61,7 @@ def create_app():
     @app.get("/health")
     def health():
         from .. import config as _c
+        import stock_db  # 与其他 endpoint 一致：local import 避免启动时初始化 db
         wl_n = len(stock_db.fetch_all_watchlist())
         return {
             "status": "ok",
@@ -139,6 +140,151 @@ def create_app():
         if n == 0:
             raise HTTPException(404, f"watchlist code not found: {code}")
         return {"status": "ok", "code": code, "rows_deleted": n}
+
+    # ────────── DB 全库浏览（深度研究 → DB 全库 tab） ──────────
+    @app.get("/api/db/all-stocks")
+    def db_all_stocks() -> dict[str, Any]:
+        """按市场分组返回 DB 内全部股票 + 最新行情 + 最新 picks 评级。
+
+        返回结构：
+          {
+            "as_of": {"prices_date": "2026-05-12", "picks_date": "2026-05-12"},
+            "counts": {"美股": 82, "A股": 12, "港股": 6, "其他": 8, "total": 108},
+            "groups": {"美股": [row, ...], "A股": [...], "港股": [...], "其他": [...]},
+          }
+        每行包含 watchlist 全 25 列 + price_* 字段 + pick_* 字段。
+        """
+        import stock_db
+        conn = stock_db.get_db()
+        try:
+            wl_rows = stock_db.fetch_all_watchlist(conn=conn)
+
+            latest_prices_q = conn.execute(
+                """
+                SELECT * FROM prices
+                WHERE (code, date) IN (SELECT code, MAX(date) FROM prices GROUP BY code)
+                """
+            ).fetchall()
+            price_cols = [d[0] for d in conn.description]
+            prices_by_code = {r[price_cols.index("code")]: dict(zip(price_cols, r)) for r in latest_prices_q}
+
+            latest_picks_q = conn.execute(
+                """
+                SELECT * FROM picks
+                WHERE (code, pick_date) IN (SELECT code, MAX(pick_date) FROM picks GROUP BY code)
+                """
+            ).fetchall()
+            pick_cols = [d[0] for d in conn.description]
+            picks_by_code = {r[pick_cols.index("code")]: dict(zip(pick_cols, r)) for r in latest_picks_q}
+
+            prices_date = conn.execute("SELECT MAX(date) FROM prices").fetchone()[0]
+            picks_date = conn.execute("SELECT MAX(pick_date) FROM picks").fetchone()[0]
+        finally:
+            conn.close()
+
+        def _classify(market: str | None) -> str:
+            m = market or ""
+            if "美股" in m:
+                return "美股"
+            if "A股" in m:
+                return "A股"
+            if "港股" in m:
+                return "港股"
+            return "其他"
+
+        def _jsonable(v):
+            if v is None:
+                return None
+            if hasattr(v, "isoformat"):
+                # 去掉 ISO 8601 的 T 分隔符 + 截到秒（2026-05-12 08:32:00）
+                if hasattr(v, "hour"):
+                    return v.isoformat(sep=" ", timespec="seconds")
+                return v.isoformat()
+            return v
+
+        groups: dict[str, list[dict[str, Any]]] = {"美股": [], "A股": [], "港股": [], "其他": []}
+        for w in wl_rows:
+            code = w.get("code")
+            merged: dict[str, Any] = {}
+            for k, v in w.items():
+                merged[k] = _jsonable(v)
+            p = prices_by_code.get(code) or {}
+            for k, v in p.items():
+                if k in ("code", "name"):
+                    continue
+                merged[f"price_{k}"] = _jsonable(v)
+            pk = picks_by_code.get(code) or {}
+            for k, v in pk.items():
+                if k in ("code", "name", "market"):
+                    continue
+                merged[f"pick_{k}"] = _jsonable(v)
+            groups[_classify(merged.get("market"))].append(merged)
+
+        return {
+            "as_of": {
+                "prices_date": _jsonable(prices_date),
+                "picks_date": _jsonable(picks_date),
+            },
+            "counts": {k: len(v) for k, v in groups.items()} | {"total": sum(len(v) for v in groups.values())},
+            "groups": groups,
+        }
+
+    @app.get("/api/db/stock-history/{code}")
+    def db_stock_history(code: str) -> dict[str, Any]:
+        """单只股票全历史快照 — 4 张表全表过滤后按时间倒序。
+
+        返回：
+          {
+            "code": "NVDA",
+            "watchlist": {...},          # 当前 watchlist 一行（含 25 列元数据）
+            "prices": [...],             # 多日行情时间序列（含 fetched_at）
+            "picks": [...],              # 历次 picks 入选 + 评分
+            "reviews": [...],            # picks 跟踪记录（含 days_held / pct）
+            "discovery": [...],          # discovery_history 历次推荐
+          }
+        """
+        import stock_db
+        conn = stock_db.get_db()
+        try:
+            wl_row = stock_db.get_watchlist_item(code, conn=conn)
+
+            def _rows(q: str) -> list[dict[str, Any]]:
+                cur = conn.execute(q, [code])
+                cols = [d[0] for d in cur.description]
+                return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+            prices = _rows("SELECT * FROM prices WHERE code = ? ORDER BY date DESC, fetched_at DESC")
+            picks = _rows("SELECT * FROM picks WHERE code = ? ORDER BY pick_date DESC")
+            reviews = _rows("SELECT * FROM reviews WHERE code = ? ORDER BY review_date DESC")
+            discovery = _rows("SELECT * FROM discovery_history WHERE ticker = ? ORDER BY generated_date DESC")
+        finally:
+            conn.close()
+
+        def _jsonify(v):
+            if v is None:
+                return None
+            if hasattr(v, "isoformat"):
+                return v.isoformat(sep=" ", timespec="seconds") if hasattr(v, "hour") else v.isoformat()
+            return v
+
+        def _walk(obj):
+            if isinstance(obj, list):
+                return [_walk(x) for x in obj]
+            if isinstance(obj, dict):
+                return {k: _walk(v) for k, v in obj.items()}
+            return _jsonify(obj)
+
+        if not wl_row and not prices and not picks and not reviews and not discovery:
+            raise HTTPException(404, f"code not found in any table: {code}")
+
+        return {
+            "code": code,
+            "watchlist": _walk(wl_row) if wl_row else None,
+            "prices": _walk(prices),
+            "picks": _walk(picks),
+            "reviews": _walk(reviews),
+            "discovery": _walk(discovery),
+        }
 
     @app.post("/api/watchlist/auto-enrich")
     def auto_enrich_watchlist(item: dict[str, Any] = Body(...)) -> dict[str, Any]:
