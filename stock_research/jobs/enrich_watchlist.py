@@ -26,6 +26,7 @@ from typing import Any
 
 from .. import config
 from ..core import akshare_client, finnhub_client, trends, baostock_client
+from ..core.watchlist_enrich import fetch_earnings_quarters, fetch_earnings_summary
 from ..adapters import legacy_shim as feishu, store
 
 logger = logging.getLogger("stock_research.jobs.enrich_watchlist")
@@ -77,6 +78,20 @@ def enrich_one(name: str, code: str, market: str,
             if tr:
                 out["trends"] = tr
                 out["sources_used"].append("trends")
+
+    # 跨市场共享：yfinance 财报（watchlist.earnings 单字段摘要 + earnings_history 历史归档）
+    # 复用 core.watchlist_enrich 的 helper，保证 API 入库路径 + daily_refresh 路径用同一个实现
+    try:
+        import yfinance as yf
+        ticker_obj = yf.Ticker(code)
+        info_yf = ticker_obj.info or {}
+        quarters = fetch_earnings_quarters(info_yf, ticker_obj)
+        if quarters:
+            out["earnings_summary"] = fetch_earnings_summary(info_yf, ticker_obj)
+            out["earnings_quarters"] = quarters
+            out["sources_used"].append(f"yfinance_earnings({len(quarters)}q)")
+    except Exception as e:
+        logger.debug("yfinance earnings fetch failed for %s: %s", code, e)
 
     return out
 
@@ -132,7 +147,16 @@ def _format_for_feishu(enriched: dict[str, Any]) -> dict[str, str]:
         lines.append(f"{emoji} Google Trends（{tr.get('timeframe')} · {tr.get('geo')}）: 平均 {tr.get('avg')} / 最近 {tr.get('last')} / 趋势 {tr.get('trend_pct'):+.1f}% [Google Trends]")
         sources.append("Google Trends (pytrends)")
 
+    # yfinance 财报摘要（跨市场都有）
+    if enriched.get("earnings_summary"):
+        first_line = enriched["earnings_summary"].split("\n")[0]
+        lines.append(f"💰 {first_line} [yfinance]")
+        sources.append("yfinance earnings (quarterly_income_stmt)")
+
     if not lines:
+        # 即使没多源 enrichment 数据，如果有 earnings 也要写回
+        if enriched.get("earnings_summary"):
+            return {"earnings": enriched["earnings_summary"]}
         return {}
 
     info_text = "\n".join(lines)
@@ -142,10 +166,13 @@ def _format_for_feishu(enriched: dict[str, Any]) -> dict[str, str]:
 
     # 2026-05-11 PM 第二轮:飞书已退役,直接返回 DuckDB watchlist 列名 dict.
     # 调用方改用 stock_db.update_watchlist_fields(code, ...) 写库.
-    return {
+    fields: dict[str, str] = {
         "info_breakdown": info_text,
         "source": source_text,
     }
+    if enriched.get("earnings_summary"):
+        fields["earnings"] = enriched["earnings_summary"]
+    return fields
 
 
 def run_all(only_code: str | None = None, do_trends: bool = True,
@@ -159,9 +186,11 @@ def run_all(only_code: str | None = None, do_trends: bool = True,
     import sys as _sys
     _sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[2] / "scripts" / "lib"))
     from stock_db import update_watchlist_fields as _update_wl
+    from stock_db import upsert_earnings_history as _upsert_hist
 
     results = []
     db_updated = 0
+    history_rows = 0
     for w in watchlist:
         code = w["normalized"]["code"]
         name = w["normalized"]["name"]
@@ -183,6 +212,13 @@ def run_all(only_code: str | None = None, do_trends: bool = True,
         if fields:
             db_updated += _update_wl(code, fields)
             print(f"     ✓ 多源 [{', '.join(enriched['sources_used']) or '无'}]")
+        # earnings_history 写入（跟 watchlist.earnings 同源同 helper）
+        quarters = enriched.get("earnings_quarters") or []
+        if quarters:
+            try:
+                history_rows += _upsert_hist(code, quarters)
+            except Exception as e:
+                logger.debug("upsert_earnings_history failed for %s: %s", code, e)
         time.sleep(sleep_sec)
 
     if results:

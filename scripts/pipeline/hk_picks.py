@@ -1,16 +1,18 @@
-"""港股每日优选 — 3 因子学术版  ✅ PRODUCTION（港股）
+"""港股每日优选 — 4 因子学术版  ✅ PRODUCTION（港股）
 
 **这是当前港股选股的主流水线。** 与 daily_picks_v5（美股）/ a_share_picks（A 股）三线并行。
 
 为什么不接进 daily_picks_v5：
   v5 写死了 yfinance + is_us_ticker，港股 fundamentals 走 akshare（factor_model._fetch_hk_financials_akshare），
-  接进去会污染原有逻辑；并且港股没分析师上修 / LHB / 北向 / PEAD / 政策这些信号，
+  接进去会污染原有逻辑；港股有独立的南向资金信号（对应 A 股北向），
   独立 job 更清爽，3 条线互不干扰。
 
 因子（合计 1.00）：
-  1. Piotroski F-Score (factor_model.piotroski_f_score, akshare 港股财报)  权重 0.40
-  2. 12-1 月动量      (factor_model fetch_momentum, yfinance 价格)         权重 0.35
-  3. 1 月反转         (factor_model fetch_momentum.reversal_1m)            权重 0.25
+  1. Piotroski F-Score (factor_model.piotroski_f_score, akshare 港股财报)  权重 0.34
+  2. 12-1 月动量      (factor_model fetch_momentum, yfinance 价格)         权重 0.30
+  3. 1 月反转         (factor_model fetch_momentum.reversal_1m)            权重 0.21
+  4. 南向资金        (south_flow_signals: 整体流向 + 截面持股 %)            权重 0.15
+                    （与 A 股北向资金权重对称，2026-05-12 新增）
 
 候选池：
   - hk_universe.HK_TECH_UNIVERSE 33 只科技龙头白名单（恒生科技指数对照）
@@ -42,15 +44,21 @@ sys.path.insert(0, str(_REPO / "scripts" / "lib"))
 from factor_model import fetch_factors_for
 from stock_db import fetch_all_watchlist, upsert_picks
 from stock_research.core.hk_universe import fetch_hk_tech_universe
+from stock_research.core.south_flow_signals import (
+    compute_south_flow_signal,
+    fetch_aggregate_south_flow,
+    fetch_components_snapshot,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
 
 FACTOR_WEIGHTS = {
-    "f_score":  0.40,   # Piotroski 财务质量（akshare 港股年报）
-    "momentum": 0.35,   # 12-1 月动量
-    "reversal": 0.25,   # 1 月反转
+    "f_score":   0.34,   # Piotroski 财务质量（akshare 港股年报）
+    "momentum":  0.30,   # 12-1 月动量
+    "reversal":  0.21,   # 1 月反转
+    "south_flow": 0.15,  # 南向资金（与 A 股北向因子对称，2026-05-12 新增）
 }
 assert abs(sum(FACTOR_WEIGHTS.values()) - 1.0) < 1e-9
 
@@ -68,6 +76,10 @@ class HKPickEntry:
     momentum_norm: float | None = None       # 横截面 percent-rank
     reversal_1m: float | None = None
     reversal_norm: float | None = None
+
+    south_pct: float | None = None            # 当前南向持股 %
+    south_rank: float | None = None           # 截面 percent-rank
+    south_score: float = 0.5                  # 综合（聚合 + 截面）
 
     composite: float = 0.0
     rank: int = 0
@@ -133,7 +145,7 @@ def _quantile(values: list[float], q: float) -> float:
 
 
 def run_hk_picks(top_k: int = 12, mode: str = "tertile", dry_run: bool = False,
-                 sleep_sec: float = 1.0):
+                 sleep_sec: float = 1.0, bypass_audit_gate: bool = False):
     """主入口。
 
     参数：
@@ -141,7 +153,21 @@ def run_hk_picks(top_k: int = 12, mode: str = "tertile", dry_run: bool = False,
       mode     'tertile'（前 1/3）/ 'median'（前 1/2）/ 'quartile'（前 1/4）
       dry_run  仅打印不写 JSON
       sleep_sec  每次 akshare 请求间隔，防限流
+      bypass_audit_gate  强制跳过 audit CONFLICT 闸门（数据系统性故障时仍推送，风险自担）
     """
+    # 跨源 audit CONFLICT 闸门 — 与 A 股 / 美股 路径对称（2026-05-12 补缺）
+    from stock_research.core.audit_gate import evaluate_gate as evaluate_audit_gate
+    from stock_research.core.audit_gate import format_report as format_audit_report
+    audit_gate = evaluate_audit_gate()
+    print(format_audit_report(audit_gate))
+    if not audit_gate.passed:
+        if bypass_audit_gate:
+            print("\n⚠️ --bypass-audit-gate：用户强制跳过闸门，继续（风险自担）\n")
+        else:
+            print("\n🔴 跨源 audit 闸门 FAIL → 强制 dry-run（不写 JSON / 不写 DB）")
+            print("   修复：python3 -m stock_research.jobs.daily_audit  或 --bypass-audit-gate\n")
+            dry_run = True
+
     print(f"\n📊 港股每日优选 — {datetime.now():%Y-%m-%d %H:%M}")
     print("=" * 70)
 
@@ -153,8 +179,16 @@ def run_hk_picks(top_k: int = 12, mode: str = "tertile", dry_run: bool = False,
         print("  (空候选，退出)")
         return 0
 
-    # 2. 因子拉取（F-Score + 动量 + 反转）
-    print(f"\n[2/4] 拉因子（akshare 港股财报 + yfinance 价格）...")
+    # 2.0 南向资金一次性预取（聚合 + 截面，所有股共享）
+    print(f"\n[2/4] 预取南向资金信号...")
+    south_agg = fetch_aggregate_south_flow(lookback_days=20)
+    print(f"  聚合: {south_agg.get('note', '—')}")
+    south_components = fetch_components_snapshot()
+    south_all_pcts = sorted(south_components.values()) if south_components else []
+    print(f"  截面: {len(south_components)} 只港股通标的有南向持股数据")
+
+    # 2. 因子拉取（F-Score + 动量 + 反转 + 南向）
+    print(f"\n[2.1/4] 拉个股因子（akshare 港股财报 + yfinance 价格）...")
     entries: list[HKPickEntry] = []
     for i, c in enumerate(cands, 1):
         tk = c["ticker"]
@@ -169,6 +203,11 @@ def run_hk_picks(top_k: int = 12, mode: str = "tertile", dry_run: bool = False,
             mom = momentum.get("momentum_12_1")
             rev = momentum.get("reversal_1m")
 
+            # 南向资金信号（聚合 + 截面）
+            south_sig = compute_south_flow_signal(
+                tk, south_components, south_agg, south_all_pcts
+            )
+
             entry = HKPickEntry(
                 code=tk,
                 name=name,
@@ -177,6 +216,9 @@ def run_hk_picks(top_k: int = 12, mode: str = "tertile", dry_run: bool = False,
                 f_score_norm=(f_score / 9.0) if isinstance(f_score, (int, float)) else None,
                 momentum_12_1=mom if isinstance(mom, (int, float)) else None,
                 reversal_1m=rev if isinstance(rev, (int, float)) else None,
+                south_pct=south_sig.individual_pct,
+                south_rank=south_sig.individual_rank,
+                south_score=south_sig.score,
                 data_quality=data_q,
             )
             entries.append(entry)
@@ -205,10 +247,12 @@ def run_hk_picks(top_k: int = 12, mode: str = "tertile", dry_run: bool = False,
         f_n = e.f_score_norm if e.f_score_norm is not None else 0.5
         m_n = e.momentum_norm if e.momentum_norm is not None else 0.5
         r_n = e.reversal_norm if e.reversal_norm is not None else 0.5
+        s_n = e.south_score if e.south_score is not None else 0.5
         composite = (
-            FACTOR_WEIGHTS["f_score"] * f_n
-            + FACTOR_WEIGHTS["momentum"] * m_n
-            + FACTOR_WEIGHTS["reversal"] * r_n
+            FACTOR_WEIGHTS["f_score"]   * f_n
+            + FACTOR_WEIGHTS["momentum"]  * m_n
+            + FACTOR_WEIGHTS["reversal"]  * r_n
+            + FACTOR_WEIGHTS["south_flow"] * s_n
         )
         e.composite = round(composite, 4)
 
@@ -232,15 +276,16 @@ def run_hk_picks(top_k: int = 12, mode: str = "tertile", dry_run: bool = False,
 
     print(f"\n  cutoff = {cutoff:.3f} (mode={mode})")
     print(f"  推荐 {len(selected)} / 有效 {len(valid_composites)} / 总 {len(entries)}")
-    print(f"\n  {'排':<3}{'代码':<10}{'名称':<14}{'F':>3}{'动量':>8}{'反转':>8}{'综合':>7}  状态")
-    print(f"  {'-'*70}")
+    print(f"\n  {'排':<3}{'代码':<10}{'名称':<14}{'F':>3}{'动量':>8}{'反转':>8}{'南向%':>7}{'综合':>7}  状态")
+    print(f"  {'-'*78}")
     for e in entries[:30]:
         f_str = str(e.f_score) if e.f_score is not None else "?"
         m_str = f"{e.momentum_12_1:+.0f}%" if e.momentum_12_1 is not None else "?"
         rv_str = f"{e.reversal_1m:+.1f}%" if e.reversal_1m is not None else "?"
+        sp_str = f"{e.south_pct:.1f}" if e.south_pct is not None else "—"
         flag = "✅" if e.recommended else ("❌" if e.data_quality == "fail" else "  ")
         print(f"  {e.rank:<3}{e.code:<10}{e.name[:12]:<14}{f_str:>3}{m_str:>8}{rv_str:>8}"
-              f"{e.composite:>7.3f}  {flag}")
+              f"{sp_str:>7}{e.composite:>7.3f}  {flag}")
 
     # 5. 写文件
     out = _REPO / "data" / "latest" / "hk_picks.json"
@@ -252,6 +297,7 @@ def run_hk_picks(top_k: int = 12, mode: str = "tertile", dry_run: bool = False,
         "cutoff": round(cutoff, 4),
         "top_k": top_k,
         "factor_weights": FACTOR_WEIGHTS,
+        "south_flow_aggregate": south_agg,
         "n_total": len(entries),
         "n_valid": len(valid_composites),
         "n_recommended": len(selected),
@@ -328,9 +374,11 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--sleep", type=float, default=1.0,
                         help="akshare 请求间隔秒数（默认 1.0 防限流）")
+    parser.add_argument("--bypass-audit-gate", action="store_true",
+                        help="跳过跨源 audit CONFLICT 闸门（数据系统性故障时仍推送，风险自担）")
     args = parser.parse_args()
     return run_hk_picks(top_k=args.top, mode=args.mode, dry_run=args.dry_run,
-                        sleep_sec=args.sleep)
+                        sleep_sec=args.sleep, bypass_audit_gate=args.bypass_audit_gate)
 
 
 if __name__ == "__main__":

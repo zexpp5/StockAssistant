@@ -676,11 +676,11 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
         else:
             lines.append("**🇺🇸 美股** — _plan_v5 为空_")
 
-    # 🇭🇰 港股（hk_picks · 3 因子 akshare 财报）
+    # 🇭🇰 港股（hk_picks · 4 因子 = Piotroski + 动量 + 反转 + 南向资金）
     if hk_picks and hk_picks.get("selected"):
         sel = hk_picks["selected"][:10]
         ts_hk = _fmt_ts(hk_picks.get("generated_at"))
-        lines.append(f"**🇭🇰 港股 ({len(sel)} 只 · 3 因子 + akshare 港股年报)** · {ts_hk}")
+        lines.append(f"**🇭🇰 港股 ({len(sel)} 只 · 4 因子 + 南向资金 + akshare 港股年报)** · {ts_hk}")
         for entry in sel:
             ticker = entry.get("code", "?")
             name = entry.get("name", "")
@@ -1452,7 +1452,7 @@ def _build_card_payload() -> dict:
         section2: list[dict] = [
             {"tag": "div", "text": {"tag": "lark_md", "content":
                 "**🔝 自选股·AI 优选（三线独立）**\n"
-                "_🇺🇸 美股 4 因子+Markowitz · 🇭🇰 港股 3 因子+akshare 年报 · 🇨🇳 A 股 6 因子+龙虎榜+北向_"}}
+                "_🇺🇸 美股 4 因子+Markowitz · 🇭🇰 港股 4 因子+南向资金 · 🇨🇳 A 股 6 因子+龙虎榜+北向_"}}
         ]
         if plan:
             pm = plan.get("portfolio_metrics") or {}

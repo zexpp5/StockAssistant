@@ -1370,7 +1370,8 @@ function switchDiscoveryView(view) {
     <button onclick="switchDbExplorerMarket('美股')"  id="db-mkt-btn-美股"  class="db-mkt-btn px-4 py-2 text-sm font-medium border-b-2 border-violet-500 text-violet-700 -mb-px">🇺🇸 美股 <span class="text-xs text-slate-400 ml-1" id="db-mkt-cnt-美股">-</span></button>
     <button onclick="switchDbExplorerMarket('A股')"   id="db-mkt-btn-A股"   class="db-mkt-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-violet-600 -mb-px">🇨🇳 A 股 <span class="text-xs text-slate-400 ml-1" id="db-mkt-cnt-A股">-</span></button>
     <button onclick="switchDbExplorerMarket('港股')"  id="db-mkt-btn-港股"  class="db-mkt-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-violet-600 -mb-px">🇭🇰 港股 <span class="text-xs text-slate-400 ml-1" id="db-mkt-cnt-港股">-</span></button>
-    <button onclick="switchDbExplorerMarket('其他')"  id="db-mkt-btn-其他"  class="db-mkt-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-violet-600 -mb-px">🌐 其他 <span class="text-xs text-slate-400 ml-1" id="db-mkt-cnt-其他">-</span></button>
+    <button onclick="switchDbExplorerMarket('其他')"  id="db-mkt-btn-其他"  class="db-mkt-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-violet-600 -mb-px"
+            title="日股/韩股/台股/澳股/英股等非美A港的全球 AI 主线扩展标的（稀土 LYC、铀 KAP、内存 SK Hynix、半导体设备 8035/6857、AI 服务器电源 2308 等）">🌏 全球 AI 主线 <span class="text-xs text-slate-400 ml-1" id="db-mkt-cnt-其他">-</span></button>
   </div>
 
   <!-- 主表（代码 + 名称列 sticky 固定，其他列横向滚动；whitespace-nowrap 不串行；表头随页面滚动也固定）-->
@@ -1427,6 +1428,19 @@ function switchDiscoveryView(view) {
       <p><strong>picks</strong>（最新一次入选）：pick_date/rating/total_score/ai_score/val_score/trend_score/cred_score/entry_price/peg_at_pick/fpe_at_pick</p>
     </div>
   </details>
+</section>
+
+<!-- ============ 🗂 个股全历史中介页（从 DB 全库浏览 跳转过来）============ -->
+<section id="stock-detail" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
+  <div class="mb-6 flex items-center gap-3">
+    <button onclick="closeStockDetail()" class="text-sm px-3 py-1.5 rounded border border-slate-300 text-slate-700 hover:bg-slate-50">← 返回 DB 全库浏览</button>
+    <h2 class="text-2xl font-bold text-slate-900">🗂 个股全历史 · <span id="stock-detail-code" class="font-mono text-violet-700">—</span></h2>
+    <span id="stock-detail-name" class="text-base text-slate-600"></span>
+    <span id="stock-detail-meta" class="ml-auto text-xs font-mono text-slate-500"></span>
+  </div>
+
+  <div id="stock-detail-loading" class="text-center text-slate-400 py-12">⏳ 加载中…</div>
+  <div id="stock-detail-content" class="space-y-6"></div>
 </section>
 
 <!-- ============ 🌳 产业链全景 Tab（按链条聚类 watchlist，让新手看出层级 + 角色 + 一句话）============ -->
@@ -3157,10 +3171,15 @@ function _dbExplorerDetailRow(r) {
           ${kvBlock("📈 prices 最新一行", groupPrices)}
           ${kvBlock("🤖 picks 最新一次", groupPicks)}
         </div>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+        <div class="grid grid-cols-1 gap-3 mt-3">
           ${longCards}
         </div>
         <div class="mt-3 flex gap-2 flex-wrap">
+          <button class="text-xs px-3 py-1.5 rounded bg-violet-600 border border-violet-600 text-white hover:bg-violet-700 font-semibold"
+                  data-code="${_esc(r.code)}" data-name="${_esc(r.name || '')}"
+                  onclick="event.stopPropagation();openStockDetail(this.dataset.code, this.dataset.name)">
+            📊 看完整历史数据 →
+          </button>
           <a class="text-xs px-3 py-1.5 rounded bg-white border border-slate-300 text-slate-700 hover:bg-slate-50"
              href="${_esc(_yahooLink(r.code, r.market))}" target="_blank">📊 Yahoo Finance ↗</a>
           <button class="text-xs px-3 py-1.5 rounded bg-white border border-slate-300 text-slate-700 hover:bg-slate-50"
@@ -3171,6 +3190,308 @@ function _dbExplorerDetailRow(r) {
       </td>
     </tr>
   `;
+}
+
+// ============ 🗂 个股全历史中介页（从 DB 全库浏览 跳过来）============
+let _stockDetailReturnTab = "db-explorer";  // 关闭时回到哪个父 tab
+
+async function openStockDetail(code, name) {
+  if (!code) return;
+  _stockDetailReturnTab = "db-explorer";
+  // 顶部基本信息先填上
+  document.getElementById("stock-detail-code").textContent = code;
+  document.getElementById("stock-detail-name").textContent = name ? `· ${name}` : "";
+  document.getElementById("stock-detail-meta").textContent = "";
+  document.getElementById("stock-detail-content").innerHTML = "";
+  document.getElementById("stock-detail-loading").style.display = "";
+  // 切到这个独立 tab
+  switchTab("stock-detail");
+  // 拉数据
+  try {
+    const data = await _watchlistApiCall("GET", "/api/db/stock-history/" + encodeURIComponent(code));
+    renderStockDetail(data);
+  } catch (e) {
+    document.getElementById("stock-detail-loading").style.display = "none";
+    document.getElementById("stock-detail-content").innerHTML =
+      `<div class="bg-rose-50 border border-rose-200 text-rose-700 rounded p-4 text-sm">加载失败：${_esc(e.message)}</div>`;
+  }
+}
+
+function closeStockDetail() {
+  switchTab(_stockDetailReturnTab || "db-explorer");
+}
+
+function renderStockDetail(data) {
+  document.getElementById("stock-detail-loading").style.display = "none";
+  const content = document.getElementById("stock-detail-content");
+  const meta = document.getElementById("stock-detail-meta");
+  const wl = data.watchlist || {};
+  const eh = data.earnings_history || [];
+  meta.textContent = `prices: ${data.prices.length} 行 · picks: ${data.picks.length} 次 · reviews: ${data.reviews.length} 次 · discovery: ${data.discovery.length} 次 · earnings: ${eh.length} 季`;
+
+  // 1) watchlist 元数据卡 (3 列网格)
+  const wlMetaCard = `
+    <div class="bg-white border border-slate-200 rounded-lg p-4">
+      <h3 class="text-base font-bold text-slate-800 mb-3">📋 watchlist 元数据（25 列）</h3>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-x-6 gap-y-1 text-xs">
+        ${[
+          ["市场", wl.market], ["业务", wl.business], ["行业", wl.industry],
+          ["AI 关联", wl.ai_relevance], ["AI 逻辑", wl.ai_logic], ["主题", wl.theme],
+          ["链条", wl.chain], ["链层", wl.chain_tier], ["链上角色", wl.chain_role],
+          ["小白介绍", wl.layman_intro], ["状态", wl.status], ["可信度", wl.credibility],
+          ["可比标的", wl.peers], ["节奏", wl.rhythm], ["双源校验", wl.verification],
+          ["源", wl.source], ["创建时间", wl.created_at], ["最后更新", wl.updated_at],
+        ].map(([k, v]) => `
+          <div class="flex gap-2 py-1 border-b border-slate-50">
+            <span class="text-slate-500 w-20 shrink-0">${_esc(k)}</span>
+            <span class="text-slate-800 break-all">${v === null || v === undefined || v === "" ? '<span class="text-slate-300">—</span>' : _esc(String(v))}</span>
+          </div>`).join("")}
+      </div>
+      ${[
+        ["📊 最新财报 (earnings)", wl.earnings],
+        ["✅ 投研结论 (conclusion)", wl.conclusion],
+        ["⚠️ 风险 (risks)", wl.risks],
+        ["🔍 全信息分项 (info_breakdown)", wl.info_breakdown],
+        ["📝 备注 (notes)", wl.notes],
+      ].map(([title, body]) => `
+        <details class="mt-3">
+          <summary class="cursor-pointer text-xs font-semibold text-slate-700 hover:text-violet-600">${_esc(title)}${body ? "" : ' <span class="text-slate-400 font-normal">— 暂无</span>'}</summary>
+          <div class="mt-2 p-3 bg-slate-50 rounded text-xs text-slate-700 whitespace-pre-wrap leading-relaxed">${body ? _esc(String(body)) : '<span class="text-slate-400">暂无内容</span>'}</div>
+        </details>`).join("")}
+    </div>`;
+
+  // 2) prices 时间序列表
+  const pricesTable = data.prices.length === 0
+    ? '<div class="text-slate-400 text-sm py-4">— 无历史行情数据 —</div>'
+    : `
+    <div class="overflow-x-auto">
+      <table class="min-w-full text-xs">
+        <thead class="bg-slate-50 text-slate-500 uppercase">
+          <tr>
+            <th class="px-3 py-2 text-left">日期</th>
+            <th class="px-3 py-2 text-left">抓取时间</th>
+            <th class="px-3 py-2 text-right">价格</th>
+            <th class="px-3 py-2 text-right">昨收</th>
+            <th class="px-3 py-2 text-right">日涨跌%</th>
+            <th class="px-3 py-2 text-right">市值</th>
+            <th class="px-3 py-2 text-right">Forward PE</th>
+            <th class="px-3 py-2 text-right">Trailing PE</th>
+            <th class="px-3 py-2 text-right">PEG</th>
+            <th class="px-3 py-2 text-right">营收增长%</th>
+            <th class="px-3 py-2 text-right">EPS 增长%</th>
+            <th class="px-3 py-2 text-right">YTD%</th>
+            <th class="px-3 py-2 text-right">一年%</th>
+            <th class="px-3 py-2 text-right">一月%</th>
+            <th class="px-3 py-2 text-right">一周%</th>
+            <th class="px-3 py-2 text-left">币种</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          ${data.prices.map(p => {
+            const dayPct = (p.price != null && p.prev_close) ? ((p.price - p.prev_close) / p.prev_close * 100) : null;
+            return `
+              <tr class="hover:bg-violet-50">
+                <td class="px-3 py-1.5 font-mono">${_esc(p.date || "—")}</td>
+                <td class="px-3 py-1.5 font-mono text-[10px] text-slate-500">${_esc(p.fetched_at || "—")}</td>
+                <td class="px-3 py-1.5 text-right font-mono">${_dbFmtNum(p.price)}</td>
+                <td class="px-3 py-1.5 text-right font-mono">${_dbFmtNum(p.prev_close)}</td>
+                <td class="px-3 py-1.5 text-right font-mono">${_dbFmtPct(dayPct)}</td>
+                <td class="px-3 py-1.5 text-right font-mono">${_dbFmtCap(p.market_cap)}</td>
+                <td class="px-3 py-1.5 text-right font-mono">${_dbFmtNum(p.forward_pe)}</td>
+                <td class="px-3 py-1.5 text-right font-mono">${_dbFmtNum(p.trailing_pe)}</td>
+                <td class="px-3 py-1.5 text-right font-mono">${_dbFmtNum(p.peg_ratio)}</td>
+                <td class="px-3 py-1.5 text-right font-mono">${_dbFmtPct(p.revenue_growth_pct)}</td>
+                <td class="px-3 py-1.5 text-right font-mono">${_dbFmtPct(p.earnings_growth_pct)}</td>
+                <td class="px-3 py-1.5 text-right font-mono">${_dbFmtPct(p.ytd_pct)}</td>
+                <td class="px-3 py-1.5 text-right font-mono">${_dbFmtPct(p.one_year_pct)}</td>
+                <td class="px-3 py-1.5 text-right font-mono">${_dbFmtPct(p.one_month_pct)}</td>
+                <td class="px-3 py-1.5 text-right font-mono">${_dbFmtPct(p.one_week_pct)}</td>
+                <td class="px-3 py-1.5 text-xs text-slate-500">${_esc(p.currency || "—")}</td>
+              </tr>`;
+          }).join("")}
+        </tbody>
+      </table>
+    </div>`;
+  const pricesCard = `
+    <div class="bg-white border border-slate-200 rounded-lg p-4">
+      <h3 class="text-base font-bold text-slate-800 mb-3">📈 prices 时间序列（${data.prices.length} 行 · 倒序）</h3>
+      ${pricesTable}
+    </div>`;
+
+  // 3) picks 历次入选
+  const picksTable = data.picks.length === 0
+    ? '<div class="text-slate-400 text-sm py-4">— 这只股票从未进入 AI 评级 picks —</div>'
+    : `
+    <div class="overflow-x-auto">
+      <table class="min-w-full text-xs">
+        <thead class="bg-slate-50 text-slate-500 uppercase">
+          <tr>
+            <th class="px-3 py-2 text-left">入选日</th>
+            <th class="px-3 py-2 text-left">评级</th>
+            <th class="px-3 py-2 text-right">总分</th>
+            <th class="px-3 py-2 text-right">AI 分</th>
+            <th class="px-3 py-2 text-right">估值分</th>
+            <th class="px-3 py-2 text-right">趋势分</th>
+            <th class="px-3 py-2 text-right">可信度分</th>
+            <th class="px-3 py-2 text-left">主题</th>
+            <th class="px-3 py-2 text-right">入选价</th>
+            <th class="px-3 py-2 text-right">入选时 PEG</th>
+            <th class="px-3 py-2 text-right">入选时 fpe</th>
+            <th class="px-3 py-2 text-right">入选时 YTD%</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          ${data.picks.map(p => `
+            <tr class="hover:bg-violet-50">
+              <td class="px-3 py-1.5 font-mono">${_esc(p.pick_date || "—")}</td>
+              <td class="px-3 py-1.5 text-xs">${_esc(p.rating || "—")}</td>
+              <td class="px-3 py-1.5 text-right font-mono font-semibold">${_dbFmtNum(p.total_score, 1)}</td>
+              <td class="px-3 py-1.5 text-right font-mono">${_dbFmtNum(p.ai_score, 1)}</td>
+              <td class="px-3 py-1.5 text-right font-mono">${_dbFmtNum(p.val_score, 1)}</td>
+              <td class="px-3 py-1.5 text-right font-mono">${_dbFmtNum(p.trend_score, 1)}</td>
+              <td class="px-3 py-1.5 text-right font-mono">${_dbFmtNum(p.cred_score, 1)}</td>
+              <td class="px-3 py-1.5 text-xs">${_esc(p.theme || "—")}</td>
+              <td class="px-3 py-1.5 text-right font-mono">${_dbFmtNum(p.entry_price)} ${_esc(p.entry_currency || "")}</td>
+              <td class="px-3 py-1.5 text-right font-mono">${_dbFmtNum(p.peg_at_pick)}</td>
+              <td class="px-3 py-1.5 text-right font-mono">${_dbFmtNum(p.fpe_at_pick)}</td>
+              <td class="px-3 py-1.5 text-right font-mono">${_dbFmtPct(p.ytd_at_pick)}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>`;
+  const picksCard = `
+    <div class="bg-white border border-slate-200 rounded-lg p-4">
+      <h3 class="text-base font-bold text-slate-800 mb-3">🤖 picks 历次 AI 评级（${data.picks.length} 次 · 倒序）</h3>
+      ${picksTable}
+    </div>`;
+
+  // 4) reviews 跟踪
+  const reviewsTable = data.reviews.length === 0
+    ? '<div class="text-slate-400 text-sm py-4">— 未生成 reviews 跟踪记录 —</div>'
+    : `
+    <div class="overflow-x-auto">
+      <table class="min-w-full text-xs">
+        <thead class="bg-slate-50 text-slate-500 uppercase">
+          <tr>
+            <th class="px-3 py-2 text-left">跟踪日</th>
+            <th class="px-3 py-2 text-left">入选日</th>
+            <th class="px-3 py-2 text-right">入选价</th>
+            <th class="px-3 py-2 text-right">当前价</th>
+            <th class="px-3 py-2 text-right">累计%</th>
+            <th class="px-3 py-2 text-right">持仓天</th>
+            <th class="px-3 py-2 text-left">grade</th>
+            <th class="px-3 py-2 text-left">评级</th>
+            <th class="px-3 py-2 text-left">主题</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          ${data.reviews.map(r => `
+            <tr class="hover:bg-violet-50">
+              <td class="px-3 py-1.5 font-mono">${_esc(r.review_date || "—")}</td>
+              <td class="px-3 py-1.5 font-mono">${_esc(r.pick_date || "—")}</td>
+              <td class="px-3 py-1.5 text-right font-mono">${_dbFmtNum(r.entry_price)}</td>
+              <td class="px-3 py-1.5 text-right font-mono">${_dbFmtNum(r.current_price)}</td>
+              <td class="px-3 py-1.5 text-right font-mono">${_dbFmtPct(r.pct)}</td>
+              <td class="px-3 py-1.5 text-right font-mono">${r.days_held ?? "—"}</td>
+              <td class="px-3 py-1.5">${_esc(r.grade || "—")}</td>
+              <td class="px-3 py-1.5">${_esc(r.rating || "—")}</td>
+              <td class="px-3 py-1.5">${_esc(r.theme || "—")}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>`;
+  const reviewsCard = `
+    <div class="bg-white border border-slate-200 rounded-lg p-4">
+      <h3 class="text-base font-bold text-slate-800 mb-3">📊 reviews 跟踪记录（${data.reviews.length} 次 · 倒序）</h3>
+      ${reviewsTable}
+    </div>`;
+
+  // 5) discovery
+  const discoveryTable = data.discovery.length === 0
+    ? '<div class="text-slate-400 text-sm py-4">— 这只股票未在 AI 推荐池 (discovery) 中出现 —</div>'
+    : `
+    <div class="overflow-x-auto">
+      <table class="min-w-full text-xs">
+        <thead class="bg-slate-50 text-slate-500 uppercase">
+          <tr>
+            <th class="px-3 py-2 text-left">推荐日</th>
+            <th class="px-3 py-2 text-right">排名</th>
+            <th class="px-3 py-2 text-left">sector</th>
+            <th class="px-3 py-2 text-right">综合 z</th>
+            <th class="px-3 py-2 text-right">F-score</th>
+            <th class="px-3 py-2 text-right">12-1 动量</th>
+            <th class="px-3 py-2 text-right">PEAD</th>
+            <th class="px-3 py-2 text-right">分析师</th>
+            <th class="px-3 py-2 text-right">市值 USD</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          ${data.discovery.map(d => `
+            <tr class="hover:bg-violet-50">
+              <td class="px-3 py-1.5 font-mono">${_esc(d.generated_date || "—")}</td>
+              <td class="px-3 py-1.5 text-right font-mono">${d.rank ?? "—"}</td>
+              <td class="px-3 py-1.5">${_esc(d.sector || "—")}</td>
+              <td class="px-3 py-1.5 text-right font-mono">${_dbFmtNum(d.composite_z)}</td>
+              <td class="px-3 py-1.5 text-right font-mono">${_dbFmtNum(d.f_score, 1)}</td>
+              <td class="px-3 py-1.5 text-right font-mono">${_dbFmtNum(d.momentum_12_1)}</td>
+              <td class="px-3 py-1.5 text-right font-mono">${_dbFmtNum(d.pead)}</td>
+              <td class="px-3 py-1.5 text-right font-mono">${_dbFmtNum(d.analyst_score)}</td>
+              <td class="px-3 py-1.5 text-right font-mono">${_dbFmtCap(d.market_cap_usd)}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>`;
+  const discoveryCard = `
+    <div class="bg-white border border-slate-200 rounded-lg p-4">
+      <h3 class="text-base font-bold text-slate-800 mb-3">🤖 discovery 推荐池历史（${data.discovery.length} 次）</h3>
+      ${discoveryTable}
+    </div>`;
+
+  // 6) earnings_history 季报历史归档（每季一行，归档纵深）
+  const earningsTable = eh.length === 0
+    ? '<div class="text-slate-400 text-sm py-4">— 未拉到季报历史 —</div>'
+    : `
+    <div class="overflow-x-auto">
+      <table class="min-w-full text-xs">
+        <thead class="bg-slate-50 text-slate-500 uppercase">
+          <tr>
+            <th class="px-3 py-2 text-left">季度末</th>
+            <th class="px-3 py-2 text-right">营收</th>
+            <th class="px-3 py-2 text-right">营收 YoY</th>
+            <th class="px-3 py-2 text-right">净利润</th>
+            <th class="px-3 py-2 text-right">净利润 YoY</th>
+            <th class="px-3 py-2 text-right">摊薄 EPS</th>
+            <th class="px-3 py-2 text-right">EPS YoY</th>
+            <th class="px-3 py-2 text-left">币种</th>
+            <th class="px-3 py-2 text-left">source</th>
+            <th class="px-3 py-2 text-left">抓取时间</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          ${eh.map(q => `
+            <tr class="hover:bg-violet-50">
+              <td class="px-3 py-1.5 font-mono font-semibold">${_esc(q.fiscal_period || "—")}</td>
+              <td class="px-3 py-1.5 text-right font-mono">${_dbFmtCap(q.revenue)} ${_esc(q.currency || "")}</td>
+              <td class="px-3 py-1.5 text-right font-mono">${_dbFmtPct(q.revenue_yoy_pct)}</td>
+              <td class="px-3 py-1.5 text-right font-mono">${_dbFmtCap(q.net_income)} ${_esc(q.currency || "")}</td>
+              <td class="px-3 py-1.5 text-right font-mono">${_dbFmtPct(q.net_income_yoy_pct)}</td>
+              <td class="px-3 py-1.5 text-right font-mono">${_dbFmtNum(q.diluted_eps)}</td>
+              <td class="px-3 py-1.5 text-right font-mono">${_dbFmtPct(q.eps_yoy_pct)}</td>
+              <td class="px-3 py-1.5 text-xs text-slate-500">${_esc(q.currency || "—")}</td>
+              <td class="px-3 py-1.5 text-xs text-slate-500">${_esc(q.source || "—")}</td>
+              <td class="px-3 py-1.5 text-[10px] font-mono text-slate-400">${_esc(q.fetched_at || "—")}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>`;
+  const earningsCard = `
+    <div class="bg-white border border-slate-200 rounded-lg p-4">
+      <h3 class="text-base font-bold text-slate-800 mb-3">💰 earnings_history 季报历史（${eh.length} 季 · 倒序）</h3>
+      <p class="text-xs text-slate-500 mb-3">从 yfinance.quarterly_income_stmt 归档；每季 1 行，按 (code, fiscal_period) upsert，<strong>不会被后续刷新覆盖</strong>，可看历次同比与纵深趋势。</p>
+      ${earningsTable}
+    </div>`;
+
+  content.innerHTML = wlMetaCard + earningsCard + pricesCard + picksCard + reviewsCard + discoveryCard;
 }
 
 function _yahooLink(code, market) {
@@ -3201,6 +3522,9 @@ const TAB_SECTIONS = {
   backtest: ["backtest"],
   professional: ["professional"],
   "db-explorer": ["db-explorer"],
+  // stock-detail 是 db-explorer 详情面板的「📊 看完整历史」按钮跳到的子页，
+  // 不挂 sidebar，只能从 openStockDetail() 跳进、closeStockDetail() 跳回
+  "stock-detail": ["stock-detail"],
   upgrade: ["upgrade"],
   "init-config": ["init-config", "portfolio-config", "watchlist-edit"],
 };

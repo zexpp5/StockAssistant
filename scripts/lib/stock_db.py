@@ -205,6 +205,25 @@ CREATE TABLE IF NOT EXISTS holdings (
     created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- earnings_history（季报历史归档）
+--   每只股票每个 fiscal_period 一行；重复拉同一季度按 (code, fiscal_period) upsert
+--   watchlist.earnings 字段仍存"最新一句话摘要"给看板用；本表存结构化纵深，画趋势 / 看历次同比
+--   source = 'yfinance_quarterly' 或 'yfinance_ttm_fallback'（季报不可用时降级到 info TTM）
+CREATE TABLE IF NOT EXISTS earnings_history (
+    code               VARCHAR   NOT NULL,
+    fiscal_period      DATE      NOT NULL,     -- 季度末日期，如 2026-03-31
+    revenue            DOUBLE,
+    net_income         DOUBLE,
+    diluted_eps        DOUBLE,
+    revenue_yoy_pct    DOUBLE,
+    net_income_yoy_pct DOUBLE,
+    eps_yoy_pct        DOUBLE,
+    currency           VARCHAR,
+    source             VARCHAR,
+    fetched_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (code, fiscal_period)
+);
 """
 
 # user_config 已知 key 的默认值（首次读取或被删除时返回）
@@ -992,6 +1011,77 @@ def set_config(key: str, value: Any, *, conn: duckdb.DuckDBPyConnection | None =
     )
     if own:
         conn.close()
+
+
+def upsert_earnings_history(
+    code: str,
+    quarters: Iterable[Mapping[str, Any]],
+    *,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> int:
+    """upsert earnings_history 多行（按 (code, fiscal_period) 主键）。
+
+    quarters 每条字段：fiscal_period (date|str), revenue, net_income, diluted_eps,
+                       revenue_yoy_pct, net_income_yoy_pct, eps_yoy_pct, currency, source
+    返回写入行数。
+    """
+    own = conn is None
+    if own:
+        conn = get_db()
+    n = 0
+    now = datetime.now()
+    for q in quarters:
+        fp = _to_date(q.get("fiscal_period"))
+        if not fp:
+            continue
+        conn.execute(
+            """
+            INSERT INTO earnings_history
+              (code, fiscal_period, revenue, net_income, diluted_eps,
+               revenue_yoy_pct, net_income_yoy_pct, eps_yoy_pct, currency, source, fetched_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (code, fiscal_period) DO UPDATE SET
+              revenue            = excluded.revenue,
+              net_income         = excluded.net_income,
+              diluted_eps        = excluded.diluted_eps,
+              revenue_yoy_pct    = excluded.revenue_yoy_pct,
+              net_income_yoy_pct = excluded.net_income_yoy_pct,
+              eps_yoy_pct        = excluded.eps_yoy_pct,
+              currency           = excluded.currency,
+              source             = excluded.source,
+              fetched_at         = excluded.fetched_at
+            """,
+            [
+                code, fp,
+                q.get("revenue"), q.get("net_income"), q.get("diluted_eps"),
+                q.get("revenue_yoy_pct"), q.get("net_income_yoy_pct"), q.get("eps_yoy_pct"),
+                q.get("currency"), q.get("source"), now,
+            ],
+        )
+        n += 1
+    if own:
+        conn.close()
+    return n
+
+
+def fetch_earnings_history(
+    code: str,
+    *,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> list[dict]:
+    """返回某只股票的全部 earnings_history，按 fiscal_period 倒序。"""
+    own = conn is None
+    if own:
+        conn = get_db()
+    cur = conn.execute(
+        "SELECT * FROM earnings_history WHERE code = ? ORDER BY fiscal_period DESC",
+        [code],
+    )
+    cols = [d[0] for d in cur.description]
+    rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    if own:
+        conn.close()
+    return rows
 
 
 def stats() -> dict:

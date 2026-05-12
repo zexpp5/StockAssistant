@@ -257,6 +257,7 @@ def create_app():
             picks = _rows("SELECT * FROM picks WHERE code = ? ORDER BY pick_date DESC")
             reviews = _rows("SELECT * FROM reviews WHERE code = ? ORDER BY review_date DESC")
             discovery = _rows("SELECT * FROM discovery_history WHERE ticker = ? ORDER BY generated_date DESC")
+            earnings_history = _rows("SELECT * FROM earnings_history WHERE code = ? ORDER BY fiscal_period DESC")
         finally:
             conn.close()
 
@@ -274,7 +275,7 @@ def create_app():
                 return {k: _walk(v) for k, v in obj.items()}
             return _jsonify(obj)
 
-        if not wl_row and not prices and not picks and not reviews and not discovery:
+        if not wl_row and not prices and not picks and not reviews and not discovery and not earnings_history:
             raise HTTPException(404, f"code not found in any table: {code}")
 
         return {
@@ -284,6 +285,7 @@ def create_app():
             "picks": _walk(picks),
             "reviews": _walk(reviews),
             "discovery": _walk(discovery),
+            "earnings_history": _walk(earnings_history),
         }
 
     @app.post("/api/watchlist/auto-enrich")

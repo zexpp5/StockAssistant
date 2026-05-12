@@ -155,28 +155,30 @@ def fetch_hk_stock_quote(code: str) -> dict[str, Any] | None:
 
 
 def fetch_hk_southbound_flow(code: str) -> dict[str, Any] | None:
-    """港股南向资金持股（来自港交所披露易，akshare 抓的）。"""
-    ak = _import_ak()
-    if not ak:
-        return None
+    """港股南向资金持股 — 2026-05-12 修复：原 stock_hk_ggt_components_em 列名失效，
+    改委托给 stock_research.core.south_flow_signals.fetch_components_snapshot。
+    保持返回 dict 形状与原 enrich_watchlist 消费端兼容。
+    """
     try:
-        df = ak.stock_hk_ggt_components_em()
-        if df is None or df.empty:
-            return None
-        sym = hk_pad(code)
-        row = df[df["代码"] == sym]
-        if row.empty:
-            return None
-        r = row.iloc[0]
-        return {
-            "code": sym,
-            "name": str(r.get("名称", "")),
-            "shares_pct": _safe_float(r.get("持股占已发行股本百分比")),
-            "source": "akshare/stock_hk_ggt_components_em",
-        }
-    except Exception as e:
-        logger.debug("akshare HK southbound not available for %s: %s", code, e)
+        from stock_research.core.south_flow_signals import (
+            fetch_components_snapshot,
+            _norm_hk_code,
+        )
+    except ImportError:
         return None
+    snapshot = fetch_components_snapshot()
+    if not snapshot:
+        return None
+    norm = _norm_hk_code(code)
+    pct = snapshot.get(norm)
+    if pct is None:
+        return None
+    return {
+        "code": code,
+        "name": "",
+        "shares_pct": float(pct),
+        "source": "akshare/south_flow_signals",
+    }
 
 
 # ────────────────────────────────────────────────────────
