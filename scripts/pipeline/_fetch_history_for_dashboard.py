@@ -80,15 +80,23 @@ def fetch_codes_from_db():
 
 
 def fetch_history(ticker: str, period: str = "2y") -> dict | None:
-    """拉单只股票 2 年日 K。"""
+    """拉单只股票 2 年日 K（含 high/low 供真 ATR 计算）。
+
+    2026-05-12 升级：补 high / low 字段（C-4），原 close 字段保持不变。
+    前端 dashboard 只读 close，所以兼容；后端 ATR 真版可用 high/low。
+    """
     try:
         t = yf.Ticker(ticker)
         h = t.history(period=period, interval="1d")
         if h is None or h.empty:
             return None
+        def _fmt(series):
+            return [None if v != v else round(float(v), 4) for v in series.tolist()]
         return {
             "ts": [d.strftime("%Y-%m-%d") for d in h.index],
-            "close": [None if v != v else round(float(v), 4) for v in h["Close"].tolist()],
+            "close": _fmt(h["Close"]),
+            "high": _fmt(h["High"]),
+            "low": _fmt(h["Low"]),
         }
     except Exception as e:
         print(f"  ❌ {ticker}: {e}")

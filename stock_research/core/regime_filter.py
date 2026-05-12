@@ -225,11 +225,54 @@ def _yield_curve_inverted(as_of: str | None = None) -> tuple[bool, dict]:
     }
 
 
+def _breadth_weak(as_of: str | None = None,
+                  spread_threshold_pct: float = -3.0) -> tuple[bool, dict]:
+    """市场广度 proxy：RSP（等权 S&P 500）vs SPY（市值加权）近 21 个交易日相对收益。
+
+    学术依据：Zweig (1986)、Fosback (1976) 指出 advance-decline 广度领先于市值指数。
+    用 RSP-SPY spread 作为简化代理：spread 显著为负 → 头部少数大盘股扛指数，
+    其余成分股已转弱 → 广度恶化，下行风险升高。
+
+    阈值 -3% 是经验值（2022/01 / 2024/07 头部分化时期均触发）。
+    """
+    try:
+        import yfinance as yf
+    except ImportError:
+        return False, {"error": "yfinance not installed"}
+    target = pd.to_datetime(as_of) if as_of else pd.Timestamp.now()
+    start = target - pd.Timedelta(days=60)
+    end = target + pd.Timedelta(days=2)
+    try:
+        rsp = yf.Ticker("RSP").history(start=start, end=end)
+        spy = yf.Ticker("SPY").history(start=start, end=end)
+    except Exception as e:
+        return False, {"error": str(e)[:80]}
+    if len(rsp) < 21 or len(spy) < 21:
+        return False, {"error": "insufficient history (need 21 trading days)"}
+    rsp_close = rsp["Close"].iloc[-21:]
+    spy_close = spy["Close"].iloc[-21:]
+    try:
+        rsp_ret = float(rsp_close.iloc[-1] / rsp_close.iloc[0] - 1) * 100
+        spy_ret = float(spy_close.iloc[-1] / spy_close.iloc[0] - 1) * 100
+    except Exception as e:
+        return False, {"error": f"compute_failed: {e}"}
+    spread = rsp_ret - spy_ret
+    return spread < spread_threshold_pct, {
+        "rsp_1m_pct": round(rsp_ret, 2),
+        "spy_1m_pct": round(spy_ret, 2),
+        "spread_pct": round(spread, 2),
+        "threshold_pct": spread_threshold_pct,
+        "interpretation": ("广度差 - 头部集中" if spread < spread_threshold_pct
+                           else "广度健康 - 涨势分布均匀"),
+    }
+
+
 def get_dynamic_gross_exposure(as_of: str | None = None,
                                *,
                                vix_threshold_cautious: float = 20.0,
                                vix_threshold_risk_off: float = 30.0,
-                               vix_threshold_panic: float = 40.0
+                               vix_threshold_panic: float = 40.0,
+                               breadth_spread_threshold_pct: float = -3.0
                                ) -> dict:
     """根据 3 信号合成 5 档位 gross exposure 上限。
 
@@ -257,6 +300,9 @@ def get_dynamic_gross_exposure(as_of: str | None = None,
     spy_ok, ma_info = _spy_above_200ma(as_of)
     _, vix_info = _vix_below_panic(as_of, panic_threshold=vix_threshold_panic)
     yc_inverted, yc_info = _yield_curve_inverted(as_of)
+    breadth_bad, breadth_info = _breadth_weak(
+        as_of, spread_threshold_pct=breadth_spread_threshold_pct,
+    )
     vix_value = vix_info.get("vix_close")
 
     triggers = []
@@ -266,8 +312,10 @@ def get_dynamic_gross_exposure(as_of: str | None = None,
         triggers.append(f"VIX={vix_value} ≥ {vix_threshold_cautious}")
     if yc_inverted:
         triggers.append("10Y-13W 倒挂 (Estrella-Mishkin)")
+    if breadth_bad:
+        triggers.append(f"广度差 (RSP-SPY spread {breadth_info.get('spread_pct','?')}%)")
 
-    # 档位判定（VIX 极端绕过信号计数）
+    # 档位判定（VIX 极端绕过信号计数；信号数门槛对应 4 信号体系微调）
     if vix_value is not None and vix_value >= vix_threshold_panic:
         gross, regime = 0.20, "PANIC"
         advice = "VIX 极端恐慌 — 仓位强制降至 20%，新仓位暂停"
@@ -276,7 +324,7 @@ def get_dynamic_gross_exposure(as_of: str | None = None,
         advice = "VIX 恐慌阈值上 — 仓位降至 40%，新仓位仅限防御板块"
     elif len(triggers) >= 3:
         gross, regime = 0.40, "RISK_OFF"
-        advice = "3 信号同时告警 — 仓位降至 40%（结构性熊市风险）"
+        advice = f"{len(triggers)} 信号同时告警 — 仓位降至 40%（结构性熊市风险）"
     elif vix_value is not None and vix_value >= vix_threshold_cautious:
         gross, regime = 0.65, "CAUTIOUS_2"
         advice = "VIX 抬升 — 仓位降至 65%，控制新仓位 beta"
@@ -294,13 +342,15 @@ def get_dynamic_gross_exposure(as_of: str | None = None,
         "gross_exposure_cap": gross,
         "regime": regime,
         "signals_triggered": len(triggers),
-        "signals": {"ma": ma_info, "vix": vix_info, "yield_curve": yc_info},
+        "signals": {"ma": ma_info, "vix": vix_info, "yield_curve": yc_info,
+                    "breadth": breadth_info},
         "triggers": triggers,
         "advice": advice,
         "thresholds": {
             "vix_cautious": vix_threshold_cautious,
             "vix_risk_off": vix_threshold_risk_off,
             "vix_panic": vix_threshold_panic,
+            "breadth_spread": breadth_spread_threshold_pct,
         },
     }
 

@@ -263,17 +263,22 @@ def section_holdings_stoploss(history: dict | None = None,
         entry = h.get("entry_price")
         if not code or entry is None:
             continue
-        closes = (history.get(code) or {}).get("close") or []
+        ticker_hist = history.get(code) or {}
+        closes = ticker_hist.get("close") or []
+        highs = ticker_hist.get("high") or None
+        lows = ticker_hist.get("low") or None
         if not closes:
             continue
         current = closes[-1]
-        # 动态止损：按个股波动率算 stop_pct（close-only ATR proxy）
-        dyn_stop = volatility_adaptive_stop_pct(closes, fallback=stop_pct)
-        dyn_watch = max(0.05, dyn_stop - 0.05)  # 观察线 = 止损线再宽 5pp
+        # 动态止损：优先真 ATR（含 high/low），fallback 到 close-only proxy
+        dyn_stop, atr_source = volatility_adaptive_stop_pct(
+            closes, highs=highs, lows=lows, fallback=stop_pct,
+        )
+        dyn_watch = max(0.05, dyn_stop - 0.05)
         triggered, dd = check_stop_loss_breach(entry, current, stop_pct=dyn_stop)
         row = {"code": code, "entry": float(entry),
                "current": float(current), "dd_pct": dd * 100,
-               "stop_pct": dyn_stop * 100}
+               "stop_pct": dyn_stop * 100, "atr_source": atr_source}
         if triggered:
             breached.append(row)
         elif dd <= -dyn_watch:
@@ -352,8 +357,178 @@ def section_regime(defense: dict | None) -> str:
 # Section 2: 今天的候选（A 股 + 美股）
 # ────────────────────────────────────────────────────────
 
-def _humanize_picks(plan: list[dict], a_share: bool, history: dict | None = None) -> list[str]:
-    """把 plan_v5 entry 排成一句话/只。ticker 加粗、不用反引号；附 60d sparkline。"""
+def _factor_scores_index(factor_scores: dict | None) -> tuple[dict, dict]:
+    """把 factor_scores_today.json 的 factors[] / signals[] 数组建成 ticker 索引。"""
+    if not isinstance(factor_scores, dict):
+        return {}, {}
+    factors = {e.get("ticker"): e for e in (factor_scores.get("factors") or []) if e.get("ticker")}
+    signals = {e.get("ticker"): e for e in (factor_scores.get("signals") or []) if e.get("ticker")}
+    return factors, signals
+
+
+def _build_us_reasons(ticker: str, factors_map: dict, signals_map: dict) -> tuple[list[str], list[str]]:
+    """美股理由 — 从 factor_scores_today.json 5 维度组装：F-Score / 12-1 动量 / PEAD / 分析师 / 内部人。"""
+    pros: list[str] = []
+    cons: list[str] = []
+    f = factors_map.get(ticker, {}) or {}
+    s = signals_map.get(ticker, {}) or {}
+
+    piot = f.get("piotroski") or {}
+    fs = piot.get("f_score")
+    if isinstance(fs, (int, float)):
+        details = piot.get("details") or {}
+        green = sum(1 for v in details.values() if v)
+        if fs >= 7:
+            pros.append(f"F-Score {fs}/9 基本面优（{green} 项绿灯）")
+        elif fs >= 5:
+            pros.append(f"F-Score {fs}/9 基本面中性（{green} 项绿灯）")
+        else:
+            cons.append(f"F-Score {fs}/9 基本面偏弱（仅 {green} 项绿灯）")
+
+    mom = (f.get("momentum") or {}).get("momentum_12_1")
+    if isinstance(mom, (int, float)):
+        if mom >= 200:
+            cons.append(f"12-1 月动量 +{mom:.0f}% 异常高（可能数据问题/拆股，注意均值回归）")
+        elif mom >= 30:
+            pros.append(f"12-1 月动量 +{mom:.0f}% 强势")
+        elif mom <= -20:
+            cons.append(f"12-1 月动量 {mom:+.0f}% 下行")
+
+    pead = f.get("pead") or {}
+    acc = pead.get("acceleration")
+    if isinstance(acc, (int, float)):
+        if acc >= 3:
+            pros.append(
+                f"PEAD 盈利加速 +{acc:.1f}%（本季 QoQ {pead.get('qoq_now_pct',0):.1f}% vs 上季 {pead.get('qoq_prev_pct',0):.1f}%）"
+            )
+        elif acc <= -3:
+            cons.append(f"PEAD 盈利减速 {acc:+.1f}%")
+
+    an = s.get("analyst") or {}
+    raises = an.get("raises") or 0
+    lowers = an.get("lowers") or 0
+    tgt = an.get("avg_target_raise_pct")
+    if raises + lowers >= 3:
+        if raises >= 5 and raises >= 3 * max(lowers, 1):
+            tgt_str = f"，平均目标价 +{tgt:.0f}%" if isinstance(tgt, (int, float)) else ""
+            pros.append(f"近 90d {raises} 家分析师上调 vs {lowers} 家下调{tgt_str}")
+        elif lowers >= 3 and lowers > raises:
+            cons.append(f"近 90d {lowers} 家分析师下调 vs {raises} 家上调")
+
+    ins = s.get("insider") or {}
+    net_val = ins.get("net_value_usd_approx")
+    if isinstance(net_val, (int, float)) and abs(net_val) >= 1e7:
+        mn = net_val / 1e6
+        if mn > 0:
+            pros.append(f"内部人 6m 净买入 ${mn:.0f}M（管理层看好信号）")
+        else:
+            cons.append(f"内部人 6m 净卖出 ${-mn:.0f}M（注意管理层抛售）")
+
+    return pros, cons
+
+
+def _build_hk_reasons(entry: dict) -> tuple[list[str], list[str]]:
+    """港股理由 — 直接读 hk_picks entry（f_score / momentum_12_1 / reversal_1m）。"""
+    pros: list[str] = []
+    cons: list[str] = []
+
+    fs = entry.get("f_score")
+    if isinstance(fs, (int, float)):
+        if fs >= 7:
+            pros.append(f"F-Score {fs}/9 基本面优（akshare 港股年报）")
+        elif fs >= 5:
+            pros.append(f"F-Score {fs}/9 基本面中性")
+        else:
+            cons.append(f"F-Score {fs}/9 基本面偏弱")
+
+    mom = entry.get("momentum_12_1")
+    if isinstance(mom, (int, float)):
+        if mom >= 30:
+            pros.append(f"12-1 月动量 +{mom:.0f}% 强势")
+        elif mom <= -20:
+            cons.append(f"12-1 月动量 {mom:+.0f}% 下行")
+
+    rev = entry.get("reversal_1m")
+    if isinstance(rev, (int, float)) and rev <= -10:
+        pros.append(f"近 1 月反转 {rev:+.1f}%（超跌候选）")
+
+    sector = entry.get("sector")
+    if sector and sector not in ("", "未知"):
+        pros.append(f"行业：{sector}")
+
+    for n in (entry.get("notes") or []):
+        if n:
+            cons.append(str(n))
+
+    return pros, cons
+
+
+def _build_a_share_reasons(entry: dict) -> tuple[list[str], list[str]]:
+    """A 股理由 — 读 a_share_picks entry 的子因子（f_score_norm/lhb/north/pead/policy）+ 风险标志。"""
+    pros: list[str] = []
+    cons: list[str] = []
+
+    f_norm = entry.get("f_score_norm")
+    if isinstance(f_norm, (int, float)):
+        f_int = round(f_norm * 9)
+        if f_int >= 7:
+            pros.append(f"F-Score {f_int}/9 基本面优")
+        elif f_int >= 5:
+            pros.append(f"F-Score {f_int}/9 基本面中性")
+        else:
+            cons.append(f"F-Score {f_int}/9 基本面偏弱")
+
+    lhb = entry.get("lhb_score")
+    if isinstance(lhb, (int, float)):
+        if lhb >= 0.7:
+            pros.append(f"龙虎榜机构净买入（分 {lhb:.2f}）")
+        elif lhb <= 0.3:
+            cons.append(f"龙虎榜机构净卖出（分 {lhb:.2f}）")
+
+    nv = entry.get("north_score")
+    if isinstance(nv, (int, float)):
+        if nv >= 0.7:
+            pros.append(f"北向资金加仓（分 {nv:.2f}）")
+        elif nv <= 0.3:
+            cons.append(f"北向资金减持（分 {nv:.2f}）")
+
+    pead = entry.get("pead_score")
+    if isinstance(pead, (int, float)) and pead >= 0.7:
+        pros.append(f"PEAD 盈利加速信号（分 {pead:.2f}）")
+
+    pb = entry.get("policy_boost")
+    if isinstance(pb, (int, float)) and pb > 0.05:
+        pros.append(f"政策受益主题 +{pb*100:.0f}%")
+
+    er = entry.get("event_risk_score")
+    if isinstance(er, (int, float)) and er < 0.7:
+        cons.append(f"事件风险分 {er:.2f}（earnings/政策密集期）")
+
+    for rf in (entry.get("risk_flags") or []):
+        if rf:
+            cons.append(f"红旗：{rf}")
+    for br in (entry.get("block_reasons") or []):
+        if br:
+            cons.append(f"约束器命中：{br}")
+
+    return pros, cons
+
+
+def _format_reason_lines(pros: list[str], cons: list[str],
+                        max_pros: int = 2, max_cons: int = 1) -> list[str]:
+    """把 pros/cons 拼成 1-3 行缩进文本。默认 top-2 ✅ + top-1 ⚠️。"""
+    lines: list[str] = []
+    for p in pros[:max_pros]:
+        lines.append(f"  ✅ {p}")
+    for c in cons[:max_cons]:
+        lines.append(f"  ⚠️ {c}")
+    return lines
+
+
+def _humanize_picks(plan: list[dict], a_share: bool, history: dict | None = None,
+                    factor_scores: dict | None = None) -> list[str]:
+    """把 plan_v5 entry 排成一句话/只 + 推荐理由行（扁平 list，每只股 1-4 行）。"""
+    factors_map, signals_map = _factor_scores_index(factor_scores)
     out = []
     for entry in plan:
         ticker = entry.get("ticker", "?")
@@ -369,36 +544,92 @@ def _humanize_picks(plan: list[dict], a_share: bool, history: dict | None = None
         out.append(
             f"• **{ticker}** {weight*100:.1f}% · F-Score {f_score} · 综合 {z:+.2f}{spark_str}"
         )
+        if not a_share:
+            pros, cons = _build_us_reasons(ticker, factors_map, signals_map)
+            out.extend(_format_reason_lines(pros, cons))
     return out
 
 
-def section_picks(plan: dict | None, a_share_picks: dict | None, history: dict | None = None) -> str:
-    """美股从 plan_v5 取，A 股优先从 a_share_picks 取（盘后），否则也从 plan_v5。"""
-    if not plan:
+def _humanize_picks_grouped(plan: list[dict], a_share: bool, history: dict | None = None,
+                            factor_scores: dict | None = None) -> list[str]:
+    """每只股聚合成 1 个多行 markdown 块（含 ticker 主行 + 缩进 reasons）。供飞书卡片 2 列拆分用。"""
+    factors_map, signals_map = _factor_scores_index(factor_scores)
+    out = []
+    for entry in plan:
+        ticker = entry.get("ticker", "?")
+        if a_share and not _is_a_share(ticker):
+            continue
+        if not a_share and _is_a_share(ticker):
+            continue
+        weight = entry.get("v5_weight") or entry.get("weight") or 0
+        f_score = entry.get("f_score", "?")
+        z = entry.get("composite_z", entry.get("composite", 0))
+        spark, pct60 = _ticker_sparkline(history or {}, ticker)
+        spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
+        head = f"• **{ticker}** {weight*100:.1f}% · F-Score {f_score} · 综合 {z:+.2f}{spark_str}"
+        if not a_share:
+            pros, cons = _build_us_reasons(ticker, factors_map, signals_map)
+            reason_lines = _format_reason_lines(pros, cons)
+            out.append("\n".join([head] + reason_lines) if reason_lines else head)
+        else:
+            out.append(head)
+    return out
+
+
+def section_picks(plan: dict | None, a_share_picks: dict | None,
+                  hk_picks: dict | None = None, history: dict | None = None,
+                  factor_scores: dict | None = None) -> str:
+    """三线独立展示：🇺🇸 美股 (plan_v5) / 🇭🇰 港股 (hk_picks) / 🇨🇳 A 股 (a_share_picks)。
+
+    每条线独立数据源、独立因子、独立优选 — 不混排。
+    每只股下追加 top-2 ✅ 推荐理由 + top-1 ⚠️ 风险点（来自子因子分解）。
+    """
+    if not plan and not hk_picks and not a_share_picks:
         return (
-            "#### 2. 建议组合\n"
-            "⚠️ 未找到 plan_a_v5 — 先跑 `python3 build_plan_a_v5.py`。\n"
+            "#### 2. AI 优选（三线独立）\n"
+            "⚠️ 美股/港股/A 股三套数据源全部缺失 — 检查 daily_refresh.sh 是否跑完。\n"
         )
 
-    plan_v5 = plan.get("plan_v5") or []
-    pm = plan.get("portfolio_metrics") or {}
-
-    head = "#### 2. 建议组合"
-    if pm:
-        head += (
-            f"  ·  Sharpe {pm.get('annual_sharpe', '?')} · "
-            f"年化 {pm.get('annual_return_pct', '?')}% · "
-            f"波动 {pm.get('annual_vol_pct', '?')}%"
-        )
+    head = "#### 2. AI 优选（三线独立 · 每只股附 ✅ 推荐理由 + ⚠️ 风险点）"
+    if plan:
+        pm = plan.get("portfolio_metrics") or {}
+        if pm:
+            head += (
+                f"  ·  美股组合 Sharpe {pm.get('annual_sharpe', '?')} · "
+                f"年化 {pm.get('annual_return_pct', '?')}% · "
+                f"波动 {pm.get('annual_vol_pct', '?')}%"
+            )
     lines = [head]
 
-    # 美股
-    us_lines = _humanize_picks(plan_v5, a_share=False, history=history)
-    if us_lines:
-        lines.append(f"**🇺🇸 美股 ({len(us_lines)} 只)**")
-        lines.extend(us_lines)
+    # 🇺🇸 美股（plan_v5 · Markowitz Max Sharpe）
+    if plan:
+        plan_v5 = plan.get("plan_v5") or []
+        us_lines = _humanize_picks(plan_v5, a_share=False, history=history, factor_scores=factor_scores)
+        if us_lines:
+            lines.append(f"**🇺🇸 美股 ({sum(1 for l in us_lines if l.startswith('•'))} 只 · 4 因子 + Markowitz 客观仓位)**")
+            lines.extend(us_lines)
+        else:
+            lines.append("**🇺🇸 美股** — _plan_v5 为空_")
 
-    # A 股：盘后有 a_share_picks 就用，否则用 plan_v5 里的 A 股
+    # 🇭🇰 港股（hk_picks · 3 因子 akshare 财报）
+    if hk_picks and hk_picks.get("selected"):
+        sel = hk_picks["selected"][:10]
+        lines.append(f"**🇭🇰 港股 ({len(sel)} 只 · 3 因子 + akshare 港股年报)**")
+        for entry in sel:
+            ticker = entry.get("code", "?")
+            name = entry.get("name", "")
+            score = entry.get("composite", 0)
+            f_score = entry.get("f_score")
+            f_str = f" · F={f_score}" if f_score is not None else ""
+            spark, pct60 = _ticker_sparkline(history or {}, ticker)
+            spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
+            lines.append(f"• **{ticker}** {name} · 综合 {score:.3f}{f_str}{spark_str}")
+            pros, cons = _build_hk_reasons(entry)
+            lines.extend(_format_reason_lines(pros, cons))
+    else:
+        lines.append("**🇭🇰 港股** — _hk_picks.json 缺失，跑 `python3 -m scripts.pipeline.hk_picks`_")
+
+    # 🇨🇳 A 股（a_share_picks · 6 因子）
     if a_share_picks and a_share_picks.get("selected"):
         sel = a_share_picks["selected"][:10]
         lines.append(f"**🇨🇳 A 股 ({len(sel)} 只 · 6 因子 + 盘后龙虎榜+北向)**")
@@ -409,14 +640,87 @@ def section_picks(plan: dict | None, a_share_picks: dict | None, history: dict |
             spark, pct60 = _ticker_sparkline(history or {}, ticker)
             spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
             lines.append(f"• **{ticker}** {name} · 综合 {score:.3f}{spark_str}")
-    else:
+            pros, cons = _build_a_share_reasons(entry)
+            lines.extend(_format_reason_lines(pros, cons))
+    elif plan:
+        # fallback: 盘前 a_share_picks 没出，用 plan_v5 里残留的 A 股代号兜底
+        plan_v5 = plan.get("plan_v5") or []
         a_lines = _humanize_picks(plan_v5, a_share=True, history=history)
         if a_lines:
-            lines.append(f"**🇨🇳 A 股 ({len(a_lines)} 只 · 盘前数据，16:30 后更准)**")
+            lines.append(f"**🇨🇳 A 股 ({sum(1 for l in a_lines if l.startswith('•'))} 只 · 盘前数据，16:30 后更准)**")
             lines.extend(a_lines)
+        else:
+            lines.append("**🇨🇳 A 股** — _a_share_picks.json 缺失（盘后才跑）_")
+    else:
+        lines.append("**🇨🇳 A 股** — _a_share_picks.json 缺失（盘后才跑）_")
+
     # 趋势图例（让新人能看懂每只股后面那个 emoji 是什么意思）
     lines.append("")
     lines.append(TREND_LEGEND_SHORT)
+    return "\n".join(lines) + "\n"
+
+
+# ────────────────────────────────────────────────────────
+# Section 2.5: A 股被拒清单（top 20 综合分高但被约束器拦下）
+# ────────────────────────────────────────────────────────
+
+def _rejected_a_share_entries(a_share_picks: dict | None, top_n: int = 20) -> list[dict]:
+    """从 a_share_picks 的 all_entries 里挑被拒清单。
+
+    定义"被拒"：在 entries 池里但不在 selected 中，按 composite 取前 top_n。
+    覆盖三类：硬拦截（tradable=False，含 block_reasons）/ 软拒（recommended=False，分数不够）/
+    sector cap 跳过的（notes 里有 sector_cap）。
+    """
+    if not a_share_picks:
+        return []
+    all_e = a_share_picks.get("all_entries") or []
+    sel = a_share_picks.get("selected") or []
+    sel_codes = {e.get("code") for e in sel}
+    rest = [e for e in all_e if e.get("code") not in sel_codes]
+    rest.sort(key=lambda e: float(e.get("composite") or 0), reverse=True)
+    return rest[:top_n]
+
+
+def section_rejected_a_share(a_share_picks: dict | None, top_n: int = 20) -> str:
+    """A 股被拒 top N — 让用户审计"约束器是不是过严了"。"""
+    rejected = _rejected_a_share_entries(a_share_picks, top_n=top_n)
+    if not rejected:
+        return ""
+
+    lines = [
+        f"#### 2.5 A 股候选但被拒 · top {len(rejected)}（综合分高但没进推荐）",
+        "_审计用：如果好票频繁出现在这里，可能约束器过严；可对照原因调阈值_",
+        "",
+    ]
+    for e in rejected:
+        code = e.get("code", "?")
+        name = e.get("name", "")
+        comp = float(e.get("composite") or 0)
+        industry = e.get("industry", "")
+        ind_str = f" [{industry}]" if industry else ""
+        lines.append(f"• **{code}** {name}{ind_str} · 综合 {comp:.3f}")
+        pros, cons = _build_a_share_reasons(e)
+        # 拒绝列表反过来：风险/拒绝原因为主，1 条优点作上下文
+        reject_lines: list[str] = []
+        # 优先展示 block_reasons / risk_flags（最关键的拒绝原因）
+        for br in (e.get("block_reasons") or [])[:2]:
+            if br:
+                reject_lines.append(f"  ❌ 约束器命中：{br}")
+        for rf in (e.get("risk_flags") or [])[:1]:
+            if rf:
+                reject_lines.append(f"  ⚠️ 红旗：{rf}")
+        # 如果没硬拦截，从 cons 里挑（即软拒）
+        if not reject_lines:
+            for c in cons[:2]:
+                reject_lines.append(f"  ⚠️ {c}")
+        # 上下文：附 1 条优点（不然全是 ❌ 看不出为什么综合分能挤进 top）
+        if pros:
+            reject_lines.append(f"  ✅ {pros[0]}（综合分高的原因）")
+        # 兜底
+        if not reject_lines:
+            tradable = e.get("tradable", True)
+            reject_lines.append(f"  ❌ {'不可买' if not tradable else '分数未达 cutoff'}")
+        lines.extend(reject_lines)
     return "\n".join(lines) + "\n"
 
 
@@ -425,6 +729,52 @@ def section_picks(plan: dict | None, a_share_picks: dict | None, history: dict |
 #   只在周一显示,其他 6 天为空
 #   回答用户"AI 给的评级/推荐到底准不准"
 # ────────────────────────────────────────────────────────
+
+def section_walk_forward_oos(today: date | None = None) -> str:
+    """周一专属 — 展示最新一次 walk_forward_backtest 的 OOS 校验结果。
+
+    daily_refresh.sh 25b 段每周一跑 walk_forward_backtest 落地 JSON 到 data/。
+    Bailey-Lopez de Prado (2014) JPM：walk-forward 是减少 backtest overfit 的金标准。
+    """
+    today = today or date.today()
+    if today.weekday() != 0:
+        return ""
+    import glob as _glob
+    candidates = sorted(_glob.glob(str(REPO / "data" / "walk_forward_*.json")))
+    if not candidates:
+        return ""
+    latest = Path(candidates[-1])
+    data = _load_json(latest)
+    if not isinstance(data, dict):
+        return ""
+    summary = data.get("summary") or {}
+    months = data.get("months") or []
+    if not months:
+        return ""
+
+    lines = ["#### 🔬 12 月 OOS 校验（周一专属 · walk-forward）"]
+    lines.append(f"窗口 {data.get('start_month')} ~ {data.get('end_month')} · "
+                 f"benchmark {data.get('benchmark', 'SPY')} · top-k {data.get('top_k', 5)}")
+    sh = summary.get("sharpe_annual")
+    ex = summary.get("total_excess_return_pct")
+    mdd = summary.get("max_drawdown_pct")
+    n = summary.get("n_months")
+    lines.append(f"")
+    lines.append(f"📊 **年化 Sharpe {sh:+.2f}** · 总超额 {ex:+.1f}% · 最大回撤 {mdd:.1f}% · {n} 月样本")
+    lines.append(f"")
+    lines.append("📅 最近 4 月明细：")
+    for m in months[-4:]:
+        ret = m.get("monthly_return", 0)
+        bench = m.get("benchmark_return", 0)
+        excess = m.get("excess_return", 0)
+        picks = ",".join(m.get("selected", [])[:4])
+        lines.append(f"• {m.get('month')}: 组合 {ret:+.1f}% / 基准 {bench:+.1f}% / "
+                     f"超额 {excess:+.1f}% · {picks}")
+    lines.append("")
+    lines.append("📖 学术依据：Bailey & Lopez de Prado (2014) JPM — walk-forward "
+                 "是减少 backtest overfit 的金标准；单次回测 Sharpe 严重高估")
+    return "\n".join(lines) + "\n"
+
 
 def section_weekly_hitrate(today: date | None = None) -> str:
     """只在周一(weekday=0)输出；汇总 reviews 表近 7 天 + discovery_tracking 近 7 天。"""
@@ -681,6 +1031,7 @@ def build_brief(share_mode: bool = False) -> str:
     factor_scores = _load_json(REPO / "data" / "latest" / "factor_scores_today.json")
     events = _load_json(REPO / "data" / "event_calendar.json")
     a_share_picks = _load_json(REPO / "data" / "a_share_picks.json")
+    hk_picks = _load_json(REPO / "data" / "latest" / "hk_picks.json")
     defense = _latest_defense_snapshot()
     history = _load_history()
 
@@ -697,13 +1048,22 @@ def build_brief(share_mode: bool = False) -> str:
     if stoploss_warn:
         parts.extend([stoploss_warn, "\n"])
     parts.extend([
-        section_picks(plan, a_share_picks, history=history),
+        section_picks(plan, a_share_picks, hk_picks=hk_picks, history=history,
+                      factor_scores=factor_scores),
         "\n",
     ])
+    # A 股被拒 top 20 — 审计约束器是否过严（无 a_share_picks 时整段省略）
+    rejected_md = section_rejected_a_share(a_share_picks)
+    if rejected_md:
+        parts.extend([rejected_md, "\n"])
     # 周一专属:命中率回顾(评级 + AI 推荐准确度)
     hitrate = section_weekly_hitrate()
     if hitrate:
         parts.extend([hitrate, "\n"])
+    # 周一专属:walk-forward OOS 校验展示
+    wf_oos = section_walk_forward_oos()
+    if wf_oos:
+        parts.extend([wf_oos, "\n"])
     parts.extend([
         section_ai_alpha(risk_metrics),
         "\n",
@@ -863,6 +1223,7 @@ def _build_card_payload() -> dict:
     events = _load_json(REPO / "data" / "event_calendar.json")
     policy_events = _load_json(REPO / "data" / "policy_events.json")
     a_share_picks = _load_json(REPO / "data" / "a_share_picks.json")
+    hk_picks = _load_json(REPO / "data" / "latest" / "hk_picks.json")
     defense = _latest_defense_snapshot()
     history = _load_history()
 
@@ -935,25 +1296,53 @@ def _build_card_payload() -> dict:
     })
     blocks.append({"tag": "hr"})
 
-    # ─── Section 2: 建议组合（白底）───
-    if plan:
+    # ─── Section 2: AI 优选（三线独立 · 白底）───
+    if plan or hk_picks or a_share_picks:
         section2: list[dict] = [
-            {"tag": "div", "text": {"tag": "lark_md", "content": "**📦 今天的建议组合**"}}
+            {"tag": "div", "text": {"tag": "lark_md", "content":
+                "**📦 AI 优选（三线独立）**\n"
+                "_🇺🇸 美股 4 因子+Markowitz · 🇭🇰 港股 3 因子+akshare 年报 · 🇨🇳 A 股 6 因子+龙虎榜+北向_"}}
         ]
-        pm = plan.get("portfolio_metrics") or {}
-        if pm:
-            section2.append(_kpi_row([
-                ("Sharpe", str(pm.get("annual_sharpe", "?"))),
-                ("年化", f"{pm.get('annual_return_pct', '?')}%"),
-                ("波动", f"{pm.get('annual_vol_pct', '?')}%"),
-            ]))
-        plan_v5 = plan.get("plan_v5") or []
-        us_lines = _humanize_picks(plan_v5, a_share=False, history=history)
+        if plan:
+            pm = plan.get("portfolio_metrics") or {}
+            if pm:
+                section2.append(_kpi_row([
+                    ("美股 Sharpe", str(pm.get("annual_sharpe", "?"))),
+                    ("年化", f"{pm.get('annual_return_pct', '?')}%"),
+                    ("波动", f"{pm.get('annual_vol_pct', '?')}%"),
+                ]))
+
+        # 🇺🇸 美股
+        plan_v5 = (plan or {}).get("plan_v5") or []
+        us_lines = _humanize_picks(plan_v5, a_share=False, history=history) if plan else []
         if us_lines:
             section2.append({"tag": "div", "text": {"tag": "lark_md",
                 "content": f"**🇺🇸 美股 ({len(us_lines)} 只)**"}})
             half = (len(us_lines) + 1) // 2
             section2.append(_two_col_lines(us_lines[:half], us_lines[half:]))
+
+        # 🇭🇰 港股
+        if hk_picks and hk_picks.get("selected"):
+            hk_sel = hk_picks["selected"][:10]
+            hk_lines = []
+            for e in hk_sel:
+                t = e.get("code", "?")
+                spark, pct60 = _ticker_sparkline(history or {}, t)
+                spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
+                f_score = e.get("f_score")
+                f_str = f" · F={f_score}" if f_score is not None else ""
+                hk_lines.append(
+                    f"• **{t}** {e.get('name','')} · {e.get('composite', 0):.2f}{f_str}{spark_str}"
+                )
+            section2.append({"tag": "div", "text": {"tag": "lark_md",
+                "content": f"**🇭🇰 港股 ({len(hk_sel)} 只)**"}})
+            if len(hk_lines) >= 4:
+                half_h = (len(hk_lines) + 1) // 2
+                section2.append(_two_col_lines(hk_lines[:half_h], hk_lines[half_h:]))
+            else:
+                section2.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(hk_lines)}})
+
+        # 🇨🇳 A 股
         if a_share_picks and a_share_picks.get("selected"):
             sel = a_share_picks["selected"][:10]
             a_lines = []
@@ -965,13 +1354,13 @@ def _build_card_payload() -> dict:
                     f"• **{t}** {e.get('name','')} · {e.get('composite', 0):.2f}{spark_str}"
                 )
             section2.append({"tag": "div", "text": {"tag": "lark_md",
-                "content": f"**🇨🇳 A 股 ({len(sel)} 只 · 6 因子 + 龙虎榜+北向)**"}})
+                "content": f"**🇨🇳 A 股 ({len(sel)} 只)**"}})
             if len(a_lines) >= 4:
                 half_a = (len(a_lines) + 1) // 2
                 section2.append(_two_col_lines(a_lines[:half_a], a_lines[half_a:]))
             else:
                 section2.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(a_lines)}})
-        else:
+        elif plan:
             a_lines_pre = _humanize_picks(plan_v5, a_share=True, history=history)
             if a_lines_pre:
                 section2.append({"tag": "div", "text": {"tag": "lark_md",

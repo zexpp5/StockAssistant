@@ -215,6 +215,55 @@ def main():
                 "composite_z": p.get("composite_z"),
             })
 
+    # ── 约束 4.5: A 股内部行业上限 — P0-4b (2026-05-12) ──
+    # 单行业 ≤ A 股部分的 40% 或整组合 25%（取较紧的）；溢出转现金
+    # industry 映射从 watchlist 反查（A 股 watchlist 自带 industry 字段）
+    try:
+        sys.path.insert(0, str(REPO / "scripts" / "lib"))
+        from stock_db import fetch_all_watchlist  # type: ignore
+        wl_by_code = {r["code"]: r for r in fetch_all_watchlist()}
+        industries_map_a = {
+            a["ticker"]: (wl_by_code.get(_strip_code(a["ticker"]), {}).get("industry")
+                          or "未分类")
+            for a in adjusted
+        }
+    except Exception as e:
+        logger.warning("watchlist 拉取失败，跳过 A 股行业上限: %s", e)
+        industries_map_a = {}
+
+    a_industry_summary: dict = {}
+    if industries_map_a:
+        a_share_total = sum(a["v5_weight"] for a in adjusted)
+        # 单行业上限 = min(A 股部分 40%, 整组合 25%)，避免 A 股仓位本身就小时 cap 空转
+        industry_cap_abs = min(0.40 * a_share_total, 0.25) if a_share_total > 0 else 0.25
+        new_a_only = {a["ticker"]: a["v5_weight"] for a in adjusted}
+        capped_a, a_industry_summary = pc.cap_by_industry(
+            new_a_only, industries_map_a, max_industry_pct=industry_cap_abs,
+        )
+        # 把 cap 后权重写回 adjusted
+        for a in adjusted:
+            new_w = capped_a.get(a["ticker"])
+            if new_w is not None and abs(new_w - a["v5_weight"]) > 1e-9:
+                spillover += a["v5_weight"] - new_w
+                a["v5_weight"] = new_w
+                a["constraint_reasons"].append(
+                    f"行业 cap (单行业 ≤ {industry_cap_abs:.1%})"
+                )
+        triggered_industries = [
+            ind for ind, s in a_industry_summary.items()
+            if s["original"] > s["capped"] + 1e-6
+        ]
+        if triggered_industries:
+            print(f"\n  ⚠️ A 股行业上限触发（≤ {industry_cap_abs:.1%}）：")
+            for ind in triggered_industries:
+                s = a_industry_summary[ind]
+                print(f"    · {ind}: {s['original']:.1%} → {s['capped']:.1%}"
+                      f"（溢出 {s['overflow']:.1%}）")
+        else:
+            top_industry_pct = max((s["original"] for s in a_industry_summary.values()),
+                                   default=0.0)
+            print(f"\n  🟢 A 股行业上限检查通过（最高 {top_industry_pct:.1%}）")
+
     # ── 约束 5: A 股调仓交易成本扣减（印花税 + 佣金 + 过户费 + 冲击）──
     # 用 portfolio_constraints.apply_transaction_cost，参数走 A 股专属常量
     prev_a_weights = {p["ticker"]: p.get("current_weight", 0.0) for p in a_share_entries}
@@ -250,6 +299,7 @@ def main():
             "impact_bps_per_pct_adv": A_SHARE_IMPACT_BPS_PER_PCT_ADV,
             "notional_yuan": A_SHARE_NOTIONAL_YUAN,
         },
+        "a_share_industry_summary": a_industry_summary,
     }
 
     print(f"\n  汇总：")

@@ -184,7 +184,8 @@ def run(capital: float = 500_000,
         skip_neutralize: bool = False,
         use_legacy_mc: bool = False,
         max_corr: float = 0.7,
-        kelly_fraction: float = 0.5) -> dict:
+        kelly_fraction: float = 0.5,
+        vol_target_annual: float | None = None) -> dict:
     """完整 v6 流水线。返回结果 dict。"""
     print("=" * 92)
     print(f"  📊 方案 A v6（中性化 + Markowitz + ADV 约束 + 成本扣减）")
@@ -341,6 +342,33 @@ def run(capital: float = 500_000,
     print(f"  组合年化收益   = {annual_ret*100:+.1f}%")
     print(f"  组合年化波动   = {annual_vol*100:.1f}%")
 
+    # ────── 5vol/6. 波动率目标（Moreira-Muir 2017 JF · 可选）──────
+    # 学术依据：Moreira-Muir 2017 JF "Volatility-Managed Portfolios" — 按目标
+    # 年化波动率反向缩放仓位；Cederburg-O'Doherty-Wang-Yan 2020 JFE 复现挑战
+    # 指出某些样本期效应消失，故默认关闭，需用户显式开启。
+    vol_scale = 1.0
+    vol_target_info: dict | None = None
+    if vol_target_annual is not None and vol_target_annual > 0 and annual_vol > 0:
+        raw_scale = vol_target_annual / annual_vol
+        vol_scale = min(1.0, raw_scale)  # 不加杠杆（cap 在 1.0）
+        if vol_scale < 0.999:
+            print(f"\n[5vol/6] ⚠️ 波动率目标触发（实测 {annual_vol*100:.1f}% > 目标 "
+                  f"{vol_target_annual*100:.1f}%）：组合缩放 ×{vol_scale:.2f}")
+            target_w = {tk: w * vol_scale for tk, w in target_w.items()}
+            # 缩放后 annual_vol / sharpe / return 需重算（线性缩放后 sharpe 不变）
+            annual_vol = annual_vol * vol_scale
+            annual_ret = annual_ret * vol_scale + 0.045 * (1 - vol_scale)  # cash 部分按 rf
+            annual_sharpe = (annual_ret - 0.045) / annual_vol if annual_vol > 0 else 0.0
+        else:
+            print(f"\n[5vol/6] 🟢 波动率目标检查通过（实测 {annual_vol*100:.1f}% ≤ 目标 "
+                  f"{vol_target_annual*100:.1f}%）")
+        vol_target_info = {
+            "target_annual": vol_target_annual,
+            "raw_scale": round(raw_scale, 4),
+            "applied_scale": round(vol_scale, 4),
+            "annual_vol_after": round(annual_vol, 4),
+        }
+
     # ────── 5pre/6. 半 Kelly 单股上限（破产保护 / Thorp 2006）──────
     # 个股层 cap，先于行业/ADV 组合层约束。kelly_fraction=0 时禁用。
     kelly_clipped: list[str] = []
@@ -427,9 +455,11 @@ def run(capital: float = 500_000,
             "neutralize": not skip_neutralize,
             "max_corr": max_corr,
             "kelly_fraction": kelly_fraction,
+            "vol_target_annual": vol_target_annual,
             "use_legacy_mc": use_legacy_mc,
         },
         "kelly_clipped": kelly_clipped,
+        "vol_target": vol_target_info,
         "portfolio_metrics": {
             "annual_sharpe": round(annual_sharpe, 2),
             "annual_return_pct": round(annual_ret * 100, 2),
@@ -464,6 +494,8 @@ def main() -> int:
                    help="选股层 pairwise 相关性上限（贪心剪枝阈值）")
     p.add_argument("--kelly-fraction", type=float, default=0.5,
                    help="半 Kelly 系数（Thorp 2006，默认 0.5；传 0 禁用单股 cap）")
+    p.add_argument("--vol-target", type=float, default=None,
+                   help="目标年化波动率（Moreira-Muir 2017，如 0.20 = 20%%；默认关闭）")
     args = p.parse_args()
     r = run(capital=args.capital, top_n=args.top_n,
             max_weight=args.max_weight, min_weight=args.min_weight,
@@ -471,7 +503,8 @@ def main() -> int:
             skip_neutralize=args.no_neutralize,
             use_legacy_mc=args.legacy_mc,
             max_corr=args.max_corr,
-            kelly_fraction=args.kelly_fraction)
+            kelly_fraction=args.kelly_fraction,
+            vol_target_annual=args.vol_target)
     return 0 if "error" not in r else 1
 
 

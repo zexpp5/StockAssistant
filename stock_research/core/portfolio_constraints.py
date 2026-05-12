@@ -153,7 +153,7 @@ def volatility_proxy_atr(closes: list[float], lookback: int = 14) -> float | Non
 
     真 ATR = EMA(True Range, 14)，需要 high/low；本函数仅用 close 做近似。
     morning_brief 的 history_data.json 仅含 close，故用此 proxy；
-    后续若 history 补 high/low 可升级到真 ATR。
+    后续若 history 补 high/low 可升级到真 ATR（见 true_atr 函数）。
     """
     if not closes or len(closes) < lookback + 1:
         return None
@@ -166,27 +166,69 @@ def volatility_proxy_atr(closes: list[float], lookback: int = 14) -> float | Non
     return sum(abs_returns) / len(abs_returns)
 
 
+def true_atr(highs: list[float] | None, lows: list[float] | None,
+             closes: list[float], period: int = 14) -> float | None:
+    """真 ATR（Wilder 1978 smoothing），需要 high / low / close 三序列同长度。
+
+    True Range = max(high - low, |high - prev_close|, |low - prev_close|)
+    ATR(t) = (ATR(t-1) × (n-1) + TR(t)) / n   ← Wilder 平滑
+    返回 NATR fraction (ATR / last_close)，跨标的可比。
+
+    缺 high/low 时返回 None；上游应 fallback 到 volatility_proxy_atr。
+    """
+    if not highs or not lows or not closes:
+        return None
+    n = min(len(highs), len(lows), len(closes))
+    if n < period + 1:
+        return None
+    h, l, c = highs[-n:], lows[-n:], closes[-n:]
+    trs: list[float] = []
+    for i in range(1, n):
+        if h[i] is None or l[i] is None or c[i - 1] is None:
+            continue
+        trs.append(max(h[i] - l[i], abs(h[i] - c[i - 1]), abs(l[i] - c[i - 1])))
+    if len(trs) < period:
+        return None
+    # Wilder smoothing：前 period 个 TR 做 SMA 做种子，之后递归
+    atr = sum(trs[:period]) / period
+    for tr in trs[period:]:
+        atr = (atr * (period - 1) + tr) / period
+    last_close = c[-1]
+    if not last_close or last_close <= 0:
+        return None
+    return atr / last_close
+
+
 def volatility_adaptive_stop_pct(closes: list[float],
+                                 highs: list[float] | None = None,
+                                 lows: list[float] | None = None,
                                  multiplier: float = 2.5,
                                  lookback: int = 14,
                                  holding_days: int = 21,
                                  min_stop: float = 0.07,
                                  max_stop: float = 0.25,
-                                 fallback: float = 0.15) -> float:
+                                 fallback: float = 0.15) -> tuple[float, str]:
     """按个股波动率算动态止损百分比，替代跨标的不可比的固定 -15%。
 
-    模型：proxy_atr × multiplier × sqrt(holding_days)
-    - 高波动股 (proxy=4%) → -23%（避免日内噪声震出）
-    - 低波动股 (proxy=1%) → -11%（小幅破位即出）
-    - cap 在 [min_stop, max_stop]，缺数据时 fallback 到固定 -15%
+    优先级：true_atr（含 high/low）→ volatility_proxy_atr（仅 close）→ fallback。
 
+    模型：atr_fraction × multiplier × sqrt(holding_days)
+    - 高波动股 (atr=4%) → -23%（避免日内噪声震出）
+    - 低波动股 (atr=1%) → -11%（小幅破位即出）
+    - cap 在 [min_stop, max_stop]
+
+    返回 (stop_pct, source)：source 标注用了 true_atr / proxy_atr / fallback
     holding_days=21 假设月度调仓，stop_pct 反映"持有一个月可能的累积波动"。
     """
-    proxy = volatility_proxy_atr(closes, lookback=lookback)
-    if proxy is None:
-        return fallback
-    scaled = proxy * multiplier * (holding_days ** 0.5)
-    return max(min_stop, min(max_stop, scaled))
+    atr_fraction = true_atr(highs, lows, closes, period=lookback)
+    source = "true_atr"
+    if atr_fraction is None:
+        atr_fraction = volatility_proxy_atr(closes, lookback=lookback)
+        source = "proxy_atr"
+    if atr_fraction is None:
+        return fallback, "fallback"
+    scaled = atr_fraction * multiplier * (holding_days ** 0.5)
+    return max(min_stop, min(max_stop, scaled)), source
 
 
 # ─────────── Kelly 仓位上限（破产保护）───────────
