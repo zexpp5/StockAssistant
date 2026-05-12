@@ -61,6 +61,8 @@ class MonthResult:
     n_kelly_capped: int = 0              # 被 kelly_cap 压权的股票数
     n_atr_stopped: int = 0               # 月内触发 ATR 止损的股票数
     deployed_weight: float = 1.0         # 实际投入仓位（< 1 = 有现金）
+    bab_active: bool = False             # 当月 BAB regime 是否触发（SPY<200MA）
+    n_bab_capped: int = 0                # BAB 压权的高 Beta 股数
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -209,6 +211,9 @@ def walk_forward(
     enable_kelly_cap: bool = False,       # D-2: 半 Kelly 单股 cap
     kelly_fraction: float = 0.5,
     max_weight: float = 0.15,
+    enable_bab_defense: bool = False,     # 三审 P0: BAB 防御模式消融
+    bab_beta_cap: float = 1.0,            # Beta > cap 视为高 Beta
+    bab_factor: float = 0.5,              # 防御期高 Beta 仓位 × factor
     rf_annual: float = 0.045,             # 现金部分按 rf 计息
 ) -> WalkForwardResult:
     """主入口。
@@ -285,6 +290,37 @@ def walk_forward(
                     weights[tk] = cap_val
                     n_kelly_capped += 1
 
+        # 3a+. BAB 防御模式（Frazzini-Pedersen 2014 JFE）
+        # 触发条件：当月起 SPY < 200MA → 切到高 Beta 减仓 / 低 Beta 偏好
+        bab_active = False
+        n_bab_capped = 0
+        if enable_bab_defense and bench_prices is not None:
+            try:
+                spy_up_to = bench_prices.loc[:month_start]
+                if len(spy_up_to) >= 200:
+                    spy_ma200 = float(spy_up_to.tail(200).mean())
+                    spy_now = float(spy_up_to.iloc[-1])
+                    bab_active = spy_now < spy_ma200
+                if bab_active:
+                    # 算选中股票的 rolling 252d Beta vs SPY (cutoff at month_start)
+                    spy_ret = bench_prices.loc[:month_start].pct_change().dropna().tail(252)
+                    spy_var = float(spy_ret.var()) if len(spy_ret) > 50 else 0.0
+                    if spy_var > 0:
+                        for tk in selected:
+                            if tk not in universe_prices.columns:
+                                continue
+                            tk_ret = universe_prices[tk].loc[:month_start].pct_change().dropna().tail(252)
+                            aligned = tk_ret.align(spy_ret, join="inner")
+                            if len(aligned[0]) < 50:
+                                continue
+                            cov = float(aligned[0].cov(aligned[1]))
+                            beta = cov / spy_var if spy_var > 0 else 1.0
+                            if beta > bab_beta_cap:
+                                weights[tk] = weights[tk] * bab_factor
+                                n_bab_capped += 1
+            except Exception as e:
+                logger.debug("BAB 防御模拟失败 %s: %s", month_label, e)
+
         # 3b. ATR 止损（简化：用持仓期内最低 close vs 月初 entry）
         n_atr_stopped = 0
         if enable_atr_stop:
@@ -327,6 +363,8 @@ def walk_forward(
             n_kelly_capped=n_kelly_capped,
             n_atr_stopped=n_atr_stopped,
             deployed_weight=round(deployed, 4),
+            bab_active=bab_active,
+            n_bab_capped=n_bab_capped,
         ))
 
     return WalkForwardResult(
@@ -383,6 +421,10 @@ def main() -> int:
                         help="D-2 消融：开启半 Kelly 单股 cap")
     parser.add_argument("--kelly-fraction", type=float, default=0.5)
     parser.add_argument("--max-weight", type=float, default=0.15)
+    parser.add_argument("--enable-bab-defense", action="store_true",
+                        help="三审消融：开启 BAB 防御 (SPY<200MA 高 Beta 减仓)")
+    parser.add_argument("--bab-beta-cap", type=float, default=1.0)
+    parser.add_argument("--bab-factor", type=float, default=0.5)
     args = parser.parse_args()
 
     r = walk_forward(
@@ -397,6 +439,9 @@ def main() -> int:
         enable_kelly_cap=args.enable_kelly_cap,
         kelly_fraction=args.kelly_fraction,
         max_weight=args.max_weight,
+        enable_bab_defense=args.enable_bab_defense,
+        bab_beta_cap=args.bab_beta_cap,
+        bab_factor=args.bab_factor,
     )
 
     print(format_report(r))

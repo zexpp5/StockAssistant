@@ -28,9 +28,12 @@
 | **A baseline** | **+672.20%** | 1.77 | -18.56% | — | — |
 | **B +Kelly cap** | +74.18% | **2.10** ⬆ | **-6.38%** ⬆ | **+0.33** ✅ | **+12.18pp** ✅ |
 | **C +ATR stop** | +577.00% | 1.66 ⬇ | -15.63% | **-0.11** ❌ | +2.93pp ✅ |
-| **D 双开** | +62.46% | 1.99 | **-5.28%** ⬆⬆ | +0.22 ⚠️ | **+13.28pp** ✅ |
+| **D Kelly+ATR** | +62.46% | 1.99 | **-5.28%** ⬆⬆ | +0.22 ⚠️ | **+13.28pp** ✅ |
+| **E +BAB defense** | +486.84% | 1.71 ⬇ | -18.82% | **-0.06** ❌ | **-0.26pp** ❌ |
+| **F Kelly+BAB** | +58.35% | **2.19** ⬆⬆ | **-5.42%** ⬆⬆ | +0.42 ✅<sup>*</sup> | +13.14pp ✅ |
 
 ⬆ = 改善 / ⬇ = 恶化
+<sup>*</sup> F vs A 通过；但 F **vs B (Kelly 单开)** Sharpe Δ 仅 +0.09，BAB 边际增益 < +0.3 阈值
 
 ---
 
@@ -60,6 +63,32 @@
 - MDD **从 -18.56% → -6.38%**（深度回撤压缩 66%）
 - 代价：总超额从 +672% → +74%（**现金 62.5% 按 rf 4.5%/年拖累绝对收益**）
 - 这是经典的"防御换风险调整"权衡，**风险调整后 dominant 优于 baseline**
+
+### 1b. BAB 在科技股 universe 上**反向 alpha** ⚠️（三审追加）
+
+实测：BAB 单开 Sharpe 1.71 < baseline 1.77（-0.06）/ MDD 几乎无变化。
+
+原因：
+- 学术 BAB（Frazzini-Pedersen 2014）是 **long-short + 全市场 universe**
+- 我们 long-only + 集中科技股 universe（12 只全是高 β NVDA/AMD/TSM 等）
+- BAB 触发期（SPY < 200MA）把高 β 减半 = **变相大幅减仓**
+- 没有低 β 替代标的 → 被迫现金 → 错过反弹
+
+**结论**：BAB defense 在**当前 universe 不适用**。要让 BAB 真正生效需要：
+1. universe 扩到全市场（含金融 / 公用事业 / 必需消费等低 β 行业）
+2. 或：把 BAB 改造为"在 risk_off 期切换到 KO / JNJ / TLT 等防御 ETF"
+
+→ **拒绝接入主路径**；BAB 模块降级为"工具箱"（[bab_defense.py](../stock_research/core/bab_defense.py) 留作未来 universe 扩张后启用）
+
+### 1c. Kelly + BAB 组合 Sharpe 最高，但 BAB 增量未达门槛
+
+Kelly + BAB (F)：Sharpe 2.19 / MDD -5.42% — 数值上最优。
+
+但严格按门 3：
+- F vs A baseline：Δ +0.42 ✅ 通过
+- **F vs B Kelly 单开：Δ +0.09 ❌ BAB 边际增益不达 +0.3 阈值**
+
+所以 BAB 不是 Kelly 之上的**独立增益**，是 noise。
 
 ### 2. ATR stop 在科技股 universe 上是噪音 ⚠️
 - 这是**今天最重要的发现**
