@@ -52,3 +52,7 @@ daily_refresh.log*
 # 2026-05-11 Phase 5 整理
 .env.bak
 logs/
+
+# Claude / 调度器锁文件（运行时生成）
+.claude/scheduled_tasks.lock
+.claude/*.lock

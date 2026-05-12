@@ -1,4 +1,4 @@
-"""港股每日优选 — 4 因子学术版  ✅ PRODUCTION（港股）
+"""港股每日优选 — 3 因子学术版（south_flow 临时降权至 0）  ✅ PRODUCTION（港股）
 
 **这是当前港股选股的主流水线。** 与 daily_picks_v5（美股）/ a_share_picks（A 股）三线并行。
 
@@ -55,10 +55,16 @@ logger = logging.getLogger(__name__)
 
 
 FACTOR_WEIGHTS = {
-    "f_score":   0.34,   # Piotroski 财务质量（akshare 港股年报）
-    "momentum":  0.30,   # 12-1 月动量
-    "reversal":  0.21,   # 1 月反转
-    "south_flow": 0.15,  # 南向资金（与 A 股北向因子对称，2026-05-12 新增）
+    "f_score":   0.40,   # Piotroski 财务质量（akshare 港股年报）
+    "momentum":  0.35,   # 12-1 月动量
+    "reversal":  0.25,   # 1 月反转
+    # south_flow 临时降到 0 — 五审第五轮发现：聚合信号是 market-level（所有港股
+    # 拿同一 score），个股截面 API stock_hk_ggt_components_em 返回的列不含持股 %，
+    # individual_rank 永远 fallback 0.5 → 因子对横截面 alpha 贡献 = 0。
+    # 修复方向：换 stock_hsgt_hold_stock_em(market='港股通沪')（cols 含"占流通股比"，
+    # 但 121 页 paginated ~5 分钟，需要 daily prefetch cache 才能用）。
+    # 待 cache 方案落地后恢复 0.15。
+    "south_flow": 0.00,
 }
 assert abs(sum(FACTOR_WEIGHTS.values()) - 1.0) < 1e-9
 

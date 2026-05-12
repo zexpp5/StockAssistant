@@ -150,10 +150,11 @@ run_step "8/25 历史回顾" "scripts/pipeline/weekly_review.py"
 
 # v6 学术因子流水线（Piotroski + 12-1 动量 + 1 月反转 + PEAD + 分析师）
 run_step "9/25 v6 学术因子选股（已落 DuckDB picks）" "scripts/pipeline/daily_picks_v5.py"
-# 9b 港股 picks：4 因子 + 南向资金 (south_flow_signals)
-# F-Score + 12-1 动量 + 1 月反转 + 南向资金 (聚合 + 截面持股 %, 权重 0.15)
+# 9b 港股 picks：3 因子学术版（F-Score + 12-1 mom + 1m rev）
+# south_flow 模块已写但权重临时 0（五审发现 akshare 个股持股 % API 列名失效）
+# 待 daily prefetch cache 方案落地后恢复 south_flow 0.15
 # 早班可跑（akshare 年报 + yfinance entry），与美股 daily_picks_v5 同时段
-run_step "9b/25 港股 picks（4 因子 + 南向资金 + DuckDB picks 表）" "scripts/pipeline/hk_picks.py"
+run_step "9b/25 港股 picks（3 因子 + DuckDB picks 表，south_flow standby）" "scripts/pipeline/hk_picks.py"
 run_step "10/25 Markowitz 仓位优化（方案 A v6）" "scripts/pipeline/build_plan_a_v5.py"
 # 2026-05-12: step 22 (apply_a_share_constraints) 从 run_a_share_steps 拆出来挪到这里
 #   它的输入是 plan_a_v5.json（美股 plan），输出 plan_a_v5_constrained.json
