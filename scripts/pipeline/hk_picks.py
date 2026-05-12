@@ -186,12 +186,20 @@ def run_hk_picks(top_k: int = 12, mode: str = "tertile", dry_run: bool = False,
         return 0
 
     # 2.0 南向资金一次性预取（聚合 + 截面，所有股共享）
-    print(f"\n[2/4] 预取南向资金信号...")
-    south_agg = fetch_aggregate_south_flow(lookback_days=20)
-    print(f"  聚合: {south_agg.get('note', '—')}")
-    south_components = fetch_components_snapshot()
-    south_all_pcts = sorted(south_components.values()) if south_components else []
-    print(f"  截面: {len(south_components)} 只港股通标的有南向持股数据")
+    # 六审 P1-1：south_flow weight=0 (standby) 时跳过预取，避免无用调用
+    south_weight = FACTOR_WEIGHTS.get("south_flow", 0)
+    if south_weight > 0:
+        print(f"\n[2/4] 预取南向资金信号...")
+        south_agg = fetch_aggregate_south_flow(lookback_days=20)
+        print(f"  聚合: {south_agg.get('note', '—')}")
+        south_components = fetch_components_snapshot()
+        south_all_pcts = sorted(south_components.values()) if south_components else []
+        print(f"  截面: {len(south_components)} 只港股通标的有南向持股数据")
+    else:
+        print(f"\n[2/4] 跳过南向资金预取（FACTOR_WEIGHTS.south_flow={south_weight} standby）")
+        south_agg = {"score": 0.5, "regime": "standby", "note": "权重 0 跳过"}
+        south_components = {}
+        south_all_pcts = []
 
     # 2. 因子拉取（F-Score + 动量 + 反转 + 南向）
     print(f"\n[2.1/4] 拉个股因子（akshare 港股财报 + yfinance 价格）...")
@@ -209,10 +217,14 @@ def run_hk_picks(top_k: int = 12, mode: str = "tertile", dry_run: bool = False,
             mom = momentum.get("momentum_12_1")
             rev = momentum.get("reversal_1m")
 
-            # 南向资金信号（聚合 + 截面）
-            south_sig = compute_south_flow_signal(
-                tk, south_components, south_agg, south_all_pcts
-            )
+            # 南向资金信号（聚合 + 截面）— standby 时直接给中性空值
+            if south_weight > 0:
+                south_sig = compute_south_flow_signal(
+                    tk, south_components, south_agg, south_all_pcts
+                )
+            else:
+                south_sig = {"score": 0.5, "regime": "standby",
+                             "individual_pct": None, "individual_rank": None}
 
             entry = HKPickEntry(
                 code=tk,

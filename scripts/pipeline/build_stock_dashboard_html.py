@@ -1411,6 +1411,9 @@ function switchDiscoveryView(view) {
           <th class="px-3 py-2 text-left">状态</th>
           <th class="px-3 py-2 text-left" title="prices.fetched_at — 行情/估值数据抓取时间">抓取时间</th>
           <th class="px-3 py-2 text-left" title="watchlist.updated_at — AI 分析/元数据最近一次刷新时间">分析时间</th>
+          <th class="px-2 py-2 text-center" title="📊 看完整历史数据（prices/picks/reviews/discovery/earnings_history 全表）">📊 历史</th>
+          <th class="px-2 py-2 text-center" title="📈 Yahoo Finance 原始页面 (新窗口)">↗ Yahoo</th>
+          <th class="px-2 py-2 text-center" title="✏️ 在自选股编辑器里改这只标的">✏️ 编辑</th>
         </tr>
       </thead>
       <tbody id="db-explorer-tbody" class="divide-y divide-slate-100"></tbody>
@@ -3061,6 +3064,23 @@ function renderDbExplorerTable() {
         <td class="px-3 py-2 text-xs text-slate-500">${_esc(r.status || "—")}</td>
         <td class="px-3 py-2 text-[11px] font-mono text-slate-500" title="行情/估值数据抓取时间">${_esc(r.price_fetched_at || "—")}</td>
         <td class="px-3 py-2 text-[11px] font-mono text-slate-500" title="AI 元数据最近一次刷新时间">${_esc(r.updated_at || "—")}</td>
+        <td class="px-2 py-2 text-center" onclick="event.stopPropagation()">
+          <button title="看完整历史数据"
+                  data-code="${_esc(r.code)}" data-name="${_esc(r.name || '')}"
+                  onclick="openStockDetail(this.dataset.code, this.dataset.name)"
+                  class="px-2 py-1 rounded text-xs bg-violet-50 hover:bg-violet-200 text-violet-700 border border-violet-200">📊 历史</button>
+        </td>
+        <td class="px-2 py-2 text-center" onclick="event.stopPropagation()">
+          <a title="Yahoo Finance 原始页面 (新窗口)"
+             href="${_esc(_yahooLink(r.code, r.market))}" target="_blank"
+             class="px-2 py-1 rounded text-xs bg-slate-50 hover:bg-slate-200 text-slate-700 border border-slate-200">↗ Yahoo</a>
+        </td>
+        <td class="px-2 py-2 text-center" onclick="event.stopPropagation()">
+          <button title="在自选股编辑器里改这只标的"
+                  data-code="${_esc(r.code)}"
+                  onclick="location.hash='#watchlist-edit';setTimeout(()=>openWatchlistEditor(this.dataset.code),200)"
+                  class="px-2 py-1 rounded text-xs bg-amber-50 hover:bg-amber-200 text-amber-700 border border-amber-200">✏️ 编辑</button>
+        </td>
       </tr>
     `;
     if (!expanded) return mainRow;
@@ -3098,11 +3118,11 @@ function _dbExplorerDetailRow(r) {
     ["最后更新", r.updated_at],
   ];
   const groupWatchLong = [
-    ["📊 最新财报 (earnings)", r.earnings],
-    ["✅ 投研结论 (conclusion)", r.conclusion],
-    ["⚠️ 风险 (risks)", r.risks],
-    ["🔍 全信息分项 (info_breakdown)", r.info_breakdown],
-    ["📝 备注 (notes)", r.notes],
+    ["📊 最新财报 (earnings)", r.earnings, "earnings"],
+    ["✅ 投研结论 (conclusion)", r.conclusion, "conclusion"],
+    ["⚠️ 风险 (risks)", r.risks, "risks"],
+    ["🔍 全信息分项 (info_breakdown)", r.info_breakdown, "info_breakdown"],
+    ["📝 备注 (notes)", r.notes, "notes"],
   ];
   const groupPrices = [
     ["📅 数据日期", r.price_date],
@@ -3153,19 +3173,108 @@ function _dbExplorerDetailRow(r) {
               ${items}
             </div>`;
   };
-  const longBlock = (title, body) => {
+  // 每个字段的"数据源 + 来源时间 + 指标计算口径"元信息
+  const LONG_META = {
+    earnings: {
+      source: "yfinance.quarterly_income_stmt（季报 IS 表）",
+      refresh: "API 入库时 + daily_refresh.sh step 4 每天自动刷",
+      formulas: [
+        "营收 = Total Revenue 字段（绝对值，单位由 financialCurrency 决定）",
+        "净利润 = Net Income",
+        "摊薄 EPS = Diluted EPS",
+        "YoY = (当季值 − 同季 4 季前值) / |4 季前值| × 100%",
+        "若 quarterly_income_stmt 为空 → fallback 用 info 的 totalRevenue/trailingEps（标注 TTM）",
+        "全季历史归档在 earnings_history 表，主表 .earnings 字段只存最新一句摘要（每次覆盖）",
+      ],
+    },
+    conclusion: {
+      source: "👤 用户 / AI 主观分析（系统不自动生成）",
+      refresh: "在「自选股」编辑器里手填，或 AI 深研后人工录入",
+      formulas: [],
+    },
+    risks: {
+      source: "👤 用户 / AI 主观分析（系统不自动生成）",
+      refresh: "在「自选股」编辑器里手填，或 AI 深研后人工录入",
+      formulas: [],
+    },
+    info_breakdown: {
+      source: "Finnhub（美股：内部人/分析师/新闻）+ akshare（A/港股：实时报价/北向/南向）+ Google Trends",
+      refresh: "daily_refresh.sh step 4 (jobs/enrich_watchlist) 每天 7:30 自动刷",
+      formulas: [
+        "内部人交易（90 天）= Finnhub /stock/insider-transactions",
+        "分析师评级 = Finnhub /stock/recommendation （最新一期，强买/买/持有/卖/强卖）",
+        "近 7 天新闻 = Finnhub /company-news",
+        "北向持股 % = akshare 沪深港通持股占比",
+        "Google Trends = pytrends 近 1 年搜索热度（avg/last/trend_pct）",
+      ],
+    },
+    notes: {
+      source: "👤 用户手填便签（系统永不写入）",
+      refresh: "仅在自选股编辑器里改",
+      formulas: [],
+    },
+  };
+
+  // 从正文里解析出"具体的数据来源时间"（不是描述文字）
+  const _extractSourceTime = (kind, body) => {
+    if (!body) return null;
+    if (kind === "earnings") {
+      // 正文首行类似 "2026-03-31 季报（yfinance）：" → 提取首个 YYYY-MM-DD
+      const m = String(body).match(/(\d{4}-\d{2}-\d{2})/);
+      return m ? `${m[1]} (财报季度末 fiscal_period)` : null;
+    }
+    if (kind === "info_breakdown") {
+      // 正文末尾类似 "⏰ 多源同步：2026-05-11T08:38:16"
+      const m = String(body).match(/多源同步[：:]\s*([\d\-T:.\s]+)/);
+      return m ? `${m[1].trim().replace("T", " ")} (多源抓取时间)` : null;
+    }
+    // conclusion / risks / notes 没独立时间，返回 null
+    return null;
+  };
+
+  const longBlock = (title, body, kind) => {
     const empty = (body === null || body === undefined || body === "");
+    const m = LONG_META[kind] || {};
+    const sourceTime = _extractSourceTime(kind, body);
+    const sourceTimeLine = sourceTime
+      ? `<div><strong>📅 数据来源时间:</strong> <span class="font-mono">${_esc(sourceTime)}</span></div>`
+      : `<div><strong>📅 数据来源时间:</strong> <span class="text-slate-400">无独立时间戳（${kind === 'conclusion' || kind === 'risks' || kind === 'notes' ? '主观字段，以「分析时间」为准' : '正文为空'}）</span></div>`;
+    // 详情 popover 内容（点 ⓘ 后展开看，默认折叠不干扰正文）
+    const detailParts = [];
+    if (m.source) detailParts.push(`<div><strong>📦 数据源:</strong> ${_esc(m.source)}</div>`);
+    if (m.refresh) detailParts.push(`<div><strong>🔄 刷新机制:</strong> ${_esc(m.refresh)}</div>`);
+    if (m.source_time_hint) detailParts.push(`<div><strong>📅 数据来源时间:</strong> ${_esc(m.source_time_hint)}</div>`);
+    if (m.formulas && m.formulas.length) {
+      detailParts.push(`<div><strong>📐 指标计算口径 (${m.formulas.length} 条)：</strong><ul class="ml-3 mt-1 space-y-0.5 list-disc list-inside">${m.formulas.map(f => `<li>${_esc(f)}</li>`).join("")}</ul></div>`);
+    }
+    // 标题行右侧紧凑 meta：只显示分析时间 + ⓘ 弹出详情
+    const compactMeta = `
+      <div class="text-[10px] text-slate-500 flex items-center gap-1.5 whitespace-nowrap">
+        <span>🕐 <span class="font-mono">${_esc(r.updated_at || '—')}</span></span>
+        ${detailParts.length ? `
+          <span class="text-slate-300">·</span>
+          <details class="relative inline-block">
+            <summary class="cursor-pointer hover:text-violet-600 list-none select-none">ⓘ 数据来源</summary>
+            <div class="absolute right-0 top-full mt-1 bg-white border border-slate-300 rounded p-3 shadow-lg z-10 w-[420px] max-w-[90vw] text-xs text-slate-600 space-y-1.5 leading-snug font-normal whitespace-normal text-left">
+              ${detailParts.join("")}
+            </div>
+          </details>` : ''}
+      </div>`;
     return `<div class="bg-white rounded p-3 border border-slate-200">
-              <div class="text-xs font-bold text-slate-700 mb-2">${_esc(title)}</div>
-              <div class="text-xs text-slate-700 whitespace-pre-wrap leading-relaxed">${empty ? '<span class="text-slate-300">— 暂无</span>' : _esc(String(body))}</div>
+              <div class="flex items-center justify-between gap-3 mb-2 flex-wrap">
+                <div class="text-xs font-bold text-slate-700">${_esc(title)}</div>
+                ${compactMeta}
+              </div>
+              <div class="text-xs text-slate-700 whitespace-pre-wrap leading-relaxed">${empty ? '<span class="text-slate-300">— 暂无（' + (kind === 'conclusion' || kind === 'risks' ? '主观字段，需用户/AI 手填' : kind === 'notes' ? '主观便签，需用户手填' : kind === 'info_breakdown' ? 'jobs/enrich_watchlist 尚未对该标的跑过多源 enrich' : '数据源未返回') + '）</span>' : _esc(String(body))}</div>
             </div>`;
   };
 
-  const longCards = groupWatchLong.map(([k, v]) => longBlock(k, v)).join("");
+  const longCards = groupWatchLong.map(([k, v, kind]) => longBlock(k, v, kind)).join("");
 
   return `
     <tr class="detail-row bg-slate-50">
-      <td colspan="17" class="px-4 py-4">
+      <td colspan="20" class="p-0">
+        <div class="db-detail-sticky" style="position: sticky; left: 0; width: calc(100vw - 18rem); max-width: 80rem; padding: 1rem; box-sizing: border-box;">
         <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
           ${kvBlock("📋 watchlist 元数据", groupWatchMeta)}
           ${kvBlock("📈 prices 最新一行", groupPrices)}
@@ -3187,6 +3296,7 @@ function _dbExplorerDetailRow(r) {
             ✏️ 在自选股里编辑
           </button>
         </div>
+        </div><!-- /db-detail-sticky (六审 P1-2: 补缺失的 sticky div 关闭，原嵌套布局错位) -->
       </td>
     </tr>
   `;
