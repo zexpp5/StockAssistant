@@ -2342,11 +2342,10 @@ function _heldBadge(code) {
 }
 
 // 自选股 AI 评级 badge — 数据来自 picks 表最新一日（daily_picks_v5 学术因子）
-//   注: 命名为 _wlRatingBadge 避免和 line 4214 的 _ratingBadge(rating) 同名冲突
 //   ⭐⭐⭐ 强烈推荐(z≥1) → ✅ 推荐
 //   ⭐⭐ 推荐(z≥0.5) / ⭐ 关注 → ⚠️ 观察
-//   不在 picks → — 未评级（z 未达入选门槛 或 数据缺失）
-//   ❌ 不建议 待补：当前 daily_picks_v5 只存入选股，需要它输出 z < -0.5 的股才能给负向评级
+//   ⛔ 不建议(z≤-0.5) → ❌ 不建议（红色）
+//   不在 picks → — 未评级（z 在 [-0.5, 0.5] 区间 或 数据缺失）
 function _wlRatingBadge(code) {
   const info = WATCHLIST_RATINGS[code];
   if (!info || !info.rating) {
@@ -2354,12 +2353,13 @@ function _wlRatingBadge(code) {
   }
   const r = String(info.rating);
   const score = info.total_score != null ? ` · ${info.total_score}` : "";
-  // 风险红旗：grade_label 把 risk_flags 拼在 · 后面（🚨 Altman Z'' / 🚨 Beneish M）
-  // 提取并叠加小红角标（不挡评级主标，hover 看详情）
   const hasFlag = r.includes("🚨");
   const flagBadge = hasFlag
     ? `<span class="inline-flex ml-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-700 ring-1 ring-rose-300" title="${_esc(r)}">🚨 风险</span>`
     : "";
+  if (r.includes("⛔")) {
+    return `<span class="inline-flex items-center"><span class="inline-flex px-2 py-0.5 rounded text-xs font-bold bg-red-100 text-red-700 ring-1 ring-red-300" title="${_esc(r)}${score}">❌ 不建议</span>${flagBadge}</span>`;
+  }
   if (r.includes("⭐⭐⭐")) {
     return `<span class="inline-flex items-center"><span class="inline-flex px-2 py-0.5 rounded text-xs font-bold bg-emerald-100 text-emerald-700" title="${_esc(r)}${score}">✅ 推荐</span>${flagBadge}</span>`;
   }
@@ -5375,7 +5375,12 @@ function _ratingScore(rating) {
 }
 
 let _latestPickDate = null;
-PICKS.forEach(p => {
+function _isProductionPick(p) {
+  const src = String(p.model_source || "");
+  return src && src !== "legacy";
+}
+const _topPickSourceRows = PICKS.some(_isProductionPick) ? PICKS.filter(_isProductionPick) : PICKS;
+_topPickSourceRows.forEach(p => {
   if (p.pick_date && (_latestPickDate == null || p.pick_date > _latestPickDate)) {
     _latestPickDate = p.pick_date;
   }
@@ -5385,7 +5390,7 @@ PICKS.forEach(p => {
 // 且 daily_refresh 偶尔重复写入导致 2 倍重复。按 code 去重，保留评分最高那条。
 // TODO（数据端）：daily_picks_v5 写入飞书时应该 upsert 而非 insert，避免重复。
 const _todayDedup = new Map();
-PICKS.forEach(p => {
+_topPickSourceRows.forEach(p => {
   if (p.pick_date !== _latestPickDate) return;
   const key = p.code || p.name || "";
   if (!key) return;
@@ -7606,6 +7611,70 @@ def _fmt_market_cap(usd: float | None) -> str:
     return f"${abs_u:,.0f}"
 
 
+def _pick_market_key(code: str | None, market: str | None) -> str | None:
+    """Map a picks row to dashboard market buckets."""
+    c = str(code or "").upper()
+    m = str(market or "")
+    if c.endswith(".HK") or "港股" in m:
+        return "hk"
+    if (
+        c.endswith((".SS", ".SZ", ".BJ"))
+        or "A股" in m
+        or "A 股" in m
+        or (c.isdigit() and len(c) == 6)
+    ):
+        return "cn"
+    if "美股" in m or (c and "." not in c and not c.isdigit()):
+        return "us"
+    return None
+
+
+def _date_prefix(ts: str | None) -> str:
+    """Return YYYY-MM-DD-ish prefix for comparing DB dates with JSON timestamps."""
+    return str(ts or "")[:10]
+
+
+def _load_latest_pick_dates_by_market() -> dict[str, str | None]:
+    """DB-first latest production pick_date per market.
+
+    JSON artifacts may lag a market-specific pipeline. The dashboard should use
+    DuckDB picks as the source of truth, and only borrow JSON timestamps when
+    they are at least as fresh as the DB date.
+    """
+    production_sources = {
+        "us": {"v6_us"},
+        "hk": {"v6_hk"},
+        "cn": {"v6_cn"},
+    }
+    out: dict[str, str | None] = {"us": None, "hk": None, "cn": None}
+    db_path = os.path.join(_REPO, "stock_history.duckdb")
+    if not os.path.exists(db_path):
+        return out
+    try:
+        import duckdb
+        con = duckdb.connect(db_path, read_only=True)
+        rows = con.execute(
+            "SELECT code, market, COALESCE(model_source, 'legacy') AS model_source, "
+            "MAX(pick_date) AS latest_date "
+            "FROM picks GROUP BY code, market, model_source"
+        ).fetchall()
+        con.close()
+    except Exception as e:
+        print(f"  ⚠️  从 DuckDB 读 picks 日期失败: {e}")
+        return out
+
+    for code, market, model_source, latest_date in rows:
+        key = _pick_market_key(code, market)
+        if not key or latest_date is None:
+            continue
+        if str(model_source or "") not in production_sources.get(key, set()):
+            continue
+        d = str(latest_date)[:10]
+        if out[key] is None or d > str(out[key]):
+            out[key] = d
+    return out
+
+
 def build():
     print("[1/3] 拉取数据 [DuckDB]...")
     from stock_db import fetch_records_view, fetch_picks_view
@@ -7615,11 +7684,11 @@ def build():
         r["market_cap"] = _fmt_market_cap(r.get("yf_market_cap"))
     print(f"  共 {len(records)} 条 watchlist (含 prices JOIN)")
     picks = fetch_picks_view()
-    print(f"  共 {len(picks)} 条自选股·AI 优选 (来自 reviews JOIN picks)")
+    print(f"  共 {len(picks)} 条自选股·AI 优选 (来自 reviews + 最新 picks)")
 
-    # 各市场 AI 计算时间 — 让用户知道这批推荐是"什么时候算的"（防止误以为是实时数据）
-    # picks 表只存 pick_date 日期，时分秒要从对应 picks JSON 读
-    picks_timestamps: dict[str, str | None] = {"us": None, "hk": None, "cn": None}
+    # 各市场 AI 计算时间 — DB picks 是事实源；JSON 仅在同日时补时分秒，不允许把
+    # dashboard 日期拉回比 DB 更旧（防 A 股 JSON 滞后污染早盘看板）。
+    picks_timestamps = _load_latest_pick_dates_by_market()
     for key, fname in (("us", "data/latest/plan_a_v5_constrained.json"),
                        ("hk", "data/latest/hk_picks.json"),
                        ("cn", "data/a_share_picks.json")):
@@ -7627,7 +7696,10 @@ def build():
         if os.path.exists(fpath):
             try:
                 with open(fpath, encoding="utf-8") as f:
-                    picks_timestamps[key] = json.load(f).get("generated_at")
+                    file_ts = json.load(f).get("generated_at")
+                db_ts = picks_timestamps.get(key)
+                if file_ts and db_ts and _date_prefix(file_ts) == _date_prefix(db_ts):
+                    picks_timestamps[key] = file_ts
             except Exception:
                 pass
     print(f"  picks 各市场计算时间: {picks_timestamps}")

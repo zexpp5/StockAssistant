@@ -427,6 +427,7 @@ def main():
                     "ytd_at_pick": r["ytd_pct"],
                     "one_week_at_pick": r["one_week_pct"],
                     "one_year_at_pick": r["one_year_pct"],
+                    "model_source": "legacy",
                 })
             n = upsert_picks(db_rows)
             print(f"  DuckDB：已写入 {n} 行 (stock_history.duckdb · picks)")

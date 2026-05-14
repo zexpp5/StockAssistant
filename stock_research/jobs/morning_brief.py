@@ -1421,6 +1421,62 @@ def _two_col_lines(lines_left: list[str], lines_right: list[str]) -> dict:
     }
 
 
+def _hitrate_card_lines(today: date) -> list[str]:
+    """飞书卡片专用：近 7 天 reviews 分档 + 近 30 天 discovery alpha → bullet 行。
+
+    复用 section_weekly_hitrate() 的两条 SQL；卡片 lark_md 不擅长渲染 markdown 表格，
+    所以这里输出更紧凑的"｜"分隔行（KPI 风格）。
+    """
+    try:
+        import sys
+        import os
+        _repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        sys.path.insert(0, os.path.join(_repo, "scripts", "lib"))
+        import stock_db
+        conn = stock_db.get_db()
+    except Exception:
+        return []
+    lines: list[str] = []
+    try:
+        rows = conn.execute("""
+          SELECT rating, COUNT(*) as n, ROUND(AVG(pct), 2) as avg_pct,
+                 ROUND(SUM(CASE WHEN pct > 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 0) as win_rate
+          FROM reviews
+          WHERE review_date >= ? AND pct IS NOT NULL
+          GROUP BY rating ORDER BY avg_pct DESC
+        """, [today - timedelta(days=7)]).fetchall()
+        if rows:
+            lines.append("**自选股评级 · 近 7 天**")
+            for rating, n, avg_pct, win_rate in rows:
+                sign = "+" if (avg_pct or 0) >= 0 else ""
+                rating_short = (rating or "—")[:18]
+                lines.append(f"• {rating_short} ｜ n={n} ｜ {sign}{avg_pct}% ｜ 胜率 {int(win_rate)}%")
+        else:
+            lines.append("_自选股评级：近 7 天暂无回顾数据_")
+    except Exception as e:
+        lines.append(f"_自选股评级查询失败: {e}_")
+    try:
+        rows = conn.execute("""
+          SELECT COUNT(*) as n, ROUND(AVG(alpha_5d), 2) as a5,
+                 ROUND(AVG(alpha_20d), 2) as a20,
+                 ROUND(SUM(CASE WHEN alpha_20d > 0 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(alpha_20d), 0), 0) as w20
+          FROM discovery_tracking WHERE generated_date >= ?
+        """, [today - timedelta(days=30)]).fetchall()
+        n, a5, a20, w20 = rows[0] if rows else (0, None, None, None)
+        if n and (a5 is not None or a20 is not None):
+            lines.append("")
+            s5 = "+" if (a5 or 0) >= 0 else ""
+            s20 = "+" if (a20 or 0) >= 0 else ""
+            lines.append(f"**🤖 AI 推荐 vs SPY** · 5d {s5}{a5}% ｜ 20d {s20}{a20}% ｜ 20d 胜率 {int(w20 or 0)}% ｜ n={n}")
+        else:
+            lines.append("")
+            lines.append("_AI 推荐 alpha：近 30 天暂无有效数据_")
+    except Exception as e:
+        lines.append(f"_AI 推荐查询失败: {e}_")
+    conn.close()
+    return lines
+
+
 def _build_card_payload() -> dict:
     """构造飞书 card v1 schema dict — 每个 section 上色块 + 横排 KPI + 长列表分 2 列。
 
@@ -1744,6 +1800,17 @@ def _build_card_payload() -> dict:
         ]))
 
     blocks.append({"tag": "hr"})
+
+    # ─── Section 4.5: 上周回顾（周一专属 · AI 准不准）───
+    if today.weekday() == 0:
+        hitrate_lines = _hitrate_card_lines(today)
+        if hitrate_lines:
+            blocks.append({
+                "tag": "div",
+                "text": {"tag": "lark_md", "content":
+                    "**🧪 上周回顾 · AI 准不准（周一专属）**\n" + "\n".join(hitrate_lines)}
+            })
+            blocks.append({"tag": "hr"})
 
     # ─── Section 5: 今天必须做的动作（卖/买左右两列）───
     is_monday = (today.weekday() == 0)

@@ -101,6 +101,9 @@ class IpoCalendar:
     upcoming_subscription: list[IpoEntry] = field(default_factory=list)
     awaiting_listing: list[IpoEntry] = field(default_factory=list)
     recently_listed: list[IpoEntry] = field(default_factory=list)
+    # 数据源 fetch 状态：{"upcoming": "ok"/"failed", "recent": "ok"/"failed"}
+    # "ok" 包括空 DataFrame（接口成功但当日无新股）；"failed" 表示 akshare 报错
+    fetch_status: dict[str, str] = field(default_factory=dict)
 
     def all_entries(self) -> list[IpoEntry]:
         return self.upcoming_subscription + self.awaiting_listing + self.recently_listed
@@ -108,9 +111,14 @@ class IpoCalendar:
     def ai_relevant(self, min_score: int = 2) -> list[IpoEntry]:
         return [e for e in self.all_entries() if e.ai_relevance >= min_score]
 
+    def fetch_ok(self) -> bool:
+        """任一数据源拉成功（即使返回空 df）即视为 ok。"""
+        return any(v == "ok" for v in self.fetch_status.values())
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "fetched_at": self.fetched_at.isoformat(),
+            "fetch_status": dict(self.fetch_status),
             "upcoming_subscription": [e.to_dict() for e in self.upcoming_subscription],
             "awaiting_listing": [e.to_dict() for e in self.awaiting_listing],
             "recently_listed": [e.to_dict() for e in self.recently_listed],
@@ -181,6 +189,7 @@ def build_ipo_calendar() -> IpoCalendar:
 
     # 1. 即将申购
     df = fetch_upcoming_subscription_raw()
+    cal.fetch_status["upcoming"] = "failed" if df is None else "ok"
     if df is not None and not df.empty:
         for _, r in df.iterrows():
             entry = _row_to_entry(r)
@@ -201,6 +210,7 @@ def build_ipo_calendar() -> IpoCalendar:
 
     # 2. 近期已上市
     df2 = fetch_recent_listings_raw()
+    cal.fetch_status["recent"] = "failed" if df2 is None else "ok"
     if df2 is not None and not df2.empty:
         cutoff = today - timedelta(days=30)
         for _, r in df2.iterrows():

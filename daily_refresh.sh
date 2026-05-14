@@ -148,6 +148,9 @@ run_step "6/25 每日优选 v1（旧体系）" "scripts/pipeline/daily_picks.py"
 run_step "7/25 picks 反向审查" "-m stock_research.jobs.audit_picks --fast"
 run_step "8/25 历史回顾" "scripts/pipeline/weekly_review.py"
 
+# 每日新闻同步飞书（财联社 100 条 → 国际/国内分类 → 删历史只保留当天）
+run_step "8b/25 每日新闻同步飞书" "scripts/daily_news_to_feishu.py"
+
 # v6 学术因子流水线（Piotroski + 12-1 动量 + 1 月反转 + PEAD + 分析师）
 run_step "9/25 v6 学术因子选股（已落 DuckDB picks）" "scripts/pipeline/daily_picks_v5.py"
 # 9b 港股 picks：3 因子学术版（F-Score + 12-1 mom + 1m rev）

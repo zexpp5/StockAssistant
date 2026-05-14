@@ -383,6 +383,7 @@ def run_hk_picks(top_k: int = 12, mode: str = "tertile", dry_run: bool = False,
             "theme": e.sector or "港股科技",
             "entry_price": price_map.get(e.code),
             "entry_currency": "HKD",
+            "model_source": "v6_hk",
         })
     if db_rows:
         try:

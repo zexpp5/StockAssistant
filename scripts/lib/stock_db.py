@@ -79,21 +79,25 @@ CREATE TABLE IF NOT EXISTS picks (
     ytd_at_pick       DOUBLE,
     one_week_at_pick  DOUBLE,
     one_year_at_pick  DOUBLE,
+    model_source      VARCHAR,
     PRIMARY KEY (pick_date, code)
 );
 
 CREATE TABLE IF NOT EXISTS reviews (
-    review_date    DATE      NOT NULL,
-    pick_date      DATE      NOT NULL,
-    code           VARCHAR   NOT NULL,
-    name           VARCHAR,
-    entry_price    DOUBLE,
-    current_price  DOUBLE,
-    pct            DOUBLE,
-    days_held      INTEGER,
-    grade          VARCHAR,
-    rating         VARCHAR,
-    theme          VARCHAR,
+    review_date        DATE      NOT NULL,
+    pick_date          DATE      NOT NULL,
+    code               VARCHAR   NOT NULL,
+    name               VARCHAR,
+    entry_price        DOUBLE,
+    current_price      DOUBLE,
+    pct                DOUBLE,
+    days_held          INTEGER,
+    grade              VARCHAR,
+    rating             VARCHAR,
+    theme              VARCHAR,
+    entry_spy_price    DOUBLE,    -- 入选日 SPY 收盘
+    current_spy_price  DOUBLE,    -- review_date 当天 SPY 最新
+    alpha_pct          DOUBLE,    -- pct - spy_pct（超额收益）
     PRIMARY KEY (review_date, pick_date, code)
 );
 
@@ -134,6 +138,10 @@ CREATE TABLE IF NOT EXISTS watchlist (
 );
 
 -- 幂等 ALTER：兼容 schema 升级前已存在的库
+ALTER TABLE picks     ADD COLUMN IF NOT EXISTS model_source      VARCHAR;
+ALTER TABLE reviews   ADD COLUMN IF NOT EXISTS entry_spy_price   DOUBLE;
+ALTER TABLE reviews   ADD COLUMN IF NOT EXISTS current_spy_price DOUBLE;
+ALTER TABLE reviews   ADD COLUMN IF NOT EXISTS alpha_pct         DOUBLE;
 ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS chain          VARCHAR;
 ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS chain_tier     VARCHAR;
 ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS chain_role     VARCHAR;
@@ -237,6 +245,16 @@ def get_db(path: str = DB_PATH) -> duckdb.DuckDBPyConnection:
     """打开 DuckDB 连接并保证 schema 存在。"""
     conn = duckdb.connect(path)
     conn.execute(SCHEMA_SQL)
+    # 一次性 backfill: 按 market 字符串推断历史行真实 source
+    # 2026-05-12 起 v5/hk/a_share 用 '·' 分隔，daily_picks.py 用空格或空 market
+    conn.execute("""
+        UPDATE picks SET model_source = CASE
+            WHEN market LIKE 'A股%' OR market LIKE 'A 股%' THEN 'v6_cn'
+            WHEN market = '港股' OR code LIKE '%.HK' THEN 'v6_hk'
+            WHEN market LIKE '美股·%' OR market = '美股' THEN 'v6_us'
+            ELSE 'legacy'
+        END WHERE model_source IS NULL
+    """)
     return conn
 
 
@@ -351,6 +369,7 @@ PICK_COLS = [
     "total_score", "ai_score", "val_score", "trend_score", "cred_score",
     "ai_relevance", "theme", "entry_price", "entry_currency",
     "peg_at_pick", "fpe_at_pick", "ytd_at_pick", "one_week_at_pick", "one_year_at_pick",
+    "model_source",
 ]
 
 
@@ -387,6 +406,7 @@ def upsert_picks(
             r.get("ytd_at_pick"),
             r.get("one_week_at_pick"),
             r.get("one_year_at_pick"),
+            r.get("model_source"),
         ]
         placeholders = ",".join(["?"] * len(PICK_COLS))
         update_set = ",".join(f"{c}=excluded.{c}" for c in PICK_COLS if c not in ("pick_date", "code"))
@@ -405,6 +425,7 @@ REVIEW_COLS = [
     "review_date", "pick_date", "code", "name",
     "entry_price", "current_price", "pct", "days_held",
     "grade", "rating", "theme",
+    "entry_spy_price", "current_spy_price", "alpha_pct",
 ]
 
 
@@ -432,6 +453,9 @@ def upsert_reviews(
             r.get("grade"),
             r.get("rating"),
             r.get("theme"),
+            r.get("entry_spy_price"),
+            r.get("current_spy_price"),
+            r.get("alpha_pct"),
         ]
         placeholders = ",".join(["?"] * len(REVIEW_COLS))
         update_set = ",".join(
@@ -457,29 +481,89 @@ def upsert_reviews(
 
 
 def fetch_picks_view(*, conn: duckdb.DuckDBPyConnection | None = None) -> list[dict]:
-    """返回最近 review 的 picks 视图(reviews LEFT JOIN picks).
+    """返回 picks 看板视图.
 
     字段对齐原 extract_picks: code/name/rating/score/entry_price/current_price/
     pct/days_held/grade/theme/ai_relevance/pick_date.
+
+    reviews 是收益跟踪表, picks 是当天选股事实表。daily_refresh 里 reviews 可能早于
+    后续市场专线写入, 所以这里在最新 review 快照之外, 额外补齐最新 pick_date 的
+    picks 行, 避免 dashboard 今日入选依赖滞后的 reviews/JSON 产物。
     """
     own = conn is None
     if own:
         conn = get_db()
     rows = conn.execute("""
+        WITH latest_price AS (
+            SELECT * FROM prices
+            WHERE (code, date) IN (
+                SELECT code, MAX(date) FROM prices GROUP BY code
+            )
+        ),
+        review_rows AS (
+            SELECT
+                r.code, r.name, COALESCE(p.market, '') AS market,
+                r.rating, r.pick_date, r.entry_price, r.current_price,
+                r.pct, r.days_held, r.grade, r.theme,
+                p.total_score AS score, p.ai_relevance,
+                p.total_score, p.ai_score, p.val_score, p.trend_score, p.cred_score,
+                COALESCE(p.model_source, 'legacy') AS model_source
+            FROM reviews r
+            LEFT JOIN picks p ON p.code = r.code AND p.pick_date = r.pick_date
+            WHERE r.review_date = (SELECT MAX(review_date) FROM reviews)
+        ),
+        v6_market_latest AS (
+            -- 每个 v6 pipeline 各自的最新 pick_date；legacy 行被排除
+            SELECT model_source, MAX(pick_date) AS max_date
+            FROM picks
+            WHERE model_source IN ('v6_us', 'v6_hk', 'v6_cn')
+            GROUP BY model_source
+        ),
+        latest_pick_rows AS (
+            SELECT
+                p.code, p.name, COALESCE(p.market, '') AS market,
+                p.rating, p.pick_date, p.entry_price, lp.price AS current_price,
+                CASE
+                    WHEN p.entry_price IS NOT NULL
+                      AND p.entry_price != 0
+                      AND lp.price IS NOT NULL
+                      AND lp.date > p.pick_date
+                    THEN (lp.price / p.entry_price - 1) * 100
+                    ELSE NULL
+                END AS pct,
+                CASE
+                    WHEN lp.date IS NOT NULL THEN date_diff('day', p.pick_date, lp.date)
+                    ELSE 0
+                END AS days_held,
+                NULL AS grade, p.theme,
+                p.total_score AS score, p.ai_relevance,
+                p.total_score, p.ai_score, p.val_score, p.trend_score, p.cred_score,
+                p.model_source
+            FROM picks p
+            INNER JOIN v6_market_latest v
+              ON v.model_source = p.model_source AND v.max_date = p.pick_date
+            LEFT JOIN latest_price lp ON lp.code = p.code
+            WHERE NOT EXISTS (
+                  SELECT 1 FROM review_rows r
+                  WHERE r.code = p.code AND r.pick_date = p.pick_date
+              )
+        )
         SELECT
-            r.code, r.name, r.rating, r.pick_date, r.entry_price, r.current_price,
-            r.pct, r.days_held, r.grade, r.theme,
-            p.total_score AS score, p.ai_relevance,
-            -- 2026-05-12 加：dashboard 卡片 reason 行需要 4 个子分数 + total_score 派生理由
-            p.total_score, p.ai_score, p.val_score, p.trend_score, p.cred_score
-        FROM reviews r
-        LEFT JOIN picks p ON p.code = r.code AND p.pick_date = r.pick_date
-        WHERE r.review_date = (SELECT MAX(review_date) FROM reviews)
-        ORDER BY r.code
+            code, name, market, rating, pick_date, entry_price, current_price,
+            pct, days_held, grade, theme, score, ai_relevance,
+            total_score, ai_score, val_score, trend_score, cred_score, model_source
+        FROM review_rows
+        UNION ALL
+        SELECT
+            code, name, market, rating, pick_date, entry_price, current_price,
+            pct, days_held, grade, theme, score, ai_relevance,
+            total_score, ai_score, val_score, trend_score, cred_score, model_source
+        FROM latest_pick_rows
+        ORDER BY code, pick_date
     """).fetchall()
-    cols = ["code", "name", "rating", "pick_date", "entry_price", "current_price",
+    cols = ["code", "name", "market", "rating", "pick_date", "entry_price", "current_price",
             "pct", "days_held", "grade", "theme", "score", "ai_relevance",
-            "total_score", "ai_score", "val_score", "trend_score", "cred_score"]
+            "total_score", "ai_score", "val_score", "trend_score", "cred_score", "model_source"]
     out = [dict(zip(cols, r)) for r in rows]
     if own:
         conn.close()

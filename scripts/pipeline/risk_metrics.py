@@ -50,6 +50,51 @@ def _ccy_from_ticker(ticker: str) -> str:
     return "USD"
 
 
+def load_portfolio_from_holdings():
+    """优先读 DuckDB holdings 表（用户真实持仓）。
+
+    返回 (portfolio, cash_pct, source)；无持仓时返回 (None, None, None)，
+    上层 fallback 到 plan_a_v5.json。
+
+    portfolio 格式：[(name, ticker, amount_rmb_at_cost, ccy, weight), ...]
+      - amount_rmb_at_cost = shares * entry_price * fx (用户实际投入)
+      - weight = amount_rmb / total_cost
+    risk_metrics 后续以 amount_rmb 按 D0 价反推 shares，所以这里给"成本"也能正确驱动。
+    """
+    try:
+        import stock_db
+        holdings = stock_db.fetch_all_holdings()
+    except Exception as e:
+        print(f"  ⚠️  holdings 表读取失败，fallback plan: {e}")
+        return None, None, None
+    if not holdings:
+        return None, None, None
+    # 同 code 多笔合并：cost_rmb 累加
+    agg: dict[str, dict] = {}
+    for h in holdings:
+        code = h.get("code")
+        shares = float(h.get("shares") or 0)
+        ep = float(h.get("entry_price") or 0)
+        if not code or shares <= 0 or ep <= 0:
+            continue
+        ccy = _ccy_from_ticker(code)
+        fx = FX_TO_RMB.get(ccy, 1.0)
+        cost_rmb = shares * ep * fx
+        if code not in agg:
+            agg[code] = {"cost_rmb": 0.0, "ccy": ccy, "shares": 0.0}
+        agg[code]["cost_rmb"] += cost_rmb
+        agg[code]["shares"] += shares
+    total_cost = sum(v["cost_rmb"] for v in agg.values())
+    if total_cost <= 0:
+        return None, None, None
+    portfolio = []
+    for code, v in agg.items():
+        weight = v["cost_rmb"] / total_cost
+        portfolio.append((code, code, v["cost_rmb"], v["ccy"], weight))
+    cash_pct = max(0.0, 1.0 - total_cost / TOTAL_CAPITAL)
+    return portfolio, cash_pct, "holdings"
+
+
 def load_portfolio_from_plan():
     """读 plan_a_v5.json，返回 (portfolio, cash_pct)。
 
@@ -93,13 +138,20 @@ def fetch_history(ticker, lookback_days=400):
 
 def main():
     global PORTFOLIO, CASH_RMB
-    PORTFOLIO, cash_pct = load_portfolio_from_plan()
+    # 优先读真实持仓（holdings 表），无持仓时 fallback 到 plan_a_v5.json
+    holdings_result = load_portfolio_from_holdings()
+    if holdings_result[0]:
+        PORTFOLIO, cash_pct, _ = holdings_result
+        source_label = "DuckDB holdings · 用户真实持仓"
+    else:
+        PORTFOLIO, cash_pct = load_portfolio_from_plan()
+        source_label = "plan_a_v5.json · v6 当前推荐"
     CASH_RMB = int(TOTAL_CAPITAL * cash_pct)
 
     print("=" * 70)
     print("  📊 方案 A v6 · 华尔街标准风险指标")
     print("=" * 70)
-    print(f"\n📋 组合：{len(PORTFOLIO)} 只（来自 plan_a_v5.json · v6 当前推荐）· 现金 ¥{CASH_RMB:,.0f} ({cash_pct*100:.0f}%)")
+    print(f"\n📋 组合：{len(PORTFOLIO)} 只（来自 {source_label}）· 现金 ¥{CASH_RMB:,.0f} ({cash_pct*100:.0f}%)")
     if PORTFOLIO:
         tickers_preview = " / ".join(p[1] for p in PORTFOLIO[:6])
         if len(PORTFOLIO) > 6:

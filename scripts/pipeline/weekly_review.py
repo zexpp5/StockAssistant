@@ -79,6 +79,44 @@ def fetch_current_price(yf_ticker):
         return None
 
 
+_SPY_HIST_CACHE: dict = {}
+
+
+def _load_spy_history():
+    """拉 SPY 过去 ~400 天历史 + 最新价，cache module-level。"""
+    if _SPY_HIST_CACHE:
+        return _SPY_HIST_CACHE
+    try:
+        t = yf.Ticker("SPY")
+        end = datetime.now()
+        start = end - timedelta(days=400)
+        hist = t.history(start=start, end=end)
+        if hist is None or hist.empty:
+            return {}
+        # date → close
+        closes = {d.date(): float(c) for d, c in zip(hist.index, hist["Close"])}
+        info = t.info
+        latest = info.get("currentPrice") or info.get("regularMarketPrice") or float(hist["Close"].iloc[-1])
+        _SPY_HIST_CACHE["closes"] = closes
+        _SPY_HIST_CACHE["latest"] = float(latest)
+    except Exception as e:
+        print(f"  ⚠️  SPY 历史拉取失败 (alpha 字段将留空): {e}")
+    return _SPY_HIST_CACHE
+
+
+def _spy_at(d):
+    """返回 d 当天或之前最近交易日的 SPY 收盘价；找不到返回 None。"""
+    cache = _SPY_HIST_CACHE.get("closes") or {}
+    if not cache:
+        return None
+    # 当天或往前找最近 7 个日历日
+    for i in range(8):
+        key = d - timedelta(days=i)
+        if key in cache:
+            return cache[key]
+    return None
+
+
 def grade_hit(pct):
     if pct is None:
         return None
@@ -105,6 +143,10 @@ def main():
 
     print("\n[2/3] 抓当前价格 + 计算回顾...")
     today_date = datetime.now().date()
+
+    # 预拉 SPY 历史 + 最新价（作为 alpha 基准）
+    _load_spy_history()
+    spy_latest = _SPY_HIST_CACHE.get("latest")
     period_cutoff = None
     if args.period:
         period_cutoff = today_date - timedelta(days=args.period)
@@ -145,6 +187,13 @@ def main():
         days_held = (today_date - pick_date).days
         grade = grade_hit(pct)
 
+        # SPY alpha: 同期 SPY 涨幅 → pct - spy_pct
+        entry_spy = _spy_at(pick_date)
+        alpha_pct = None
+        if entry_spy and spy_latest and entry_spy > 0:
+            spy_pct = (spy_latest - entry_spy) / entry_spy * 100
+            alpha_pct = round(pct - spy_pct, 2)
+
         results.append({
             "name": name,
             "code": code,
@@ -157,6 +206,9 @@ def main():
             "rating": item.get("rating") or "",
             "theme": item.get("theme") or "",
             "ai_relevance": item.get("ai_relevance") or "",
+            "entry_spy_price": entry_spy,
+            "current_spy_price": spy_latest,
+            "alpha_pct": alpha_pct,
         })
         sign = "+" if pct > 0 else ""
         print(f"{current} {currency} · {sign}{pct:.1f}% · {days_held} 天 · {grade}")
@@ -233,6 +285,9 @@ def main():
             "grade": r["grade"],
             "rating": r["rating"],
             "theme": r["theme"],
+            "entry_spy_price": r.get("entry_spy_price"),
+            "current_spy_price": r.get("current_spy_price"),
+            "alpha_pct": r.get("alpha_pct"),
         } for r in results]
         n = upsert_reviews(db_rows)
         print(f"\n  DuckDB：已写入 {n} 行 (stock_history.duckdb · reviews)")

@@ -292,10 +292,37 @@ def build_universe(skip_codes: set[str]) -> list[dict]:
     return list(seen.values())
 
 
-def filter_by_market_cap(universe: list[dict], min_cap_usd: float = 5e9) -> list[dict]:
-    """用 yfinance 拉市值，剔除小盘股。
+_FX_TO_USD_CACHE: dict[str, float] = {"USD": 1.0}
 
-    小盘股的财报往往不全 / 滞后 / 噪声大，对学术因子模型（尤其 Piotroski）非常不友好。
+
+def _fx_to_usd(ccy: str) -> float:
+    """本币 → USD 汇率。命中 cache 直返，否则 yfinance 实时拉一次。"""
+    import yfinance as yf
+    ccy = (ccy or "USD").upper()
+    if ccy in _FX_TO_USD_CACHE:
+        return _FX_TO_USD_CACHE[ccy]
+    rate = None
+    try:
+        info = yf.Ticker(f"{ccy}USD=X").info
+        rate = info.get("regularMarketPrice") or info.get("previousClose")
+    except Exception:
+        pass
+    if not rate or rate <= 0:
+        # 静态 fallback（保守，2026 量级；未命中时至少不会把 RMB 当 USD）
+        fallback = {"CNY": 0.139, "HKD": 0.128, "JPY": 0.0067, "KRW": 0.00074,
+                    "TWD": 0.031, "EUR": 1.07, "GBP": 1.27, "AUD": 0.66}
+        rate = fallback.get(ccy)
+    if rate and rate > 0:
+        _FX_TO_USD_CACHE[ccy] = float(rate)
+        return float(rate)
+    return 0.0  # 完全无法换算 → 该股被过滤
+
+
+def filter_by_market_cap(universe: list[dict], min_cap_usd: float = 5e9) -> list[dict]:
+    """用 yfinance 拉市值（含 currency 换算），剔除小盘股。
+
+    yfinance marketCap 是**本币**计价，A 股/港股/日股等必须按 FX 折算到 USD
+    再比阈值，否则 A 股 5B RMB ≈ 700M USD 就能通过 5B USD 闸门（实际放水 7 倍）。
     """
     import yfinance as yf
     out = []
@@ -303,19 +330,31 @@ def filter_by_market_cap(universe: list[dict], min_cap_usd: float = 5e9) -> list
     for i, u in enumerate(universe, 1):
         try:
             t = yf.Ticker(u["ticker"])
-            cap = t.info.get("marketCap")
-            if cap is None or cap < min_cap_usd:
+            info = t.info
+            cap_local = info.get("marketCap")
+            ccy = (info.get("currency") or "USD").upper()
+            if cap_local is None:
                 if i % 20 == 0:
                     print(f"    进度 {i}/{len(universe)}")
                 continue
-            u["market_cap_usd"] = cap
+            fx = _fx_to_usd(ccy) if ccy != "USD" else 1.0
+            if fx <= 0:
+                continue
+            cap_usd = cap_local * fx
+            if cap_usd < min_cap_usd:
+                if i % 20 == 0:
+                    print(f"    进度 {i}/{len(universe)}")
+                continue
+            u["market_cap_usd"] = cap_usd
+            u["market_cap_local"] = cap_local
+            u["currency"] = ccy
             out.append(u)
         except Exception:
             continue
         if i % 20 == 0:
             print(f"    进度 {i}/{len(universe)}（已通过 {len(out)}）")
-        time.sleep(0.1)  # yfinance rate limit 友好
-    print(f"  ✅ 过市值后剩 {len(out)} 只")
+        time.sleep(0.1)
+    print(f"  ✅ 过市值后剩 {len(out)} 只 (FX cache: {dict(_FX_TO_USD_CACHE)})")
     return out
 
 

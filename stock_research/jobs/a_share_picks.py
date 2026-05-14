@@ -547,6 +547,7 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
                 "theme": e.industry or "A 股",
                 "entry_price": price_map.get(e.code),
                 "entry_currency": "CNY",
+                "model_source": "v6_cn",
             })
         if db_rows:
             n = upsert_picks(db_rows)

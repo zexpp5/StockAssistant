@@ -71,6 +71,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["tertile", "median", "quartile"], default="tertile")
     parser.add_argument("--top", type=int, default=12)
+    parser.add_argument("--neg-top", type=int, default=10,
+                        help="负向(⛔不建议)股写入上限，按 z 升序取最差 N 只")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--cache", default="factor_scores_today.json",
                        help="因子缓存文件，避免重复拉")
@@ -212,6 +214,8 @@ def main():
     print(f"  {'-'*85}")
 
     selected = []
+    negatives = []
+    NEG_CUTOFF = -0.5  # z ≤ -0.5 标 ⛔ 不建议
     for _, r in composite_df.iterrows():
         tk = r["ticker"]
         name = name_by_code.get(tk, tk)
@@ -220,16 +224,18 @@ def main():
         rv_str = f"{r['reversal']:+.1f}%" if pd.notna(r['reversal']) else "N/A"
         ins_score = insider_scores.get(tk, 0)
         rec = bool(r["recommended"])
-        flag = "✅" if rec else " "
+        z = float(r["composite"]) if pd.notna(r["composite"]) else 0.0
+        is_neg = z <= NEG_CUTOFF
+        flag = "✅" if rec else ("⛔" if is_neg else " ")
         print(f"  {int(r['rank']):<3}{name[:18]:<22}{f_str:>3}{m_str:>8}{rv_str:>8}"
               f"{int(r['analyst']):>7}{ins_score:>7}{r['composite']:>+7.2f}    {flag}")
 
-        if rec:
+        if rec or is_neg:
             fd = fundamental_by_code.get(tk) or {}
             altman = fd.get("altman") if fd.get("altman") and not fd.get("altman", {}).get("error") else None
             beneish = fd.get("beneish") if fd.get("beneish") and not fd.get("beneish", {}).get("error") else None
             risk_flags = _build_risk_flags(fd.get("altman"), fd.get("beneish"))
-            selected.append({
+            row = {
                 "code": tk,
                 "name": name,
                 "market": market_by_code.get(tk, "美股"),
@@ -238,15 +244,25 @@ def main():
                 "reversal_1m": float(r["reversal"]) if pd.notna(r["reversal"]) else None,
                 "analyst_score": int(r["analyst"]),
                 "insider_score": int(ins_score),
-                "composite_z": float(r["composite"]),
+                "composite_z": z,
                 "rank": int(r["rank"]),
                 "altman_z": (altman or {}).get("z_score"),
                 "beneish_m": (beneish or {}).get("m_score_adjusted"),
                 "risk_flags": risk_flags,
-            })
+            }
+            if rec:
+                selected.append(row)
+            else:
+                negatives.append(row)
 
-    # 限制写入数量
+    # 限制写入数量: 正向 top N + 负向 bottom N（按 z 升序，最差的 N 只）
     selected = selected[:args.top]
+    negatives.sort(key=lambda x: x["composite_z"])
+    neg_top = min(getattr(args, "neg_top", 10), len(negatives))
+    negatives = negatives[:neg_top]
+    if negatives:
+        print(f"\n  ⛔ 不建议（z ≤ {NEG_CUTOFF}）{len(negatives)} 只: " +
+              ", ".join(f"{x['code']}({x['composite_z']:+.2f})" for x in negatives))
 
     if args.dry_run:
         print(f"\n[Dry-Run] 不写 DuckDB。共 {len(selected)} 只候选")
@@ -257,7 +273,7 @@ def main():
     # ============================================================
     db_rows = []
     success = 0
-    for s in selected:
+    for s in selected + negatives:
         # GICS 客观分类
         ai_score, theme, sector, industry, source = classify(s["code"])
         ai_label = score_to_label(ai_score)
@@ -268,6 +284,8 @@ def main():
             grade_label = "⭐⭐⭐ 强烈推荐（z ≥ 1）"
         elif z >= 0.5:
             grade_label = "⭐⭐ 推荐（z ≥ 0.5）"
+        elif z <= NEG_CUTOFF:
+            grade_label = f"⛔ 不建议（z ≤ {NEG_CUTOFF}）"
         else:
             grade_label = "⭐ 关注"
 
@@ -287,6 +305,7 @@ def main():
             "cred_score": s["analyst_score"],
             "ai_relevance": ai_label,
             "theme": theme,
+            "model_source": "v6_us",
         })
         success += 1
 

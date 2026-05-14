@@ -8,8 +8,8 @@
   stdout: 当日是否有可申购 + AI 相关新股摘要
 
 退出码：
-  0 = 成功
-  2 = 无法抓取（akshare 失败）
+  0 = 成功（含"接口正常但当日无新股"）
+  2 = 数据源完全失败（akshare 两个端点都报错）
 """
 from __future__ import annotations
 import json
@@ -102,15 +102,21 @@ def main() -> int:
 
     n_total = (len(cal.upcoming_subscription) + len(cal.awaiting_listing)
                + len(cal.recently_listed))
-    if n_total == 0:
-        logger.warning("IPO 日历为空（可能 akshare 失败 / 当前无新股）")
-        # 仍然写文件（空），避免下游 reader 报错
-        _write_json(cal, out_json)
-        _write_markdown(cal, out_md)
-        return 2
 
+    # 写文件（即使为空），避免下游 reader 报错
     _write_json(cal, out_json)
     _write_markdown(cal, out_md)
+
+    # 区分"接口失败" vs "当日无新股"：
+    #   fetch_ok=False → akshare 两个端点都报错 → exit 2（真失败，daily_refresh 标红）
+    #   fetch_ok=True 但 n_total=0 → 接口正常但当日确实无新股 → exit 0（正常情况）
+    if not cal.fetch_ok():
+        logger.error("akshare IPO 接口全部失败 (fetch_status=%s)", cal.fetch_status)
+        return 2
+    if n_total == 0:
+        logger.info("IPO 接口正常但当日无新股 (fetch_status=%s)", cal.fetch_status)
+        print(f"✅ IPO 日历空 — 接口正常但当日无新股 — {datetime.now():%Y-%m-%d %H:%M}")
+        return 0
 
     today = date.today()
     today_subs = [e for e in cal.upcoming_subscription if e.subscribe_date == today]
