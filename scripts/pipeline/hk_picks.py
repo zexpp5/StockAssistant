@@ -7,16 +7,15 @@
   接进去会污染原有逻辑；港股有独立的南向资金信号（对应 A 股北向），
   独立 job 更清爽，3 条线互不干扰。
 
-因子（合计 1.00）：
-  1. Piotroski F-Score (factor_model.piotroski_f_score, akshare 港股财报)  权重 0.34
-  2. 12-1 月动量      (factor_model fetch_momentum, yfinance 价格)         权重 0.30
-  3. 1 月反转         (factor_model fetch_momentum.reversal_1m)            权重 0.21
-  4. 南向资金        (south_flow_signals: 整体流向 + 截面持股 %)            权重 0.15
-                    （与 A 股北向资金权重对称，2026-05-12 新增）
+因子（当前合计 1.00）：
+  1. Piotroski F-Score (factor_model.piotroski_f_score, akshare 港股财报)  权重 0.40
+  2. 12-1 月动量      (factor_model fetch_momentum, yfinance 价格)         权重 0.35
+  3. 1 月反转         (factor_model fetch_momentum.reversal_1m)            权重 0.25
+  4. 南向资金        standby，权重 0.00；cache 验证稳定后再恢复
 
 候选池：
-  - hk_universe.HK_TECH_UNIVERSE 33 只科技龙头白名单（恒生科技指数对照）
-  - ∪ watchlist 港股标的（用户自加，比如 6869/9992）
+  - 仅 watchlist 港股标的（用户手动加入，比如 6869/9992）
+  - hk_universe 只保留给独立 AI 推荐/候选发现，不写入「自选股·AI 优选」
 
 输出：
   - data/latest/hk_picks.json   完整结果（结构对齐 a_share_picks，让 morning_brief 统一渲染）
@@ -33,6 +32,7 @@ import logging
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
@@ -43,7 +43,6 @@ sys.path.insert(0, str(_REPO / "scripts" / "lib"))
 
 from factor_model import fetch_factors_for
 from stock_db import fetch_all_watchlist, upsert_picks
-from stock_research.core.hk_universe import fetch_hk_tech_universe
 from stock_research.core.south_flow_signals import (
     compute_south_flow_signal,
     fetch_aggregate_south_flow,
@@ -52,6 +51,7 @@ from stock_research.core.south_flow_signals import (
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
+HK_FACTOR_CACHE = _REPO / "data" / "latest" / "hk_factor_cache.json"
 
 
 FACTOR_WEIGHTS = {
@@ -88,6 +88,8 @@ class HKPickEntry:
     south_score: float = 0.5                  # 综合（聚合 + 截面）
 
     composite: float = 0.0
+    coverage_score: float = 0.0
+    missing_factors: str = ""
     rank: int = 0
     recommended: bool = False
 
@@ -100,24 +102,14 @@ def _is_hk_code(code: str) -> bool:
 
 
 def fetch_hk_candidates() -> list[dict]:
-    """合并 hk_universe 白名单 + watchlist 港股，去重。"""
-    universe = fetch_hk_tech_universe()
+    """读取 watchlist 港股候选，保持自选股完全由用户手动维护。"""
     wl_records = fetch_all_watchlist()
-    wl_hk = [
+    return [
         {"ticker": r["code"], "raw_ticker": r["code"].replace(".HK", "").lstrip("0"),
          "name": r.get("name", r["code"]), "sector": r.get("industry") or "",
          "source": "watchlist"}
         for r in wl_records if _is_hk_code(r.get("code", ""))
     ]
-
-    by_ticker: dict[str, dict] = {}
-    for item in universe + wl_hk:
-        tk = item["ticker"].upper()
-        if tk not in by_ticker:
-            by_ticker[tk] = item
-        else:
-            by_ticker[tk].setdefault("sector", item.get("sector", ""))
-    return list(by_ticker.values())
 
 
 def _winsorize_rank(values: list[float | None]) -> list[float | None]:
@@ -150,8 +142,127 @@ def _quantile(values: list[float], q: float) -> float:
     return s[idx]
 
 
+def _apply_sector_cap(entries: list[HKPickEntry], cutoff: float, top_k: int,
+                      max_sector_frac: float = 0.35) -> tuple[list[HKPickEntry], list[str]]:
+    """按综合分排序后加行业上限，避免港股 top 全挤在同一赛道。"""
+    max_per_sector = max(1, int(top_k * max_sector_frac))
+    selected: list[HKPickEntry] = []
+    counts: dict[str, int] = {}
+    skipped: list[str] = []
+    eligible = [e for e in entries if e.data_quality != "fail" and e.composite >= cutoff]
+    for e in eligible:
+        sector = e.sector or "未分类"
+        if counts.get(sector, 0) >= max_per_sector:
+            skipped.append(f"{e.code}({sector})")
+            continue
+        selected.append(e)
+        counts[sector] = counts.get(sector, 0) + 1
+        if len(selected) >= top_k:
+            break
+    return selected, skipped
+
+
+def _load_hk_factor_cache() -> dict:
+    try:
+        data = json.loads(HK_FACTOR_CACHE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {"items": {}}
+    except Exception:
+        return {"items": {}}
+
+
+def _save_hk_factor_cache(cache: dict) -> None:
+    HK_FACTOR_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "items": cache.get("items", {}),
+    }
+    tmp = HK_FACTOR_CACHE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    tmp.replace(HK_FACTOR_CACHE)
+
+
+def _cached_factor(cache_items: dict, ticker: str, today: str) -> dict | None:
+    item = cache_items.get(ticker)
+    if isinstance(item, dict) and item.get("date") == today and isinstance(item.get("factor"), dict):
+        return item["factor"]
+    return None
+
+
+def _standby_south_signal(tk: str):
+    from stock_research.core.south_flow_signals import SouthFlowSignal
+    return SouthFlowSignal(
+        code=tk,
+        aggregate_regime="standby",
+        individual_pct=None,
+        individual_rank=0.5,
+        score=0.5,
+        notes=["standby (FACTOR_WEIGHTS.south_flow=0)"],
+    )
+
+
+def _build_hk_entry(
+    c: dict,
+    *,
+    today: str,
+    cache_items: dict,
+    south_weight: float,
+    south_components: dict,
+    south_agg: dict,
+    south_all_pcts: list,
+    sleep_sec: float,
+) -> tuple[HKPickEntry, dict | None, str]:
+    tk = c["ticker"]
+    name = c.get("name", tk)
+    try:
+        f = _cached_factor(cache_items, tk, today)
+        cache_update = None
+        cache_hit = f is not None
+        if f is None:
+            f = fetch_factors_for(tk, as_of=None)
+            cache_update = {"date": today, "factor": f}
+            if sleep_sec > 0:
+                time.sleep(sleep_sec)
+
+        piotroski = f.get("piotroski") or {}
+        momentum = f.get("momentum") or {}
+        f_score = piotroski.get("f_score")
+        data_q = piotroski.get("data_quality", "fail")
+        mom = momentum.get("momentum_12_1")
+        rev = momentum.get("reversal_1m")
+
+        if south_weight > 0:
+            south_sig = compute_south_flow_signal(
+                tk, south_components, south_agg, south_all_pcts
+            )
+        else:
+            south_sig = _standby_south_signal(tk)
+
+        entry = HKPickEntry(
+            code=tk,
+            name=name,
+            sector=c.get("sector", "") or "",
+            f_score=int(f_score) if isinstance(f_score, (int, float)) else None,
+            f_score_norm=(f_score / 9.0) if isinstance(f_score, (int, float)) else None,
+            momentum_12_1=mom if isinstance(mom, (int, float)) else None,
+            reversal_1m=rev if isinstance(rev, (int, float)) else None,
+            south_pct=south_sig.individual_pct,
+            south_rank=south_sig.individual_rank,
+            south_score=south_sig.score,
+            data_quality=data_q,
+        )
+        f_str = str(f_score) if f_score is not None else "?"
+        m_str = f"{mom:+.0f}%" if isinstance(mom, (int, float)) else "?"
+        status = f"F={f_str:<3} M={m_str:<6} [{data_q}]" + (" cache" if cache_hit else "")
+        return entry, cache_update, status
+    except Exception as e:
+        entry = HKPickEntry(code=tk, name=name, sector=c.get("sector", ""),
+                            data_quality="fail", notes=[f"err: {e}"])
+        return entry, None, f"失败: {e}"
+
+
 def run_hk_picks(top_k: int = 12, mode: str = "tertile", dry_run: bool = False,
-                 sleep_sec: float = 1.0, bypass_audit_gate: bool = False):
+                 sleep_sec: float = 1.0, bypass_audit_gate: bool = False,
+                 workers: int = 3):
     """主入口。
 
     参数：
@@ -180,7 +291,7 @@ def run_hk_picks(top_k: int = 12, mode: str = "tertile", dry_run: bool = False,
     # 1. 候选池
     print("\n[1/4] 拉港股候选池...")
     cands = fetch_hk_candidates()
-    print(f"  候选 {len(cands)} 只（hk_universe 33 + watchlist 港股）")
+    print(f"  候选 {len(cands)} 只（仅来自手动 watchlist 港股）")
     if not cands:
         print("  (空候选，退出)")
         return 0
@@ -204,59 +315,39 @@ def run_hk_picks(top_k: int = 12, mode: str = "tertile", dry_run: bool = False,
     # 2. 因子拉取（F-Score + 动量 + 反转 + 南向）
     print(f"\n[2.1/4] 拉个股因子（akshare 港股财报 + yfinance 价格）...")
     entries: list[HKPickEntry] = []
-    for i, c in enumerate(cands, 1):
-        tk = c["ticker"]
-        name = c.get("name", tk)
-        print(f"  [{i:>2}/{len(cands)}] {tk:10} {name[:12]:<14}", end=" ", flush=True)
-        try:
-            f = fetch_factors_for(tk, as_of=None)
-            piotroski = f.get("piotroski") or {}
-            momentum = f.get("momentum") or {}
-            f_score = piotroski.get("f_score")
-            data_q = piotroski.get("data_quality", "fail")
-            mom = momentum.get("momentum_12_1")
-            rev = momentum.get("reversal_1m")
-
-            # 南向资金信号（聚合 + 截面）— standby 时给同类型 SouthFlowSignal 对象
-            # 七审 P0：下游 line 237-239 用 south_sig.individual_pct/rank/score（属性访问），
-            # 之前返回 dict 会在 weight=0 默认状态下抛 AttributeError
-            if south_weight > 0:
-                south_sig = compute_south_flow_signal(
-                    tk, south_components, south_agg, south_all_pcts
-                )
-            else:
-                from stock_research.core.south_flow_signals import SouthFlowSignal
-                south_sig = SouthFlowSignal(
-                    code=tk,
-                    aggregate_regime="standby",
-                    individual_pct=None,
-                    individual_rank=0.5,
-                    score=0.5,
-                    notes=["standby (FACTOR_WEIGHTS.south_flow=0)"],
-                )
-
-            entry = HKPickEntry(
-                code=tk,
-                name=name,
-                sector=c.get("sector", "") or "",
-                f_score=int(f_score) if isinstance(f_score, (int, float)) else None,
-                f_score_norm=(f_score / 9.0) if isinstance(f_score, (int, float)) else None,
-                momentum_12_1=mom if isinstance(mom, (int, float)) else None,
-                reversal_1m=rev if isinstance(rev, (int, float)) else None,
-                south_pct=south_sig.individual_pct,
-                south_rank=south_sig.individual_rank,
-                south_score=south_sig.score,
-                data_quality=data_q,
-            )
+    today = datetime.now().strftime("%Y-%m-%d")
+    factor_cache = _load_hk_factor_cache()
+    cache_items = factor_cache.setdefault("items", {})
+    cache_dirty = False
+    worker_count = max(1, min(workers, len(cands)))
+    print(f"  并发 workers={worker_count} · 当天 cache={HK_FACTOR_CACHE}")
+    with ThreadPoolExecutor(max_workers=worker_count) as ex:
+        futures = {
+            ex.submit(
+                _build_hk_entry,
+                c,
+                today=today,
+                cache_items=cache_items,
+                south_weight=south_weight,
+                south_components=south_components,
+                south_agg=south_agg,
+                south_all_pcts=south_all_pcts,
+                sleep_sec=sleep_sec,
+            ): (idx, c)
+            for idx, c in enumerate(cands, 1)
+        }
+        for fut in as_completed(futures):
+            idx, c = futures[fut]
+            tk = c["ticker"]
+            name = c.get("name", tk)
+            entry, cache_update, status = fut.result()
             entries.append(entry)
-            f_str = str(f_score) if f_score is not None else "?"
-            m_str = f"{mom:+.0f}%" if isinstance(mom, (int, float)) else "?"
-            print(f"F={f_str:<3} M={m_str:<6} [{data_q}]")
-        except Exception as e:
-            entries.append(HKPickEntry(code=tk, name=name, sector=c.get("sector", ""),
-                                        data_quality="fail", notes=[f"err: {e}"]))
-            print(f"失败: {e}")
-        time.sleep(sleep_sec)
+            if cache_update is not None:
+                cache_items[tk] = cache_update
+                cache_dirty = True
+            print(f"  [{idx:>2}/{len(cands)}] {tk:10} {name[:12]:<14} {status}")
+    if cache_dirty:
+        _save_hk_factor_cache(factor_cache)
 
     # 3. 横截面归一化 momentum / reversal
     moms = [e.momentum_12_1 for e in entries]
@@ -270,18 +361,24 @@ def run_hk_picks(top_k: int = 12, mode: str = "tertile", dry_run: bool = False,
     # 4. 合成 composite + 决策
     print(f"\n[3/4] 合成综合分（{len(entries)} 只）...")
     for e in entries:
-        # 缺失（None）→ 0.5（中位补值）
-        f_n = e.f_score_norm if e.f_score_norm is not None else 0.5
-        m_n = e.momentum_norm if e.momentum_norm is not None else 0.5
-        r_n = e.reversal_norm if e.reversal_norm is not None else 0.5
-        s_n = e.south_score if e.south_score is not None else 0.5
-        composite = (
-            FACTOR_WEIGHTS["f_score"]   * f_n
-            + FACTOR_WEIGHTS["momentum"]  * m_n
-            + FACTOR_WEIGHTS["reversal"]  * r_n
-            + FACTOR_WEIGHTS["south_flow"] * s_n
-        )
-        e.composite = round(composite, 4)
+        factors = {
+            "f_score": e.f_score_norm,
+            "momentum": e.momentum_norm,
+            "reversal": e.reversal_norm,
+            "south_flow": e.south_score if FACTOR_WEIGHTS.get("south_flow", 0) > 0 else None,
+        }
+        active = {k: w for k, w in FACTOR_WEIGHTS.items() if w > 0}
+        total_w = sum(active.values()) or 1.0
+        covered_w = sum(w for k, w in active.items() if factors.get(k) is not None)
+        e.coverage_score = round(covered_w / total_w, 4)
+        missing = [k for k in active if factors.get(k) is None]
+        e.missing_factors = ",".join(missing)
+        if covered_w <= 0:
+            e.composite = -0.25
+        else:
+            raw = sum(active[k] * float(factors[k]) for k in active if factors.get(k) is not None) / covered_w
+            penalty = max(0.0, 0.50 - e.coverage_score) / 0.50 * 0.25
+            e.composite = round(raw * e.coverage_score - penalty, 4)
 
     entries.sort(key=lambda e: -e.composite)
     valid_composites = [e.composite for e in entries if e.data_quality != "fail"]
@@ -294,15 +391,18 @@ def run_hk_picks(top_k: int = 12, mode: str = "tertile", dry_run: bool = False,
         "median":   _quantile(valid_composites, 0.50),
     }
     cutoff = cutoff_map[mode]
-    selected: list[HKPickEntry] = []
     for i, e in enumerate(entries, 1):
         e.rank = i
-        e.recommended = (e.data_quality != "fail" and e.composite >= cutoff)
-        if e.recommended and len(selected) < top_k:
-            selected.append(e)
+        e.recommended = False
+
+    selected, sector_skipped = _apply_sector_cap(entries, cutoff, top_k)
+    for e in selected:
+        e.recommended = True
 
     print(f"\n  cutoff = {cutoff:.3f} (mode={mode})")
     print(f"  推荐 {len(selected)} / 有效 {len(valid_composites)} / 总 {len(entries)}")
+    if sector_skipped:
+        print(f"  行业 cap 跳过 {len(sector_skipped)} 只: {', '.join(sector_skipped[:8])}")
     print(f"\n  {'排':<3}{'代码':<10}{'名称':<14}{'F':>3}{'动量':>8}{'反转':>8}{'南向%':>7}{'综合':>7}  状态")
     print(f"  {'-'*78}")
     for e in entries[:30]:
@@ -384,6 +484,10 @@ def run_hk_picks(top_k: int = 12, mode: str = "tertile", dry_run: bool = False,
             "entry_price": price_map.get(e.code),
             "entry_currency": "HKD",
             "model_source": "v6_hk",
+            "signal": "buy",
+            "coverage_score": e.coverage_score,
+            "missing_factors": e.missing_factors,
+            "factor_weights_used": json.dumps(FACTOR_WEIGHTS, sort_keys=True),
         })
     if db_rows:
         try:
@@ -402,11 +506,14 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--sleep", type=float, default=1.0,
                         help="akshare 请求间隔秒数（默认 1.0 防限流）")
+    parser.add_argument("--workers", type=int, default=int(os.getenv("STOCK_ASSISTANT_HK_WORKERS", "3")),
+                        help="缓存未命中时并发拉港股因子的线程数（默认 3）")
     parser.add_argument("--bypass-audit-gate", action="store_true",
                         help="跳过跨源 audit CONFLICT 闸门（数据系统性故障时仍推送，风险自担）")
     args = parser.parse_args()
     return run_hk_picks(top_k=args.top, mode=args.mode, dry_run=args.dry_run,
-                        sleep_sec=args.sleep, bypass_audit_gate=args.bypass_audit_gate)
+                        sleep_sec=args.sleep, bypass_audit_gate=args.bypass_audit_gate,
+                        workers=args.workers)
 
 
 if __name__ == "__main__":

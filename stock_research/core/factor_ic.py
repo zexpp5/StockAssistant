@@ -28,7 +28,30 @@ from typing import Sequence
 
 import numpy as np
 import pandas as pd
-from scipy.stats import spearmanr
+
+try:  # scipy is optional in the daily runtime; pandas ranking is enough here.
+    from scipy.stats import spearmanr as _scipy_spearmanr
+    from scipy.stats import t as _scipy_t_dist
+except Exception:  # pragma: no cover - exercised on lean production envs
+    _scipy_spearmanr = None
+    _scipy_t_dist = None
+
+
+def _spearmanr(scores: np.ndarray, rets: np.ndarray) -> tuple[float, float]:
+    if _scipy_spearmanr is not None:
+        ic, pval = _scipy_spearmanr(scores, rets)
+        return float(ic), float(pval)
+    score_rank = pd.Series(scores).rank(method="average")
+    ret_rank = pd.Series(rets).rank(method="average")
+    ic = score_rank.corr(ret_rank)
+    return float(ic) if ic == ic else float("nan"), float("nan")
+
+
+def _pearson_pvalue(ic: float, n: int) -> float:
+    if _scipy_t_dist is None:
+        return float("nan")
+    t_stat = ic * np.sqrt((n - 2) / (1 - ic ** 2))
+    return float(2 * (1 - _scipy_t_dist.cdf(abs(t_stat), df=n - 2)))
 
 
 # ─────────── 单期 IC ───────────
@@ -69,15 +92,13 @@ def compute_ic(factors: dict[str, dict[str, float]],
     rets = np.array([r for _, r in paired])
 
     if method == "spearman":
-        ic, pval = spearmanr(scores, rets)
+        ic, pval = _spearmanr(scores, rets)
     elif method == "pearson":
         ic = float(np.corrcoef(scores, rets)[0, 1])
         # 用 t 分布近似 p 值
         n = len(paired)
         if abs(ic) < 0.999:
-            t = ic * np.sqrt((n - 2) / (1 - ic ** 2))
-            from scipy.stats import t as t_dist
-            pval = 2 * (1 - t_dist.cdf(abs(t), df=n - 2))
+            pval = _pearson_pvalue(ic, n)
         else:
             pval = 0.0
     else:

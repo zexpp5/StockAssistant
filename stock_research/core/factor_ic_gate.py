@@ -8,9 +8,9 @@
 闸门规则（保守、明确、可解释）：
   1. **新鲜度**：最新 factor_ic snapshot 必须在 max_age_days 内（默认 35 天）
      —— 过期闸门不可信，宁可手动重跑也不放行
-  2. **核心因子至少 1 个 healthy**：在 watch_factors 里至少有 1 个因子满足
+  2. **生产等权因子必须全部 healthy**：v6 composite 等权使用的每个因子都要满足
      mean_ic ≥ mean_ic_threshold 且 |ic_ir| ≥ ir_threshold（默认 0.03 / 0.30）
-     —— "至少 1 个"是宽松边界；全部失效才一票否决
+     —— 未验证/衰减因子不能继续以等权进入 buy 推荐
   3. **反向因子单独标记**：mean_ic < -mean_ic_threshold（inverted alpha）的因子
      报告里红字提示，可以反向使用但不计入"healthy"
 
@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_MEAN_IC_THRESHOLD = 0.03     # 边际有效下限
 DEFAULT_IR_THRESHOLD = 0.30          # IR 良好下限
 DEFAULT_MAX_AGE_DAYS = 35            # 超过 35 天的 IC 数据视为过期
-DEFAULT_WATCH_FACTORS = ["momentum", "reversal", "long_momentum"]
+DEFAULT_WATCH_FACTORS = ["f_score", "momentum", "reversal", "pead", "analyst", "quality"]
 
 
 @dataclass
@@ -127,6 +127,7 @@ def evaluate_gate(snapshot: dict | None = None,
                   mean_ic_threshold: float = DEFAULT_MEAN_IC_THRESHOLD,
                   ir_threshold: float = DEFAULT_IR_THRESHOLD,
                   max_age_days: float = DEFAULT_MAX_AGE_DAYS,
+                  require_all_factors: bool = True,
                   audit_dir: Path | None = None
                   ) -> GateResult:
     """评估因子 IC 闸门状态。
@@ -148,6 +149,7 @@ def evaluate_gate(snapshot: dict | None = None,
         "ir_threshold": ir_threshold,
         "max_age_days": max_age_days,
         "watch_factors": list(watch_factors),
+        "require_all_factors": require_all_factors,
     }
 
     # ─── 1. 加载快照 ───
@@ -199,6 +201,7 @@ def evaluate_gate(snapshot: dict | None = None,
 
     healthy = [v.factor for v in verdicts if v.status == "healthy"]
     inverted = [v.factor for v in verdicts if v.status == "inverted"]
+    blocking = [v for v in verdicts if v.status != "healthy"]
 
     # ─── 4. 闸门判定 ───
     if not verdicts:
@@ -206,6 +209,20 @@ def evaluate_gate(snapshot: dict | None = None,
             passed=False, reason="watch_factors 为空（无因子可判定）",
             snapshot_path=str(snapshot_path) if snapshot_path else None,
             snapshot_age_days=age, factor_verdicts=verdicts,
+            thresholds=thresholds,
+        )
+
+    if require_all_factors and blocking:
+        statuses = ", ".join(f"{v.factor}={v.status}" for v in blocking)
+        return GateResult(
+            passed=False,
+            reason=(f"生产等权因子未全部 healthy（{statuses}）— "
+                    "未验证/衰减因子必须先补 IC，或从 composite 权重中降为 0"),
+            snapshot_path=str(snapshot_path) if snapshot_path else None,
+            snapshot_age_days=age,
+            factor_verdicts=verdicts,
+            healthy_factors=healthy,
+            inverted_factors=inverted,
             thresholds=thresholds,
         )
 
@@ -251,7 +268,8 @@ def format_report(result: GateResult) -> str:
         age_line,
         (f"  阈值：mean_ic ≥ {result.thresholds.get('mean_ic_threshold')}, "
          f"|IR| ≥ {result.thresholds.get('ir_threshold')}, "
-         f"max_age = {result.thresholds.get('max_age_days')}d"),
+         f"max_age = {result.thresholds.get('max_age_days')}d, "
+         f"require_all = {result.thresholds.get('require_all_factors')}"),
         "",
         f"  {'因子':<16}{'mean IC':>10}{'IC IR':>10}{'hit':>8}{'periods':>10}  状态",
         f"  {'-'*70}",

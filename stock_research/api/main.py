@@ -118,12 +118,25 @@ def create_app():
 
     @app.post("/api/watchlist")
     def create_watchlist(item: dict[str, Any] = Body(...)) -> dict[str, Any]:
-        """新增 watchlist 一条；code 必填；如已存在则 upsert 更新。"""
+        """新增 watchlist 一条；code 必填；如已存在则 upsert 更新。
+
+        入库成功后**异步触发** daily_picks_v5 评级（不阻塞响应）。
+        """
         import stock_db
         if not item.get("code"):
             raise HTTPException(400, "code is required")
         n = stock_db.upsert_watchlist([item])
-        return {"status": "ok", "code": item["code"], "rows_affected": n}
+        rerun_info: dict[str, Any] = {}
+        try:
+            rerun_info = _spawn_picks_rerun(trigger=f"watchlist:add:{item['code']}")
+        except Exception as e:  # 不让评级失败拖垮添加流程
+            rerun_info = {"status": "error", "error": str(e)}
+        return {
+            "status": "ok",
+            "code": item["code"],
+            "rows_affected": n,
+            "rerun": rerun_info,
+        }
 
     @app.put("/api/watchlist/{code}")
     def update_watchlist(code: str, item: dict[str, Any] = Body(...)) -> dict[str, Any]:
@@ -187,10 +200,12 @@ def create_app():
             }
 
             # 找 picks 表里不在 watchlist 的标的（如 hk_picks 的 hk_universe.py 白名单股、a_share_picks 额外评的）
+            # signal='buy' 过滤：avoid/watch 档不算"额外候选"，避免把 daily_picks_v5 的负向 picks 当推荐展示。
             picks_only_q = conn.execute(
                 """
                 SELECT DISTINCT code, FIRST(name) AS name, FIRST(market) AS market FROM picks
                 WHERE code NOT IN (SELECT code FROM watchlist)
+                  AND COALESCE(signal, 'buy') = 'buy'
                 GROUP BY code
                 """
             ).fetchall()
@@ -439,6 +454,243 @@ def create_app():
         if not code:
             raise HTTPException(400, "code is required")
         return enrich_one(code, item.get("name"))
+
+    # ────────── picks 自动评级（加股后异步触发） ──────────
+    # lock 文件：被自动评级或日批 daily_picks_v5 占用时存在；写入 JSON {pid, started_at, trigger}
+    _PICKS_LOCK = Path("/tmp/picks_rerun.lock")
+    _PICKS_LOG = Path("/tmp/picks_rerun.log")
+
+    def _rerun_status() -> dict[str, Any]:
+        """读 lock 文件，判断是否在跑；自动清理 stale lock（pid 已死）。"""
+        import json as _json, os as _os, time as _time
+        if not _PICKS_LOCK.exists():
+            return {"running": False}
+        try:
+            info = _json.loads(_PICKS_LOCK.read_text())
+        except Exception:
+            _PICKS_LOCK.unlink(missing_ok=True)
+            return {"running": False, "stale_cleared": True}
+        pid = info.get("pid")
+        alive = False
+        if pid:
+            try:
+                _os.kill(pid, 0)  # signal 0 = 探活
+                alive = True
+            except OSError:
+                alive = False
+        if not alive:
+            _PICKS_LOCK.unlink(missing_ok=True)
+            return {"running": False, "stale_cleared": True, "last_pid": pid}
+        age_s = _time.time() - info.get("started_at", _time.time())
+        return {
+            "running": True,
+            "pid": pid,
+            "started_at": info.get("started_at"),
+            "age_s": round(age_s, 1),
+            "trigger": info.get("trigger"),
+        }
+
+    def _spawn_picks_rerun(
+        trigger: str,
+        *,
+        force_refresh: bool = False,
+        bypass_ic_gate: bool = False,
+        bypass_audit_gate: bool = False,
+        bypass_reason: str | None = None,
+    ) -> dict[str, Any]:
+        """启动 daily_picks_v5 子进程（detached），写 lock。已在跑则 noop。
+
+        force_refresh=True 时删 factor cache，保证新加的股被评（否则 cache 命中跳过拉因子）。
+        watchlist 触发的 rerun 总是 force_refresh，因为 watchlist 才刚变化。
+        """
+        import json as _json, os as _os, time as _time, subprocess as _sub
+        existing = _rerun_status()
+        if existing.get("running"):
+            return {"status": "already_running", **existing}
+
+        repo_root = str(_REPO_ROOT)
+        # watchlist 变化触发的 rerun 强制重拉因子；手动触发可省时间复用 cache
+        if force_refresh or trigger.startswith("watchlist:"):
+            cache_file = _REPO_ROOT / "data" / "latest" / "factor_scores_today.json"
+            try:
+                cache_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        cmd = [
+            sys.executable,
+            str(_REPO_ROOT / "scripts" / "pipeline" / "daily_picks_v5.py"),
+        ]
+        bypasses: list[str] = []
+        if bypass_ic_gate:
+            cmd.append("--bypass-ic-gate")
+            bypasses.append("ic_gate")
+        if bypass_audit_gate:
+            cmd.append("--bypass-audit-gate")
+            bypasses.append("audit_gate")
+
+        # 不走 shell，避免 trigger/body 注入；wrapper 只负责落 log 和结束时清 lock。
+        wrapper_code = r"""
+import datetime as _dt
+import json as _json
+import subprocess as _sub
+import sys as _sys
+from pathlib import Path as _Path
+
+cmd = _json.loads(_sys.argv[1])
+log_path = _Path(_sys.argv[2])
+lock_path = _Path(_sys.argv[3])
+repo_root = _sys.argv[4]
+trigger = _sys.argv[5].replace("\n", " ")[:240]
+bypass_info = _sys.argv[6].replace("\n", " ")[:240]
+reason = _sys.argv[7].replace("\n", " ")[:240]
+
+log_path.parent.mkdir(parents=True, exist_ok=True)
+rc = 1
+try:
+    with log_path.open("a", encoding="utf-8") as log:
+        ts = _dt.datetime.now().isoformat(timespec="seconds")
+        log.write(f"[picks-rerun] start trigger={trigger} bypass={bypass_info or '-'} reason={reason or '-'} at {ts}\n")
+        log.flush()
+        rc = _sub.call(cmd, cwd=repo_root, stdout=log, stderr=_sub.STDOUT)
+        ts = _dt.datetime.now().isoformat(timespec="seconds")
+        log.write(f"[picks-rerun] done exit={rc} at {ts}\n")
+finally:
+    try:
+        lock_path.unlink()
+    except FileNotFoundError:
+        pass
+_sys.exit(rc)
+"""
+        proc = _sub.Popen(
+            [
+                sys.executable,
+                "-c",
+                wrapper_code,
+                _json.dumps(cmd, ensure_ascii=False),
+                str(_PICKS_LOG),
+                str(_PICKS_LOCK),
+                repo_root,
+                str(trigger or "manual"),
+                ",".join(bypasses),
+                str(bypass_reason or ""),
+            ],
+            cwd=repo_root,
+            stdout=_sub.DEVNULL,
+            stderr=_sub.DEVNULL,
+            start_new_session=True,  # detach
+        )
+        _PICKS_LOCK.write_text(_json.dumps({
+            "pid": proc.pid,
+            "started_at": _time.time(),
+            "trigger": trigger,
+            "force_refresh": force_refresh or trigger.startswith("watchlist:"),
+            "bypasses": bypasses,
+            "bypass_reason": bypass_reason or "",
+            "cmd": cmd,
+        }, ensure_ascii=False))
+        return {
+            "status": "started",
+            "pid": proc.pid,
+            "trigger": trigger,
+            "bypasses": bypasses,
+        }
+
+    @app.get("/api/picks/rerun-status")
+    def picks_rerun_status() -> dict[str, Any]:
+        """前端轮询用：picks 评级 job 是否还在跑。"""
+        return _rerun_status()
+
+    @app.post("/api/picks/rerun")
+    def picks_rerun(item: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+        """手动触发 daily_picks_v5 重跑。
+
+        body 可选 {trigger, force_refresh}；force_refresh=true 时删 factor cache 强制重拉。
+        默认不绕过 IC / audit 闸门。若确需紧急绕过，必须同时传：
+        {allow_gate_bypass: true, bypass_ic_gate/bypass_audit_gate: true, bypass_reason: "..."}。
+        """
+        bypass_ic = bool(item.get("bypass_ic_gate", False))
+        bypass_audit = bool(item.get("bypass_audit_gate", False))
+        if (bypass_ic or bypass_audit) and not bool(item.get("allow_gate_bypass", False)):
+            raise HTTPException(
+                400,
+                "gate bypass is disabled by default; pass allow_gate_bypass=true "
+                "and bypass_reason to make the override explicit",
+            )
+        return _spawn_picks_rerun(
+            item.get("trigger") or "manual",
+            force_refresh=bool(item.get("force_refresh", False)),
+            bypass_ic_gate=bypass_ic,
+            bypass_audit_gate=bypass_audit,
+            bypass_reason=str(item.get("bypass_reason") or ""),
+        )
+
+    @app.get("/api/picks/latest-summary")
+    def picks_latest_summary() -> dict[str, Any]:
+        """返回 {code: {pick_date, rating, total_score, ai_score, theme}}，
+        每只股取它**自己**最新 pick_date 的一行（不是全表最新 pick_date）。
+
+        前端用这个实时刷新 AI 评级列。
+        """
+        import stock_db
+        conn = stock_db.get_db()
+        try:
+            rows = conn.execute(
+                """
+                WITH ranked AS (
+                    SELECT
+                        code, pick_date, rating, total_score, ai_score, theme,
+                        ROW_NUMBER() OVER (PARTITION BY code ORDER BY pick_date DESC) AS rn
+                    FROM picks
+                )
+                SELECT code, pick_date, rating, total_score, ai_score, theme
+                FROM ranked
+                WHERE rn = 1
+                """,
+            ).fetchall()
+        finally:
+            conn.close()
+        return {
+            r[0]: {
+                "pick_date": r[1].isoformat() if r[1] else None,
+                "rating": r[2],
+                "total_score": r[3],
+                "ai_score": r[4],
+                "theme": r[5],
+            }
+            for r in rows
+        }
+
+    @app.get("/api/picks/by-code/{code}")
+    def picks_by_code(code: str) -> dict[str, Any]:
+        """查这只股的最新评级（最大 pick_date）。返回 {found, pick_date, rating, total_score} 或 {found: false}。"""
+        import stock_db
+        conn = stock_db.get_db()
+        try:
+            row = conn.execute(
+                """
+                SELECT pick_date, rating, total_score, ai_score, theme, model_source
+                FROM picks
+                WHERE code = ?
+                ORDER BY pick_date DESC
+                LIMIT 1
+                """,
+                [code],
+            ).fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return {"found": False, "code": code}
+        return {
+            "found": True,
+            "code": code,
+            "pick_date": row[0].isoformat() if row[0] else None,
+            "rating": row[1],
+            "total_score": row[2],
+            "ai_score": row[3],
+            "theme": row[4],
+            "model_source": row[5],
+        }
 
     # ────────── 持仓 holdings（2026-05-12 从 dashboard localStorage 迁过来） ──────────
     @app.get("/api/holdings")

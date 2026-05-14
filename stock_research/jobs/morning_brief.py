@@ -4,7 +4,7 @@
 一份就知道："今天能不能动手、买什么、AI 说对了么、有什么红旗、要做什么"。
 
 数据源（全部已经在跑，本脚本只做拼装，不产生新数据）：
-  - plan_a_v5_constrained.json | plan_a_v5.json     -> 当前建议组合
+  - plan_a_v5_constrained.json | plan_a_v5.json     -> 当前建议组合（兼容文件名，内容为 v6 risk-aware）
   - trade_delta.json                                 -> 本周调仓 delta
   - risk_metrics.json                                -> 历史风险指标 + NAV 时序
   - data/snapshots/audit/realtime_defense_*.json     -> regime gate（最新一份）
@@ -55,6 +55,38 @@ def _load_json(path: Path) -> dict | list | None:
         return None
 
 
+def _parse_ts(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", ""))
+    except Exception:
+        return None
+
+
+def _load_us_plan() -> dict | None:
+    """读取美股生产 plan，避免旧 constrained 文件盖过最新 risk-aware plan。"""
+    base = _load_json(REPO / "data" / "latest" / "plan_a_v5.json")
+    constrained = _load_json(REPO / "data" / "latest" / "plan_a_v5_constrained.json")
+    base = base if isinstance(base, dict) else None
+    constrained = constrained if isinstance(constrained, dict) else None
+    if not base:
+        return constrained
+    if not constrained:
+        return base
+
+    base_ts = _parse_ts(base.get("generated_at"))
+    constrained_ts = (
+        _parse_ts(constrained.get("a_share_constraints_at"))
+        or _parse_ts(constrained.get("generated_at"))
+    )
+    same_plan = constrained.get("generated_at") == base.get("generated_at")
+    if same_plan or (base_ts and constrained_ts and constrained_ts >= base_ts):
+        return constrained
+    logger.warning("忽略旧 plan_a_v5_constrained.json，使用最新 plan_a_v5.json")
+    return base
+
+
 def _load_a_share_picks() -> dict | None:
     """Load A-share picks JSON, with DuckDB v6_cn as fresher source of truth."""
     json_payload = _load_json(REPO / "data" / "a_share_picks.json")
@@ -84,6 +116,7 @@ def _load_a_share_picks() -> dict | None:
             SELECT code, name, market, rating, total_score, ai_relevance, theme
             FROM picks
             WHERE model_source = 'v6_cn' AND pick_date = ?
+              AND signal = 'buy'
             ORDER BY total_score DESC NULLS LAST, code
         """, [latest]).fetchall()
         conn.close()
@@ -150,6 +183,57 @@ def section_quality_gate() -> str:
     if not lines:
         return ""
     return "#### 🧯 数据质量闸门\n" + "\n".join(lines) + "\n"
+
+
+def section_source_health() -> str:
+    payload = _load_json(REPO / "data" / "latest" / "source_health.json")
+    if not isinstance(payload, dict):
+        return ""
+    rows = []
+    for name, info in (payload.get("sources") or {}).items():
+        if (info or {}).get("status") in (None, "", "ok", "healthy"):
+            continue
+        affected = "、".join((info.get("affected_fields") or [])[:4]) or "部分字段"
+        unaffected = "、".join((info.get("unaffected_fields") or [])[:5]) or "主流程"
+        rows.append(
+            f"• **{name} 降级**：{info.get('reason') or 'unknown'}；"
+            f"受影响：{affected}；仍可用：{unaffected}"
+        )
+    if not rows:
+        return ""
+    rows.insert(0, "🟡 数据源有降级，但不等于整套建议失败；是否能交易以质量闸门为准。")
+    return "#### 🧯 数据源健康\n" + "\n".join(rows) + "\n"
+
+
+def _evidence_lines() -> list[str]:
+    ev = _load_json(REPO / "data" / "latest" / "recommendation_evidence.json")
+    if not isinstance(ev, dict):
+        return []
+    grade = ev.get("evidence_grade", "UNKNOWN")
+    cov = ev.get("review_coverage") or {}
+    total_r = cov.get("total_reviewed", 0)
+    total_m = cov.get("total_mature", 0)
+    coverage = cov.get("coverage")
+    cov_txt = "—" if coverage is None else f"{coverage * 100:.1f}%"
+    lines = [f"📐 **有效性证据 = {grade}** · 成熟回顾 {total_r}/{total_m} · 覆盖 {cov_txt}"]
+    rows = [r for r in (ev.get("review_metrics_by_source") or []) if r.get("signal") == "buy"]
+    if rows:
+        bits = []
+        for r in rows[:3]:
+            alpha = r.get("avg_alpha_pct")
+            alpha_txt = "—" if alpha is None else f"{alpha:+.2f}%"
+            bits.append(f"{r.get('model_source')} alpha {alpha_txt} n={r.get('n', 0)}")
+        lines.append("• " + " ｜ ".join(bits))
+    if grade == "INSUFFICIENT_EVIDENCE":
+        lines.append("• 证据仍在积累：清空重跑后至少等 1/5/20 日窗口成熟，再判断模型是否真有效。")
+    return lines
+
+
+def section_evidence() -> str:
+    lines = _evidence_lines()
+    if not lines:
+        return ""
+    return "#### 📐 推荐有效性证据\n" + "\n".join(lines) + "\n"
 
 
 def _latest_defense_snapshot() -> dict | None:
@@ -764,23 +848,23 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
             )
     lines = [head]
 
-    # 🇺🇸 美股（plan_v5 · Markowitz Max Sharpe）
+    # 🇺🇸 美股（plan_v5 兼容字段 · v6 risk-aware optimize）
     if plan:
         plan_v5 = plan.get("plan_v5") or []
         us_lines = _humanize_picks(plan_v5, a_share=False, history=history, factor_scores=factor_scores)
         if us_lines:
             n_us = sum(1 for l in us_lines if l.startswith("•"))
             ts_us = _fmt_ts(plan.get("generated_at"))
-            lines.append(f"**🇺🇸 美股 ({n_us} 只 · 4 因子 + Markowitz 客观仓位)** · {ts_us}")
+            lines.append(f"**🇺🇸 美股 ({n_us} 只 · 6 因子 + risk-aware 仓位)** · {ts_us}")
             lines.extend(us_lines)
         else:
             lines.append("**🇺🇸 美股** — _plan_v5 为空_")
 
-    # 🇭🇰 港股（hk_picks · 4 因子 = Piotroski + 动量 + 反转 + 南向资金）
+    # 🇭🇰 港股（hk_picks · 3 因子 = Piotroski + 动量 + 反转；南向权重为 0 时不写进理由）
     if hk_picks and hk_picks.get("selected"):
         sel = hk_picks["selected"][:10]
         ts_hk = _fmt_ts(hk_picks.get("generated_at"))
-        lines.append(f"**🇭🇰 港股 ({len(sel)} 只 · 4 因子 + 南向资金 + akshare 港股年报)** · {ts_hk}")
+        lines.append(f"**🇭🇰 港股 ({len(sel)} 只 · 3 因子 + akshare 港股年报)** · {ts_hk}")
         for entry in sel:
             ticker = entry.get("code", "?")
             name = entry.get("name", "")
@@ -1353,8 +1437,7 @@ def build_brief(share_mode: bool = False) -> str:
       - 红旗 section 为空时整段省略
       - 免责声明放最末一行（每天看一遍即可）
     """
-    plan_constrained = _load_json(REPO / "data" / "latest" / "plan_a_v5_constrained.json")
-    plan = plan_constrained or _load_json(REPO / "data" / "latest" / "plan_a_v5.json")
+    plan = _load_us_plan()
     trade_delta = _load_json(REPO / "data" / "latest" / "trade_delta.json")
     risk_metrics = _load_json(REPO / "data" / "latest" / "risk_metrics.json")
     factor_scores = _load_json(REPO / "data" / "latest" / "factor_scores_today.json")
@@ -1379,6 +1462,12 @@ def build_brief(share_mode: bool = False) -> str:
     qgate = section_quality_gate()
     if qgate:
         parts.extend([qgate, "\n"])
+    source_health = section_source_health()
+    if source_health:
+        parts.extend([source_health, "\n"])
+    evidence = section_evidence()
+    if evidence:
+        parts.extend([evidence, "\n"])
     # 1.5 持仓止损告警（无告警时整段省略，避免空版面）
     stoploss_warn = section_holdings_stoploss(history)
     if stoploss_warn:
@@ -1622,8 +1711,7 @@ def _build_card_payload() -> dict:
       红旗    → carmine 红粉（警示，仅非空时）
       调仓    → turquoise 青绿（最醒目 · 用户最关心的"今天做什么"）
     """
-    plan_constrained = _load_json(REPO / "data" / "latest" / "plan_a_v5_constrained.json")
-    plan = plan_constrained or _load_json(REPO / "data" / "latest" / "plan_a_v5.json")
+    plan = _load_us_plan()
     trade_delta = _load_json(REPO / "data" / "latest" / "trade_delta.json")
     risk_metrics = _load_json(REPO / "data" / "latest" / "risk_metrics.json")
     factor_scores = _load_json(REPO / "data" / "latest" / "factor_scores_today.json")
@@ -1707,13 +1795,21 @@ def _build_card_payload() -> dict:
     if qgate_lines:
         blocks.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(qgate_lines)}})
         blocks.append({"tag": "hr"})
+    source_health_md = section_source_health()
+    if source_health_md:
+        blocks.append({"tag": "div", "text": {"tag": "lark_md", "content": source_health_md.replace("#### ", "")}})
+        blocks.append({"tag": "hr"})
+    evidence_lines = _evidence_lines()
+    if evidence_lines:
+        blocks.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(evidence_lines)}})
+        blocks.append({"tag": "hr"})
 
     # ─── Section 2: 🔝 自选股·AI 优选（三线独立 · 白底）───
     if plan or hk_picks or a_share_picks:
         section2: list[dict] = [
             {"tag": "div", "text": {"tag": "lark_md", "content":
                 "**🔝 自选股·AI 优选（三线独立）**\n"
-                "_🇺🇸 美股 4 因子+Markowitz · 🇭🇰 港股 4 因子+南向资金 · 🇨🇳 A 股 6 因子+龙虎榜+北向_"
+                "_🇺🇸 美股 6 因子+risk-aware · 🇭🇰 港股 3 因子 · 🇨🇳 A 股 6 因子+龙虎榜+北向_"
                 + ("\n🔴 **质量闸门 FAIL：本区只读观察，不作为买入/加仓清单。**" if trade_blocked else "")}}
         ]
         if plan:

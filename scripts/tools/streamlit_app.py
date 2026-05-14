@@ -182,6 +182,7 @@ def _load_a_share_picks() -> dict | None:
                     SELECT code, name, market, rating, total_score, ai_relevance, theme
                     FROM picks
                     WHERE model_source = 'v6_cn' AND pick_date = ?
+                      AND signal = 'buy'
                     ORDER BY total_score DESC NULLS LAST, code
                 """, [latest]).fetchall()
                 con.close()

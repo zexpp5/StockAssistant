@@ -1,7 +1,7 @@
 """
 方案 A v6 · 专业风险指标计算器
 ─────────────────────────────────────────
-读 plan_a_v5.json 里 v6 当前推荐的 12 只组合（不再用旧的硬编码持仓），
+读 plan_a_v5.json 里 v6 risk-aware 当前推荐组合（保留旧文件名兼容下游），
 基于过去 ~1 年历史日收益，计算华尔街标准指标：
 
   • 年化收益率
@@ -25,7 +25,7 @@ from datetime import datetime, timedelta
 
 import yfinance as yf
 
-# 运行时从 plan_a_v5.json 动态加载（v6 当前推荐组合）
+# 运行时从 plan_a_v5.json 动态加载（v6 risk-aware 当前推荐组合；文件名保留兼容）
 PORTFOLIO = []
 CASH_RMB = 25000  # 默认 5%，main() 会按 plan 的 cash_pct 重写
 try:
@@ -104,12 +104,17 @@ def load_portfolio_from_plan():
     """
     plan_file = os.path.join(_REPO, "data", "latest", "plan_a_v5.json")
     if not os.path.exists(plan_file):
-        print(f"❌ {plan_file} 不存在 — 请先跑：python3 build_plan_a_v5.py")
+        print(f"❌ {plan_file} 不存在 — 请先跑：python3 -m stock_research.jobs.optimize_portfolio")
         sys.exit(1)
     with open(plan_file, "r", encoding="utf-8") as f:
         plan = json.load(f)
     plan_list = plan.get("plan_v5") or plan.get("plan_v6") or plan.get("plan") or []
-    cash_pct = plan.get("constraints", {}).get("cash_pct", 0.05)
+    constraints = plan.get("constraints", {})
+    cash_pct = (
+        constraints.get("cash_pct_effective")
+        if constraints.get("cash_pct_effective") is not None
+        else constraints.get("cash_pct", 0.05)
+    )
     portfolio = []
     for p in plan_list:
         ticker = p.get("ticker")
@@ -145,7 +150,7 @@ def main():
         source_label = "DuckDB holdings · 用户真实持仓"
     else:
         PORTFOLIO, cash_pct = load_portfolio_from_plan()
-        source_label = "plan_a_v5.json · v6 当前推荐"
+        source_label = "plan_a_v5.json · v6 risk-aware 当前推荐"
     CASH_RMB = int(TOTAL_CAPITAL * cash_pct)
 
     print("=" * 70)

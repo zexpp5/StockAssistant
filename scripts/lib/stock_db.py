@@ -80,6 +80,10 @@ CREATE TABLE IF NOT EXISTS picks (
     one_week_at_pick  DOUBLE,
     one_year_at_pick  DOUBLE,
     model_source      VARCHAR,
+    signal            VARCHAR,   -- buy / avoid / watch（结构化分流，不再靠 rating 文本前缀）
+    coverage_score    DOUBLE,    -- 因子有效覆盖率；低覆盖推荐会被降权/降级
+    missing_factors   VARCHAR,   -- 逗号分隔的缺失因子名
+    factor_weights_used VARCHAR, -- JSON: IC gate 后实际参与 composite 的因子权重
     PRIMARY KEY (pick_date, code)
 );
 
@@ -144,6 +148,10 @@ CREATE TABLE IF NOT EXISTS watchlist (
 
 -- 幂等 ALTER：兼容 schema 升级前已存在的库
 ALTER TABLE picks     ADD COLUMN IF NOT EXISTS model_source      VARCHAR;
+ALTER TABLE picks     ADD COLUMN IF NOT EXISTS signal            VARCHAR;
+ALTER TABLE picks     ADD COLUMN IF NOT EXISTS coverage_score    DOUBLE;
+ALTER TABLE picks     ADD COLUMN IF NOT EXISTS missing_factors   VARCHAR;
+ALTER TABLE picks     ADD COLUMN IF NOT EXISTS factor_weights_used VARCHAR;
 ALTER TABLE reviews   ADD COLUMN IF NOT EXISTS entry_spy_price   DOUBLE;
 ALTER TABLE reviews   ADD COLUMN IF NOT EXISTS current_spy_price DOUBLE;
 ALTER TABLE reviews   ADD COLUMN IF NOT EXISTS alpha_pct         DOUBLE;
@@ -269,7 +277,7 @@ def get_db(path: str = DB_PATH) -> duckdb.DuckDBPyConnection:
         WHERE model_source = 'v6_us'
           AND (
               rating IS NULL
-              OR (rating NOT LIKE '%z %' AND rating NOT LIKE '%不建议%')
+              OR (rating NOT LIKE '%z %' AND rating NOT LIKE '%不建议%' AND rating NOT LIKE '%关注%')
           )
     """)
     conn.execute("""
@@ -423,8 +431,28 @@ PICK_COLS = [
     "total_score", "ai_score", "val_score", "trend_score", "cred_score",
     "ai_relevance", "theme", "entry_price", "entry_currency",
     "peg_at_pick", "fpe_at_pick", "ytd_at_pick", "one_week_at_pick", "one_year_at_pick",
-    "model_source",
+    "model_source", "signal", "coverage_score", "missing_factors", "factor_weights_used",
 ]
+
+
+def _infer_signal_from_rating(rating: str | None) -> str:
+    """fallback：写入方未填 signal 时从 rating 文本推断。
+
+    新代码应直接传 signal=buy/avoid/watch；本函数仅给历史 row 兜底。
+    daily_picks_v5 的四类 rating（line 420-429）和 signal 的对应：
+      - "⛔ 不建议（z ≤ -0.5）"                       → avoid
+      - "⭐ 观察（-0.5 < z < cutoff）"                → watch（z 在中性区，不入选也不淘汰）
+      - "⭐ 关注 / ⭐⭐ 推荐 / ⭐⭐⭐ 强烈推荐"           → buy
+      - 空 rating                                    → watch（最保守，避免误标 buy）
+    """
+    text = (rating or "").strip()
+    if not text:
+        return "watch"
+    if "⛔" in text or "不建议" in text:
+        return "avoid"
+    if "观察" in text:
+        return "watch"
+    return "buy"
 
 
 def upsert_picks(
@@ -440,6 +468,7 @@ def upsert_picks(
     d = _to_date(pick_date) if pick_date else date.today()
     n = 0
     for r in rows:
+        sig = r.get("signal") or _infer_signal_from_rating(r.get("rating"))
         values = [
             _to_date(r.get("pick_date")) or d,
             r.get("code"),
@@ -461,6 +490,10 @@ def upsert_picks(
             r.get("one_week_at_pick"),
             r.get("one_year_at_pick"),
             r.get("model_source"),
+            sig,
+            r.get("coverage_score"),
+            r.get("missing_factors"),
+            r.get("factor_weights_used"),
         ]
         placeholders = ",".join(["?"] * len(PICK_COLS))
         update_set = ",".join(f"{c}=excluded.{c}" for c in PICK_COLS if c not in ("pick_date", "code"))
@@ -541,10 +574,13 @@ def upsert_reviews(
 
 
 def fetch_picks_view(*, conn: duckdb.DuckDBPyConnection | None = None) -> list[dict]:
-    """返回 picks 看板视图.
+    """返回自选股 picks 看板视图.
 
     字段对齐原 extract_picks: code/name/rating/score/entry_price/current_price/
     pct/days_held/grade/theme/ai_relevance/pick_date.
+
+    这是「自选股·AI 优选」视图，只展示仍在 watchlist 里的人工自选股。
+    picks-only / discovery-only 候选应留在 AI 推荐或 DB 全库页，不能混进自选股。
 
     reviews 是收益跟踪表, picks 是当天选股事实表。daily_refresh 里 reviews 可能早于
     后续市场专线写入, 所以这里在最新 review 快照之外, 额外补齐最新 pick_date 的
@@ -562,13 +598,21 @@ def fetch_picks_view(*, conn: duckdb.DuckDBPyConnection | None = None) -> list[d
         ),
         review_rows AS (
             SELECT
-                r.code, r.name, COALESCE(p.market, '') AS market,
+                r.code, COALESCE(w.name, r.name) AS name, COALESCE(w.market, p.market, '') AS market,
                 r.rating, r.pick_date, r.entry_price, r.current_price,
                 r.pct, r.days_held, r.grade, r.theme,
                 p.total_score AS score, p.ai_relevance,
                 p.total_score, p.ai_score, p.val_score, p.trend_score, p.cred_score,
-                COALESCE(r.model_source, p.model_source, 'legacy_unknown') AS model_source
+                COALESCE(r.model_source, p.model_source, 'legacy_unknown') AS model_source,
+                COALESCE(r.signal, p.signal,
+                    CASE
+                      WHEN r.rating LIKE '%⛔%' OR r.rating LIKE '%不建议%' THEN 'avoid'
+                      WHEN r.rating LIKE '%观察%' THEN 'watch'
+                      WHEN r.rating IS NULL OR TRIM(r.rating) = '' THEN 'watch'
+                      ELSE 'buy'
+                    END) AS signal
             FROM reviews r
+            INNER JOIN watchlist w ON w.code = r.code
             LEFT JOIN picks p ON p.code = r.code AND p.pick_date = r.pick_date
             WHERE r.review_date = (SELECT MAX(review_date) FROM reviews)
               AND COALESCE(r.model_source, p.model_source, 'legacy_unknown')
@@ -583,7 +627,7 @@ def fetch_picks_view(*, conn: duckdb.DuckDBPyConnection | None = None) -> list[d
         ),
         latest_pick_rows AS (
             SELECT
-                p.code, p.name, COALESCE(p.market, '') AS market,
+                p.code, COALESCE(w.name, p.name) AS name, COALESCE(w.market, p.market, '') AS market,
                 p.rating, p.pick_date, p.entry_price, lp.price AS current_price,
                 CASE
                     WHEN p.entry_price IS NOT NULL
@@ -600,8 +644,16 @@ def fetch_picks_view(*, conn: duckdb.DuckDBPyConnection | None = None) -> list[d
                 NULL AS grade, p.theme,
                 p.total_score AS score, p.ai_relevance,
                 p.total_score, p.ai_score, p.val_score, p.trend_score, p.cred_score,
-                p.model_source
+                p.model_source,
+                COALESCE(p.signal,
+                    CASE
+                      WHEN p.rating LIKE '%⛔%' OR p.rating LIKE '%不建议%' THEN 'avoid'
+                      WHEN p.rating LIKE '%观察%' THEN 'watch'
+                      WHEN p.rating IS NULL OR TRIM(p.rating) = '' THEN 'watch'
+                      ELSE 'buy'
+                    END) AS signal
             FROM picks p
+            INNER JOIN watchlist w ON w.code = p.code
             INNER JOIN v6_market_latest v
               ON v.model_source = p.model_source AND v.max_date = p.pick_date
             LEFT JOIN latest_price lp ON lp.code = p.code
@@ -613,19 +665,19 @@ def fetch_picks_view(*, conn: duckdb.DuckDBPyConnection | None = None) -> list[d
         SELECT
             code, name, market, rating, pick_date, entry_price, current_price,
             pct, days_held, grade, theme, score, ai_relevance,
-            total_score, ai_score, val_score, trend_score, cred_score, model_source
+            total_score, ai_score, val_score, trend_score, cred_score, model_source, signal
         FROM review_rows
         UNION ALL
         SELECT
             code, name, market, rating, pick_date, entry_price, current_price,
             pct, days_held, grade, theme, score, ai_relevance,
-            total_score, ai_score, val_score, trend_score, cred_score, model_source
+            total_score, ai_score, val_score, trend_score, cred_score, model_source, signal
         FROM latest_pick_rows
         ORDER BY code, pick_date
     """).fetchall()
     cols = ["code", "name", "market", "rating", "pick_date", "entry_price", "current_price",
             "pct", "days_held", "grade", "theme", "score", "ai_relevance",
-            "total_score", "ai_score", "val_score", "trend_score", "cred_score", "model_source"]
+            "total_score", "ai_score", "val_score", "trend_score", "cred_score", "model_source", "signal"]
     out = [dict(zip(cols, r)) for r in rows]
     if own:
         conn.close()
@@ -661,7 +713,10 @@ def fetch_records_view(*, conn: duckdb.DuckDBPyConnection | None = None) -> list
             lp.ytd_pct,
             lp.one_year_pct,
             lp.one_month_pct,
-            lp.one_week_pct
+            lp.one_week_pct,
+            lp.date           AS price_date,
+            lp.fetched_at     AS price_fetched_at,
+            w.updated_at      AS analysis_updated_at
         FROM watchlist w
         LEFT JOIN latest_price lp ON lp.code = w.code
         ORDER BY w.code
@@ -672,7 +727,8 @@ def fetch_records_view(*, conn: duckdb.DuckDBPyConnection | None = None) -> list
             "earnings", "verification", "info_breakdown",
             "latest_price", "yf_market_cap", "forward_pe", "peg",
             "earnings_growth_pct", "ytd_pct", "one_year_pct",
-            "one_month_pct", "one_week_pct"]
+            "one_month_pct", "one_week_pct", "price_date",
+            "price_fetched_at", "analysis_updated_at"]
     out = [dict(zip(cols, r)) for r in rows]
     # 注:旧 extract_records 还返回 market_cap (人工填写的"当前市值"字符串)
     # DuckDB 不存,统一用 yf_market_cap 替代.调用方需要的话自己 fallback.

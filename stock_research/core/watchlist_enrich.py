@@ -291,18 +291,31 @@ def enrich_one(code: str, name: str | None = None) -> dict[str, Any]:
         out["market"] = market
         meta["sources"].append("market: code suffix")
 
-    # 2. yfinance 拉公司信息
+    # 2. yfinance 拉公司信息（TLS/curl 偶发会闪一下，重试 2 次）
     info: dict[str, Any] = {}
     ticker = None
     yf_code = code  # 简化：直接用 code（带后缀的 yfinance 都能识别）
-    try:
-        import yfinance as yf
-        ticker = yf.Ticker(yf_code)
-        info = ticker.info or {}
-        meta["sources"].append(f"yfinance:{yf_code}")
-    except Exception as e:
-        meta["warnings"].append(f"yfinance failed: {e}")
-        info = {}
+    last_err: Exception | None = None
+    for attempt, delay in enumerate((0, 0.5, 1.0)):
+        if delay:
+            import time
+            time.sleep(delay)
+        try:
+            import yfinance as yf
+            ticker = yf.Ticker(yf_code)
+            info = ticker.info or {}
+            if info:
+                meta["sources"].append(
+                    f"yfinance:{yf_code}" if attempt == 0 else f"yfinance:{yf_code} (retry {attempt})"
+                )
+                last_err = None
+                break
+        except Exception as e:
+            last_err = e
+            info = {}
+            continue
+    if last_err is not None:
+        meta["warnings"].append(f"yfinance failed after 3 tries: {last_err}")
 
     long_name = info.get("longName") or info.get("shortName") or ""
     sector = info.get("sector") or ""

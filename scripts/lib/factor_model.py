@@ -562,9 +562,20 @@ def fetch_factors_batch(tickers, as_of=None, sleep_sec=1.5):
 # ============================================================
 # 因子合成（横截面 z-score 等权）
 # ============================================================
+DEFAULT_FACTOR_WEIGHTS = {
+    "f_score": 1.0,
+    "momentum": 1.0,
+    "reversal": 1.0,
+    "pead": 1.0,
+    "analyst": 1.0,
+    "quality": 1.0,
+}
+
+
 def combine_factors(records, analyst_signals=None, include_reversal=True,
-                    include_quality=True):
-    """6 因子等权合成（z-score 标准化后等权）。
+                    include_quality=True, factor_weights=None,
+                    min_coverage_score=0.50):
+    """6 因子合成（z-score 标准化后按有效权重合成）。
 
     因子（全部来自顶刊学术论文）:
       1. Piotroski F-Score (Stanford 2000)
@@ -578,14 +589,24 @@ def combine_factors(records, analyst_signals=None, include_reversal=True,
          z_quality = (z_roic + z_(-accruals)) / 2
 
     include_quality=False 时退回 5 因子（旧行为，用于消融对照）。
+    factor_weights 可由 IC gate 传入；被降权到 0 的因子不会参与 composite。
+    缺失因子不再 fill 成中性 0，而是降低 coverage_score，并对 composite 施加保守惩罚。
     """
+    weights = dict(DEFAULT_FACTOR_WEIGHTS)
+    if factor_weights:
+        weights.update({k: float(v) for k, v in factor_weights.items() if k in weights})
+    if not include_reversal:
+        weights["reversal"] = 0.0
+    if not include_quality:
+        weights["quality"] = 0.0
+
     df = []
     for r in records:
         f = r["piotroski"]["f_score"]
         m = r["momentum"]["momentum_12_1"]
         rev = r["momentum"].get("reversal_1m")
         pead = (r.get("pead") or {}).get("acceleration")
-        ana = (analyst_signals or {}).get(r["ticker"], 0)
+        ana = (analyst_signals or {}).get(r["ticker"])
         q = r.get("quality") or {}
         roic = q.get("roic") if not q.get("error") else None
         accruals = q.get("accruals") if not q.get("error") else None
@@ -620,21 +641,55 @@ def combine_factors(records, analyst_signals=None, include_reversal=True,
             return s_w * 0
         return (s_w - mean) / std
 
-    df["z_f"] = zscore(df["f_score"]).fillna(0)
-    df["z_mom"] = zscore(df["momentum"]).fillna(0)
-    df["z_rev"] = zscore(df["reversal"]).fillna(0)
-    df["z_pead"] = zscore(df["pead"]).fillna(0)
-    df["z_ana"] = zscore(df["analyst"]).fillna(0)
+    df["z_f"] = zscore(df["f_score"])
+    df["z_mom"] = zscore(df["momentum"])
+    df["z_rev"] = zscore(df["reversal"])
+    df["z_pead"] = zscore(df["pead"])
+    df["z_ana"] = zscore(df["analyst"])
 
     if include_quality:
-        df["z_roic"] = zscore(df["roic"]).fillna(0)
-        df["z_acc_neg"] = zscore(df["accruals_neg"]).fillna(0)
+        df["z_roic"] = zscore(df["roic"])
+        df["z_acc_neg"] = zscore(df["accruals_neg"])
         df["z_quality"] = (df["z_roic"] + df["z_acc_neg"]) / 2
-        df["composite"] = (df["z_f"] + df["z_mom"] + df["z_rev"]
-                           + df["z_pead"] + df["z_ana"] + df["z_quality"]) / 6
     else:
-        df["composite"] = (df["z_f"] + df["z_mom"] + df["z_rev"]
-                           + df["z_pead"] + df["z_ana"]) / 5
+        df["z_quality"] = np.nan
+
+    factor_cols = {
+        "f_score": ("z_f", "f_score"),
+        "momentum": ("z_mom", "momentum"),
+        "reversal": ("z_rev", "reversal"),
+        "pead": ("z_pead", "pead"),
+        "analyst": ("z_ana", "analyst"),
+        "quality": ("z_quality", "roic"),
+    }
+    active = [(name, col, raw_col, max(0.0, weights.get(name, 0.0)))
+              for name, (col, raw_col) in factor_cols.items()
+              if max(0.0, weights.get(name, 0.0)) > 0]
+    total_active_w = sum(w for _, _, _, w in active)
+    if total_active_w <= 0:
+        df["coverage_score"] = 0.0
+        df["composite_raw"] = np.nan
+        df["composite"] = -1.0
+        df["missing_factors"] = ",".join(factor_cols)
+        df["factor_weights_used"] = "{}"
+    else:
+        weighted_sum = pd.Series(0.0, index=df.index)
+        covered_weight = pd.Series(0.0, index=df.index)
+        missing_by_row: list[list[str]] = [[] for _ in range(len(df))]
+        weights_used = {name: round(w / total_active_w, 6) for name, _, _, w in active}
+        for name, z_col, raw_col, w in active:
+            available = df[raw_col].notna() & df[z_col].notna()
+            weighted_sum = weighted_sum.add(df[z_col].where(available, 0.0) * w, fill_value=0.0)
+            covered_weight = covered_weight.add(available.astype(float) * w, fill_value=0.0)
+            for idx, ok in enumerate(available.tolist()):
+                if not ok:
+                    missing_by_row[idx].append(name)
+        df["coverage_score"] = (covered_weight / total_active_w).round(4)
+        df["composite_raw"] = (weighted_sum / covered_weight.replace(0, np.nan))
+        penalty = ((min_coverage_score - df["coverage_score"]).clip(lower=0) / min_coverage_score)
+        df["composite"] = (df["composite_raw"].fillna(0.0) * df["coverage_score"] - penalty).round(6)
+        df["missing_factors"] = [",".join(x) for x in missing_by_row]
+        df["factor_weights_used"] = json.dumps(weights_used, sort_keys=True)
 
     df = df.sort_values("composite", ascending=False).reset_index(drop=True)
     df["rank"] = df.index + 1

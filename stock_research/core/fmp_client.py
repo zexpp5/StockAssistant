@@ -11,8 +11,10 @@
 """
 from __future__ import annotations
 import logging
+import re
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -29,6 +31,75 @@ FMP_API_KEY = config.__dict__.get("FMP_API_KEY") or __import__("os").environ.get
 
 # 进程级强制刷新开关：FMP_FORCE_REFRESH=1 时整次运行绕过 24h 缓存（财报日 / debug 用）
 _FORCE_REFRESH_ENV = __import__("os").environ.get("FMP_FORCE_REFRESH", "").lower() in ("1", "true", "yes", "on")
+_FMP_DISABLED_REASON: str | None = None
+_FMP_EVENTS: list[dict[str, Any]] = []
+
+
+def _redact(text: str) -> str:
+    """Keep API keys out of logs, including URLs embedded in exceptions."""
+    return re.sub(r"(apikey=)[^&\s)]+", r"\1***", text)
+
+
+def _record_event(level: str, reason: str, path: str, detail: str | None = None) -> None:
+    _FMP_EVENTS.append({
+        "ts": datetime.now().isoformat(timespec="seconds"),
+        "level": level,
+        "reason": reason,
+        "path": path,
+        "detail": _redact(detail or "")[:300],
+    })
+
+
+def source_health_snapshot(*, pipeline: str = "v6_us") -> dict[str, Any]:
+    status = "ok"
+    reason = None
+    if _FMP_DISABLED_REASON:
+        status = "degraded"
+        reason = _FMP_DISABLED_REASON
+    elif any(e.get("level") in {"ERROR", "WARN"} for e in _FMP_EVENTS):
+        status = "degraded"
+        reason = "recent_request_errors"
+    return {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "pipeline": pipeline,
+        "sources": {
+            "FMP": {
+                "status": status,
+                "reason": reason,
+                "last_event": _FMP_EVENTS[-1] if _FMP_EVENTS else None,
+                "events": _FMP_EVENTS[-20:],
+                "affected_fields": [
+                    "Altman Z-Score",
+                    "Beneish M-Score",
+                    "财务造假/破产软红旗",
+                    "DCF 深度估值",
+                ],
+                "unaffected_fields": [
+                    "价格",
+                    "Piotroski F-Score",
+                    "12-1 月动量",
+                    "1 月反转",
+                    "分析师上修",
+                    "主推荐排序",
+                ],
+                "impact": (
+                    "FMP 降级时，美股主因子仍可运行；Z/M-Score 与部分深度基本面红旗会显示为空。"
+                ),
+                "operator_action": (
+                    "等待 FMP 免费额度恢复，或升级 FMP 套餐；不需要因此重跑价格数据。"
+                ),
+            }
+        },
+    }
+
+
+def write_source_health(*, pipeline: str = "v6_us", path: str | Path | None = None) -> dict[str, Any]:
+    """Persist source health so dashboard/brief can show data degradation."""
+    payload = source_health_snapshot(pipeline=pipeline)
+    out = Path(path) if path is not None else config.DATA_DIR / "latest" / "source_health.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(__import__("json").dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return payload
 
 
 def is_available() -> bool:
@@ -52,6 +123,10 @@ def _get(path: str, params: dict | None = None, force_refresh: bool = False) -> 
         logger.debug("FMP cache HIT: %s %s", path, params)
         return cached
 
+    global _FMP_DISABLED_REASON
+    if _FMP_DISABLED_REASON:
+        logger.debug("FMP skipped for %s: %s", path, _FMP_DISABLED_REASON)
+        return None
     if not FMP_API_KEY:
         return None
     p = dict(params or {})
@@ -59,7 +134,12 @@ def _get(path: str, params: dict | None = None, force_refresh: bool = False) -> 
     try:
         r = requests.get(f"{FMP_BASE}{path}", params=p, timeout=20)
         if r.status_code != 200:
-            logger.warning("FMP %s -> %d: %s", path, r.status_code, r.text[:200])
+            if r.status_code == 429:
+                _FMP_DISABLED_REASON = "rate_limited_429"
+                _record_event("WARN", "rate_limited_429", path, r.text)
+            else:
+                _record_event("WARN", f"http_{r.status_code}", path, r.text)
+            logger.warning("FMP %s -> %d: %s", path, r.status_code, _redact(r.text[:200]))
             return None
         data = r.json()
         # FMP 错误时返回 {"Error Message": "..."}
@@ -69,7 +149,8 @@ def _get(path: str, params: dict | None = None, force_refresh: bool = False) -> 
         fmp_cache.save(path, params, data)
         return data
     except Exception as e:
-        logger.warning("FMP %s failed: %s", path, e)
+        _record_event("WARN", "request_exception", path, str(e))
+        logger.warning("FMP %s failed: %s", path, _redact(str(e)))
         return None
 
 

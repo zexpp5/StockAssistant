@@ -53,6 +53,44 @@ import pandas as pd
 logger = logging.getLogger("stock_research.jobs.optimize_portfolio")
 
 
+def _default_capital() -> float:
+    """与旧 build_plan_a_v5.py 对齐：优先用 DuckDB 配置的组合规模。"""
+    try:
+        import stock_db
+        return float(stock_db.get_config("total_capital") or 500_000)
+    except Exception:
+        return 500_000.0
+
+
+DEFAULT_CAPITAL = _default_capital()
+
+
+def _safe_float(value, default=None):
+    try:
+        if value is None:
+            return default
+        f = float(value)
+        return f if np.isfinite(f) else default
+    except Exception:
+        return default
+
+
+def _write_latest_plan(result: dict) -> None:
+    """写生产读路径。
+
+    历史上下游仍读 data/latest/plan_a_v5.json / plan_v5 字段；这里保留旧文件名和
+    字段形状，但 payload 明确标注 method=risk_aware_optimize，避免生产继续吃旧
+    裸 Markowitz 结果。
+    """
+    latest_dir = _REPO_ROOT / "data" / "latest"
+    latest_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("plan_a_v5.json", "plan_v6.json"):
+        out = latest_dir / name
+        with open(out, "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2, default=str)
+        print(f"✅ 生产 plan 已写入: {out}")
+
+
 # ─────────── 数据获取 ───────────
 
 def _load_factor_scores() -> dict | None:
@@ -173,7 +211,7 @@ def markowitz_constrained(mean_rets: np.ndarray, cov: np.ndarray,
 
 # ─────────── 主流水线 ───────────
 
-def run(capital: float = 500_000,
+def run(capital: float = DEFAULT_CAPITAL,
         top_n: int = 12,
         max_weight: float = 0.15,
         min_weight: float = 0.02,
@@ -212,29 +250,63 @@ def run(capital: float = 500_000,
 
     # ────── 3. 用因子 + 中性化重新排序 ──────
     print(f"\n[2/5] 因子合成{'（含中性化）' if not skip_neutralize else '（不中性化，对照模式）'}...")
-    from factor_model import combine_factors
+    from factor_model import DEFAULT_FACTOR_WEIGHTS, combine_factors
     from early_signals import score_analyst
-    analyst = {tk: score_analyst(s.get("analyst"))[0] for tk, s in sig_map.items()}
-    df = combine_factors(factors, analyst_signals=analyst, include_reversal=True)
+    from stock_research.core.factor_ic_gate import evaluate_gate, format_report
+
+    gate = evaluate_gate()
+    print(format_report(gate))
+    factor_weights = dict(DEFAULT_FACTOR_WEIGHTS)
+    if not gate.passed:
+        healthy = set(gate.healthy_factors or [])
+        if not healthy:
+            return {"error": "factor_ic_gate_no_healthy_factors", "gate_reason": gate.reason}
+        factor_weights = {
+            k: (v if k in healthy else 0.0)
+            for k, v in DEFAULT_FACTOR_WEIGHTS.items()
+        }
+        dropped = [k for k, v in factor_weights.items() if v <= 0]
+        print(
+            "  🟡 IC gate 未全通过：组合优化只使用 healthy 因子 "
+            f"{sorted(healthy)}；降权 {dropped}"
+        )
+
+    analyst = {
+        tk: (None if not s.get("analyst") or "error" in (s.get("analyst") or {})
+             else score_analyst(s.get("analyst"))[0])
+        for tk, s in sig_map.items()
+    }
+    df = combine_factors(
+        factors,
+        analyst_signals=analyst,
+        include_reversal=True,
+        factor_weights=factor_weights,
+    )
 
     if not skip_neutralize and not df.empty and len(wl_lookup) > 0:
         df["industry"] = df["ticker"].apply(lambda t: _industry_for(t, wl_lookup))
         df["market_cap"] = df["ticker"].apply(lambda t: _market_cap_for(t, wl_lookup))
         # 对各因子做行业 + 市值中性化
-        factor_cols = [c for c in ["momentum", "reversal", "pead", "z_momentum",
-                                    "z_reversal", "z_pead"] if c in df.columns]
+        neutralizable = {
+            "momentum": "z_mom",
+            "reversal": "z_rev",
+            "pead": "z_pead",
+        }
+        factor_cols = [
+            col for factor, col in neutralizable.items()
+            if factor_weights.get(factor, 0.0) > 0 and col in df.columns
+        ]
         if factor_cols:
             df = nz.neutralize_all(df, factor_cols, industry_col="industry",
                                    market_cap_col="market_cap")
             # 用中性化后的 z 列重新合成 composite
-            n_z_cols = [f"n_{c}" for c in factor_cols if c.startswith("z_")
-                        and f"n_{c}" in df.columns]
+            n_z_cols = [f"n_{c}" for c in factor_cols if f"n_{c}" in df.columns]
             if n_z_cols:
                 df["composite_neutral"] = df[n_z_cols].mean(axis=1)
                 df = df.sort_values("composite_neutral", ascending=False).reset_index(drop=True)
                 print(f"  ✅ 中性化使用列: {n_z_cols}")
                 print(f"  ↳ Top 5（中性化）: {df.head(5)['ticker'].tolist()}")
-                print(f"  ↳ Top 5（原始）  : {combine_factors(factors, analyst_signals=analyst).head(5)['ticker'].tolist()}")
+                print(f"  ↳ Top 5（原始）  : {combine_factors(factors, analyst_signals=analyst, factor_weights=factor_weights).head(5)['ticker'].tolist()}")
 
     top = df.head(top_n)
     tickers = top["ticker"].tolist()
@@ -427,6 +499,8 @@ def run(capital: float = 500_000,
     print(f"\n  {'股票':<10}{'目标w':>9}{'限流后':>9}{'金额':>12}{'ADV(M)':>10}")
     print("  " + "-" * 55)
     plan = []
+    plan_v5 = []
+    df_lookup = {str(r.get("ticker")): r for r in df.to_dict("records")}
     for tk in final_tickers:
         v_target = target_w.get(tk, 0)
         v_capped = capped.get(tk, 0)
@@ -434,8 +508,27 @@ def run(capital: float = 500_000,
         adv_m = adv_dict.get(tk, 0) / 1e6
         flag = " ⚠️" if abs(v_target - v_capped) > 1e-6 else ""
         print(f"  {tk:<10}{v_target*100:>+8.1f}%{v_capped*100:>+8.1f}%{amount:>11,.0f}{adv_m:>9.1f}{flag}")
-        plan.append({"ticker": tk, "target_weight": v_target, "capped_weight": v_capped,
-                     "amount": amount, "adv_dollars": adv_dict.get(tk, 0)})
+        info = df_lookup.get(tk, {})
+        composite = _safe_float(info.get("composite_neutral"), _safe_float(info.get("composite"), 0.0))
+        entry = {
+            "ticker": tk,
+            "target_weight": _safe_float(v_target, 0.0),
+            "capped_weight": _safe_float(v_capped, 0.0),
+            "amount": round(_safe_float(amount, 0.0), 2),
+            "amount_rmb": round(_safe_float(amount, 0.0), 2),
+            "adv_dollars": _safe_float(adv_dict.get(tk), 0.0),
+            "f_score": _safe_float(info.get("f_score")),
+            "composite_z": composite,
+            "composite_neutral": _safe_float(info.get("composite_neutral")),
+        }
+        plan.append(entry)
+        # 兼容旧生产读路径：plan_v5/v5_weight 字段名保留，但值来自 v6 风险感知优化器。
+        plan_v5.append({
+            **entry,
+            "v5_weight": _safe_float(v_capped, 0.0),
+            "v6_weight": _safe_float(v_capped, 0.0),
+            "current_weight": 0.0,
+        })
 
     used_total = capital * sum(capped.values())
     actual_cash = capital - used_total
@@ -451,12 +544,21 @@ def run(capital: float = 500_000,
         "constraints": {
             "max_weight": max_weight, "min_weight": min_weight,
             "cash_pct": cash_pct, "max_adv_pct": max_adv_pct,
+            "cash_pct_effective": round(actual_cash / capital, 6) if capital else cash_pct,
+            "gross_exposure_effective": round(sum(capped.values()), 6),
             "cost_bps": cost_bps, "impact_bps_per_pct_adv": impact_bps_per_pct_adv,
             "neutralize": not skip_neutralize,
             "max_corr": max_corr,
             "kelly_fraction": kelly_fraction,
             "vol_target_annual": vol_target_annual,
             "use_legacy_mc": use_legacy_mc,
+            "factor_weights_used": factor_weights,
+        },
+        "factor_ic_gate": {
+            "passed": gate.passed,
+            "reason": gate.reason,
+            "healthy_factors": gate.healthy_factors,
+            "inverted_factors": gate.inverted_factors,
         },
         "kelly_clipped": kelly_clipped,
         "vol_target": vol_target_info,
@@ -470,10 +572,13 @@ def run(capital: float = 500_000,
             "turnover": round(cost["turnover"], 4),
         },
         "risk_aware": risk_aware_meta,
+        "plan_v5": plan_v5,
+        "plan_v6": plan,
         "plan": plan,
         "adv_warnings": warns,
     }
     store.save_json(result, config.AUDIT_DIR.parent / "optimize", "plan_v6")
+    _write_latest_plan(result)
     print(f"\n✅ 快照已保存")
     return result
 
@@ -481,7 +586,8 @@ def run(capital: float = 500_000,
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s")
     p = argparse.ArgumentParser(description="组合优化 v6: 中性化 + Markowitz + ADV + 成本")
-    p.add_argument("--capital", type=float, default=500_000, help="组合规模（美元）")
+    p.add_argument("--capital", type=float, default=DEFAULT_CAPITAL,
+                   help=f"组合规模（默认读 DuckDB total_capital={DEFAULT_CAPITAL:,.0f}）")
     p.add_argument("--top-n", type=int, default=12, help="选股数")
     p.add_argument("--max-weight", type=float, default=0.15)
     p.add_argument("--min-weight", type=float, default=0.02)

@@ -210,11 +210,44 @@ def classify(ticker, info=None, retries=2):
 
     # 3. 模糊后备规则（关键词）
     industry_lower = industry.lower()
-    if "semiconductor" in industry_lower:
+    if "semiconductor equipment" in industry_lower or "lithography" in industry_lower:
+        return 3, "🏭 半导体设备", sector, industry, f"keyword:semi_equipment"
+    if (
+        "semiconductor" in industry_lower
+        or "compute" in industry_lower
+        or "chip" in industry_lower
+        or "asic" in industry_lower
+        or "foundry" in industry_lower
+        or "memory" in industry_lower
+        or "hbm" in industry_lower
+    ):
         return 3, "🔥 AI 算力核心", sector, industry, f"keyword:semiconductor"
-    if "software" in industry_lower or "internet" in industry_lower:
+    if (
+        "software" in industry_lower
+        or "internet" in industry_lower
+        or "cloud" in industry_lower
+        or "platform" in industry_lower
+        or "eda" in industry_lower
+        or "security" in industry_lower
+        or "networking" in industry_lower
+        or "connectivity" in industry_lower
+        or "hardware" in industry_lower
+        or "server" in industry_lower
+        or "robot" in industry_lower
+        or "automation" in industry_lower
+    ):
         return 2, "🤖 AI 应用层", sector, industry, f"keyword:software"
-    if "electric" in industry_lower or "power" in industry_lower or "utility" in industry_lower:
+    if (
+        "electric" in industry_lower
+        or "power" in industry_lower
+        or "utility" in industry_lower
+        or "energy" in industry_lower
+        or "nuclear" in industry_lower
+        or "data center" in industry_lower
+        or "reit" in industry_lower
+        or "construction" in industry_lower
+        or "infrastructure" in industry_lower
+    ):
         return 1, "⚡ AI 电力链", sector, industry, f"keyword:electric"
     if "uranium" in industry_lower or "metals" in industry_lower or "mining" in industry_lower:
         return 1, "💎 下一波稀缺资源", sector, industry, f"keyword:uranium/metals"

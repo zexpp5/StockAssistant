@@ -50,6 +50,9 @@ ROOT_FILES = [
     "data/latest/plan_a_v5.json",
     "data/latest/trade_delta.json",
     "data/latest/plan_a_v5_constrained.json",
+    "data/latest/recommendation_quality_gate.json",
+    "data/latest/recommendation_evidence.json",
+    "data/latest/source_health.json",
     # 历史遗留（不一定存在，存在则归档）
     "simulation_plan_a.json",
     "archive/legacy/reverse_validation.json",

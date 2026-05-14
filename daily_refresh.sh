@@ -8,11 +8,12 @@
 #   ▸ Watchlist 编辑入口:dashboard 内联 CRUD modal (写 DuckDB)
 #
 # 流程：抓价格 → SEC 13F → 13F→json → enrichment → 跨源审计 → v1 优选 → picks 反向审查
-#       → 历史回顾 → v6 学术因子选股 → Markowitz 仓位优化 → 调整清单
+#       → 历史回顾 → v6 学术因子选股 → risk-aware 仓位优化 → 调整清单
 #       → 风险指标 → 优化方法对比 → 实盘防御 → OpenBB 综合情报
 #       → [A 股] IPO 日历 + 事件日历 + 政策事件
 #       → [A 股] 选股闭环 + plan_a 后处理约束
 #       → [每周] 候选发现 → DuckDB pipeline 同步 → 重建 HTML
+# 注意：watchlist/自选股只允许用户通过 dashboard 手动维护，不从 universe 自动回填。
 # 失败时弹 macOS 通知 + 写日志，不中断后续步骤
 #
 # 安装到 cron（推荐双时段，否则 A 股闭环跑出脏数据）：
@@ -38,7 +39,13 @@ done
 
 # 默认值可以被环境变量覆盖；部署时 export DIR=/your/path
 DIR="${DIR:-$(cd "$(dirname "$0")" && pwd)}"
-PYTHON="${PYTHON:-python3}"
+if [ -z "${PYTHON:-}" ]; then
+    if [ -x "/opt/homebrew/bin/python3" ]; then
+        PYTHON="/opt/homebrew/bin/python3"
+    else
+        PYTHON="python3"
+    fi
+fi
 TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
 FAILED_STEPS=()
 
@@ -125,8 +132,10 @@ if [ "$MODE" = "a_share_only" ]; then
     # a_share_picks 跑完后重跑约束器 — A 股 holdings 可能变化，需要刷新美股 plan_constrained
     run_step "10b/25 plan_a 后处理（美股仓位约束）" "-m stock_research.jobs.apply_a_share_constraints"
     run_step "24/25 DuckDB pipeline 同步" "scripts/migrate/migrate_pipeline_to_duckdb.py"
+    run_step "24b/25 产业链分级标注（重建 HTML 前）" "scripts/tools/classify_watchlist_chains.py"
     run_step "25/25 重建 HTML" "scripts/pipeline/build_stock_dashboard_html.py"
     run_step "26 早安简报（主入口 · 每天打开看这一份）" "-m stock_research.jobs.morning_brief"
+    run_step "27 生产闭环验收" "scripts/tools/production_acceptance_check.py"
     DONE_TS=$(date '+%Y-%m-%d %H:%M:%S')
     echo ""
     if [ ${#FAILED_STEPS[@]} -eq 0 ]; then
@@ -159,7 +168,7 @@ run_step "9/25 v6 学术因子选股（已落 DuckDB picks）" "scripts/pipeline
 # 待 daily prefetch cache 方案落地后恢复 south_flow 0.15
 # 早班可跑（akshare 年报 + yfinance entry），与美股 daily_picks_v5 同时段
 run_step "9b/25 港股 picks（3 因子 + DuckDB picks 表，south_flow standby）" "scripts/pipeline/hk_picks.py"
-run_step "10/25 Markowitz 仓位优化（方案 A v6）" "scripts/pipeline/build_plan_a_v5.py"
+run_step "10/25 risk-aware 仓位优化（方案 A v6）" "-m stock_research.jobs.optimize_portfolio"
 # 2026-05-12: step 22 (apply_a_share_constraints) 从 run_a_share_steps 拆出来挪到这里
 #   它的输入是 plan_a_v5.json（美股 plan），输出 plan_a_v5_constrained.json
 #   命名上叫 "a_share_constraints" 但实际处理美股仓位约束（A 股 holdings → 美股 plan），
@@ -195,21 +204,24 @@ run_step "20/25 产业政策事件扫描" "-m stock_research.jobs.policy_scan_da
 # 注：apply_a_share_constraints 已从此处拆出（见 step 10b），不再受收盘时间锁
 run_a_share_steps
 
-# 候选发现：扫 SOXX/IGM/IRBO/BAI 找 watchlist 之外的因子高分股。
-# 每只股票要拉 yfinance 财报+价格+分析师，全跑一次 ~20-30 分钟。
-# 2026-05-12 改为每天跑（原来每 6 天）— tab 名「今日候选」需要每日更新对齐 generated_at。
-run_step "23/25 候选发现（每日）" "scripts/tools/discover_candidates.py"
+# AI 推荐：用今天已落 DuckDB 的 prices + picks 做全池快速排名。
+# 不排除 watchlist，避免 AI 推荐页变成"自选股之外"的补充名单。
+# 深因子全量慢跑保留在 scripts/tools/discover_candidates.py，适合离线/周末跑。
+run_step "23/25 全池 AI 推荐（每日）" "scripts/tools/build_pool_recommendations.py"
 
 # 2026-05-11 PM: 推荐准确度评估 — 每天跑(即使 discovery 本身跳过),
 # 因为要给过去 70 天的所有推荐刷新 1d/5d/20d/60d alpha 数据。
 run_step "23b/25 推荐准确度评估（每日）" "scripts/tools/evaluate_discovery.py"
 run_step "23c/25 推荐质量闸门（收盘后复核）" "scripts/tools/recommendation_quality_gate.py"
+run_step "23d/25 推荐有效性证据报告" "scripts/tools/recommendation_evidence_report.py"
 
 # DuckDB pipeline 同步：把今天刷新过的根目录数据 JSON（risk_metrics / track_13f / plan_a_v5
 # / history_data / optimization_result / factor_scores_today / reverse_validation_*）
 # 增量插入到 stock_history.duckdb 的 snapshots(category='pipeline') 表，
 # 使「数据源切换 = DuckDB」的看板能拿到当天数据。脚本幂等，按 mtime 时间戳去重。
 run_step "24/25 DuckDB pipeline 同步" "scripts/migrate/migrate_pipeline_to_duckdb.py"
+
+run_step "24b/25 产业链分级标注（重建 HTML 前）" "scripts/tools/classify_watchlist_chains.py"
 
 run_step "25/25 重建 HTML" "scripts/pipeline/build_stock_dashboard_html.py"
 
@@ -229,6 +241,7 @@ fi
 # 26 早安简报 — 这是真正的"主入口"，把所有 JSON 拼成一份每天能读完的 markdown。
 # 设了 FEISHU_BRIEF_WEBHOOK 还会自动推送到飞书群机器人。
 run_step "26 早安简报（主入口 · 每天打开看这一份）" "-m stock_research.jobs.morning_brief"
+run_step "27 生产闭环验收" "scripts/tools/production_acceptance_check.py"
 
 DONE_TS=$(date '+%Y-%m-%d %H:%M:%S')
 echo ""

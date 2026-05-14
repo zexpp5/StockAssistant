@@ -1,12 +1,13 @@
 """
 候选发现 (Discovery)
 ─────────────────────────────────────────
-扫描更广的 universe（半导体 + 软件 + 大科技 ETF 的全部成分股），
-跑同一套学术因子模型，找出**不在当前 watchlist** 但因子得分前列的候选。
+扫描更广的 universe（半导体 + 软件 + 大科技 ETF + A 股/港股科技池），
+跑同一套学术因子模型，找出全池因子得分前列的候选。
 
 为什么要它？
-  当前 daily_picks_v5 只对 watchlist 78 只打分排序，永远不会推荐
-  watchlist 之外的股票。本脚本补足"发现"这一层。
+  daily_picks_v5 是"今日入选/交易建议"链路；本脚本是"全池发现/横向排名"链路。
+  它不以 watchlist 作为筛选边界：已在自选股里的标的也可以进入 AI 推荐榜，
+  这样你看到的是完整池子的统一排名，而不是只看自选股之外的补充名单。
 
 数据来源（全部 iShares 公开 CSV，免费）:
   · SOXX — 半导体 (~30 只)
@@ -17,7 +18,7 @@
 流水线:
   1. 拉 3 个 ETF 的 holdings CSV → 合并去重
   2. 过滤美股（yfinance 财报齐全）
-  3. 排除已在 watchlist 的
+  3. 默认不排除 watchlist（可用 --exclude-watchlist 临时恢复旧逻辑）
   4. 过滤市值 ≥ $5B（剔除小盘股，数据质量差）
   5. 跑 factor_model（Piotroski + 12-1 动量 + PEAD + 分析师）
   6. 取 composite score Top N → 写 JSON 给看板
@@ -35,6 +36,8 @@ import os
 import json
 import argparse
 import time
+import signal
+from contextlib import contextmanager
 from io import StringIO
 from datetime import datetime
 import csv
@@ -44,9 +47,27 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "scripts", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "scripts", "pipeline"))  # sibling: daily_picks  # 2026-05-11 lib 迁移
 
-from daily_picks import fetch_watchlist
 from factor_model import fetch_factors_for, combine_factors
 from early_signals import fetch_signals_for, score_analyst
+
+
+@contextmanager
+def time_limit(seconds: int, label: str):
+    """Prevent one stalled network call from blocking the whole discovery run."""
+    if seconds <= 0:
+        yield
+        return
+
+    def _raise_timeout(signum, frame):  # noqa: ARG001
+        raise TimeoutError(f"{label} timed out after {seconds}s")
+
+    old_handler = signal.signal(signal.SIGALRM, _raise_timeout)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, old_handler)
 
 
 # ============================================================
@@ -185,8 +206,8 @@ def fetch_ishares_holdings(
 # ============================================================
 # Universe 构建
 # ============================================================
-def build_universe(skip_codes: set[str]) -> list[dict]:
-    """合并多个数据源的成分股 → 去重 → 排除已知 watchlist。
+def build_universe(skip_codes: set[str] | None = None) -> list[dict]:
+    """合并多个数据源的成分股 → 去重 → 可选排除已知 watchlist。
 
     数据源：
       1. iShares ETF holdings（美股 + MCHI 中国）
@@ -195,9 +216,10 @@ def build_universe(skip_codes: set[str]) -> list[dict]:
          - 科创 50 (~50,去重后约 30)
          - 创业板指 (~100,去重后约 75)
 
-    skip_codes 同时按 yfinance 格式（300308.SZ）和裸代码（300308）匹配，
-    保证不论 watchlist 用哪种写法都能正确排除。
+    默认 skip_codes 为空，即全池扫描；只有 --exclude-watchlist 才会传入非空集合。
+    skip_codes 同时按 yfinance 格式（300308.SZ）和裸代码（300308）匹配。
     """
+    skip_codes = skip_codes or set()
     seen = {}
     # ── 1. ETF holdings
     for symbol, slug, sector_filter in ISHARES_ETFS:
@@ -264,7 +286,7 @@ def build_universe(skip_codes: set[str]) -> list[dict]:
         from stock_research.core.hk_universe import fetch_hk_tech_universe
         print(f"  拉港股科技龙头白名单 (互联网/半导体/新能源车/创新药)...", end=" ", flush=True)
         hk = fetch_hk_tech_universe()
-        print(f"{len(hk)} 只")
+        print(f"{len(hk)} 只", flush=True)
         n_new = 0
         for item in hk:
             tk = item["ticker"]
@@ -296,46 +318,47 @@ _FX_TO_USD_CACHE: dict[str, float] = {"USD": 1.0}
 
 
 def _fx_to_usd(ccy: str) -> float:
-    """本币 → USD 汇率。命中 cache 直返，否则 yfinance 实时拉一次。"""
-    import yfinance as yf
+    """本币 → USD 汇率。用静态 fallback，避免 quote 接口 401/限流影响主流程。"""
     ccy = (ccy or "USD").upper()
     if ccy in _FX_TO_USD_CACHE:
         return _FX_TO_USD_CACHE[ccy]
-    rate = None
-    try:
-        info = yf.Ticker(f"{ccy}USD=X").info
-        rate = info.get("regularMarketPrice") or info.get("previousClose")
-    except Exception:
-        pass
-    if not rate or rate <= 0:
-        # 静态 fallback（保守，2026 量级；未命中时至少不会把 RMB 当 USD）
-        fallback = {"CNY": 0.139, "HKD": 0.128, "JPY": 0.0067, "KRW": 0.00074,
-                    "TWD": 0.031, "EUR": 1.07, "GBP": 1.27, "AUD": 0.66}
-        rate = fallback.get(ccy)
+    fallback = {"CNY": 0.139, "HKD": 0.128, "JPY": 0.0067, "KRW": 0.00074,
+                "TWD": 0.031, "EUR": 1.07, "GBP": 1.27, "AUD": 0.66}
+    rate = fallback.get(ccy)
     if rate and rate > 0:
         _FX_TO_USD_CACHE[ccy] = float(rate)
         return float(rate)
     return 0.0  # 完全无法换算 → 该股被过滤
 
 
-def filter_by_market_cap(universe: list[dict], min_cap_usd: float = 5e9) -> list[dict]:
-    """用 yfinance 拉市值（含 currency 换算），剔除小盘股。
+def _quote_market_cap(ticker: str) -> tuple[float | None, str]:
+    """Fetch market cap and currency through yfinance fast_info.
 
-    yfinance marketCap 是**本币**计价，A 股/港股/日股等必须按 FX 折算到 USD
-    再比阈值，否则 A 股 5B RMB ≈ 700M USD 就能通过 5B USD 闸门（实际放水 7 倍）。
+    Ticker.info can hang for some cross-market tickers; fast_info is much
+    lighter and still exposes marketCap/currency for this filter.
     """
     import yfinance as yf
+    with time_limit(10, f"marketCap {ticker}"):
+        info = dict(yf.Ticker(ticker).fast_info)
+    cap = info.get("marketCap")
+    ccy = (info.get("currency") or "USD").upper()
+    return cap, ccy
+
+
+def filter_by_market_cap(universe: list[dict], min_cap_usd: float = 5e9) -> list[dict]:
+    """用 Yahoo quote 拉市值（含 currency 换算），剔除小盘股。
+
+    Yahoo marketCap 是**本币**计价，A 股/港股/日股等必须按 FX 折算到 USD
+    再比阈值，否则 A 股 5B RMB ≈ 700M USD 就能通过 5B USD 闸门（实际放水 7 倍）。
+    """
     out = []
-    print(f"  过滤市值 ≥ ${min_cap_usd / 1e9:.0f}B（共 {len(universe)} 只待筛）...")
+    print(f"  过滤市值 ≥ ${min_cap_usd / 1e9:.0f}B（共 {len(universe)} 只待筛）...", flush=True)
     for i, u in enumerate(universe, 1):
         try:
-            t = yf.Ticker(u["ticker"])
-            info = t.info
-            cap_local = info.get("marketCap")
-            ccy = (info.get("currency") or "USD").upper()
+            cap_local, ccy = _quote_market_cap(u["ticker"])
             if cap_local is None:
                 if i % 20 == 0:
-                    print(f"    进度 {i}/{len(universe)}")
+                    print(f"    进度 {i}/{len(universe)}", flush=True)
                 continue
             fx = _fx_to_usd(ccy) if ccy != "USD" else 1.0
             if fx <= 0:
@@ -343,7 +366,7 @@ def filter_by_market_cap(universe: list[dict], min_cap_usd: float = 5e9) -> list
             cap_usd = cap_local * fx
             if cap_usd < min_cap_usd:
                 if i % 20 == 0:
-                    print(f"    进度 {i}/{len(universe)}")
+                    print(f"    进度 {i}/{len(universe)}", flush=True)
                 continue
             u["market_cap_usd"] = cap_usd
             u["market_cap_local"] = cap_local
@@ -352,9 +375,9 @@ def filter_by_market_cap(universe: list[dict], min_cap_usd: float = 5e9) -> list
         except Exception:
             continue
         if i % 20 == 0:
-            print(f"    进度 {i}/{len(universe)}（已通过 {len(out)}）")
+            print(f"    进度 {i}/{len(universe)}（已通过 {len(out)}）", flush=True)
         time.sleep(0.1)
-    print(f"  ✅ 过市值后剩 {len(out)} 只 (FX cache: {dict(_FX_TO_USD_CACHE)})")
+    print(f"  ✅ 过市值后剩 {len(out)} 只 (FX cache: {dict(_FX_TO_USD_CACHE)})", flush=True)
     return out
 
 
@@ -369,29 +392,39 @@ def main():
     parser.add_argument("--min-cap-billion", type=float, default=5.0,
                        help="最低市值（十亿美元）")
     parser.add_argument("--out", default="data/discovery_candidates.json")
+    parser.add_argument("--exclude-watchlist", action="store_true",
+                       help="旧逻辑：排除已在 watchlist 的标的。默认关闭，AI 推荐走全池排名。")
     parser.add_argument("--skip-cap-filter", action="store_true",
                        help="跳过市值过滤（加速调试）")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     print("=" * 80)
-    print("  🔍 候选发现 — 在 watchlist 之外找因子打分高的股")
+    print("  🔍 候选发现 — 全池因子排名（默认不排除 watchlist）")
     print("=" * 80)
 
     # ============================================================
-    # 1. 当前 watchlist（避免推荐你已经研究过的）
+    # 1. 扫描范围
     # ============================================================
-    print("\n[1/5] 拉当前 watchlist [DuckDB]（用于排除）...")
-    watchlist = fetch_watchlist()
-    skip_codes = {r["code"].strip() for r in watchlist if r.get("code")}
-    print(f"  watchlist 已有 {len(skip_codes)} 只（这些会被排除）")
+    if args.exclude_watchlist:
+        print("\n[1/5] 拉当前 watchlist [DuckDB]（旧逻辑：用于排除）...")
+        from daily_picks import fetch_watchlist
+        watchlist = fetch_watchlist()
+        skip_codes = {r["code"].strip() for r in watchlist if r.get("code")}
+        universe_scope = "outside_watchlist"
+        print(f"  watchlist 已有 {len(skip_codes)} 只（这些会被排除）")
+    else:
+        print("\n[1/5] 扫描范围：全池 universe（不读取/不排除 watchlist）")
+        skip_codes = set()
+        universe_scope = "all_pool"
 
     # ============================================================
     # 2. 构建 universe
     # ============================================================
     print("\n[2/5] 拉 ETF holdings 构建 universe...")
     universe = build_universe(skip_codes)
-    print(f"  合并去重后 universe = {len(universe)} 只（已排除 watchlist）")
+    scope_note = "已排除 watchlist" if args.exclude_watchlist else "未排除 watchlist"
+    print(f"  合并去重后 universe = {len(universe)} 只（{scope_note}）")
     if args.max_universe:
         universe = sorted(universe, key=lambda x: -x["etf_weight_max"])[:args.max_universe]
         print(f"  --max-universe 截断到 {len(universe)} 只")
@@ -423,10 +456,16 @@ def main():
         tk = u["ticker"]
         try:
             print(f"  [{i}/{len(universe)}] {tk:6}", end=" ", flush=True)
-            f = fetch_factors_for(tk)
+            with time_limit(35, f"factors {tk}"):
+                f = fetch_factors_for(tk)
             factors.append(f)
             factor_detail_map[tk] = f
-            sig = fetch_signals_for(tk)
+            try:
+                with time_limit(20, f"signals {tk}"):
+                    sig = fetch_signals_for(tk)
+            except Exception as e:
+                sig = {}
+                print(f"(signals 跳过: {e}) ", end="", flush=True)
             signal_detail_map[tk] = sig
             ana_score, _ = score_analyst(sig.get("analyst"))
             signals[tk] = ana_score
@@ -502,6 +541,8 @@ def main():
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "universe_size": len(universe),
         "watchlist_excluded": len(skip_codes),
+        "universe_scope": universe_scope,
+        "exclude_watchlist": bool(args.exclude_watchlist),
         "etf_sources": [etf[0] for etf in ISHARES_ETFS],
         "method": "Piotroski F-Score + 12-1 momentum + PEAD + analyst (z-score 等权)",
         "min_market_cap_usd": args.min_cap_billion * 1e9,
@@ -524,8 +565,8 @@ def main():
     except Exception as e:
         print(f"⚠️ 落 DuckDB discovery_history 失败: {e}")
 
-    print(f"\n💡 下一步：在飞书 watchlist 表里手动研究这些标的（行业 / 业务 / 风险），")
-    print("    通过的就加入 watchlist；通不过的就丢掉。")
+    print(f"\n💡 下一步：把这份全池排名当作研究线索。")
+    print("    不在 watchlist 的标的可加入自选；已在 watchlist 的标的可回到详情页复核。")
     print("    模型只是缩小搜索空间，不替代你的研究判断。")
 
 

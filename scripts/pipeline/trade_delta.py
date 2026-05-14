@@ -2,14 +2,14 @@
 三市场调仓清单（actionable trade list）
 ─────────────────────────────────────────
 拆分自原单一美股版（2026-05-12 三线独立化）：
-  · 美股：plan_a_v5.json    × US 持仓 → trade_delta.json    (旧默认路径，保持向后兼容)
+  · 美股：plan_a_v5.json    × US 持仓 → trade_delta.json    (兼容文件名，内容来自 v6 risk-aware)
   · 港股：hk_picks.json     × HK 持仓 → trade_delta_hk.json
   · A 股：DuckDB picks.v6_cn（fallback a_share_picks.json）× A 股持仓 → trade_delta_cn.json
 
 为什么不合并到一张调仓单：
   - 三个市场账户独立（美元 / 港元 / 人民币），汇率不同
   - 交易时段不重合（港股 9:30 开盘时美股已收）
-  - 仓位算法不同（v5 Markowitz / hk 等权 / cn sector cap）
+  - 仓位算法不同（US risk-aware / hk 等权 / cn sector cap）
   合并会把 weight 含义搞乱，新人无法直接拿去下单
 
 输入持仓：DuckDB holdings 表（前端 /api/holdings 写入）
@@ -190,6 +190,7 @@ def _load_cn_plan_from_db() -> dict | None:
             SELECT code, name, market, rating, total_score, ai_relevance, theme
             FROM picks
             WHERE model_source = 'v6_cn' AND pick_date = ?
+              AND signal = 'buy'
             ORDER BY total_score DESC NULLS LAST, code
         """, [latest]).fetchall()
         conn.close()
@@ -310,7 +311,7 @@ def build_delta(market: str, plan_file: str, out_file: str,
 
     if plan is None and not os.path.exists(plan_file):
         print(f"  ⚠️  {plan_file} 不存在 — 该市场跳过。")
-        print(f"     美股：build_plan_a_v5.py / 港股：hk_picks.py / A 股：a_share_picks")
+        print(f"     美股：python3 -m stock_research.jobs.optimize_portfolio / 港股：hk_picks.py / A 股：a_share_picks")
         return None
 
     if plan is None:

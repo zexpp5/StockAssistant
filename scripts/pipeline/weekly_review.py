@@ -64,13 +64,14 @@ def fetch_picks_from_db(*, include_legacy: bool = False):
         """
     rows = conn.execute(f"""
         SELECT pick_date, code, name, market, entry_price, entry_currency,
-               rating, theme, ai_relevance, COALESCE(model_source, 'legacy_unknown') AS model_source
+               rating, theme, ai_relevance, COALESCE(model_source, 'legacy_unknown') AS model_source,
+               signal
         FROM picks
         {source_filter}
         ORDER BY pick_date DESC, code
     """).fetchall()
     cols = ["pick_date", "code", "name", "market", "entry_price",
-            "entry_currency", "rating", "theme", "ai_relevance", "model_source"]
+            "entry_currency", "rating", "theme", "ai_relevance", "model_source", "signal"]
     out = [dict(zip(cols, r)) for r in rows]
     conn.close()
     return out
@@ -140,7 +141,24 @@ def _benchmark_at(benchmark: str, d):
 
 
 def signal_from_rating(rating: str) -> str:
-    return "avoid" if ("不建议" in (rating or "") or "⛔" in (rating or "")) else "buy"
+    """从 rating 文本推断 signal —— 仅作为 DB signal 缺失时的 fallback。
+
+    新代码（2026-05-14+）应直接读 picks.signal 字段；此函数仅给历史 picks（signal IS NULL）兜底。
+    """
+    text = (rating or "").strip()
+    if "⛔" in text or "不建议" in text:
+        return "avoid"
+    if "观察" in text:
+        return "watch"
+    return "buy"
+
+
+def resolve_signal(item: dict) -> str:
+    """从 picks item 取 signal，优先用 DB 字段，缺失时按 rating 文本兜底。"""
+    sig = item.get("signal")
+    if sig:
+        return sig
+    return signal_from_rating(item.get("rating") or "")
 
 
 def grade_hit(pct):
@@ -226,7 +244,7 @@ def main():
         if entry_spy and bench_latest and entry_spy > 0:
             benchmark_pct = (bench_latest - entry_spy) / entry_spy * 100
             alpha_pct = round(pct - benchmark_pct, 2)
-        signal = signal_from_rating(item.get("rating") or "")
+        signal = resolve_signal(item)
         is_success = None
         if alpha_pct is not None:
             is_success = alpha_pct < 0 if signal == "avoid" else alpha_pct > 0

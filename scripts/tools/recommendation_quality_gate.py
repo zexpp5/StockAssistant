@@ -78,12 +78,15 @@ def _run_checks() -> dict:
     ).fetchall()
     latest = {src: _as_date(d) for src, d, _n in latest_rows}
     latest_counts = {}
+    # signal='buy' 才算"真生产推荐"。avoid/watch 是同一张 picks 表里的负向/中性档，
+    # 用 rating 文本前缀分类不可靠（"⭐ 关注" 也是 buy，"⭐ 观察" 是 watch），改用结构化 signal。
     for src, d in latest.items():
         if d is None:
             latest_counts[src] = 0
             continue
         latest_counts[src] = conn.execute(
-            "SELECT COUNT(*) FROM picks WHERE model_source = ? AND pick_date = ?",
+            "SELECT COUNT(*) FROM picks "
+            "WHERE model_source = ? AND pick_date = ? AND COALESCE(signal, 'buy') = 'buy'",
             [src, d],
         ).fetchone()[0]
 
@@ -114,7 +117,8 @@ def _run_checks() -> dict:
         FROM picks p
         INNER JOIN latest l
           ON l.model_source = p.model_source AND l.pick_date = p.pick_date
-        WHERE p.entry_price IS NULL OR p.entry_price <= 0 OR p.entry_currency IS NULL
+        WHERE COALESCE(p.signal, 'buy') = 'buy'
+          AND (p.entry_price IS NULL OR p.entry_price <= 0 OR p.entry_currency IS NULL)
         ORDER BY p.model_source, p.code
         """,
         list(PRODUCTION_SOURCES),
@@ -163,6 +167,7 @@ def _run_checks() -> dict:
         SELECT COUNT(*)
         FROM picks
         WHERE model_source IN ({ph})
+          AND COALESCE(signal, 'buy') = 'buy'
           AND pick_date < CURRENT_DATE
           AND entry_price IS NOT NULL
         """,
@@ -173,6 +178,7 @@ def _run_checks() -> dict:
         SELECT COUNT(*)
         FROM picks p
         WHERE p.model_source IN ({ph})
+          AND COALESCE(p.signal, 'buy') = 'buy'
           AND p.pick_date < CURRENT_DATE
           AND p.entry_price IS NOT NULL
           AND EXISTS (

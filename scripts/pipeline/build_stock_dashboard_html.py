@@ -11,6 +11,7 @@ _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 sys.path.insert(0, _REPO)
 sys.path.insert(0, os.path.join(_REPO, "scripts", "lib"))  # 2026-05-11 lib 迁移
 import json
+import html as html_lib
 from datetime import datetime
 
 # 2026-05-11 PM 第二轮:飞书 100% 退役 — 不再从 Bitable 拉数据
@@ -500,7 +501,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <span class="font-bold text-slate-800">在 12 只里"切蛋糕"（仓位层 · 核心）</span>
       </div>
       <p class="text-sm text-slate-700 leading-relaxed mb-3">
-        采用 <strong>Markowitz 最大夏普比组合优化</strong>（1952 诺奖理论），并叠加几条工程上的硬约束：
+        采用 <strong>risk-aware 组合优化</strong>（Ledoit-Wolf 协方差、相关性剪枝、风险闸门），并叠加几条工程上的硬约束：
       </p>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mb-3 text-sm">
         <div class="bg-slate-50 rounded px-3 py-2"><strong>现金底线 5%</strong> · 留 <span data-cfg-pct="0.05">¥25,000</span> 应急/加仓</div>
@@ -742,6 +743,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div id="picks-summary" class="text-right flex-shrink-0"></div>
   </div>
 
+  {SOURCE_HEALTH_PANEL}
+
   <!-- 🌟 今日 top picks 横幅（最新一批入选 · 三线独立 2026-05-12 起）-->
   <div class="mb-6 bg-gradient-to-r from-violet-100 to-fuchsia-50 border-2 border-violet-300 rounded-xl p-5">
     <div class="flex items-center gap-2 mb-3 flex-wrap">
@@ -760,7 +763,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           class="picks-mkt-btn px-3 py-1 text-xs font-medium rounded text-slate-600 hover:bg-violet-50">🇨🇳 A 股</button>
       </div>
     </div>
-    <div id="picks-today-list" class="grid grid-cols-1 md:grid-cols-3 gap-3"></div>
+    <div id="picks-today-list" class="overflow-x-auto rounded-lg border border-violet-100 bg-white"></div>
   </div>
 
   <!-- 显眼分隔横条：上面是今天的，下面是历史回顾，视觉一刀两断 -->
@@ -817,13 +820,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <section id="discovery" class="max-w-7xl mx-auto px-6 py-10 bg-gradient-to-br from-sky-50 to-indigo-50 rounded-2xl my-6">
   <div class="flex items-center gap-3 mb-2">
     <span class="text-3xl">🔍</span>
-    <h2 class="text-2xl font-bold text-slate-900">AI 推荐 — 自选股之外的因子高分股</h2>
+    <h2 class="text-2xl font-bold text-slate-900">AI 推荐 — 全池综合排名</h2>
   </div>
   <p class="text-slate-700 mb-3 max-w-3xl">
-    扫描 SOXX / IGM / IRBO / BAI 四个 ETF 的所有成分股（半导体 + 拓展科技 + AI 主题），
-    跑同一套学术因子模型（Piotroski + 12-1 动量 + PEAD + 分析师上修），
-    找出 <strong>不在你 自选股里</strong> 但综合得分前列的标的。
-    <strong class="text-rose-600">仅缩小搜索空间，研究判断仍需你来做</strong>。
+    基于今天 DuckDB 已拉回的 <strong>全池数据</strong>（prices + latest picks），
+    综合价格动量、增长、估值、AI 主题关联和已有 v6 因子打分来排序。
+    <strong class="text-violet-700">这里不排除 Watchlist</strong>：自选股和非自选股都进入同一张榜。
+    <strong class="text-rose-600">用于确定研究优先级，不等于直接买入指令</strong>。
   </p>
   <div id="discovery-meta" class="text-xs text-slate-500 mb-4"></div>
 
@@ -846,7 +849,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <!-- 今日候选 view -->
   <div id="disc-view-today">
     <div id="discovery-empty" class="hidden text-center py-12 text-slate-500 bg-white rounded-xl">
-      暂无AI 推荐数据(运行 <code class="text-xs bg-slate-200 px-1.5 py-0.5 rounded">python3 scripts/tools/discover_candidates.py</code> 生成)
+      暂无AI 推荐数据(运行 <code class="text-xs bg-slate-200 px-1.5 py-0.5 rounded">python3 scripts/tools/build_pool_recommendations.py</code> 生成)
     </div>
     <div id="discovery-table-wrap" class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
       <table class="w-full text-sm">
@@ -873,8 +876,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       </table>
     </div>
     <p class="text-xs text-slate-500 mt-4">
-      💡 <strong>怎么用</strong>:对感兴趣的标的去自选股管理页手动调研(业务 / AI 关联 / 风险),
-      通过的加自选 —— 下次 daily_picks 会自动把它纳入排序池。
+      💡 <strong>怎么用</strong>: 这是全池横向排名。未在自选的标的可去自选股管理页调研后加入；
+      已在自选的标的可回到详情页复核它为什么排在这里。
       <strong class="text-violet-700">α 列</strong>显示推荐后 5/20 交易日相对 SPY 的超额收益,
       数据来自 <code class="text-xs bg-slate-100 px-1 rounded">discovery_tracking</code> 表(每日刷新)。
     </p>
@@ -925,6 +928,24 @@ function switchDiscoveryView(view) {
     用 <strong>远期 PE</strong>（市场对未来 12 个月利润的预期估值）和 <strong>YTD 涨幅</strong>
     交叉分析，找「相对便宜+业绩在加速」的组合。<strong class="text-rose-600">PE 仅是单一维度参考，不构成投资建议</strong>。
   </p>
+
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6">
+    <div class="bg-white/80 rounded-lg border border-cyan-100 px-4 py-3">
+      <div class="text-[11px] font-semibold text-slate-500 uppercase">估值数据抓取时间</div>
+      <div id="valuation-price-asof" class="mt-1 font-mono text-sm font-semibold text-slate-800">—</div>
+      <div class="mt-1 text-xs text-slate-500">来自 prices.fetched_at，PE/YTD 的实际抓取时间</div>
+    </div>
+    <div class="bg-white/80 rounded-lg border border-cyan-100 px-4 py-3">
+      <div class="text-[11px] font-semibold text-slate-500 uppercase">AI 分析时间</div>
+      <div id="valuation-analysis-asof" class="mt-1 font-mono text-sm font-semibold text-slate-800">—</div>
+      <div class="mt-1 text-xs text-slate-500">来自 watchlist.updated_at，业务/AI 元数据最近刷新</div>
+    </div>
+    <div class="bg-white/80 rounded-lg border border-cyan-100 px-4 py-3">
+      <div class="text-[11px] font-semibold text-slate-500 uppercase">估值覆盖</div>
+      <div id="valuation-coverage" class="mt-1 font-mono text-sm font-semibold text-slate-800">—</div>
+      <div class="mt-1 text-xs text-slate-500">有 Forward PE + YTD 的标的才进入散点图</div>
+    </div>
+  </div>
 
   <!-- 散点图 -->
   <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
@@ -982,7 +1003,7 @@ function switchDiscoveryView(view) {
     <span class="text-3xl">🌳</span>
     <h1 class="text-2xl font-bold text-slate-900">产业链地图</h1>
   </div>
-  <p class="text-sm text-slate-600">把自选股按 <strong class="text-violet-700">产业链 × 层级 × 角色</strong> 三维聚类。同一标的可属于多条链（如 SK Hynix 同时在 HBM 链 + AI 算力链）。</p>
+  <p class="text-sm text-slate-600">按市场拆开看：<strong class="text-violet-700">US / Hong Kong / A 股</strong> 三个模块，每个模块内分一级、二级、三级、未分层列表。</p>
 </section>
 
 <!-- ============ 全局分布图表（已退役 · 原属"主题分组"tab，2026-05-11 合并到「产业链地图」后不再展示） ============ -->
@@ -1477,16 +1498,7 @@ function switchDiscoveryView(view) {
       <span class="text-3xl">🌳</span>
       <h2 class="text-2xl font-bold text-slate-900">产业链全景</h2>
     </div>
-    <p class="text-sm text-slate-600">
-      把自选股按 <strong>产业链 × 层级 × 角色</strong> 三维聚类。
-      <strong class="text-violet-700">层级颜色</strong>：
-      <span class="px-1.5 py-0.5 bg-violet-100 text-violet-800 rounded text-xs font-semibold">核心</span>
-      <span class="px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded text-xs font-semibold">一线</span>
-      <span class="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 rounded text-xs font-semibold">二线</span>
-      <span class="px-1.5 py-0.5 bg-amber-100 text-amber-800 rounded text-xs font-semibold">三线</span>
-      <span class="px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded text-xs font-semibold">N/A</span>
-      。同一标的可属于多条链(如 SK Hynix 同时在 HBM 和 AI 算力链)。
-    </p>
+    <p class="text-sm text-slate-600">先按市场分块，再按一级 / 二级 / 三级 / 未分层列出标的，避免不同市场混在一起。</p>
   </div>
 
   <div class="flex items-center gap-3 mb-4 flex-wrap text-xs">
@@ -1495,7 +1507,19 @@ function switchDiscoveryView(view) {
     <span id="chain-count" class="ml-auto text-slate-500"></span>
   </div>
 
-  <div id="chain-summary" class="mb-6 flex flex-wrap gap-2"></div>
+  <div class="flex flex-col md:flex-row md:items-center gap-3 mb-4">
+    <input id="chain-search" oninput="loadChainOverview()" type="text"
+           placeholder="搜索市场 / 代码 / 名称 / 角色…"
+           class="w-full md:w-80 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-violet-400">
+    <div class="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+      <span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-violet-500"></span>一级：核心/一线</span>
+      <span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>二级</span>
+      <span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-amber-500"></span>三级：三线</span>
+      <span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-slate-400"></span>未分层</span>
+    </div>
+  </div>
+
+  <div id="chain-summary" class="mb-4 flex flex-wrap gap-2"></div>
 
   <div id="chain-cards-container" class="space-y-6"></div>
 </section>
@@ -1541,7 +1565,7 @@ function switchDiscoveryView(view) {
                  class="flex-1 px-3 py-2 text-2xl font-bold text-slate-900 border border-slate-300 rounded-lg focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 outline-none">
         </div>
         <p class="text-xs text-slate-500 mt-2 leading-relaxed">
-          整个组合按这个数算每只股票该买多少。修改后<strong>下一次跑批</strong>（build_plan_a_v5 / trade_delta / risk_metrics）就生效。
+          整个组合按这个数算每只股票该买多少。修改后<strong>下一次跑批</strong>（optimize_portfolio / trade_delta / risk_metrics）就生效。
         </p>
       </label>
     </div>
@@ -1848,8 +1872,8 @@ function switchDiscoveryView(view) {
           <tbody>
             <tr class="border-b border-blue-100">
               <td class="py-1.5 px-2 font-semibold">v6 选股</td>
-              <td class="px-2">4 学术因子（Piotroski + 12-1 动量 + PEAD + 分析师上修）+ Markowitz 仓位 → 每天 12 只</td>
-              <td class="px-2 font-mono text-[11px]">daily_picks_v5.py · build_plan_a_v5.py</td>
+              <td class="px-2">6 学术因子 + risk-aware 仓位（Ledoit-Wolf / 相关性剪枝 / ADV 成本）→ 每天 12 只</td>
+              <td class="px-2 font-mono text-[11px]">daily_picks_v5.py · optimize_portfolio.py</td>
               <td class="px-2 text-emerald-700 font-semibold">✅ 在跑</td>
             </tr>
             <tr class="border-b border-blue-100">
@@ -1940,7 +1964,7 @@ function switchDiscoveryView(view) {
         </div>
         <div class="bg-white rounded-lg p-3 border border-emerald-200">
           <p class="font-bold text-slate-800 mb-1">5. 组合优化 v6</p>
-          <p class="text-xs text-slate-600">因子中性化 + Markowitz + ADV 限流 + 成本扣减 + Trade delta 自动写飞书</p>
+          <p class="text-xs text-slate-600">因子中性化 + risk-aware 优化 + ADV 限流 + 成本扣减 + Trade delta 自动写飞书</p>
         </div>
         <div class="bg-white rounded-lg p-3 border border-emerald-200">
           <p class="font-bold text-slate-800 mb-1">6. 工程化 + 文档</p>
@@ -2271,6 +2295,7 @@ function switchDiscoveryView(view) {
 <script>
 // ============ 数据注入 · 2026-05-11 起 DuckDB single source of truth ============
 // RECORDS / PICKS / SIMULATION 来自飞书 watchlist API 实时拉（仍保留），其余全部走 DuckDB。
+const DASHBOARD_UPDATE_TIME = "{UPDATE_TIME}";
 const RECORDS      = {RECORDS_JSON};
 const PICKS        = {PICKS_JSON};
 // 2026-05-12 加：各市场 picks JSON 的 generated_at — 让用户知道每条推荐是什么时候算的
@@ -2297,6 +2322,10 @@ const _DYNAMIC     = {PLAN_DYNAMIC_JSON_DB};
 const WATCHLIST_API_BASE = "http://127.0.0.1:8765";
 let _watchlistCache = [];
 let _watchlistEditCode = null;  // null = 新增模式；非空 = 编辑该 code
+// 2026-05-14: 自动评级状态
+let __pickJobRunning = false;       // 后台 daily_picks_v5 是否在跑（每 3s 轮询同步）
+let __pickJobPolling = null;        // setInterval handle
+let __pickJobLastSeenAt = null;     // 上一次轮询到 running=true 的时间戳（用于结束检测）
 
 async function _watchlistApiCall(method, path, body) {
   const opts = { method, headers: {"Content-Type": "application/json"} };
@@ -2344,12 +2373,15 @@ function _heldBadge(code) {
 // 自选股 AI 评级 badge — 数据来自 picks 表最新一日（daily_picks_v5 学术因子）
 //   ⭐⭐⭐ 强烈推荐(z≥1) → ✅ 推荐
 //   ⭐⭐ 推荐(z≥0.5) / ⭐ 关注 → ⚠️ 观察
-//   ⛔ 不建议(z≤-0.5) → ❌ 不建议（红色）
-//   不在 picks → — 未评级（z 在 [-0.5, 0.5] 区间 或 数据缺失）
+//   ⛔ 不建议(z≤-0.5) → ❌ 不建议（浅灰，比未评级稍深一点）
+//   不在 picks → 评级中（后台 daily_picks_v5 跑着）/ 未评级（无 job 在跑）
 function _wlRatingBadge(code) {
   const info = WATCHLIST_RATINGS[code];
   if (!info || !info.rating) {
-    return '<span class="text-slate-400 text-xs" title="未在今日 daily_picks 入选池">— 未评级</span>';
+    if (__pickJobRunning) {
+      return '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs bg-sky-100 text-sky-700" title="后台 daily_picks_v5 正在跑评级"><span class="animate-pulse">🔄</span>&nbsp;评级中</span>';
+    }
+    return '<span class="text-slate-400 text-xs" title="picks 表里没这只股 — 点'+'刷新 / 或加一只新股自动触发评级">— 未评级</span>';
   }
   const r = String(info.rating);
   const score = info.total_score != null ? ` · ${info.total_score}` : "";
@@ -2358,7 +2390,7 @@ function _wlRatingBadge(code) {
     ? `<span class="inline-flex ml-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-700 ring-1 ring-rose-300" title="${_esc(r)}">🚨 风险</span>`
     : "";
   if (r.includes("⛔")) {
-    return `<span class="inline-flex items-center"><span class="inline-flex px-2 py-0.5 rounded text-xs font-bold bg-red-100 text-red-700 ring-1 ring-red-300" title="${_esc(r)}${score}">❌ 不建议</span>${flagBadge}</span>`;
+    return `<span class="inline-flex items-center"><span class="inline-flex px-2 py-0.5 rounded text-xs bg-slate-100 text-slate-500" title="${_esc(r)}${score}">❌ 不建议</span>${flagBadge}</span>`;
   }
   if (r.includes("⭐⭐⭐")) {
     return `<span class="inline-flex items-center"><span class="inline-flex px-2 py-0.5 rounded text-xs font-bold bg-emerald-100 text-emerald-700" title="${_esc(r)}${score}">✅ 推荐</span>${flagBadge}</span>`;
@@ -2513,6 +2545,13 @@ async function loadWatchlistTable() {
     if (_watchlistCache.length === 0) {
       _watchlistCache = await _watchlistApiCall("GET", "/api/watchlist");
     }
+    // 2026-05-14: 实时合并 picks 表里每只股的最新评级 → WATCHLIST_RATINGS
+    try {
+      const latest = await fetch(WATCHLIST_API_BASE + "/api/picks/latest-summary").then(r => r.ok ? r.json() : {});
+      for (const [c, v] of Object.entries(latest || {})) WATCHLIST_RATINGS[c] = v;
+    } catch (_) { /* offline 时静默 */ }
+    // 同步评级 job 状态
+    await _pollRatingStatusOnce();
     // 确保持仓 cache 已加载,这样 _heldBadge 能正确显示「💼 持」标记
     if (!_holdingsLoaded) await _ensureHoldingsLoaded();
     // 总是调用（line 2263 内部 guard 保证幂等）— 修复:cache 可能被其他 tab 先填(如 AI 推荐的"✓ 已在自选"标记)导致筛选项漏初始化
@@ -2567,7 +2606,105 @@ async function loadWatchlistTable() {
 }
 async function forceReloadWatchlist() { _watchlistCache = []; await loadWatchlistTable(); }
 
+// ============ 2026-05-14: 自动评级状态轮询 ============
+async function _pollRatingStatusOnce() {
+  // 查后台 picks 评级 job 状态；返回 true 表示状态变化（用于决定是否需要刷新表）
+  let prev = __pickJobRunning;
+  try {
+    const r = await fetch(WATCHLIST_API_BASE + "/api/picks/rerun-status");
+    if (!r.ok) { __pickJobRunning = false; return prev !== false; }
+    const s = await r.json();
+    __pickJobRunning = !!s.running;
+    if (__pickJobRunning) __pickJobLastSeenAt = Date.now();
+  } catch (_) {
+    __pickJobRunning = false;
+  }
+  return prev !== __pickJobRunning;
+}
+
+function _startRatingPolling() {
+  if (__pickJobPolling) return;  // 已经在轮询
+  // 每 3s 查一次；轮询到 running=false 且之前 running=true → 评级刚跑完，刷新列表
+  __pickJobPolling = setInterval(async () => {
+    const wasRunning = __pickJobRunning;
+    await _pollRatingStatusOnce();
+    if (wasRunning && !__pickJobRunning) {
+      // 评级刚结束 → 重拉最新评级 + 重刷表
+      clearInterval(__pickJobPolling);
+      __pickJobPolling = null;
+      try {
+        const latest = await fetch(WATCHLIST_API_BASE + "/api/picks/latest-summary").then(r => r.ok ? r.json() : {});
+        for (const [c, v] of Object.entries(latest || {})) WATCHLIST_RATINGS[c] = v;
+      } catch (_) {}
+      // 仅在自选股 tab 可见时重渲染（避免对其他 tab 状态干扰）
+      const wlSection = document.getElementById("watchlist-table-body");
+      if (wlSection) await forceReloadWatchlist();
+    } else if (!wasRunning && !__pickJobRunning) {
+      // 连续两次都 idle → 关掉轮询，省 CPU
+      clearInterval(__pickJobPolling);
+      __pickJobPolling = null;
+    }
+  }, 3000);
+}
+
 // ============ 🌳 产业链全景渲染 ============
+function _chainAnchor(chain) {
+  return "chain-row-" + String(chain || "unknown").replace(/[^a-zA-Z0-9\u4e00-\u9fff]+/g, "_");
+}
+
+function _chainFallbackRows() {
+  const src = (typeof WATCHLIST_CHAIN_INFO !== "undefined") ? WATCHLIST_CHAIN_INFO : {};
+  return Object.entries(src).map(([code, meta]) => ({
+    code,
+    name: meta.name || code,
+    market: meta.market || "",
+    industry: meta.industry || "",
+    chain: meta.chain || "",
+    chain_tier: meta.chain_tier || "N/A",
+    chain_role: meta.chain_role || "",
+    layman_intro: meta.layman_intro || "",
+    status: meta.status || "",
+  }));
+}
+
+function _chainStockPill(r, apiOk) {
+  const level = _chainLevelKey(r);
+  const tone = {
+    l1: "bg-violet-50 text-violet-800 border-violet-200",
+    l2: "bg-emerald-50 text-emerald-800 border-emerald-200",
+    l3: "bg-amber-50 text-amber-800 border-amber-200",
+    un: "bg-slate-50 text-slate-600 border-slate-200",
+  }[level];
+  const title = [r.name || r.code, r.chain_role, r.chain_tier, r.layman_intro].filter(Boolean).join(" · ");
+  const inner = `
+    <div class="flex items-center gap-1 min-w-0">
+      <span class="font-mono font-bold text-[11px]">${_esc(r.code || "—")}</span>
+      <span class="truncate text-xs">${_esc(r.name || "")}</span>
+    </div>
+    <div class="mt-0.5 text-[10px] text-slate-500 truncate">${_esc(r.chain_role || r.industry || "")}</div>
+  `;
+  const cls = `block w-full px-2 py-1.5 rounded border ${tone} text-left hover:ring-1 hover:ring-violet-300`;
+  if (!apiOk) {
+    return `<div class="${cls} cursor-help" title="${_esc(title || "内置快照，启动 API 后可编辑")}">${inner}</div>`;
+  }
+  return `<button type="button" onclick="openWatchlistEditor('${_esc(r.code || "")}')" class="${cls} text-left" title="${_esc(title || "点击编辑链条标注")}">${inner}</button>`;
+}
+
+function _chainMarketKey(r) {
+  const s = [r.market, r.chain, r.code].map(x => String(x || "")).join(" ");
+  if (/A股|沪|深|北|A-share/i.test(s)) return "cn";
+  if (/港股|HK|Hong Kong|\\.HK/i.test(s)) return "hk";
+  return "us";
+}
+
+function _chainLevelKey(r) {
+  const t = String(r.chain_tier || "");
+  if (t === "核心" || t === "一线") return "l1";
+  if (t === "二线") return "l2";
+  if (t === "三线") return "l3";
+  return "un";
+}
+
 async function loadChainOverview() {
   const statusEl = document.getElementById("chain-api-status");
   const countEl = document.getElementById("chain-count");
@@ -2576,89 +2713,103 @@ async function loadChainOverview() {
   if (!container) return;
 
   const ok = await _checkApiStatus();
-  if (statusEl) statusEl.className = ok
-    ? "px-2 py-0.5 rounded bg-emerald-100 text-emerald-700"
-    : "px-2 py-0.5 rounded bg-rose-100 text-rose-700";
-  if (statusEl) statusEl.textContent = ok ? "✓ API 已连接" : "✗ API 未启动";
-  if (!ok) {
-    container.innerHTML = `<div class="bg-rose-50 border border-rose-200 rounded p-4 text-sm text-rose-700">
-      本地 API 未启动 — 请运行: <code class="bg-rose-100 px-2 py-0.5 rounded">uvicorn stock_research.api.main:app --port 8765</code>
-    </div>`;
-    return;
-  }
   try {
-    if (_watchlistCache.length === 0) {
-      _watchlistCache = await _watchlistApiCall("GET", "/api/watchlist");
+    if (ok && _watchlistCache.length === 0) {
+      const payload = await _watchlistApiCall("GET", "/api/watchlist");
+      _watchlistCache = Array.isArray(payload)
+        ? payload
+        : (Array.isArray(payload?.rows) ? payload.rows : (Array.isArray(payload?.items) ? payload.items : []));
     }
-    const byChain = {};
-    _watchlistCache.forEach(r => {
-      const chains = (r.chain || "").split(",").map(s => s.trim()).filter(Boolean);
-      if (chains.length === 0) chains.push("(未分类)");
-      chains.forEach(c => { (byChain[c] = byChain[c] || []).push(r); });
+    const fallbackRows = _chainFallbackRows();
+    const useApiRows = ok && Array.isArray(_watchlistCache) && _watchlistCache.length > 0;
+    const sourceRows = useApiRows ? _watchlistCache : fallbackRows;
+    if (statusEl) statusEl.className = useApiRows
+      ? "px-2 py-0.5 rounded bg-emerald-100 text-emerald-700"
+      : "px-2 py-0.5 rounded bg-slate-100 text-slate-600";
+    if (statusEl) statusEl.textContent = useApiRows
+      ? "✓ API 已连接 · 可编辑"
+      : (ok ? "API 空 · 使用内置快照" : "内置快照 · 只读");
+    const kw = (document.getElementById("chain-search")?.value || "").trim().toLowerCase();
+    const markets = {
+      us: { label: "US", hint: "美股 / 全球 ADR", icon: "🇺🇸", rows: [], levels: { l1: [], l2: [], l3: [], un: [] } },
+      hk: { label: "Hong Kong", hint: "港股", icon: "🇭🇰", rows: [], levels: { l1: [], l2: [], l3: [], un: [] } },
+      cn: { label: "A 股", hint: "沪深北", icon: "🇨🇳", rows: [], levels: { l1: [], l2: [], l3: [], un: [] } },
+    };
+    sourceRows.forEach(raw => {
+      const r = {...raw};
+      if (kw) {
+        const hay = [r.market, r.chain, r.code, r.name, r.chain_role, r.layman_intro, r.industry]
+          .map(x => String(x || "").toLowerCase()).join(" ");
+        if (!hay.includes(kw)) return;
+      }
+      const m = markets[_chainMarketKey(r)] || markets.us;
+      const level = _chainLevelKey(r);
+      m.rows.push(r);
+      m.levels[level].push(r);
     });
-    const chainsSorted = Object.keys(byChain).sort((a, b) => byChain[b].length - byChain[a].length);
-    countEl.textContent = `${chainsSorted.length} 条链 · ${_watchlistCache.length} 个标的(去重)`;
-
-    summaryEl.innerHTML = chainsSorted.map(c => {
-      const n = byChain[c].length;
-      const anchor = "chain-card-" + c.replace(/[^a-zA-Z0-9]/g, "_");
-      return `<a href="#${anchor}" onclick="document.getElementById('${anchor}')?.scrollIntoView({behavior:'smooth',block:'start'});return false;"
-        class="inline-flex items-center gap-1.5 px-3 py-1 bg-white border border-slate-200 hover:border-violet-400 hover:bg-violet-50 rounded-full text-xs text-slate-700 transition">
-        <span class="font-medium">${_esc(c)}</span>
-        <span class="text-slate-400">·</span>
-        <span class="text-violet-600 font-semibold">${n}</span>
-      </a>`;
-    }).join("");
-
-    container.innerHTML = chainsSorted.map(c => {
-      const rows = byChain[c];
-      rows.sort((a, b) => {
-        const ta = (TIER_STYLE[a.chain_tier] || TIER_STYLE["N/A"]).order;
-        const tb = (TIER_STYLE[b.chain_tier] || TIER_STYLE["N/A"]).order;
-        if (ta !== tb) return ta - tb;
-        return (a.code || "").localeCompare(b.code || "");
+    Object.values(markets).forEach(m => {
+      ["l1", "l2", "l3", "un"].forEach(level => {
+        m.levels[level].sort((a, b) => {
+          const roleCmp = String(a.chain_role || "").localeCompare(String(b.chain_role || ""));
+          if (roleCmp !== 0) return roleCmp;
+          return String(a.code || "").localeCompare(String(b.code || ""));
+        });
       });
-      const tiers = ["核心", "一线", "二线", "三线", "N/A"];
-      const byTier = {};
-      tiers.forEach(t => byTier[t] = []);
-      rows.forEach(r => {
-        const t = r.chain_tier && byTier[r.chain_tier] !== undefined ? r.chain_tier : "N/A";
-        byTier[t].push(r);
-      });
-      const anchor = "chain-card-" + c.replace(/[^a-zA-Z0-9]/g, "_");
+    });
 
-      const tierBlocks = tiers.filter(t => byTier[t].length > 0).map(t => {
-        const s = TIER_STYLE[t];
-        const stockCards = byTier[t].map(r => `
-          <div class="bg-white border border-slate-200 hover:border-violet-300 rounded-lg p-3 cursor-pointer transition group"
-               onclick="location.hash='#watchlist-edit';setTimeout(()=>openWatchlistEditor('${_esc(r.code)}'),200);">
-            <div class="flex items-start justify-between gap-2 mb-1.5">
-              <div class="flex-1 min-w-0">
-                <div class="font-mono text-xs font-bold text-slate-900 truncate">${_esc(r.code)}</div>
-                <div class="text-sm text-slate-700 truncate">${_esc(r.name)}</div>
-              </div>
-              ${_roleBadge(r.chain_role)}
-            </div>
-            <div class="text-xs text-slate-600 leading-snug line-clamp-3">${_esc(r.layman_intro) || '<span class="text-slate-400">(未填一句话解释)</span>'}</div>
-          </div>
-        `).join("");
-        return `<div class="mb-4">
-          <div class="flex items-center gap-2 mb-2">
-            <span class="px-2 py-0.5 rounded ${s.bg} ${s.txt} text-xs font-semibold">${t}</span>
-            <span class="text-xs text-slate-400">${byTier[t].length} 只</span>
-          </div>
-          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">${stockCards}</div>
-        </div>`;
-      }).join("");
+    const marketList = [markets.us, markets.hk, markets.cn];
+    const total = marketList.reduce((sum, m) => sum + m.rows.length, 0);
+    countEl.textContent = `${total} 个标的${kw ? " · 已筛选" : ""}`;
+    summaryEl.innerHTML = marketList.map(m => `
+      <a href="#chain-market-${m.label.replace(/\s+/g, "-").toLowerCase()}"
+         onclick="document.getElementById('chain-market-${m.label.replace(/\s+/g, "-").toLowerCase()}')?.scrollIntoView({behavior:'smooth',block:'start'});return false;"
+         class="inline-flex items-center gap-2 px-3 py-1 bg-white border border-slate-200 hover:border-violet-400 hover:bg-violet-50 rounded-full text-xs text-slate-700 transition">
+        <span>${m.icon}</span><span class="font-medium">${m.label}</span><span class="text-violet-600 font-semibold">${m.rows.length}</span>
+      </a>
+    `).join("");
 
-      return `<div id="${anchor}" class="bg-slate-50 rounded-xl border border-slate-200 p-5">
-        <div class="flex items-center gap-3 mb-4 pb-3 border-b border-slate-200">
-          <h3 class="text-xl font-bold text-slate-900">🔗 ${_esc(c)}</h3>
-          <span class="text-sm text-slate-500">${rows.length} 个标的</span>
+    if (total === 0) {
+      container.innerHTML = `<div class="bg-white border border-slate-200 rounded-lg p-8 text-center text-sm text-slate-500">没有匹配的市场或标的</div>`;
+      return;
+    }
+
+    const column = (title, subtitle, rows, tone) => `
+      <div class="min-w-0 bg-white border border-slate-200 rounded-lg overflow-hidden">
+        <div class="px-3 py-2 border-b border-slate-100 ${tone}">
+          <div class="flex items-baseline justify-between gap-2">
+            <h4 class="text-sm font-bold">${title}</h4>
+            <span class="text-xs font-mono">${rows.length}</span>
+          </div>
+          <div class="text-[11px] opacity-75">${subtitle}</div>
         </div>
-        ${tierBlocks || '<div class="text-sm text-slate-400">本链暂无标的</div>'}
+        <div class="p-2 space-y-1.5 max-h-[520px] overflow-y-auto">
+          ${rows.length ? rows.map(r => _chainStockPill(r, useApiRows)).join("") : '<div class="text-xs text-slate-300 px-2 py-3">—</div>'}
+        </div>
       </div>`;
-    }).join("");
+
+    container.innerHTML = marketList.map(m => `
+      <section id="chain-market-${m.label.replace(/\s+/g, "-").toLowerCase()}" class="bg-slate-50 border border-slate-200 rounded-xl p-4">
+        <div class="flex items-center justify-between gap-3 mb-3">
+          <div>
+            <h3 class="text-lg font-bold text-slate-900">${m.icon} ${m.label}</h3>
+            <p class="text-xs text-slate-500">${m.hint} · ${m.rows.length} 个标的</p>
+          </div>
+          <div class="flex gap-2 text-xs text-slate-500">
+            <span>一级 ${m.levels.l1.length}</span>
+            <span>二级 ${m.levels.l2.length}</span>
+            <span>三级 ${m.levels.l3.length}</span>
+            <span>未分层 ${m.levels.un.length}</span>
+          </div>
+        </div>
+        <div class="grid grid-cols-1 lg:grid-cols-4 gap-3">
+          ${column("一级", "核心 / 一线", m.levels.l1, "bg-violet-50 text-violet-800")}
+          ${column("二级", "二线", m.levels.l2, "bg-emerald-50 text-emerald-800")}
+          ${column("三级", "三线", m.levels.l3, "bg-amber-50 text-amber-800")}
+          ${column("未分层", "N/A / 未标", m.levels.un, "bg-slate-50 text-slate-600")}
+        </div>
+      </section>
+    `).join("") + `
+    ${useApiRows ? "" : `<p class="mt-3 text-xs text-slate-500">当前使用 HTML 内置快照展示；启动本地 API 后，点击股票标签可直接编辑链条标注。</p>`}`;
   } catch (e) {
     container.innerHTML = `<div class="bg-rose-50 border border-rose-200 rounded p-4 text-sm text-rose-700">加载失败：${_esc(e.message)}</div>`;
   }
@@ -2739,6 +2890,7 @@ async function saveWatchlistItem() {
     layman_intro: document.getElementById("wl-layman-intro").value.trim() || null,
   };
   try {
+    const isNew = !_watchlistEditCode;
     if (_watchlistEditCode) {
       await _watchlistApiCall("PUT", "/api/watchlist/" + encodeURIComponent(_watchlistEditCode), item);
     } else {
@@ -2746,6 +2898,9 @@ async function saveWatchlistItem() {
     }
     closeWatchlistEditor();
     await forceReloadWatchlist();
+    // 2026-05-14: 新增股票后，POST /api/watchlist 已经自动触发 daily_picks_v5
+    // → 这里启动轮询，让列表里的"未评级"自动变"评级中"，跑完再变成具体评级
+    if (isNew) _startRatingPolling();
   } catch (e) {
     alert("保存失败：" + e.message);
   }
@@ -2808,8 +2963,16 @@ async function deleteWatchlistItem(code) {
   try {
     await _watchlistApiCall("DELETE", "/api/watchlist/" + encodeURIComponent(code));
     await loadWatchlistTable();
+    alert(`✓ 已删除 ${code}`);
   } catch (e) {
-    alert("删除失败：" + e.message);
+    // 列表过期场景（DB 里其实已经没这条了）：刷新后静默
+    if (/404/.test(e.message || "")) {
+      await loadWatchlistTable();
+      alert(`${code} 已不在列表中，已为你刷新最新数据`);
+    } else {
+      await loadWatchlistTable();
+      alert("删除失败：" + e.message);
+    }
   }
 }
 
@@ -4556,10 +4719,10 @@ async function clearHoldings() {
   await saveHoldings([]);
 }
 
-// ============ 一键加载方案 A v6（学术因子 + Markowitz 客观仓位） ============
+// ============ 一键加载方案 A v6（学术因子 + risk-aware 客观仓位） ============
 async function loadPlanAv6() {
   if (!PLAN_A_V6 || !PLAN_A_V6.plan_v5 || PLAN_A_V6.plan_v5.length === 0) {
-    alert("还没有方案 A v6 数据，请先跑：python3 build_plan_a_v5.py");
+    alert("还没有方案 A v6 数据，请先跑：python3 -m stock_research.jobs.optimize_portfolio");
     return;
   }
   if (!confirm(
@@ -4630,7 +4793,7 @@ function renderV6Metrics(metrics) {
       <div class="text-[10px] text-slate-500">SPY 长期约 15-18%</div>
     </div>
     <div class="bg-white rounded-lg p-3 border border-emerald-200">
-      <div class="text-sm font-bold text-slate-700">5 因子 + Markowitz</div>
+      <div class="text-sm font-bold text-slate-700">6 因子 + risk-aware</div>
       <div class="text-xs text-slate-600 mt-1">Piotroski / 12-1 动量 / 1月反转</div>
       <div class="text-xs text-slate-600">PEAD / 分析师上修</div>
     </div>
@@ -5374,12 +5537,26 @@ function _ratingScore(rating) {
   return 0;
 }
 
+function _pickScore(p) {
+  const raw = (p.total_score != null && p.total_score !== "") ? p.total_score : p.score;
+  const n = parseFloat(raw);
+  return Number.isFinite(n) ? n : 0;
+}
+
 let _latestPickDate = null;
 function _isProductionPick(p) {
   const src = String(p.model_source || "");
   return src && src !== "legacy";
 }
-const _topPickSourceRows = PICKS.some(_isProductionPick) ? PICKS.filter(_isProductionPick) : PICKS;
+// 默认只看 signal='buy'（结构化 buy/avoid/watch 取代 rating 文本前缀）。
+// avoid 是 daily_picks_v5 的"⛔ 不建议"档，watch 是中性档；二者写入 picks 表是为审计/
+// 自选股评级展示，**不**该混进"今日 top picks"。signal 为空（极老数据）按 buy 兜底。
+function _isBuySignal(p) {
+  const s = String(p.signal || "").toLowerCase();
+  return s === "" || s === "buy";
+}
+const _topPickSourceRows = (PICKS.some(_isProductionPick) ? PICKS.filter(_isProductionPick) : PICKS)
+  .filter(_isBuySignal);
 _topPickSourceRows.forEach(p => {
   if (p.pick_date && (_latestPickDate == null || p.pick_date > _latestPickDate)) {
     _latestPickDate = p.pick_date;
@@ -5402,7 +5579,7 @@ _topPickSourceRows.forEach(p => {
   const sNew = _ratingScore(p.rating);
   const sCur = _ratingScore(cur.rating);
   // 评分高的胜出；评分相同时取 score 大的
-  if (sNew > sCur || (sNew === sCur && (parseFloat(p.score) || 0) > (parseFloat(cur.score) || 0))) {
+  if (sNew > sCur || (sNew === sCur && _pickScore(p) > _pickScore(cur))) {
     _todayDedup.set(key, p);
   }
 });
@@ -5410,7 +5587,7 @@ _topPickSourceRows.forEach(p => {
 const todayPicks = Array.from(_todayDedup.values()).sort((a, b) => {
   const ra = _ratingScore(a.rating), rb = _ratingScore(b.rating);
   if (rb !== ra) return rb - ra;
-  return (parseFloat(b.score) || 0) - (parseFloat(a.score) || 0);
+  return _pickScore(b) - _pickScore(a);
 });
 
 if (_latestPickDate) {
@@ -5507,7 +5684,7 @@ function _fmtTs(iso) {
   const short = (hh && mm) ? `${MM}-${DD} ${hh}:${mm}` : `${MM}-${DD}`;
   const full = (hh && mm) ? `${Y}-${MM}-${DD} ${hh}:${mm}` : `${Y}-${MM}-${DD}`;
   let age = "", stale = false;
-  const t = Date.parse(s);
+  const t = Date.parse(s.replace(" ", "T"));
   if (!isNaN(t)) {
     const ms = Date.now() - t;
     const hrs = Math.floor(ms / 3600000);
@@ -5522,26 +5699,96 @@ function _fmtTs(iso) {
   return { short, full, age, stale };
 }
 
-function _pickReasonsHtml(p) {
+function _numOrNull(v) {
+  if (v == null || v === "") return null;
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function _fmtCompactNum(v, digits = 0) {
+  const n = _numOrNull(v);
+  if (n == null) return "—";
+  return n.toFixed(digits);
+}
+
+function _factorPill(label, value, title, tone = "slate") {
+  const toneCls = {
+    violet: "bg-violet-50 text-violet-700 border-violet-100",
+    emerald: "bg-emerald-50 text-emerald-700 border-emerald-100",
+    amber: "bg-amber-50 text-amber-700 border-amber-100",
+    sky: "bg-sky-50 text-sky-700 border-sky-100",
+    slate: "bg-slate-50 text-slate-600 border-slate-100"
+  }[tone] || "bg-slate-50 text-slate-600 border-slate-100";
+  return `<span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border ${toneCls}" title="${_esc(title)}"><span class="text-slate-400">${label}</span><span class="font-mono font-semibold">${value}</span></span>`;
+}
+
+function _pickFactorPillsHtml(p) {
+  const ai = _numOrNull(p.ai_score);
+  const val = _numOrNull(p.val_score);
+  const trend = _numOrNull(p.trend_score);
+  const cred = _numOrNull(p.cred_score);
+  const fScore = val == null || val <= 0 ? "—" : `${Math.round(val / 3)}/9`;
+  return `<div class="flex flex-wrap gap-1 text-[11px] min-w-[190px] max-w-[230px]">
+    ${_factorPill("AI", ai == null ? "—" : ai.toFixed(0), "AI 主题相关度子分", ai != null && ai >= 70 ? "violet" : "slate")}
+    ${_factorPill("F", fScore, "Piotroski F-Score，由 val_score ÷ 3 还原", val != null && val >= 21 ? "emerald" : "slate")}
+    ${_factorPill("动", trend == null || trend <= 0 ? "—" : trend.toFixed(0), "12-1 月动量/趋势子分", trend != null && trend >= 20 ? "amber" : "slate")}
+    ${_factorPill("信", cred == null || cred <= 0 ? "—" : cred.toFixed(0), "分析师上修/可信度子分；非美股通常为空", cred != null && cred >= 20 ? "sky" : "slate")}
+  </div>`;
+}
+
+function _pickReasonsCompactHtml(p) {
   const { pros, cons } = _buildPickReasons(p);
-  const mkt = _pickMarket(p);  // us / hk / cn
-  const ts = (typeof PICKS_TIMESTAMPS !== "undefined") ? PICKS_TIMESTAMPS[mkt] : null;
-  const tsFmt = _fmtTs(ts || p.pick_date);
+  const theme = (p.theme || p.ai_relevance || "").toString().trim();
   const lines = [];
+
   pros.slice(0, 2).forEach(t =>
-    lines.push(`<div class="text-[11px] text-emerald-700 leading-tight" title="${_esc(t)}">✅ ${t}</div>`));
-  // cons 里的"🚨 风险红旗"全显示（红色高亮），其他普通 cons 只显示第一条（黄色）
-  // 红旗源自 grade_label 拼接的 risk_flags（Altman Z'' / Beneish M），避免被截断埋没
+    lines.push(`<div class="text-[11px] text-emerald-700 leading-tight truncate" title="${_esc(t)}">✅ ${_esc(t)}</div>`));
   const flagCons = cons.filter(t => t.includes("🚨"));
   const otherCons = cons.filter(t => !t.includes("🚨"));
-  flagCons.forEach(t =>
-    lines.push(`<div class="text-[11px] text-rose-700 leading-tight font-medium" title="${_esc(t)}">${t}</div>`));
+  flagCons.slice(0, 2).forEach(t =>
+    lines.push(`<div class="text-[11px] text-rose-700 leading-tight font-medium truncate" title="${_esc(t)}">${_esc(t)}</div>`));
   otherCons.slice(0, 1).forEach(t =>
-    lines.push(`<div class="text-[11px] text-amber-700 leading-tight" title="${_esc(t)}">⚠️ ${t}</div>`));
-  // 始终显示 AI 计算时间（即使没有 pros/cons 也要让用户知道这条是什么时候算的）
-  const ageCls = tsFmt.age.includes("⚠️") ? "text-rose-600 font-medium" : "text-slate-400";
-  lines.push(`<div class="text-[10px] ${ageCls} mt-1" title="${_esc(tsFmt.full)}">🕐 AI 算于 ${tsFmt.short} ${tsFmt.age}</div>`);
-  return `<div class="mt-2 pt-2 border-t border-violet-50 space-y-0.5">${lines.join("")}</div>`;
+    lines.push(`<div class="text-[11px] text-amber-700 leading-tight truncate" title="${_esc(t)}">⚠️ ${_esc(t)}</div>`));
+
+  if (lines.length === 0 && theme) {
+    lines.push(`<div class="text-[11px] text-slate-600 leading-tight truncate" title="${_esc(theme)}">${_esc(theme)}</div>`);
+  }
+  return `<div class="space-y-0.5 min-w-[260px] max-w-[380px]">${lines.join("") || '<span class="text-xs text-slate-400">—</span>'}</div>`;
+}
+
+function _pickTimestampHtml(p) {
+  const mkt = _pickMarket(p);
+  const ts = (typeof PICKS_TIMESTAMPS !== "undefined") ? PICKS_TIMESTAMPS[mkt] : null;
+  const tsFmt = _fmtTs(ts || p.pick_date);
+  const ageCls = tsFmt.stale ? "text-rose-600 font-medium" : "text-slate-500";
+  return `<div class="text-[11px] leading-tight ${ageCls}" title="${_esc(tsFmt.full)}">
+    <div class="font-mono">${_esc(tsFmt.short)}</div>
+    <div>${_esc(tsFmt.age || "")}</div>
+  </div>`;
+}
+
+function _pickPriceHtml(p) {
+  const pickDate = _formatPickDate(p.pick_date);
+  const entry = _formatPrice(p.entry_price);
+  const current = _formatPrice(p.current_price);
+  const days = p.days_held || 0;
+  const v = parseFloat(p.pct);
+  if (days > 0 && p.current_price != null && !isNaN(v)) {
+    const color = v > 0 ? "text-emerald-600" : v < 0 ? "text-rose-600" : "text-slate-500";
+    const sign = v > 0 ? "+" : "";
+    return `<div class="text-[11px] leading-tight font-mono min-w-[150px]">
+      <div><span class="text-slate-400">${pickDate}</span> @ ${entry}</div>
+      <div>现 ${current} · <span class="${color} font-bold">${sign}${v.toFixed(1)}%</span> <span class="text-slate-400">(${days}天)</span></div>
+    </div>`;
+  }
+  return `<div class="text-[11px] leading-tight font-mono min-w-[150px]">
+    <div><span class="text-slate-400">${pickDate}</span> @ ${entry}</div>
+    <div class="text-slate-400">当日新选</div>
+  </div>`;
+}
+
+function _pickReasonsHtml(p) {
+  return `${_pickReasonsCompactHtml(p)}<div class="mt-1">${_pickTimestampHtml(p)}</div>`;
 }
 
 // 三线独立后 top picks 把美股+港股+A 股混在一起；按市场过滤展示
@@ -5554,34 +5801,55 @@ function renderTodayPicksList() {
                               : window._todayPicksAll.filter(p => _pickMarket(p) === f);
   const node = document.getElementById("picks-today-list");
   if (list.length === 0) {
-    node.innerHTML = '<div class="col-span-3 text-center text-slate-500 text-sm py-4">该市场暂无入选 — 跑完对应市场 picks 后会显示</div>';
+    node.className = "rounded-lg border border-violet-100 bg-white";
+    node.innerHTML = '<div class="text-center text-slate-500 text-sm py-6">该市场暂无入选 — 跑完对应市场 picks 后会显示</div>';
     return;
   }
-  node.innerHTML = list.map(p => {
-    const pickDate = _formatPickDate(p.pick_date);
-    const entry = _formatPrice(p.entry_price);
-    const current = _formatPrice(p.current_price);
-    const days = p.days_held || 0;
-    const v = parseFloat(p.pct);
-    let priceLine;
-    if (days > 0 && p.current_price != null && !isNaN(v)) {
-      const color = v > 0 ? "text-emerald-600" : "text-rose-600";
-      const sign = v > 0 ? "+" : "";
-      priceLine = `${pickDate} @ ${entry} → 现 ${current} · <span class="${color} font-bold">${sign}${v.toFixed(1)}%</span> <span class="text-slate-400">(${days}天)</span>`;
-    } else {
-      priceLine = `${pickDate} 入选 @ ${entry} · <span class="text-slate-400">当日新选</span>`;
-    }
-    return `<div class="bg-white rounded-lg p-3 border border-violet-100">
-        <div class="flex items-center justify-between gap-2 mb-1">
-          <span class="font-bold text-slate-900 truncate font-mono">${_marketEmoji(p)} ${p.code || "?"}</span>
-          ${_ratingBadge(p.rating)}
+  node.className = "overflow-x-auto rounded-lg border border-violet-100 bg-white shadow-sm";
+  const rows = list.map((p, idx) => {
+    const score = _pickScore(p);
+    const scoreCls = score >= 85 ? "text-rose-600"
+                   : score >= 70 ? "text-amber-600"
+                   : score >= 55 ? "text-emerald-600"
+                   : "text-slate-500";
+    const theme = (p.theme || p.ai_relevance || "").toString().trim();
+    const model = String(p.model_source || "").replace("v6_", "").toUpperCase();
+    return `<tr class="border-b border-violet-50 last:border-0 hover:bg-violet-50/50">
+      <td class="px-3 py-2 text-right text-[11px] font-mono text-slate-400">${idx + 1}</td>
+      <td class="px-3 py-2 min-w-[190px]">
+        <div class="flex items-center gap-2">
+          <span class="font-bold text-slate-900 font-mono">${_marketEmoji(p)} ${_esc(p.code || "?")}</span>
+          ${model ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">${_esc(model)}</span>` : ""}
         </div>
-        <div class="text-xs text-slate-700 truncate mb-1">${p.name || ""}</div>
-        <div class="text-[11px] text-slate-500 font-mono mb-1">${priceLine}</div>
-        <div class="text-[10px] text-slate-400 truncate mb-1">${p.theme || ""}</div>
-        ${_pickReasonsHtml(p)}
-      </div>`;
+        <div class="text-xs text-slate-700 truncate max-w-[220px]" title="${_esc(p.name || "")}">${_esc(p.name || "")}</div>
+        ${theme ? `<div class="text-[10px] text-slate-400 truncate max-w-[220px]" title="${_esc(theme)}">${_esc(theme)}</div>` : ""}
+      </td>
+      <td class="px-3 py-2 whitespace-nowrap">${_ratingBadge(p.rating)}</td>
+      <td class="px-3 py-2 text-right">
+        <div class="font-mono text-base font-bold ${scoreCls}">${score ? score.toFixed(1) : "—"}</div>
+        <div class="text-[10px] text-slate-400">总分</div>
+      </td>
+      <td class="px-3 py-2">${_pickFactorPillsHtml(p)}</td>
+      <td class="px-3 py-2">${_pickPriceHtml(p)}</td>
+      <td class="px-3 py-2">${_pickReasonsCompactHtml(p)}</td>
+      <td class="px-3 py-2 whitespace-nowrap">${_pickTimestampHtml(p)}</td>
+    </tr>`;
   }).join("");
+  node.innerHTML = `<table class="min-w-[1080px] w-full text-left">
+    <thead class="bg-violet-50/90 text-[11px] uppercase tracking-wide text-violet-900">
+      <tr>
+        <th class="px-3 py-2 text-right font-semibold">#</th>
+        <th class="px-3 py-2 font-semibold">股票</th>
+        <th class="px-3 py-2 font-semibold">评级</th>
+        <th class="px-3 py-2 text-right font-semibold">总分</th>
+        <th class="px-3 py-2 font-semibold">因子拆解</th>
+        <th class="px-3 py-2 font-semibold">价格</th>
+        <th class="px-3 py-2 font-semibold">为什么入选</th>
+        <th class="px-3 py-2 font-semibold">AI 时间</th>
+      </tr>
+    </thead>
+    <tbody class="text-sm divide-y divide-violet-50">${rows}</tbody>
+  </table>`;
 }
 
 function filterPicksMarket(market) {
@@ -5757,6 +6025,35 @@ function _buildDiscoveryReasons(detail) {
   const pros = [], cons = [];
   if (!detail || typeof detail !== "object") return { pros, cons };
 
+  if (detail.fast_pool) {
+    const total = detail.pick_total_score;
+    if (typeof total === "number") {
+      if (total >= 75) pros.push(`v6 最新打分 ${total.toFixed(1)}，已进入强推荐区间`);
+      else if (total >= 60) pros.push(`v6 最新打分 ${total.toFixed(1)}，处于可观察区间`);
+      else cons.push(`v6 最新打分 ${total.toFixed(1)}，模型信号偏弱`);
+    }
+    const mom = detail.momentum_proxy;
+    if (typeof mom === "number") {
+      if (mom >= 30) pros.push(`价格动量强：综合动量约 +${mom.toFixed(1)}%`);
+      else if (mom <= -20) cons.push(`价格趋势偏弱：综合动量约 ${mom.toFixed(1)}%`);
+    }
+    const growth = detail.growth_proxy;
+    if (typeof growth === "number") {
+      if (growth >= 20) pros.push(`增长数据较强：营收/利润代理增速约 +${growth.toFixed(1)}%`);
+      else if (growth <= -10) cons.push(`增长数据承压：营收/利润代理增速约 ${growth.toFixed(1)}%`);
+    }
+    const val = detail.valuation || {};
+    if (typeof val.forward_pe === "number" && val.forward_pe > 0 && val.forward_pe <= 30) {
+      pros.push(`估值未失控：Forward PE ${val.forward_pe.toFixed(1)}`);
+    } else if (typeof val.forward_pe === "number" && val.forward_pe > 80) {
+      cons.push(`估值偏贵：Forward PE ${val.forward_pe.toFixed(1)}`);
+    }
+    if (detail.ai_relevance || detail.theme) {
+      pros.push(`主题/AI 关联：${detail.ai_relevance || detail.theme}`);
+    }
+    return { pros, cons };
+  }
+
   // Piotroski 9 项布尔分解
   const piotDet = detail.piotroski_details || {};
   const piotKeys = Object.keys(piotDet);
@@ -5826,7 +6123,7 @@ function _renderReasonPanel(c) {
     ${ts.age.includes("⚠️") ? '<span class="ml-auto text-[11px]">⚠️ 数据已过期 — 跑 daily_refresh.sh 刷新</span>' : ''}
   </div>`;
   if (!pros.length && !cons.length) {
-    return tsBanner + `<div class="text-xs text-slate-400 py-2 px-3">_未拉到详细因子分解（detail 字段缺失，需重跑 discover_candidates.py）_</div>`;
+    return tsBanner + `<div class="text-xs text-slate-400 py-2 px-3">_未拉到详细分解（detail 字段缺失，需重跑 build_pool_recommendations.py）_</div>`;
   }
   const prosHtml = pros.length
     ? `<div class="space-y-1">
@@ -5928,7 +6225,7 @@ function _computeDiscoveryStats() {
   if (accuracyEl) {
     if (!stats.totalRecs) {
       accuracyEl.innerHTML = `<div class="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-800">
-        <strong>📊 算法准确度</strong> · 暂无历史推荐数据 — 每天跑一次 discover_candidates.py + evaluate_discovery.py,数据将自动累积。1 周后回来看第一组 5d alpha,1 个月后看 20d alpha。</div>`;
+        <strong>📊 算法准确度</strong> · 暂无历史推荐数据 — 每天跑一次 build_pool_recommendations.py + evaluate_discovery.py,数据将自动累积。1 周后回来看第一组 5d alpha,1 个月后看 20d alpha。</div>`;
     } else if (!stats.evaluated) {
       accuracyEl.innerHTML = `<div class="bg-sky-50 border border-sky-200 rounded-lg p-4 text-sm text-sky-800">
         <strong>📊 算法准确度</strong> · 已记录 ${stats.totalRecs} 条推荐,但**还没有 alpha 数据**(可能 evaluate_discovery 还没跑,或推荐才生成不久 yfinance 拉不到对应日期的价格)。</div>`;
@@ -5983,11 +6280,15 @@ function _computeDiscoveryStats() {
   } else {
     const _metaTs = _fmtTs(DISCOVERY.generated_at);
     const _ageColor = _metaTs.age.includes("⚠️") ? "text-rose-700 font-bold bg-rose-50 px-1.5 py-0.5 rounded" : "text-emerald-700 font-medium";
+    const _scope = DISCOVERY.universe_scope || (DISCOVERY.exclude_watchlist ? "outside_watchlist" : null);
+    const _scopeText = (_scope === "all_pool" || _scope === "all_db_prices")
+      ? "全池扫描，未排除自选股"
+      : `已排除 watchlist ${DISCOVERY.watchlist_excluded || "?"} 只`;
     meta.innerHTML = `<span class="${_ageColor}" title="${_metaTs.full}">🕐 AI 算于 ${_metaTs.short} ${_metaTs.age}</span> · `
-      + `universe ${DISCOVERY.universe_size || "?"} 只(已排除 watchlist ${DISCOVERY.watchlist_excluded || "?"} 只) · `
+      + `universe ${DISCOVERY.universe_size || "?"} 只（${_scopeText}） · `
       + `数据源 ${(DISCOVERY.etf_sources || []).join(" / ")} · `
       + `市值门槛 $${((DISCOVERY.min_market_cap_usd || 0) / 1e9).toFixed(0)}B`;
-    // 整批 candidates 是同一次 discover_candidates.py 跑出来的，时间相同；算一次复用
+    // 整批 candidates 是同一次 build_pool_recommendations.py 跑出来的，时间相同；算一次复用
     const _discoveryTs = _fmtTs(DISCOVERY.generated_at);
     tbody.innerHTML = cands.map((c, idx) => {
       const isFirst = idx === 0;  // 第一行默认展开 reason 面板
@@ -6066,7 +6367,7 @@ function _computeDiscoveryStats() {
   if (historyEl) {
     if (!Array.isArray(DISCOVERY_HISTORY) || !DISCOVERY_HISTORY.length) {
       historyEl.innerHTML = `<div class="text-sm text-slate-500 bg-white rounded-lg p-4 border border-slate-200">
-        暂无历史推荐数据。每次跑 discover_candidates.py 会自动追加一批,跨日累积。
+        暂无历史推荐数据。每次跑 build_pool_recommendations.py 会自动追加一批,跨日累积。
       </div>`;
     } else {
       // 按 generated_date 分组
@@ -6143,6 +6444,42 @@ function _computeDiscoveryStats() {
 
 // ============ 估值视角 ============
 const validForVal = RECORDS.filter(r => r.forward_pe != null && r.forward_pe !== "" && r.ytd_pct != null && r.ytd_pct !== "");
+
+function valuationTsMillis(v) {
+  if (!v) return -Infinity;
+  const t = Date.parse(String(v).replace(" ", "T"));
+  return Number.isFinite(t) ? t : -Infinity;
+}
+
+function latestValuationTs(rows, field) {
+  let best = null;
+  let bestMs = -Infinity;
+  rows.forEach(r => {
+    const v = r[field];
+    const ms = valuationTsMillis(v);
+    if (ms > bestMs) {
+      best = v;
+      bestMs = ms;
+    }
+  });
+  return best;
+}
+
+function setValuationMeta(id, ts) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const isFallback = !ts && typeof DASHBOARD_UPDATE_TIME !== "undefined" && DASHBOARD_UPDATE_TIME;
+  const f = _fmtTs(ts || (isFallback ? DASHBOARD_UPDATE_TIME : null));
+  el.textContent = f.full + (f.age || "") + (isFallback ? "（页面生成时间）" : "");
+  el.title = isFallback ? "当前记录缺少逐股时间字段，暂用页面生成时间；下次重建后会使用 DuckDB 真实字段" : f.full;
+  el.classList.toggle("text-rose-700", f.stale);
+  el.classList.toggle("text-slate-800", !f.stale);
+}
+
+setValuationMeta("valuation-price-asof", latestValuationTs(validForVal, "price_fetched_at"));
+setValuationMeta("valuation-analysis-asof", latestValuationTs(validForVal, "analysis_updated_at"));
+const valuationCoverageEl = document.getElementById("valuation-coverage");
+if (valuationCoverageEl) valuationCoverageEl.textContent = `${validForVal.length} / ${RECORDS.length} 只`;
 
 function pctColor(p) { return p > 0 ? "#10b981" : "#ef4444"; }
 function aiColor(ar) {
@@ -6856,6 +7193,63 @@ def scoring_rules_panel_html(calib):
     </div>
   </details>
 </section>'''
+
+
+def source_health_panel_html(payload: dict | None) -> str:
+    """Render data-source degradation near today's picks."""
+    if not isinstance(payload, dict) or not payload.get("sources"):
+        return ""
+    sources = payload.get("sources") or {}
+    degraded = [
+        (name, info) for name, info in sources.items()
+        if (info or {}).get("status") not in (None, "", "ok", "healthy")
+    ]
+    if not degraded:
+        return ""
+
+    cards = []
+    for name, info in degraded:
+        name_s = html_lib.escape(str(name))
+        reason = html_lib.escape(str(info.get("reason") or "unknown"))
+        impact = html_lib.escape(str(info.get("impact") or "部分字段不可用"))
+        action = html_lib.escape(str(info.get("operator_action") or "稍后重跑对应步骤"))
+        last = info.get("last_event") or {}
+        last_path = html_lib.escape(str(last.get("path") or ""))
+        last_detail = html_lib.escape(str(last.get("detail") or "")) if last.get("detail") else ""
+        affected = "、".join(html_lib.escape(str(x)) for x in (info.get("affected_fields") or [])[:5])
+        unaffected = "、".join(html_lib.escape(str(x)) for x in (info.get("unaffected_fields") or [])[:6])
+        cards.append(f"""
+      <div class="bg-white rounded-lg border border-amber-200 p-3">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="px-2 py-0.5 rounded bg-amber-100 text-amber-800 text-xs font-mono">{name_s}</span>
+          <span class="text-xs text-amber-700">degraded · {reason}</span>
+        </div>
+        <p class="text-sm text-slate-800">{impact}</p>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mt-2 text-xs">
+          <div class="bg-rose-50 text-rose-800 rounded p-2"><strong>受影响</strong>：{affected or "—"}</div>
+          <div class="bg-emerald-50 text-emerald-800 rounded p-2"><strong>仍可用</strong>：{unaffected or "—"}</div>
+        </div>
+        <p class="text-xs text-slate-500 mt-2">最近事件：{last_path or "—"} {last_detail}</p>
+        <p class="text-xs text-slate-600 mt-1">处理建议：{action}</p>
+      </div>
+""")
+
+    ts = html_lib.escape(str(payload.get("generated_at") or ""))
+    pipeline = html_lib.escape(str(payload.get("pipeline") or ""))
+    return f"""
+  <div class="mb-6 rounded-xl border border-amber-300 bg-amber-50 p-4">
+    <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
+      <div>
+        <h3 class="text-sm font-bold text-amber-900">🧯 数据源降级提示</h3>
+        <p class="text-xs text-amber-800">这些不是隐藏错误；只说明某些字段今天为空，主推荐是否可用以质量闸门为准。</p>
+      </div>
+      <span class="text-[11px] font-mono text-amber-700">{pipeline} · {ts}</span>
+    </div>
+    <div class="space-y-3">
+      {''.join(cards)}
+    </div>
+  </div>
+"""
 
 
 def _find_plan_inception_date() -> str | None:
@@ -7752,6 +8146,7 @@ def build():
     plan_a_v6 = _load_json("data/latest/plan_a_v5.json")
     history_data = _load_json("data/latest/history_data.json")
     discovery = _load_json("data/discovery_candidates.json")
+    source_health = _load_json("data/latest/source_health.json")
 
     # DuckDB 源
     risk_metrics_db = _load_pipeline_db("risk_metrics")
@@ -7772,6 +8167,13 @@ def build():
         print(f"  历史数据已加载 ({len(history_data.get('tickers', {}))} 只 × 2 年日K)")
     if discovery:
         print(f"  AI 推荐已加载 ({len(discovery.get('candidates', []))} 只 · universe {discovery.get('universe_size', 0)})")
+    if source_health:
+        degraded = [
+            k for k, v in (source_health.get("sources") or {}).items()
+            if (v or {}).get("status") not in (None, "", "ok", "healthy")
+        ]
+        if degraded:
+            print(f"  数据源降级提示: {', '.join(degraded)}")
     print(f"  [DuckDB 镜像] risk={'✓' if risk_metrics_db else '✗'} 13f={'✓' if track_13f_db else '✗'} "
           f"opt={'✓' if optimization_db else '✗'} plan={'✓' if plan_a_v6_db else '✗'} "
           f"hist={'✓' if history_data_db else '✗'}")
@@ -7825,6 +8227,7 @@ def build():
 </div>
 '''
     html = html.replace("{AUDIT_PANEL}", audit_panel_combined)
+    html = html.replace("{SOURCE_HEALTH_PANEL}", source_health_panel_html(source_health))
 
     # 打分规则面板（动态读 factor_weights.json，缺失则 fallback 到「未实证」版本）
     calib_snap = load_calibration_snapshot()
@@ -7893,14 +8296,27 @@ def build():
     try:
         from stock_db import get_db as _get_db
         _conn = _get_db()
-        for code, rating, total_score, ai_score in _conn.execute(
-            "SELECT code, rating, total_score, ai_score FROM picks "
-            "WHERE pick_date = (SELECT MAX(pick_date) FROM picks)"
+        # 自选股 AI 评级列：保留 buy/avoid/watch 全档（avoid 的"⛔"对自选股是有价值的信号 —
+        # 提示用户考虑出掉），但带上 signal 让前端按结构化字段区分着色，而不是再去
+        # 解析 rating 文本前缀。
+        for code, rating, total_score, ai_score, signal in _conn.execute(
+            """
+            WITH latest AS (
+              SELECT code, MAX(pick_date) AS pick_date
+              FROM picks
+              GROUP BY code
+            )
+            SELECT p.code, p.rating, p.total_score, p.ai_score, p.signal
+            FROM picks p
+            INNER JOIN watchlist w ON w.code = p.code
+            INNER JOIN latest l ON l.code = p.code AND l.pick_date = p.pick_date
+            """
         ).fetchall():
             watchlist_ratings[code] = {
                 "rating": rating,
                 "total_score": total_score,
                 "ai_score": ai_score,
+                "signal": signal,
             }
         _conn.close()
         print(f"  自选股 AI 评级已加载 [DuckDB picks]({len(watchlist_ratings)} 只)")

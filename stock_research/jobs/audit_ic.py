@@ -1,7 +1,8 @@
 """因子 IC 监测 job：用历史数据算每个因子的滚动 IC，告警衰减。
 
 数据源：复用 walk_forward_validate.py 的 6 个 regime 数据，对每个 regime：
-  - factors:    在 regime 起点用 calc_factors_at 算 12-1 动量 + 1 月反转
+  - factors:    在 regime 起点用 calc_factors_at 算 12-1 动量 + 1 月反转；
+                其他生产因子若历史点不可得，会显式产出 no_data，供 gate 阻断。
   - forward:    regime 起点 → 终点的实际收益率
 
 输出：
@@ -10,7 +11,7 @@
 
 CLI:
   python3 -m stock_research.jobs.audit_ic
-  python3 -m stock_research.jobs.audit_ic --factors momentum reversal
+  python3 -m stock_research.jobs.audit_ic --factors f_score momentum reversal pead analyst quality
 """
 from __future__ import annotations
 import argparse
@@ -21,12 +22,15 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
+sys.path.insert(0, str(_REPO_ROOT / "archive" / "legacy"))
 
 from .. import config
 from ..core import factor_ic
 from ..adapters import store
 
 logger = logging.getLogger("stock_research.jobs.audit_ic")
+
+PRODUCTION_FACTOR_NAMES = ["f_score", "momentum", "reversal", "pead", "analyst", "quality"]
 
 
 def _build_history_from_walkforward(samples: list[str], regimes: list[tuple]):
@@ -57,7 +61,7 @@ def _build_history_from_walkforward(samples: list[str], regimes: list[tuple]):
 
 def run(factor_names: list[str] | None = None) -> dict:
     if factor_names is None:
-        factor_names = ["momentum", "reversal"]
+        factor_names = list(PRODUCTION_FACTOR_NAMES)
 
     print("=" * 80)
     print("  📊 因子 IC 监测（Grinold-Kahn 行业标准）")
@@ -116,7 +120,7 @@ def run(factor_names: list[str] | None = None) -> dict:
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s")
     p = argparse.ArgumentParser(description="因子 IC 监测（Grinold-Kahn 行业标准）")
-    p.add_argument("--factors", nargs="*", default=["momentum", "reversal"],
+    p.add_argument("--factors", nargs="*", default=PRODUCTION_FACTOR_NAMES,
                    help="要监测的因子名")
     args = p.parse_args()
     r = run(factor_names=args.factors)

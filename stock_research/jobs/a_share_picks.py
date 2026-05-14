@@ -39,7 +39,7 @@ import json
 import logging
 import os
 import sys
-import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
@@ -69,10 +69,9 @@ logger = logging.getLogger(__name__)
 
 # ─────────── 因子权重（合计 1.00）───────────
 #
-# ⚠️ 当前权重是启发式（拍脑袋）值，未经 IC 历史验证。建议：
-#   1. 跑 stock_research.jobs.calibrate_pick_weights 做 IC-based 校准；
-#   2. 输出落到 data/calibrated_factor_weights.json；
-#   3. 本模块通过 load_weights() 优先读校准文件，无文件时 fallback 到启发式。
+# ⚠️ 当前权重是启发式值，未经 A 股市场内 IC 历史验证。生产写库前必须有
+# data/calibrated_factor_weights.json，且文件需声明 market=a_share 与 validated=true。
+# 无有效校准文件时本 job 会强制 dry-run；只有显式 --bypass-ic-gate 才允许写库。
 #
 # 任何对启发式权重的临时调整必须经过 walk-forward backtest 验证 Sharpe > Equal-Weight + 0.3，
 # 否则不应进 production（防止 overfitting watchlist 历史）。
@@ -87,23 +86,65 @@ DEFAULT_FACTOR_WEIGHTS = {
     "policy_theme":  0.10,   # 政策主题受益
 }
 assert abs(sum(DEFAULT_FACTOR_WEIGHTS.values()) - 1.0) < 1e-9
+CALIBRATED_WEIGHTS_PATH = REPO / "data" / "calibrated_factor_weights.json"
+A_SHARE_FACTOR_CACHE = REPO / "data" / "latest" / "a_share_factor_cache.json"
+
+
+def _load_calibrated_weights() -> tuple[dict[str, float] | None, str]:
+    """读取并校验 A 股 IC 权重文件。
+
+    返回 (weights, status)。weights 为 None 时 status 说明不可生产的原因。
+    """
+    calib = CALIBRATED_WEIGHTS_PATH
+    if not calib.exists():
+        return None, "missing"
+    try:
+        data = json.loads(calib.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.warning("加载 calibrated_factor_weights.json 失败: %s", e)
+        return None, "unreadable"
+    if not isinstance(data, dict):
+        return None, "invalid_payload"
+
+    market = str(data.get("market") or data.get("universe") or "").strip().lower()
+    if market and market not in {"a_share", "ashare", "cn", "china", "v6_cn", "a股"}:
+        return None, f"wrong_market:{market}"
+    validated = data.get("validated") is True or str(data.get("validation_status") or "").lower() in {
+        "pass", "passed", "valid", "validated",
+    }
+    if not validated:
+        return None, "not_validated"
+
+    raw = data.get("weights")
+    if not isinstance(raw, dict):
+        return None, "missing_weights"
+    unknown = sorted(k for k in raw if k not in DEFAULT_FACTOR_WEIGHTS)
+    if unknown:
+        return None, f"unknown_factors:{','.join(unknown)}"
+    weights: dict[str, float] = {}
+    try:
+        for k, v in raw.items():
+            fv = float(v)
+            if fv < 0:
+                return None, f"negative_weight:{k}"
+            if fv > 0:
+                weights[k] = fv
+    except Exception:
+        return None, "non_numeric_weight"
+    total = sum(weights.values())
+    if total <= 0:
+        return None, "zero_weights"
+    if abs(total - 1.0) > 1e-4:
+        return None, f"weights_sum:{total:.6f}"
+    return weights, f"ic_calibrated@{calib.name}"
 
 
 def load_weights() -> tuple[dict[str, float], str]:
-    """优先读 IC 校准结果，没有则用启发式默认值。
-
-    返回 (weights, source) — source 用于报告里标注权重来源。
-    """
-    calib = REPO / "data" / "calibrated_factor_weights.json"
-    if calib.exists():
-        try:
-            data = json.loads(calib.read_text(encoding="utf-8"))
-            w = data.get("weights") if isinstance(data, dict) else None
-            if isinstance(w, dict) and abs(sum(w.values()) - 1.0) < 1e-6:
-                return w, f"ic_calibrated@{calib.name}"
-            logger.warning("calibrated_factor_weights.json 存在但格式无效，回退到默认")
-        except Exception as e:
-            logger.warning("加载 calibrated_factor_weights.json 失败: %s", e)
+    """读生产校准权重；无有效文件时只返回启发式权重供 dry-run / bypass 使用。"""
+    weights, source = _load_calibrated_weights()
+    if weights is not None:
+        return weights, source
+    logger.warning("A 股校准权重不可用(%s)，回退启发式权重；生产写库会被上层闸门阻断", source)
     return DEFAULT_FACTOR_WEIGHTS, "heuristic_default"
 
 
@@ -133,6 +174,9 @@ class APickEntry:
 
     # 综合
     composite: float = 0.0
+    coverage_score: float = 0.0
+    missing_factors: str = ""
+    factor_weights_used: str = ""
     rank: int = 0
     recommended: bool = False
 
@@ -186,6 +230,169 @@ def fetch_a_share_watchlist() -> list[dict]:
     return out
 
 
+def _load_a_share_factor_cache() -> dict:
+    try:
+        data = json.loads(A_SHARE_FACTOR_CACHE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {"items": {}}
+    except Exception:
+        return {"items": {}}
+
+
+def _save_a_share_factor_cache(cache: dict) -> None:
+    A_SHARE_FACTOR_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "items": cache.get("items", {}),
+    }
+    tmp = A_SHARE_FACTOR_CACHE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    tmp.replace(A_SHARE_FACTOR_CACHE)
+
+
+def _cached_a_share_bundle(cache_items: dict, code: str, as_of_today: str) -> dict | None:
+    key = _strip_code(code)
+    item = cache_items.get(key)
+    if isinstance(item, dict) and item.get("date") == as_of_today and isinstance(item.get("bundle"), dict):
+        return item["bundle"]
+    return None
+
+
+def _fetch_a_share_factor_bundle(code: str, as_of_today: str,
+                                 cache_items: dict) -> tuple[dict, dict | None, bool]:
+    """Network-heavy A-share factor bundle with same-day cache.
+
+    The tradability filter, LHB batch, event calendar, and policy scan stay
+    outside the cache because they are already batch-level or cheap local reads.
+    """
+    norm = _strip_code(code)
+    cached = _cached_a_share_bundle(cache_items, norm, as_of_today)
+    if cached is not None:
+        return cached, None, True
+
+    f_score = mom = rev = None
+    try:
+        f_data = fetch_factors_a_share(norm, as_of=as_of_today)
+        f_score = (f_data.get("piotroski") or {}).get("f_score")
+        mom = (f_data.get("momentum") or {}).get("momentum_12_1")
+        rev = (f_data.get("momentum") or {}).get("reversal_1m")
+    except Exception as e:
+        logger.debug("factor_model_china failed for %s: %s", norm, e)
+
+    try:
+        n_sig = compute_north_flow_signal(norm, lookback_days=20)
+        north_score = n_sig.score
+    except Exception as e:
+        north_score = 0.5
+        logger.debug("north flow failed for %s: %s", norm, e)
+
+    try:
+        from stock_research.core.a_share_fundamental_deep import (
+            altman_z_double_prime_a, beneish_m_score_a, build_a_share_risk_flags,
+        )
+        from stock_research.core.a_share_industry import get_industry as _get_ind
+        altman = altman_z_double_prime_a(norm)
+        beneish = beneish_m_score_a(norm)
+        ind_info = _get_ind(norm) or {}
+        z_inapp = ind_info.get("z_prime_inapplicable", False)
+        risk_flags = build_a_share_risk_flags(altman, beneish, z_prime_inapplicable=z_inapp)
+        altman_z_val = altman.get("z_score") if not altman.get("error") else None
+        beneish_m_val = beneish.get("m_score_adjusted") if not beneish.get("error") else None
+    except Exception as fe:
+        logger.debug("a_share_fundamental_deep failed for %s: %s", norm, fe)
+        altman_z_val, beneish_m_val, risk_flags = None, None, []
+
+    bundle = {
+        "f_score": f_score,
+        "mom": mom,
+        "rev": rev,
+        "north_score": north_score,
+        "altman_z": altman_z_val,
+        "beneish_m": beneish_m_val,
+        "risk_flags": risk_flags,
+    }
+    return bundle, {"date": as_of_today, "bundle": bundle}, False
+
+
+def _build_a_share_entry(
+    r: dict,
+    *,
+    as_of_today: str,
+    cache_items: dict,
+    snapshot,
+    lhb_factors: dict,
+    cal: EventCalendar,
+    tailwind: dict,
+    theme_field: str,
+) -> tuple[APickEntry, tuple, dict | None, str]:
+    code = r["code"]
+    norm = _strip_code(code)
+    name = r.get("name", code)
+    bundle, cache_update, cache_hit = _fetch_a_share_factor_bundle(norm, as_of_today, cache_items)
+
+    f_score = bundle.get("f_score")
+    mom = bundle.get("mom")
+    rev = bundle.get("rev")
+
+    try:
+        pead = pead_factor(norm, cal)
+    except Exception as e:
+        pead = {"score": 0.5, "in_event_window": False}
+        logger.debug("pead failed for %s: %s", norm, e)
+
+    theme_text = (r.get(theme_field, "") or r.get("industry", "")
+                  or r.get("ai_logic", "") or "")
+    policy_boost = 0.0
+    for theme, count in tailwind.items():
+        if theme in theme_text:
+            policy_boost = max(policy_boost, min(0.30, count * 0.05))
+
+    event_risk = cal.risk_score(norm) if cal.events else 1.0
+
+    if snapshot is not None:
+        tradable_codes, blocked = filter_tradable(
+            [norm], snapshot,
+            allow_st=False,
+            allow_limit_up=False,
+            allow_suspended=False,
+        )
+        tradable = norm in tradable_codes
+        block_reasons = blocked.get(norm, [])
+    else:
+        tradable, block_reasons = True, []
+
+    lhb = lhb_factors.get(norm) or lhb_factors.get(code)
+    lhb_score = lhb.score if lhb else 0.5
+
+    entry = APickEntry(
+        code=norm, name=name,
+        market=r.get("market", "A 股") or "A 股",
+        industry=(r.get("industry") or r.get(theme_field) or "")[:32],
+        f_score_norm=(f_score / 9.0) if isinstance(f_score, (int, float)) else None,
+        momentum_norm=mom,
+        reversal_norm=rev,
+        lhb_score=lhb_score,
+        north_score=bundle.get("north_score", 0.5),
+        pead_score=pead.get("score", 0.5),
+        policy_boost=policy_boost,
+        event_risk_score=event_risk,
+        tradable=tradable,
+        block_reasons=block_reasons,
+        altman_z=bundle.get("altman_z"),
+        beneish_m=bundle.get("beneish_m"),
+        risk_flags=bundle.get("risk_flags") or [],
+        notes=[],
+    )
+    f_str = f"F={f_score}" if f_score is not None else "F=?"
+    m_str = f"M={mom:+.0f}%" if isinstance(mom, (int, float)) else "M=?"
+    flag = "✅" if tradable else "❌"
+    status = (
+        f"{f_str:<6}{m_str:<9} LHB={lhb_score:.2f} "
+        f"N={entry.north_score:.2f} PEAD={pead.get('score', 0.5):.2f} {flag}"
+        + (" cache" if cache_hit else "")
+    )
+    return entry, (mom, rev), cache_update, status
+
+
 # ─────────── 主流程 ───────────
 
 def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
@@ -193,7 +400,8 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
                       sector_cap_count: int = 3,
                       require_after_close: bool = False,
                       bypass_ic_gate: bool = False,
-                      bypass_audit_gate: bool = False):
+                      bypass_audit_gate: bool = False,
+                      workers: int = 3):
     """主入口。
 
     参数：
@@ -213,16 +421,18 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
         print(f"   收盘后单跑：python -m stock_research.jobs.a_share_picks --dry-run")
         return 0
 
-    # 因子 IC CI 闸门 — 同 daily_picks_v5（Grinold-Kahn 行业标准）
-    from stock_research.core.factor_ic_gate import evaluate_gate, format_report
-    gate = evaluate_gate()
-    print(format_report(gate))
-    if not gate.passed:
+    # A 股不能复用美股 IC gate；生产权重必须来自市场内有效校准文件。
+    calibrated_weights, calibration_status = _load_calibrated_weights()
+    if calibrated_weights is None:
         if bypass_ic_gate:
-            print("\n⚠️ --bypass-ic-gate：用户强制跳过闸门，继续（风险自担）\n")
+            print(
+                "\n⚠️ --bypass-ic-gate：A 股无有效市场内 IC 校准权重 "
+                f"({calibration_status})，继续使用启发式权重（风险自担）\n"
+            )
         else:
-            print("\n🔴 因子 IC 闸门 FAIL → 强制 dry-run（不写飞书 / 不写 DB）")
-            print("   修复：python3 -m stock_research.jobs.audit_ic  或 --bypass-ic-gate\n")
+            print("\n🔴 A 股缺少有效市场内 IC 校准权重 → 强制 dry-run（不写 DB）")
+            print("   要求：data/calibrated_factor_weights.json 含 market=a_share, validated=true, weights 合计=1")
+            print("   临时研究用途可显式 --bypass-ic-gate，但不会作为默认生产路径\n")
             dry_run = True
 
     # 跨源 audit CONFLICT 闸门 — 同 daily_picks_v5
@@ -286,105 +496,46 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
     as_of_today = datetime.now().strftime("%Y-%m-%d")
     entries: list[APickEntry] = []
     raw_metrics = []  # 用于横截面归一化
-    for i, r in enumerate(records, 1):
-        code = r["code"]
-        name = r.get("name", code)
-        print(f"  [{i:>2}/{len(records)}] {code} {name[:10]:<10}", end=" ", flush=True)
-
-        # Piotroski + 动量 + 反转
-        try:
-            f_data = fetch_factors_a_share(code, as_of=as_of_today)
-            f_score = f_data["piotroski"].get("f_score")
-            mom = f_data["momentum"].get("momentum_12_1")
-            rev = f_data["momentum"].get("reversal_1m")
-        except Exception as e:
-            f_score, mom, rev = None, None, None
-            logger.debug("factor_model_china failed for %s: %s", code, e)
-
-        # 北向（per-stock API，慢）
-        try:
-            n_sig = compute_north_flow_signal(code, lookback_days=20)
-        except Exception as e:
-            from stock_research.core.north_flow_signals import NorthFlowSignal
-            n_sig = NorthFlowSignal(code=_strip_code(code), lookback_days=20, score=0.5, notes=[f"err: {e}"])
-        time.sleep(0.3)  # akshare 限流
-
-        # PEAD（用真实公告日）
-        try:
-            pead = pead_factor(code, cal)
-        except Exception as e:
-            pead = {"score": 0.5, "in_event_window": False}
-            logger.debug("pead failed for %s: %s", code, e)
-
-        # 政策主题加成（基于 watchlist 的 industry / theme 字段匹配）
-        theme_text = (r.get(theme_field, "") or r.get("industry", "")
-                      or r.get("ai_logic", "") or "")
-        policy_boost = 0.0
-        for theme, count in tailwind.items():
-            if theme in theme_text:
-                policy_boost = max(policy_boost, min(0.30, count * 0.05))
-
-        # 事件风险（解禁/减持降权）
-        event_risk = cal.risk_score(code) if cal.events else 1.0
-
-        # 可买性
-        if snapshot is not None:
-            tradable_codes, blocked = filter_tradable([code], snapshot,
-                                                      allow_st=False,
-                                                      allow_limit_up=False,
-                                                      allow_suspended=False)
-            tradable = code in tradable_codes
-            block_reasons = blocked.get(code, [])
-        else:
-            tradable, block_reasons = True, []
-
-        # LHB
-        lhb = lhb_factors.get(code)
-        lhb_score = lhb.score if lhb else 0.5
-
-        # Altman Z'' / Beneish M 软红旗 — P0-3b (2026-05-12)
-        # 失败不阻塞主流程；金融/地产用 a_share_industry GICS 标记跳过 Z 校验
-        try:
-            from stock_research.core.a_share_fundamental_deep import (
-                altman_z_double_prime_a, beneish_m_score_a, build_a_share_risk_flags,
-            )
-            from stock_research.core.a_share_industry import get_industry as _get_ind
-            altman = altman_z_double_prime_a(code)
-            beneish = beneish_m_score_a(code)
-            ind_info = _get_ind(code) or {}
-            z_inapp = ind_info.get("z_prime_inapplicable", False)
-            risk_flags = build_a_share_risk_flags(altman, beneish, z_prime_inapplicable=z_inapp)
-            altman_z_val = altman.get("z_score") if not altman.get("error") else None
-            beneish_m_val = beneish.get("m_score_adjusted") if not beneish.get("error") else None
-        except Exception as fe:
-            logger.debug("a_share_fundamental_deep failed for %s: %s", code, fe)
-            altman_z_val, beneish_m_val, risk_flags = None, None, []
-
-        entry = APickEntry(
-            code=_strip_code(code), name=name,
-            market=r.get("market", "A 股") or "A 股",
-            industry=(r.get("industry") or r.get(theme_field) or "")[:32],
-            f_score_norm=(f_score / 9.0) if isinstance(f_score, (int, float)) else None,
-            momentum_norm=mom,   # 暂存原值，后面横截面归一化
-            reversal_norm=rev,
-            lhb_score=lhb_score,
-            north_score=n_sig.score,
-            pead_score=pead.get("score", 0.5),
-            policy_boost=policy_boost,
-            event_risk_score=event_risk,
-            tradable=tradable,
-            block_reasons=block_reasons,
-            altman_z=altman_z_val,
-            beneish_m=beneish_m_val,
-            risk_flags=risk_flags,
-            notes=[],
-        )
-        entries.append(entry)
-        raw_metrics.append((mom, rev))
-        f_str = f"F={f_score}" if f_score is not None else "F=?"
-        m_str = f"M={mom:+.0f}%" if isinstance(mom, (int, float)) else "M=?"
-        flag = "✅" if tradable else "❌"
-        print(f"{f_str:<6}{m_str:<9} LHB={lhb_score:.2f} N={n_sig.score:.2f} PEAD={pead.get('score', 0.5):.2f} {flag}")
+    factor_cache = _load_a_share_factor_cache()
+    cache_items = factor_cache.setdefault("items", {})
+    cache_dirty = False
+    worker_count = max(1, min(workers, len(records)))
+    print(f"  并发 workers={worker_count} · 当天 cache={A_SHARE_FACTOR_CACHE}")
+    with ThreadPoolExecutor(max_workers=worker_count) as ex:
+        futures = {
+            ex.submit(
+                _build_a_share_entry,
+                r,
+                as_of_today=as_of_today,
+                cache_items=cache_items,
+                snapshot=snapshot,
+                lhb_factors=lhb_factors,
+                cal=cal,
+                tailwind=tailwind,
+                theme_field=theme_field,
+            ): (idx, r)
+            for idx, r in enumerate(records, 1)
+        }
+        for fut in as_completed(futures):
+            idx, r = futures[fut]
+            code = r["code"]
+            name = r.get("name", code)
+            try:
+                entry, raw_pair, cache_update, status = fut.result()
+            except Exception as e:
+                entry = APickEntry(code=_strip_code(code), name=name, tradable=False,
+                                   block_reasons=["因子计算失败"], notes=[str(e)])
+                raw_pair = (None, None)
+                cache_update = None
+                status = f"失败: {e}"
+            entries.append(entry)
+            raw_metrics.append(raw_pair)
+            if cache_update is not None:
+                cache_items[entry.code] = cache_update
+                cache_dirty = True
+            print(f"  [{idx:>2}/{len(records)}] {entry.code} {name[:10]:<10} {status}")
+    if cache_dirty:
+        _save_a_share_factor_cache(factor_cache)
 
     # 5. 横截面归一化 momentum / reversal — winsorize + rank
     # 原 min-max 对极值零防御（一只异常股拉爆 max，其他股全挤在 0 端）。
@@ -399,19 +550,31 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
     # 6. 合成综合分
     print(f"\n[7/7] 合成综合分（{len(entries)} 只，权重源={weights_source}）...")
     for idx, e in enumerate(entries):
-        # 缺失（None）→ 0.5（中位补值），避免缺失变成 0 拉低
-        e.momentum_norm = mom_ranks[idx] if mom_ranks[idx] is not None else 0.5
-        e.reversal_norm = rev_ranks[idx] if rev_ranks[idx] is not None else 0.5
+        e.momentum_norm = mom_ranks[idx]
+        e.reversal_norm = rev_ranks[idx]
 
-        composite = (
-            weights["f_score"] * (e.f_score_norm if e.f_score_norm is not None else 0.5)
-            + weights["momentum"] * e.momentum_norm
-            + weights["reversal"] * e.reversal_norm
-            + weights["lhb"] * e.lhb_score
-            + weights["north_flow"] * e.north_score
-            + weights["pead"] * e.pead_score
-            + weights["policy_theme"] * (0.5 + e.policy_boost)  # 基础 0.5 + 加成
-        )
+        factor_values = {
+            "f_score": e.f_score_norm,
+            "momentum": e.momentum_norm,
+            "reversal": e.reversal_norm,
+            "lhb": e.lhb_score,
+            "north_flow": e.north_score,
+            "pead": e.pead_score,
+            "policy_theme": 0.5 + e.policy_boost,
+        }
+        active = {k: float(v) for k, v in weights.items() if float(v) > 0}
+        total_w = sum(active.values()) or 1.0
+        covered_w = sum(w for k, w in active.items() if factor_values.get(k) is not None)
+        e.coverage_score = round(covered_w / total_w, 4)
+        e.missing_factors = ",".join(k for k in active if factor_values.get(k) is None)
+        e.factor_weights_used = json.dumps(active, sort_keys=True)
+        if covered_w <= 0:
+            composite = -0.25
+        else:
+            raw = sum(active[k] * float(factor_values[k])
+                      for k in active if factor_values.get(k) is not None) / covered_w
+            penalty = max(0.0, 0.50 - e.coverage_score) / 0.50 * 0.25
+            composite = raw * e.coverage_score - penalty
         # 风险加权（解禁/减持等）
         composite *= e.event_risk_score
         e.composite = round(composite, 4)
@@ -467,6 +630,8 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
         "sector_cap_count": sector_cap_count,
         "factor_weights": weights,
         "factor_weights_source": weights_source,
+        "calibration_status": calibration_status,
+        "production_write_enabled": not dry_run,
         "n_total": len(entries),
         "n_tradable": sum(1 for e in entries if e.tradable),
         "n_recommended": len(selected),
@@ -529,6 +694,8 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
                 grade_label = "⭐⭐ 推荐（综合 ≥0.55）"
             else:
                 grade_label = "⭐ 关注"
+            if e.coverage_score < 0.50:
+                grade_label = f"⭐ 观察（数据覆盖 {e.coverage_score:.0%} < 50%，不进 buy）"
             risk_flags = getattr(e, "risk_flags", None) or []
             if risk_flags:
                 grade_label = grade_label + " · " + "｜".join(risk_flags)
@@ -548,6 +715,10 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
                 "entry_price": price_map.get(e.code),
                 "entry_currency": "CNY",
                 "model_source": "v6_cn",
+                "signal": "watch" if e.coverage_score < 0.50 else "buy",
+                "coverage_score": e.coverage_score,
+                "missing_factors": e.missing_factors,
+                "factor_weights_used": e.factor_weights_used,
             })
         if db_rows:
             n = upsert_picks(db_rows)
@@ -655,6 +826,8 @@ def main():
                         help="⚠️ 强行跳过因子 IC 闸门（需自担风险）")
     parser.add_argument("--bypass-audit-gate", action="store_true",
                         help="⚠️ 强行跳过跨源 audit CONFLICT 闸门（需自担风险）")
+    parser.add_argument("--workers", type=int, default=int(os.getenv("STOCK_ASSISTANT_A_WORKERS", "3")),
+                        help="缓存未命中时并发拉 A 股因子的线程数（默认 3）")
     args = parser.parse_args()
     return run_a_share_picks(
         top_k=args.top, mode=args.mode, dry_run=args.dry_run,
@@ -662,6 +835,7 @@ def main():
         require_after_close=args.require_after_close,
         bypass_ic_gate=args.bypass_ic_gate,
         bypass_audit_gate=args.bypass_audit_gate,
+        workers=args.workers,
     )
 
 
