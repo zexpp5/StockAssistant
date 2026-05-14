@@ -165,6 +165,54 @@ def _load_json(rel: str) -> dict | None:
         return None
 
 
+@st.cache_data(ttl=300)
+def _load_a_share_picks() -> dict | None:
+    """A 股优选 DB-first；JSON 只作为旧产物 fallback。"""
+    db_path = _REPO_ROOT / "stock_history.duckdb"
+    json_payload = _load_json("data/a_share_picks.json")
+    if db_path.exists():
+        try:
+            import duckdb
+            con = duckdb.connect(str(db_path), read_only=True)
+            latest = con.execute(
+                "SELECT MAX(pick_date) FROM picks WHERE model_source = 'v6_cn'"
+            ).fetchone()[0]
+            if latest is not None:
+                rows = con.execute("""
+                    SELECT code, name, market, rating, total_score, ai_relevance, theme
+                    FROM picks
+                    WHERE model_source = 'v6_cn' AND pick_date = ?
+                    ORDER BY total_score DESC NULLS LAST, code
+                """, [latest]).fetchall()
+                con.close()
+                selected = []
+                for code, name, market, rating, total_score, ai_relevance, theme in rows:
+                    selected.append({
+                        "code": code,
+                        "ticker": code,
+                        "name": name,
+                        "market": market,
+                        "rating": rating,
+                        "composite": (float(total_score) / 100) if total_score is not None else 0,
+                        "industry": theme or ai_relevance,
+                        "theme": theme,
+                    })
+                return {
+                    "generated_at": f"{str(latest)[:10]}T00:00:00",
+                    "source": "duckdb:picks.v6_cn",
+                    "n_total": len(selected),
+                    "n_tradable": len(selected),
+                    "n_recommended": len(selected),
+                    "cutoff": 0,
+                    "selected": selected,
+                    "all_entries": selected,
+                }
+            con.close()
+        except Exception:
+            pass
+    return json_payload
+
+
 # ───── Tab 1: 概览 ─────
 with tab_overview:
     # 顶部：实盘防御警报（实时数据，永远放最上面）
@@ -667,9 +715,9 @@ with tab_stress:
 # ───── Tab 7: A 股优选（v9.0 6 因子闭环）─────
 with tab_a_share:
     st.header("🇨🇳 A 股每日优选（6 因子闭环 v9.0）")
-    a_pick = _load_json("data/a_share_picks.json")
+    a_pick = _load_a_share_picks()
     if a_pick is None:
-        st.warning("无 a_share_picks.json — 先跑 `python3 -m stock_research.jobs.a_share_picks`")
+        st.warning("无 A 股优选数据 — 先跑 `python3 -m stock_research.jobs.a_share_picks`")
     else:
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("总扫描", a_pick.get("n_total", 0))
@@ -677,8 +725,9 @@ with tab_a_share:
         c3.metric("入选", a_pick.get("n_recommended", 0))
         c4.metric("cutoff", f"{a_pick.get('cutoff', 0):.3f}")
 
+        source = a_pick.get("source") or "json:data/a_share_picks.json"
         st.caption(f"生成时间: {a_pick.get('generated_at', '?')[:16]} · "
-                   f"模式: {a_pick.get('mode', '?')}")
+                   f"模式: {a_pick.get('mode', '?')} · 来源: {source}")
 
         weights = a_pick.get("factor_weights", {})
         if weights:

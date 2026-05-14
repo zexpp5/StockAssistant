@@ -55,6 +55,103 @@ def _load_json(path: Path) -> dict | list | None:
         return None
 
 
+def _load_a_share_picks() -> dict | None:
+    """Load A-share picks JSON, with DuckDB v6_cn as fresher source of truth."""
+    json_payload = _load_json(REPO / "data" / "a_share_picks.json")
+    try:
+        lib_path = str(REPO / "scripts" / "lib")
+        if lib_path not in sys.path:
+            sys.path.insert(0, lib_path)
+        from stock_db import get_db
+
+        conn = get_db()
+        latest = conn.execute(
+            "SELECT MAX(pick_date) FROM picks WHERE model_source = 'v6_cn'"
+        ).fetchone()[0]
+        if latest is None:
+            conn.close()
+            return json_payload if isinstance(json_payload, dict) else None
+
+        json_date = ""
+        if isinstance(json_payload, dict):
+            json_date = str(json_payload.get("generated_at") or "")[:10]
+        db_date = str(latest)[:10]
+        if isinstance(json_payload, dict) and json_date >= db_date:
+            conn.close()
+            return json_payload
+
+        rows = conn.execute("""
+            SELECT code, name, market, rating, total_score, ai_relevance, theme
+            FROM picks
+            WHERE model_source = 'v6_cn' AND pick_date = ?
+            ORDER BY total_score DESC NULLS LAST, code
+        """, [latest]).fetchall()
+        conn.close()
+        selected = []
+        for code, name, market, rating, total_score, ai_relevance, theme in rows:
+            selected.append({
+                "code": code,
+                "ticker": code,
+                "name": name,
+                "market": market,
+                "rating": rating,
+                "composite": (float(total_score) / 100) if total_score is not None else 0,
+                "industry": theme or ai_relevance,
+                "theme": theme,
+            })
+        return {
+            "generated_at": f"{db_date}T00:00:00",
+            "source": "duckdb:picks.v6_cn",
+            "n_recommended": len(selected),
+            "selected": selected,
+            "all_entries": selected,
+        }
+    except Exception as e:
+        logger.warning(f"读取 DuckDB A 股 picks 失败，回退 JSON: {e}")
+        return json_payload if isinstance(json_payload, dict) else None
+
+
+def _quality_gate_payload() -> dict:
+    gate = _load_json(REPO / "data" / "latest" / "recommendation_quality_gate.json")
+    return gate if isinstance(gate, dict) else {}
+
+
+def _quality_gate_status() -> str:
+    return str((_quality_gate_payload() or {}).get("status") or "UNKNOWN")
+
+
+def _quality_gate_blocks_trade() -> bool:
+    return _quality_gate_status() == "FAIL"
+
+
+def _quality_gate_lines(max_items: int = 4) -> list[str]:
+    gate = _quality_gate_payload()
+    if not gate or gate.get("status") == "PASS":
+        return []
+    status = gate.get("status", "UNKNOWN")
+    summary = gate.get("summary") or {}
+    icon = "🔴" if status == "FAIL" else "🟡"
+    lines = [
+        f"{icon} **数据质量闸门 = {status}** "
+        f"(fail={summary.get('fail', 0)}, warn={summary.get('warn', 0)})"
+    ]
+    for item in (gate.get("issues") or [])[:max_items]:
+        level = item.get("level", "?")
+        if level == "INFO":
+            continue
+        lines.append(f"• **{level}** {item.get('message', '')}")
+    if status == "FAIL":
+        lines.append("• 建议：今天只读不交易，先修复 FAIL 项。")
+    return lines
+
+
+def section_quality_gate() -> str:
+    lines = _quality_gate_lines()
+    if not lines:
+        return ""
+    return "#### 🧯 数据质量闸门\n" + "\n".join(lines) + "\n"
+
+
 def _latest_defense_snapshot() -> dict | None:
     """读最新的 realtime_defense_*.json（按文件名时间戳排序）。"""
     snap_dir = REPO / "data" / "snapshots" / "audit"
@@ -641,7 +738,8 @@ def _humanize_picks_grouped(plan: list[dict], a_share: bool, history: dict | Non
 
 def section_picks(plan: dict | None, a_share_picks: dict | None,
                   hk_picks: dict | None = None, history: dict | None = None,
-                  factor_scores: dict | None = None) -> str:
+                  factor_scores: dict | None = None,
+                  read_only: bool = False) -> str:
     """三线独立展示：🇺🇸 美股 (plan_v5) / 🇭🇰 港股 (hk_picks) / 🇨🇳 A 股 (a_share_picks)。
 
     每条线独立数据源、独立因子、独立优选 — 不混排。
@@ -654,6 +752,8 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
         )
 
     head = "#### 2. 🔝 自选股·AI 优选（三线独立 · 每只股附 ✅ 推荐理由 + ⚠️ 风险点）"
+    if read_only:
+        head += "\n🔴 **质量闸门 FAIL：以下只读观察，不作为买入/加仓清单。**"
     if plan:
         pm = plan.get("portfolio_metrics") or {}
         if pm:
@@ -867,19 +967,29 @@ def section_weekly_hitrate(today: date | None = None) -> str:
           SELECT rating,
                  COUNT(*) as n,
                  ROUND(AVG(pct), 2) as avg_pct,
-                 ROUND(SUM(CASE WHEN pct > 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 0) as win_rate
+                 ROUND(AVG(alpha_pct), 2) as avg_alpha,
+                 ROUND(SUM(CASE WHEN COALESCE(
+                     is_success,
+                     CASE
+                       WHEN COALESCE(signal, 'buy') = 'avoid' THEN alpha_pct < 0
+                       ELSE alpha_pct > 0
+                     END
+                 ) THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 0) as hit_rate
           FROM reviews
           WHERE review_date >= ? AND pct IS NOT NULL
+            AND COALESCE(model_source, '') IN ('v6_us', 'v6_hk', 'v6_cn')
           GROUP BY rating
-          ORDER BY avg_pct DESC
+          ORDER BY avg_alpha DESC NULLS LAST, avg_pct DESC
         """, [today - timedelta(days=7)]).fetchall()
         if rows:
-            lines.append("**自选股评级 · 按 ⭐ 分档（近 7 天）**")
-            lines.append(f"| 评级 | 样本 | 平均涨幅 | 胜率 |")
-            lines.append(f"|---|---:|---:|---:|")
-            for rating, n, avg_pct, win_rate in rows:
+            lines.append("**自选股评级 · 按 ⭐ 分档（近 7 天 · v6 生产线）**")
+            lines.append(f"| 评级 | 样本 | 平均涨幅 | 平均 alpha | 信号命中 |")
+            lines.append(f"|---|---:|---:|---:|---:|")
+            for rating, n, avg_pct, avg_alpha, hit_rate in rows:
                 sign = "+" if (avg_pct or 0) >= 0 else ""
-                lines.append(f"| {rating} | {n} | {sign}{avg_pct}% | {int(win_rate)}% |")
+                alpha_sign = "+" if (avg_alpha or 0) >= 0 else ""
+                alpha_txt = "—" if avg_alpha is None else f"{alpha_sign}{avg_alpha}%"
+                lines.append(f"| {rating} | {n} | {sign}{avg_pct}% | {alpha_txt} | {int(hit_rate or 0)}% |")
         else:
             lines.append("_自选股评级：近 7 天暂无回顾数据（reviews 表为空或评级缺失）_")
     except Exception as e:
@@ -887,20 +997,22 @@ def section_weekly_hitrate(today: date | None = None) -> str:
     # ── AI 推荐(discovery)准确度 · 5d/20d alpha
     try:
         rows = conn.execute("""
-          SELECT COUNT(*) as n,
+          SELECT COUNT(alpha_5d) as n5,
+                 COUNT(alpha_20d) as n20,
                  ROUND(AVG(alpha_5d), 2) as avg_5d,
                  ROUND(AVG(alpha_20d), 2) as avg_20d,
                  ROUND(SUM(CASE WHEN alpha_20d > 0 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(alpha_20d), 0), 0) as win_20d
           FROM discovery_tracking
           WHERE generated_date >= ?
         """, [today - timedelta(days=30)]).fetchall()
-        n, a5, a20, w20 = rows[0] if rows else (0, None, None, None)
-        if n and (a5 is not None or a20 is not None):
+        n5, n20, a5, a20, w20 = rows[0] if rows else (0, 0, None, None, None)
+        if (n5 or n20) and (a5 is not None or a20 is not None):
             lines.append("")
-            lines.append("**🤖 AI 推荐 · vs SPY alpha（近 30 天推荐）**")
+            lines.append("**🤖 AI 推荐 · vs benchmark alpha（近 30 天推荐）**")
             sign5 = "+" if (a5 or 0) >= 0 else ""
             sign20 = "+" if (a20 or 0) >= 0 else ""
-            lines.append(f"- 5d alpha：{sign5}{a5}% · 20d alpha：{sign20}{a20}% · 20d 胜率：{int(w20 or 0)}% · 样本 {n}")
+            lines.append(f"- 5d alpha：{sign5}{a5}% · 样本 {n5}")
+            lines.append(f"- 20d alpha：{sign20}{a20}% · 20d 胜率：{int(w20 or 0)}% · 样本 {n20}")
         else:
             lines.append("")
             lines.append("_AI 推荐 alpha：近 30 天暂无有效数据（discovery_tracking 待 evaluate_discovery 跑后填充）_")
@@ -1174,13 +1286,18 @@ def section_red_flags(
 # Section 5: 今天必须做的动作
 # ────────────────────────────────────────────────────────
 
-def section_actions(trade_delta: dict | None, defense: dict | None) -> str:
+def section_actions(trade_delta: dict | None, defense: dict | None,
+                    quality_status: str | None = None) -> str:
     """0-3 条具体动作。原则：越少越好；多了说明系统在乱报。"""
     lines = ["#### 5. 今天必须做的动作"]
     actions: list[str] = []
 
     weekday = date.today().weekday()  # 0 = 周一
     is_monday = (weekday == 0)
+    if quality_status == "FAIL":
+        actions.append("🔴 **数据质量闸门 = FAIL：今天暂停买入/加仓/调仓**，只读观察，先修复 FAIL 项")
+        lines.extend(actions)
+        return "\n".join(lines) + "\n"
 
     # regime CRITICAL = 任何动作都让位（HIGH 时仅减仓不加仓，不阻断 rebalance 卖出）
     sev = defense.get("severity") if defense else None
@@ -1194,7 +1311,7 @@ def section_actions(trade_delta: dict | None, defense: dict | None) -> str:
     # 周一 rebalance
     if is_monday and trade_delta:
         sells = trade_delta.get("sells") or []
-        buys = trade_delta.get("buys") or []
+        buys = [] if sev == "HIGH" else (trade_delta.get("buys") or [])
         if sells or buys:
             actions.append(f"**周一 rebalance**：卖 {len(sells)} 只 / 买 {len(buys)} 只")
             for s in sells[:3]:
@@ -1242,10 +1359,14 @@ def build_brief(share_mode: bool = False) -> str:
     risk_metrics = _load_json(REPO / "data" / "latest" / "risk_metrics.json")
     factor_scores = _load_json(REPO / "data" / "latest" / "factor_scores_today.json")
     events = _load_json(REPO / "data" / "event_calendar.json")
-    a_share_picks = _load_json(REPO / "data" / "a_share_picks.json")
+    a_share_picks = _load_a_share_picks()
     hk_picks = _load_json(REPO / "data" / "latest" / "hk_picks.json")
     defense = _latest_defense_snapshot()
     history = _load_history()
+    qgate_status = _quality_gate_status()
+    trade_blocked = qgate_status == "FAIL"
+    qgate_status = _quality_gate_status()
+    read_only = qgate_status == "FAIL"
 
     parts: list[str] = []
     cal = section_calendar(plan)
@@ -1255,13 +1376,16 @@ def build_brief(share_mode: bool = False) -> str:
         section_regime(defense),
         "\n",
     ])
+    qgate = section_quality_gate()
+    if qgate:
+        parts.extend([qgate, "\n"])
     # 1.5 持仓止损告警（无告警时整段省略，避免空版面）
     stoploss_warn = section_holdings_stoploss(history)
     if stoploss_warn:
         parts.extend([stoploss_warn, "\n"])
     parts.extend([
         section_picks(plan, a_share_picks, hk_picks=hk_picks, history=history,
-                      factor_scores=factor_scores),
+                      factor_scores=factor_scores, read_only=read_only),
         "\n",
     ])
     # A 股被拒 top 20 — 审计约束器是否过严（无 a_share_picks 时整段省略）
@@ -1290,7 +1414,7 @@ def build_brief(share_mode: bool = False) -> str:
         parts.append("\n")
 
     if not share_mode:
-        parts.append(section_actions(trade_delta, defense))
+        parts.append(section_actions(trade_delta, defense, quality_status=qgate_status))
     else:
         parts.append(
             "#### 5. 今天必须做的动作\n"
@@ -1440,34 +1564,45 @@ def _hitrate_card_lines(today: date) -> list[str]:
     try:
         rows = conn.execute("""
           SELECT rating, COUNT(*) as n, ROUND(AVG(pct), 2) as avg_pct,
-                 ROUND(SUM(CASE WHEN pct > 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 0) as win_rate
+                 ROUND(AVG(alpha_pct), 2) as avg_alpha,
+                 ROUND(SUM(CASE WHEN COALESCE(
+                     is_success,
+                     CASE
+                       WHEN COALESCE(signal, 'buy') = 'avoid' THEN alpha_pct < 0
+                       ELSE alpha_pct > 0
+                     END
+                 ) THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 0) as hit_rate
           FROM reviews
           WHERE review_date >= ? AND pct IS NOT NULL
-          GROUP BY rating ORDER BY avg_pct DESC
+            AND COALESCE(model_source, '') IN ('v6_us', 'v6_hk', 'v6_cn')
+          GROUP BY rating ORDER BY avg_alpha DESC NULLS LAST, avg_pct DESC
         """, [today - timedelta(days=7)]).fetchall()
         if rows:
-            lines.append("**自选股评级 · 近 7 天**")
-            for rating, n, avg_pct, win_rate in rows:
+            lines.append("**自选股评级 · 近 7 天 v6**")
+            for rating, n, avg_pct, avg_alpha, hit_rate in rows:
                 sign = "+" if (avg_pct or 0) >= 0 else ""
+                alpha_sign = "+" if (avg_alpha or 0) >= 0 else ""
+                alpha_txt = "—" if avg_alpha is None else f"{alpha_sign}{avg_alpha}%"
                 rating_short = (rating or "—")[:18]
-                lines.append(f"• {rating_short} ｜ n={n} ｜ {sign}{avg_pct}% ｜ 胜率 {int(win_rate)}%")
+                lines.append(f"• {rating_short} ｜ n={n} ｜ {sign}{avg_pct}% ｜ alpha {alpha_txt} ｜ 命中 {int(hit_rate or 0)}%")
         else:
             lines.append("_自选股评级：近 7 天暂无回顾数据_")
     except Exception as e:
         lines.append(f"_自选股评级查询失败: {e}_")
     try:
         rows = conn.execute("""
-          SELECT COUNT(*) as n, ROUND(AVG(alpha_5d), 2) as a5,
+          SELECT COUNT(alpha_5d) as n5, COUNT(alpha_20d) as n20,
+                 ROUND(AVG(alpha_5d), 2) as a5,
                  ROUND(AVG(alpha_20d), 2) as a20,
                  ROUND(SUM(CASE WHEN alpha_20d > 0 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(alpha_20d), 0), 0) as w20
           FROM discovery_tracking WHERE generated_date >= ?
         """, [today - timedelta(days=30)]).fetchall()
-        n, a5, a20, w20 = rows[0] if rows else (0, None, None, None)
-        if n and (a5 is not None or a20 is not None):
+        n5, n20, a5, a20, w20 = rows[0] if rows else (0, 0, None, None, None)
+        if (n5 or n20) and (a5 is not None or a20 is not None):
             lines.append("")
             s5 = "+" if (a5 or 0) >= 0 else ""
             s20 = "+" if (a20 or 0) >= 0 else ""
-            lines.append(f"**🤖 AI 推荐 vs SPY** · 5d {s5}{a5}% ｜ 20d {s20}{a20}% ｜ 20d 胜率 {int(w20 or 0)}% ｜ n={n}")
+            lines.append(f"**🤖 AI 推荐 vs benchmark** · 5d {s5}{a5}% (n={n5}) ｜ 20d {s20}{a20}% ｜ 胜率 {int(w20 or 0)}% (n={n20})")
         else:
             lines.append("")
             lines.append("_AI 推荐 alpha：近 30 天暂无有效数据_")
@@ -1494,7 +1629,7 @@ def _build_card_payload() -> dict:
     factor_scores = _load_json(REPO / "data" / "latest" / "factor_scores_today.json")
     events = _load_json(REPO / "data" / "event_calendar.json")
     policy_events = _load_json(REPO / "data" / "policy_events.json")
-    a_share_picks = _load_json(REPO / "data" / "a_share_picks.json")
+    a_share_picks = _load_a_share_picks()
     hk_picks = _load_json(REPO / "data" / "latest" / "hk_picks.json")
     defense = _latest_defense_snapshot()
     history = _load_history()
@@ -1568,12 +1703,18 @@ def _build_card_payload() -> dict:
     })
     blocks.append({"tag": "hr"})
 
+    qgate_lines = _quality_gate_lines()
+    if qgate_lines:
+        blocks.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(qgate_lines)}})
+        blocks.append({"tag": "hr"})
+
     # ─── Section 2: 🔝 自选股·AI 优选（三线独立 · 白底）───
     if plan or hk_picks or a_share_picks:
         section2: list[dict] = [
             {"tag": "div", "text": {"tag": "lark_md", "content":
                 "**🔝 自选股·AI 优选（三线独立）**\n"
-                "_🇺🇸 美股 4 因子+Markowitz · 🇭🇰 港股 4 因子+南向资金 · 🇨🇳 A 股 6 因子+龙虎榜+北向_"}}
+                "_🇺🇸 美股 4 因子+Markowitz · 🇭🇰 港股 4 因子+南向资金 · 🇨🇳 A 股 6 因子+龙虎榜+北向_"
+                + ("\n🔴 **质量闸门 FAIL：本区只读观察，不作为买入/加仓清单。**" if trade_blocked else "")}}
         ]
         if plan:
             pm = plan.get("portfolio_metrics") or {}
@@ -1814,11 +1955,17 @@ def _build_card_payload() -> dict:
 
     # ─── Section 5: 今天必须做的动作（卖/买左右两列）───
     is_monday = (today.weekday() == 0)
-    if severity == "HIGH":
+    if trade_blocked:
         blocks.append({
             "tag": "div",
             "text": {"tag": "lark_md",
-                "content": "**✅ 今天必须做的动作**\n🔴 **regime HIGH，今天不交易**，等系统恢复 NORMAL"}
+                "content": "**✅ 今天必须做的动作**\n🔴 **数据质量闸门 FAIL：暂停买入/加仓/调仓**，先修复 FAIL 项"}
+        })
+    elif severity == "HIGH":
+        blocks.append({
+            "tag": "div",
+            "text": {"tag": "lark_md",
+                "content": "**✅ 今天必须做的动作**\n🟠 **regime HIGH：只减仓不加仓**，暂停所有买入"}
         })
     elif is_monday and trade_delta and ((trade_delta.get("sells") or []) or (trade_delta.get("buys") or [])):
         sells = trade_delta.get("sells") or []

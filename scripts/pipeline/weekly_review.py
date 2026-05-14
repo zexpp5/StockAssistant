@@ -54,16 +54,23 @@ def to_yfinance_ticker(code, market):
     return None
 
 
-def fetch_picks_from_db():
+def fetch_picks_from_db(*, include_legacy: bool = False):
     """从 DuckDB picks 表读所有入选记录."""
     conn = get_db()
-    rows = conn.execute("""
+    source_filter = ""
+    if not include_legacy:
+        source_filter = """
+        WHERE COALESCE(model_source, 'legacy_unknown') IN ('v6_us', 'v6_hk', 'v6_cn')
+        """
+    rows = conn.execute(f"""
         SELECT pick_date, code, name, market, entry_price, entry_currency,
-               rating, theme, ai_relevance
-        FROM picks ORDER BY pick_date DESC, code
+               rating, theme, ai_relevance, COALESCE(model_source, 'legacy_unknown') AS model_source
+        FROM picks
+        {source_filter}
+        ORDER BY pick_date DESC, code
     """).fetchall()
     cols = ["pick_date", "code", "name", "market", "entry_price",
-            "entry_currency", "rating", "theme", "ai_relevance"]
+            "entry_currency", "rating", "theme", "ai_relevance", "model_source"]
     out = [dict(zip(cols, r)) for r in rows]
     conn.close()
     return out
@@ -79,15 +86,30 @@ def fetch_current_price(yf_ticker):
         return None
 
 
-_SPY_HIST_CACHE: dict = {}
+_BENCH_HIST_CACHE: dict[str, dict] = {}
 
 
-def _load_spy_history():
-    """拉 SPY 过去 ~400 天历史 + 最新价，cache module-level。"""
-    if _SPY_HIST_CACHE:
-        return _SPY_HIST_CACHE
+def pick_benchmark(code: str, market: str, model_source: str) -> str:
+    code = (code or "").upper()
+    market = market or ""
+    model_source = model_source or ""
+    if model_source == "v6_cn" or code.endswith((".SS", ".SZ")) or "A股" in market:
+        return "000300.SS"
+    if model_source == "v6_hk" or code.endswith(".HK") or "港股" in market:
+        return "^HSI"
+    if code.endswith((".KS", ".KQ")) or "韩股" in market:
+        return "^KS11"
+    if code.endswith(".AX") or "澳股" in market:
+        return "^AXJO"
+    return "SPY"
+
+
+def _load_benchmark_history(benchmark: str):
+    """拉 benchmark 过去 ~400 天历史 + 最新价，cache module-level。"""
+    if benchmark in _BENCH_HIST_CACHE:
+        return _BENCH_HIST_CACHE[benchmark]
     try:
-        t = yf.Ticker("SPY")
+        t = yf.Ticker(benchmark)
         end = datetime.now()
         start = end - timedelta(days=400)
         hist = t.history(start=start, end=end)
@@ -97,16 +119,16 @@ def _load_spy_history():
         closes = {d.date(): float(c) for d, c in zip(hist.index, hist["Close"])}
         info = t.info
         latest = info.get("currentPrice") or info.get("regularMarketPrice") or float(hist["Close"].iloc[-1])
-        _SPY_HIST_CACHE["closes"] = closes
-        _SPY_HIST_CACHE["latest"] = float(latest)
+        _BENCH_HIST_CACHE[benchmark] = {"closes": closes, "latest": float(latest)}
     except Exception as e:
-        print(f"  ⚠️  SPY 历史拉取失败 (alpha 字段将留空): {e}")
-    return _SPY_HIST_CACHE
+        print(f"  ⚠️  {benchmark} 历史拉取失败 (alpha 字段将留空): {e}")
+        _BENCH_HIST_CACHE[benchmark] = {}
+    return _BENCH_HIST_CACHE[benchmark]
 
 
-def _spy_at(d):
-    """返回 d 当天或之前最近交易日的 SPY 收盘价；找不到返回 None。"""
-    cache = _SPY_HIST_CACHE.get("closes") or {}
+def _benchmark_at(benchmark: str, d):
+    """返回 d 当天或之前最近交易日的 benchmark 收盘价；找不到返回 None。"""
+    cache = (_BENCH_HIST_CACHE.get(benchmark) or {}).get("closes") or {}
     if not cache:
         return None
     # 当天或往前找最近 7 个日历日
@@ -115,6 +137,10 @@ def _spy_at(d):
         if key in cache:
             return cache[key]
     return None
+
+
+def signal_from_rating(rating: str) -> str:
+    return "avoid" if ("不建议" in (rating or "") or "⛔" in (rating or "")) else "buy"
 
 
 def grade_hit(pct):
@@ -134,19 +160,17 @@ def grade_hit(pct):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--period", type=int, default=None, help="只看最近 N 天的入选")
+    parser.add_argument("--include-legacy", action="store_true", help="同时回顾 legacy picks（默认只评估 v6 生产线）")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     print("[1/3] 拉取 picks [DuckDB]...")
-    items = fetch_picks_from_db()
+    items = fetch_picks_from_db(include_legacy=args.include_legacy)
     print(f"  共 {len(items)} 条入选记录")
 
     print("\n[2/3] 抓当前价格 + 计算回顾...")
     today_date = datetime.now().date()
 
-    # 预拉 SPY 历史 + 最新价（作为 alpha 基准）
-    _load_spy_history()
-    spy_latest = _SPY_HIST_CACHE.get("latest")
     period_cutoff = None
     if args.period:
         period_cutoff = today_date - timedelta(days=args.period)
@@ -156,6 +180,7 @@ def main():
         name = item.get("name") or ""
         code = item.get("code") or ""
         market = item.get("market") or ""
+        model_source = item.get("model_source") or "legacy_unknown"
         pick_date = item.get("pick_date")  # DuckDB DATE -> python date
         entry_price = item.get("entry_price")
         currency = item.get("entry_currency") or "USD"
@@ -165,6 +190,11 @@ def main():
 
         # 期限过滤
         if period_cutoff and pick_date < period_cutoff:
+            continue
+
+        days_held = (today_date - pick_date).days
+        if days_held < 1:
+            print(f"  [跳过] {name} — 当日入选未成熟")
             continue
 
         if not entry_price:
@@ -184,15 +214,22 @@ def main():
 
         # 计算
         pct = round((current - entry_price) / entry_price * 100, 2)
-        days_held = (today_date - pick_date).days
         grade = grade_hit(pct)
 
-        # SPY alpha: 同期 SPY 涨幅 → pct - spy_pct
-        entry_spy = _spy_at(pick_date)
+        # Alpha: stock pct - same-market benchmark pct
+        benchmark = pick_benchmark(code, market, model_source)
+        bench_cache = _load_benchmark_history(benchmark)
+        bench_latest = bench_cache.get("latest")
+        entry_spy = _benchmark_at(benchmark, pick_date)
+        benchmark_pct = None
         alpha_pct = None
-        if entry_spy and spy_latest and entry_spy > 0:
-            spy_pct = (spy_latest - entry_spy) / entry_spy * 100
-            alpha_pct = round(pct - spy_pct, 2)
+        if entry_spy and bench_latest and entry_spy > 0:
+            benchmark_pct = (bench_latest - entry_spy) / entry_spy * 100
+            alpha_pct = round(pct - benchmark_pct, 2)
+        signal = signal_from_rating(item.get("rating") or "")
+        is_success = None
+        if alpha_pct is not None:
+            is_success = alpha_pct < 0 if signal == "avoid" else alpha_pct > 0
 
         results.append({
             "name": name,
@@ -207,11 +244,17 @@ def main():
             "theme": item.get("theme") or "",
             "ai_relevance": item.get("ai_relevance") or "",
             "entry_spy_price": entry_spy,
-            "current_spy_price": spy_latest,
+            "current_spy_price": bench_latest,
             "alpha_pct": alpha_pct,
+            "model_source": model_source,
+            "signal": signal,
+            "benchmark_code": benchmark,
+            "benchmark_pct": round(benchmark_pct, 2) if benchmark_pct is not None else None,
+            "is_success": is_success,
         })
         sign = "+" if pct > 0 else ""
-        print(f"{current} {currency} · {sign}{pct:.1f}% · {days_held} 天 · {grade}")
+        alpha_txt = "" if alpha_pct is None else f" · alpha {alpha_pct:+.1f}% vs {benchmark}"
+        print(f"{current} {currency} · {sign}{pct:.1f}% · {days_held} 天 · {grade}{alpha_txt}")
         time.sleep(0.4)
 
     print(f"\n[3/3] 回顾报告")
@@ -234,6 +277,12 @@ def main():
     print(f"  • 命中（>+5%）：{win_count} 只 ({win_rate:.1f}%)")
     print(f"  • 跟随（-5%~+5%）：{flat_count} 只")
     print(f"  • 失败（<-5%）：{loss_count} 只")
+    alpha_results = [r for r in results if r.get("alpha_pct") is not None]
+    if alpha_results:
+        avg_alpha = sum(r["alpha_pct"] for r in alpha_results) / len(alpha_results)
+        signal_hits = sum(1 for r in alpha_results if r.get("is_success") is True)
+        print(f"  • 平均 alpha：{'+' if avg_alpha > 0 else ''}{avg_alpha:.2f}%")
+        print(f"  • 按信号命中：{signal_hits} 只 ({signal_hits / len(alpha_results) * 100:.1f}%)")
 
     # TOP / BOTTOM
     sorted_by_pct = sorted(results, key=lambda x: x["pct"], reverse=True)
@@ -288,6 +337,11 @@ def main():
             "entry_spy_price": r.get("entry_spy_price"),
             "current_spy_price": r.get("current_spy_price"),
             "alpha_pct": r.get("alpha_pct"),
+            "model_source": r.get("model_source"),
+            "signal": r.get("signal"),
+            "benchmark_code": r.get("benchmark_code"),
+            "benchmark_pct": r.get("benchmark_pct"),
+            "is_success": r.get("is_success"),
         } for r in results]
         n = upsert_reviews(db_rows)
         print(f"\n  DuckDB：已写入 {n} 行 (stock_history.duckdb · reviews)")

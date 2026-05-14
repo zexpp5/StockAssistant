@@ -98,6 +98,11 @@ CREATE TABLE IF NOT EXISTS reviews (
     entry_spy_price    DOUBLE,    -- 入选日 SPY 收盘
     current_spy_price  DOUBLE,    -- review_date 当天 SPY 最新
     alpha_pct          DOUBLE,    -- pct - spy_pct（超额收益）
+    model_source       VARCHAR,
+    signal             VARCHAR,   -- buy / avoid
+    benchmark_code     VARCHAR,
+    benchmark_pct      DOUBLE,
+    is_success         BOOLEAN,
     PRIMARY KEY (review_date, pick_date, code)
 );
 
@@ -142,6 +147,11 @@ ALTER TABLE picks     ADD COLUMN IF NOT EXISTS model_source      VARCHAR;
 ALTER TABLE reviews   ADD COLUMN IF NOT EXISTS entry_spy_price   DOUBLE;
 ALTER TABLE reviews   ADD COLUMN IF NOT EXISTS current_spy_price DOUBLE;
 ALTER TABLE reviews   ADD COLUMN IF NOT EXISTS alpha_pct         DOUBLE;
+ALTER TABLE reviews   ADD COLUMN IF NOT EXISTS model_source      VARCHAR;
+ALTER TABLE reviews   ADD COLUMN IF NOT EXISTS signal            VARCHAR;
+ALTER TABLE reviews   ADD COLUMN IF NOT EXISTS benchmark_code    VARCHAR;
+ALTER TABLE reviews   ADD COLUMN IF NOT EXISTS benchmark_pct     DOUBLE;
+ALTER TABLE reviews   ADD COLUMN IF NOT EXISTS is_success        BOOLEAN;
 ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS chain          VARCHAR;
 ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS chain_tier     VARCHAR;
 ALTER TABLE watchlist ADD COLUMN IF NOT EXISTS chain_role     VARCHAR;
@@ -245,15 +255,59 @@ def get_db(path: str = DB_PATH) -> duckdb.DuckDBPyConnection:
     """打开 DuckDB 连接并保证 schema 存在。"""
     conn = duckdb.connect(path)
     conn.execute(SCHEMA_SQL)
-    # 一次性 backfill: 按 market 字符串推断历史行真实 source
-    # 2026-05-12 起 v5/hk/a_share 用 '·' 分隔，daily_picks.py 用空格或空 market
+    # Do not infer production model source from market. Legacy and v6 pipelines
+    # can write the same market, so old NULL rows must stay out of production
+    # views until a writer explicitly tags them.
     conn.execute("""
-        UPDATE picks SET model_source = CASE
-            WHEN market LIKE 'A股%' OR market LIKE 'A 股%' THEN 'v6_cn'
-            WHEN market = '港股' OR code LIKE '%.HK' THEN 'v6_hk'
-            WHEN market LIKE '美股·%' OR market = '美股' THEN 'v6_us'
-            ELSE 'legacy'
-        END WHERE model_source IS NULL
+        UPDATE picks
+        SET model_source = 'legacy_unknown'
+        WHERE model_source IS NULL
+    """)
+    conn.execute("""
+        UPDATE picks
+        SET model_source = 'legacy'
+        WHERE model_source = 'v6_us'
+          AND (
+              rating IS NULL
+              OR (rating NOT LIKE '%z %' AND rating NOT LIKE '%不建议%')
+          )
+    """)
+    conn.execute("""
+        UPDATE picks
+        SET model_source = 'legacy'
+        WHERE model_source IN ('v6_hk', 'v6_cn')
+          AND (
+              rating IS NULL
+              OR (rating NOT LIKE '%综合%' AND rating NOT LIKE '%关注%')
+          )
+    """)
+    conn.execute("""
+        UPDATE picks AS p
+        SET entry_price = (
+            SELECT pr.price
+            FROM prices pr
+            WHERE pr.code = p.code
+              AND pr.price IS NOT NULL
+              AND pr.date <= p.pick_date
+            ORDER BY pr.date DESC
+            LIMIT 1
+        )
+        WHERE p.model_source IN ('v6_us', 'v6_hk', 'v6_cn')
+          AND p.entry_price IS NULL
+    """)
+    conn.execute("""
+        UPDATE picks AS p
+        SET entry_currency = (
+            SELECT pr.currency
+            FROM prices pr
+            WHERE pr.code = p.code
+              AND pr.currency IS NOT NULL
+              AND pr.date <= p.pick_date
+            ORDER BY pr.date DESC
+            LIMIT 1
+        )
+        WHERE p.model_source IN ('v6_us', 'v6_hk', 'v6_cn')
+          AND p.entry_currency IS NULL
     """)
     return conn
 
@@ -426,6 +480,7 @@ REVIEW_COLS = [
     "entry_price", "current_price", "pct", "days_held",
     "grade", "rating", "theme",
     "entry_spy_price", "current_spy_price", "alpha_pct",
+    "model_source", "signal", "benchmark_code", "benchmark_pct", "is_success",
 ]
 
 
@@ -456,6 +511,11 @@ def upsert_reviews(
             r.get("entry_spy_price"),
             r.get("current_spy_price"),
             r.get("alpha_pct"),
+            r.get("model_source"),
+            r.get("signal"),
+            r.get("benchmark_code"),
+            r.get("benchmark_pct"),
+            r.get("is_success"),
         ]
         placeholders = ",".join(["?"] * len(REVIEW_COLS))
         update_set = ",".join(
@@ -507,10 +567,12 @@ def fetch_picks_view(*, conn: duckdb.DuckDBPyConnection | None = None) -> list[d
                 r.pct, r.days_held, r.grade, r.theme,
                 p.total_score AS score, p.ai_relevance,
                 p.total_score, p.ai_score, p.val_score, p.trend_score, p.cred_score,
-                COALESCE(p.model_source, 'legacy') AS model_source
+                COALESCE(r.model_source, p.model_source, 'legacy_unknown') AS model_source
             FROM reviews r
             LEFT JOIN picks p ON p.code = r.code AND p.pick_date = r.pick_date
             WHERE r.review_date = (SELECT MAX(review_date) FROM reviews)
+              AND COALESCE(r.model_source, p.model_source, 'legacy_unknown')
+                  IN ('v6_us', 'v6_hk', 'v6_cn')
         ),
         v6_market_latest AS (
             -- 每个 v6 pipeline 各自的最新 pick_date；legacy 行被排除

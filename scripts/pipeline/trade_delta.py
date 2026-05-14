@@ -4,7 +4,7 @@
 拆分自原单一美股版（2026-05-12 三线独立化）：
   · 美股：plan_a_v5.json    × US 持仓 → trade_delta.json    (旧默认路径，保持向后兼容)
   · 港股：hk_picks.json     × HK 持仓 → trade_delta_hk.json
-  · A 股：a_share_picks.json × A 股持仓 → trade_delta_cn.json
+  · A 股：DuckDB picks.v6_cn（fallback a_share_picks.json）× A 股持仓 → trade_delta_cn.json
 
 为什么不合并到一张调仓单：
   - 三个市场账户独立（美元 / 港元 / 人民币），汇率不同
@@ -46,6 +46,33 @@ def _market_of(ticker: str) -> str:
     return "us"
 
 
+def _quality_gate_payload() -> dict:
+    path = os.path.join(_REPO, "data", "latest", "recommendation_quality_gate.json")
+    if not os.path.exists(path):
+        return {}
+    try:
+        return json.load(open(path, encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _quality_gate_status(payload: dict | None = None) -> str:
+    payload = payload or _quality_gate_payload()
+    return str(payload.get("status") or "UNKNOWN")
+
+
+def _quality_gate_block_reason(market: str, payload: dict) -> str | None:
+    status = _quality_gate_status(payload)
+    if status == "FAIL":
+        return "recommendation_quality_gate FAIL — 暂停买入/卖出/调仓，先修复数据质量"
+    if market == "cn":
+        stale_codes = {"v6_cn_missing", "v6_cn_stale", "v6_cn_stale_after_close", "a_share_db_lags_json"}
+        for issue in payload.get("issues") or []:
+            if issue.get("code") in stale_codes:
+                return f"A 股生产信号未刷新：{issue.get('message', 'v6_cn stale')} — 暂停 A 股调仓"
+    return None
+
+
 def _infer_fx_to_rmb(ticker: str) -> float:
     """按 ticker 后缀粗略推断换 RMB 汇率。"""
     m = _market_of(ticker)
@@ -61,6 +88,20 @@ def _infer_fx_to_rmb(ticker: str) -> float:
     if t.endswith(".L"):
         return 9.0           # GBP
     return USD_TO_RMB         # 默认 USD
+
+
+def _to_yfinance_ticker(ticker: str) -> str:
+    """Normalize local codes to yfinance tickers for price lookup."""
+    t = (ticker or "").strip().upper()
+    if "." in t:
+        return t
+    if t.isdigit() and len(t) == 6:
+        if t.startswith(("60", "68")):
+            return f"{t}.SS"
+        if t.startswith(("8", "9", "43")):
+            return f"{t}.BJ"
+        return f"{t}.SZ"
+    return t
 
 
 def load_current_from_holdings(total_capital: float, market: str | None = None) -> dict:
@@ -104,11 +145,75 @@ def load_current_from_holdings(total_capital: float, market: str | None = None) 
 
 
 def fetch_price(ticker):
+    candidates = [ticker]
+    t = (ticker or "").upper()
+    for suffix in (".SS", ".SZ", ".BJ", ".HK"):
+        if t.endswith(suffix):
+            candidates.append(t[:-len(suffix)])
     try:
-        h = yf.Ticker(ticker).history(period="2d")
+        for code in candidates:
+            px = stock_db.latest_price(code)
+            if px and px.get("price"):
+                return float(px["price"])
+        conn = stock_db.get_db()
+        for code in candidates:
+            row = conn.execute(
+                "SELECT entry_price FROM picks "
+                "WHERE code = ? AND entry_price IS NOT NULL "
+                "ORDER BY pick_date DESC LIMIT 1",
+                [code],
+            ).fetchone()
+            if row and row[0]:
+                conn.close()
+                return float(row[0])
+        conn.close()
+    except Exception:
+        pass
+    try:
+        h = yf.Ticker(_to_yfinance_ticker(ticker)).history(period="2d")
         return float(h["Close"].iloc[-1])
     except Exception:
         return None
+
+
+def _load_cn_plan_from_db() -> dict | None:
+    """Read latest A-share production picks from DuckDB, DB-first."""
+    try:
+        conn = stock_db.get_db()
+        latest = conn.execute(
+            "SELECT MAX(pick_date) FROM picks WHERE model_source = 'v6_cn'"
+        ).fetchone()[0]
+        if latest is None:
+            conn.close()
+            return None
+        rows = conn.execute("""
+            SELECT code, name, market, rating, total_score, ai_relevance, theme
+            FROM picks
+            WHERE model_source = 'v6_cn' AND pick_date = ?
+            ORDER BY total_score DESC NULLS LAST, code
+        """, [latest]).fetchall()
+        conn.close()
+    except Exception as e:
+        print(f"  ⚠️  DuckDB A 股 picks 读取失败，回退 JSON: {e}")
+        return None
+    selected = []
+    for code, name, market, rating, total_score, ai_relevance, theme in rows:
+        selected.append({
+            "code": code,
+            "ticker": code,
+            "name": name or code,
+            "market": market,
+            "rating": rating,
+            "composite": (float(total_score) / 100) if total_score is not None else None,
+            "theme": theme,
+            "industry": theme or ai_relevance,
+        })
+    return {
+        "generated_at": f"{str(latest)[:10]}T00:00:00",
+        "source": "duckdb:picks.v6_cn",
+        "selected": selected,
+        "n_recommended": len(selected),
+    }
 
 
 # ────────────────────────────────────────────────────────
@@ -147,10 +252,11 @@ def _normalize_plan(plan_data: dict, market: str, total_capital: float) -> dict:
         eq_w = (1.0 / n) if n else 0
         for p in sel:
             tk = p.get("code") or p.get("ticker")
+            f_norm = p.get("f_score_norm")
             out[tk] = {
                 "weight": eq_w,
                 "amount_rmb": eq_w * total_capital,
-                "f_score": int(p["f_score_norm"] * 9) if p.get("f_score_norm") is not None else None,
+                "f_score": int(f_norm * 9) if f_norm is not None else p.get("f_score"),
                 "composite_z": p.get("composite"),
                 "name": p.get("name", tk),
             }
@@ -167,12 +273,49 @@ def build_delta(market: str, plan_file: str, out_file: str,
     print(f"  💼 {market_label} 调整清单（基于 {total_capital/10000:.0f} 万 {currency}）")
     print("=" * 100)
 
-    if not os.path.exists(plan_file):
+    qgate_payload = _quality_gate_payload()
+    qgate = _quality_gate_status(qgate_payload)
+    block_reason = _quality_gate_block_reason(market, qgate_payload)
+    if block_reason:
+        payload = {
+            "generated_at": datetime.now().isoformat(),
+            "market": market,
+            "market_label": market_label,
+            "total_capital_rmb": total_capital,
+            "quality_gate_status": qgate,
+            "trade_blocked": True,
+            "block_reason": block_reason,
+            "sells": [],
+            "buys": [],
+            "adjusts": [],
+            "summary": {
+                "total_sell_rmb": 0,
+                "total_buy_rmb": 0,
+                "total_adjust_rmb": 0,
+                "net_cash_need_rmb": 0,
+            },
+        }
+        with open(out_file, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
+        print(f"  🔴 {block_reason}")
+        print(f"  ✅ {out_file}")
+        return payload
+
+    plan = None
+    source_label = plan_file
+    if market == "cn":
+        plan = _load_cn_plan_from_db()
+        if plan:
+            source_label = plan.get("source", "duckdb:picks.v6_cn")
+
+    if plan is None and not os.path.exists(plan_file):
         print(f"  ⚠️  {plan_file} 不存在 — 该市场跳过。")
         print(f"     美股：build_plan_a_v5.py / 港股：hk_picks.py / A 股：a_share_picks")
         return None
 
-    plan = json.load(open(plan_file, encoding="utf-8"))
+    if plan is None:
+        plan = json.load(open(plan_file, encoding="utf-8"))
+    print(f"  目标来源：{source_label}")
     target = _normalize_plan(plan, market, total_capital)
     if not target:
         print(f"  ⚠️  {plan_file} 推荐为空 — 跳过")
@@ -261,6 +404,8 @@ def build_delta(market: str, plan_file: str, out_file: str,
         "generated_at": datetime.now().isoformat(),
         "market": market,
         "market_label": market_label,
+        "quality_gate_status": qgate,
+        "trade_blocked": False,
         "total_capital_rmb": total_capital,
         "sells": sells,
         "buys": buys,

@@ -67,6 +67,61 @@ def _build_risk_flags(altman: dict | None, beneish: dict | None) -> list[str]:
     return flags
 
 
+def _load_entry_prices(codes: list[str]) -> dict[str, dict]:
+    """Use local daily price snapshots first; fall back to yfinance when needed."""
+    out: dict[str, dict] = {}
+    if not codes:
+        return out
+
+    conn = None
+    try:
+        from stock_db import get_db, latest_price
+        conn = get_db()
+        for code in codes:
+            px = latest_price(code, conn=conn)
+            price = px.get("price") if px else None
+            if price:
+                out[code] = {
+                    "price": float(price),
+                    "currency": px.get("currency") or "USD",
+                }
+    except Exception as e:
+        print(f"  ⚠️ 本地 prices 取入选价失败: {e}")
+    finally:
+        if conn is not None:
+            conn.close()
+
+    missing = [c for c in codes if c not in out]
+    if not missing:
+        return out
+
+    try:
+        import yfinance as yf
+        df = yf.download(
+            " ".join(missing),
+            period="5d",
+            group_by="ticker",
+            auto_adjust=False,
+            progress=False,
+            threads=True,
+        )
+        if df is None or df.empty:
+            return out
+        for code in missing:
+            try:
+                if len(missing) == 1 and "Close" in df:
+                    close = df["Close"].dropna()
+                else:
+                    close = df[code]["Close"].dropna()
+                if not close.empty:
+                    out[code] = {"price": float(close.iloc[-1]), "currency": "USD"}
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"  ⚠️ yfinance 入选价兜底失败: {e}")
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["tertile", "median", "quartile"], default="tertile")
@@ -273,6 +328,9 @@ def main():
     # ============================================================
     db_rows = []
     success = 0
+    entry_prices = _load_entry_prices([s["code"] for s in selected + negatives])
+    if entry_prices:
+        print(f"\n  入选价：已填 {len(entry_prices)}/{len(selected) + len(negatives)} 只")
     for s in selected + negatives:
         # GICS 客观分类
         ai_score, theme, sector, industry, source = classify(s["code"])
@@ -305,6 +363,8 @@ def main():
             "cred_score": s["analyst_score"],
             "ai_relevance": ai_label,
             "theme": theme,
+            "entry_price": (entry_prices.get(s["code"]) or {}).get("price"),
+            "entry_currency": (entry_prices.get(s["code"]) or {}).get("currency"),
             "model_source": "v6_us",
         })
         success += 1

@@ -141,11 +141,19 @@ def fetch_upcoming_subscription_raw():
     ak = _import_ak()
     if ak is None:
         return None
-    try:
-        return ak.stock_xgsglb_em(symbol="即将发行")
-    except Exception as e:
-        logger.warning("akshare stock_xgsglb_em(即将发行) failed: %s", e)
-        return None
+    attempts = [
+        ("stock_xgsglb_em(即将发行)", lambda: ak.stock_xgsglb_em(symbol="即将发行")),
+        ("stock_xgsglb_em(全部股票)", lambda: ak.stock_xgsglb_em(symbol="全部股票")),
+        ("stock_xgsglb_em()", lambda: ak.stock_xgsglb_em()),
+    ]
+    for label, fn in attempts:
+        try:
+            df = fn()
+            if df is not None:
+                return df
+        except Exception as e:
+            logger.warning("akshare %s failed: %s", label, e)
+    return None
 
 
 def fetch_recent_listings_raw():
@@ -153,12 +161,20 @@ def fetch_recent_listings_raw():
     ak = _import_ak()
     if ak is None:
         return None
-    try:
-        # akshare 提供了已上市的版本（参数因版本不同，"全部股票"或"近三月"）
-        return ak.stock_xgsglb_em(symbol="已上市")
-    except Exception as e:
-        logger.warning("akshare stock_xgsglb_em(已上市) failed: %s", e)
-        return None
+    attempts = [
+        ("stock_xgsglb_em(已上市)", lambda: ak.stock_xgsglb_em(symbol="已上市")),
+        ("stock_xgsglb_em(全部股票)", lambda: ak.stock_xgsglb_em(symbol="全部股票")),
+        ("stock_xgsglb_em()", lambda: ak.stock_xgsglb_em()),
+        ("stock_zh_a_new_em()", lambda: ak.stock_zh_a_new_em()),
+    ]
+    for label, fn in attempts:
+        try:
+            df = fn()
+            if df is not None:
+                return df
+        except Exception as e:
+            logger.warning("akshare %s failed: %s", label, e)
+    return None
 
 
 # ───────────── 主题标签 + AI 相关性 ─────────────

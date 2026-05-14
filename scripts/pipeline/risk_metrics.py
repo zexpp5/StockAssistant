@@ -56,10 +56,10 @@ def load_portfolio_from_holdings():
     返回 (portfolio, cash_pct, source)；无持仓时返回 (None, None, None)，
     上层 fallback 到 plan_a_v5.json。
 
-    portfolio 格式：[(name, ticker, amount_rmb_at_cost, ccy, weight), ...]
+    portfolio 格式：[(name, ticker, amount_rmb_at_cost, ccy, weight, shares_override), ...]
       - amount_rmb_at_cost = shares * entry_price * fx (用户实际投入)
       - weight = amount_rmb / total_cost
-    risk_metrics 后续以 amount_rmb 按 D0 价反推 shares，所以这里给"成本"也能正确驱动。
+      - shares_override = 用户实际股数；真实持仓用它，plan fallback 才按 D0 价反推。
     """
     try:
         import stock_db
@@ -90,7 +90,7 @@ def load_portfolio_from_holdings():
     portfolio = []
     for code, v in agg.items():
         weight = v["cost_rmb"] / total_cost
-        portfolio.append((code, code, v["cost_rmb"], v["ccy"], weight))
+        portfolio.append((code, code, v["cost_rmb"], v["ccy"], weight, v["shares"]))
     cash_pct = max(0.0, 1.0 - total_cost / TOTAL_CAPITAL)
     return portfolio, cash_pct, "holdings"
 
@@ -98,8 +98,8 @@ def load_portfolio_from_holdings():
 def load_portfolio_from_plan():
     """读 plan_a_v5.json，返回 (portfolio, cash_pct)。
 
-    portfolio 格式与旧的硬编码 PORTFOLIO 兼容：
-      [(name, ticker, amount_rmb, ccy, weight), ...]
+    portfolio 格式：
+      [(name, ticker, amount_rmb, ccy, weight, shares_override), ...]
     其中 name 用 ticker 顶替（plan_a_v5.json 无中文名字段），ccy 由后缀推断。
     """
     plan_file = os.path.join(_REPO, "data", "latest", "plan_a_v5.json")
@@ -118,7 +118,7 @@ def load_portfolio_from_plan():
         if not ticker or amount_rmb < 100:
             continue
         ccy = _ccy_from_ticker(ticker)
-        portfolio.append((ticker, ticker, amount_rmb, ccy, weight))
+        portfolio.append((ticker, ticker, amount_rmb, ccy, weight, None))
     return portfolio, cash_pct
 
 
@@ -161,7 +161,7 @@ def main():
     # 1) 拉所有标的历史
     print("\n[1/3] 拉过去 ~1 年历史...")
     series = {}
-    for name, ticker, rmb, ccy, pct in PORTFOLIO:
+    for name, ticker, rmb, ccy, pct, shares_override in PORTFOLIO:
         s = fetch_history(ticker)
         if s is not None:
             series[ticker] = s
@@ -211,12 +211,12 @@ def main():
 
         total = CASH_RMB
         all_have_price = True
-        for name, ticker, rmb, ccy, _pct in PORTFOLIO:
+        for name, ticker, rmb, ccy, _pct, shares_override in PORTFOLIO:
             if ticker not in first_prices or last_price[ticker] is None:
                 all_have_price = False
                 break
             fx = FX_TO_RMB.get(ccy, 1.0)
-            shares = rmb / (first_prices[ticker] * fx)
+            shares = shares_override if shares_override is not None else rmb / (first_prices[ticker] * fx)
             total += shares * last_price[ticker] * fx
 
         if all_have_price:

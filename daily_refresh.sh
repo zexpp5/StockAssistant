@@ -78,7 +78,8 @@ run_step() {
             notify "📉 股票看板刷新失败" "$label: $script"
         fi
     else
-        if ! $PYTHON "$script"; then
+        # 不能引号化 $script：当 script 形如 "path/x.py --dry-run" 需要 shell 拆词
+        if ! $PYTHON $script; then
             echo "❌ [$label] $script 失败"
             FAILED_STEPS+=("$label/$script")
             notify "📉 股票看板刷新失败" "$label: $script"
@@ -144,7 +145,7 @@ run_step "2/25 SEC 13F 刷新" "-m stock_research.jobs.refresh_13f"
 run_step "3/25 SEC 13F → track_13f.json（dashboard 用）" "scripts/pipeline/_build_track_13f_from_sec.py"
 run_step "4/25 多源 enrichment" "-m stock_research.jobs.enrich_watchlist --skip-trends"
 run_step "5/25 跨源审计" "-m stock_research.jobs.daily_audit"
-run_step "6/25 每日优选 v1（旧体系）" "scripts/pipeline/daily_picks.py"
+run_step "6/25 每日优选 v1（旧体系 · dry-run 基线）" "scripts/pipeline/daily_picks.py --dry-run"
 run_step "7/25 picks 反向审查" "-m stock_research.jobs.audit_picks --fast"
 run_step "8/25 历史回顾" "scripts/pipeline/weekly_review.py"
 
@@ -164,6 +165,7 @@ run_step "10/25 Markowitz 仓位优化（方案 A v6）" "scripts/pipeline/build
 #   命名上叫 "a_share_constraints" 但实际处理美股仓位约束（A 股 holdings → 美股 plan），
 #   不该和 A 股 picks 绑定收盘时间。早班 7:30 就要跑出最新 constrained 版供 dashboard 用。
 run_step "10b/25 plan_a 后处理（美股仓位约束）" "-m stock_research.jobs.apply_a_share_constraints"
+run_step "10c/25 推荐质量闸门（调仓前）" "scripts/tools/recommendation_quality_gate.py"
 run_step "11/25 调整清单（卖/买/调）→ trade_delta.json" "scripts/pipeline/trade_delta.py"
 # Step 12 已废 (2026-05-11 PM 第二轮): 飞书 Bitable 100% 退役,trade_delta 走 JSON+DuckDB
 
@@ -201,6 +203,7 @@ run_step "23/25 候选发现（每日）" "scripts/tools/discover_candidates.py"
 # 2026-05-11 PM: 推荐准确度评估 — 每天跑(即使 discovery 本身跳过),
 # 因为要给过去 70 天的所有推荐刷新 1d/5d/20d/60d alpha 数据。
 run_step "23b/25 推荐准确度评估（每日）" "scripts/tools/evaluate_discovery.py"
+run_step "23c/25 推荐质量闸门（收盘后复核）" "scripts/tools/recommendation_quality_gate.py"
 
 # DuckDB pipeline 同步：把今天刷新过的根目录数据 JSON（risk_metrics / track_13f / plan_a_v5
 # / history_data / optimization_result / factor_scores_today / reverse_validation_*）

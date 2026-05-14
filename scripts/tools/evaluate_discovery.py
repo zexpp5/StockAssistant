@@ -64,25 +64,27 @@ def fetch_close_series(ticker: str, start: date, end: date) -> dict[date, float]
         return {}
 
 
-def evaluate_one(gen_date: date, ticker: str) -> dict | None:
+def evaluate_one(gen_date: date, ticker: str) -> tuple[dict | None, str]:
     """对一个 (generated_date, ticker) 算 entry_price + 4 个窗口的 pct/alpha。
-    返回 None 表示价格拉不到或数据不足。
+    返回 (None, reason) 表示暂不更新；未成熟窗口不算失败。
     """
     bench_code = pick_benchmark(ticker)
     today = date.today()
+    if gen_date >= today:
+        return None, "immature"
     end = min(today, gen_date + timedelta(days=100))  # 60 交易日 ≈ 90 自然日, 留点 buffer
 
     prices_t = fetch_close_series(ticker, gen_date, end)
     if not prices_t:
-        return None
+        return None, "no_price"
     prices_b = fetch_close_series(bench_code, gen_date, end)
     if not prices_b:
-        return None
+        return None, "no_benchmark"
 
     sorted_t = sorted(prices_t.keys())
     sorted_b = sorted(prices_b.keys())
     if not sorted_t or not sorted_b:
-        return None
+        return None, "no_series"
 
     # entry_price = gen_date 之后第一个有数据的交易日的 close
     entry_t = prices_t[sorted_t[0]]
@@ -109,7 +111,7 @@ def evaluate_one(gen_date: date, ticker: str) -> dict | None:
         out[f"pct_{n}d"] = pct_t
         out[f"benchmark_pct_{n}d"] = pct_b
         out[f"alpha_{n}d"] = alpha
-    return out
+    return out, "ok"
 
 
 def main():
@@ -126,22 +128,29 @@ def main():
         conn.close()
         return
 
-    n_ok, n_fail = 0, 0
+    n_ok, n_fail, n_skip = 0, 0, 0
+    fail_reasons: dict[str, int] = {}
     updates = []
     # benchmark 缓存:同 ticker 同时段重复拉是浪费 — 但为了简单先不缓存
     for i, (gen_date, ticker) in enumerate(rows, 1):
-        result = evaluate_one(gen_date, ticker)
+        result, status = evaluate_one(gen_date, ticker)
         if result:
             updates.append(result)
             n_ok += 1
+        elif status == "immature":
+            n_skip += 1
         else:
             n_fail += 1
+            fail_reasons[status] = fail_reasons.get(status, 0) + 1
         if i % 20 == 0:
-            print(f"  进度 {i}/{len(rows)} (成功 {n_ok} 失败 {n_fail})")
+            print(f"  进度 {i}/{len(rows)} (成功 {n_ok} 跳过未成熟 {n_skip} 失败 {n_fail})")
 
     if updates:
         upsert_discovery_tracking(updates, conn=conn)
-    print(f"✅ evaluate_discovery 完成: 成功 {n_ok} 条 / 失败 {n_fail} 条")
+    if fail_reasons:
+        reason_txt = ", ".join(f"{k}={v}" for k, v in sorted(fail_reasons.items()))
+        print(f"  失败原因: {reason_txt}")
+    print(f"✅ evaluate_discovery 完成: 成功 {n_ok} 条 / 跳过未成熟 {n_skip} 条 / 失败 {n_fail} 条")
     conn.close()
 
 
