@@ -93,6 +93,60 @@ def _load_us_plan() -> dict | None:
     return base
 
 
+def _load_hk_picks() -> dict | None:
+    """Load HK picks: V2 first（recommendation_picks.market='HK'）, fall back to JSON."""
+    json_payload = _load_json(REPO / "data" / "latest" / "hk_picks.json")
+    try:
+        lib_path = str(REPO / "scripts" / "lib")
+        if lib_path not in sys.path:
+            sys.path.insert(0, lib_path)
+        from stock_db import get_db
+
+        conn = get_db()
+        v2_run = conn.execute(
+            """
+            SELECT run_id, run_date FROM recommendation_runs
+            WHERE universe_scope = 'system_tech_universe' AND status = 'generated'
+            ORDER BY generated_at DESC LIMIT 1
+            """
+        ).fetchone()
+        if v2_run:
+            run_id, run_date = v2_run
+            v2_rows = conn.execute(
+                """
+                SELECT p.symbol,
+                       COALESCE(NULLIF(u.name, p.symbol), p.name) AS name,
+                       p.rating, p.total_score
+                FROM recommendation_picks p
+                LEFT JOIN system_universe u
+                  ON p.market = u.market AND p.symbol = u.symbol
+                WHERE p.run_id = ? AND p.market = 'HK' AND p.signal = 'buy'
+                ORDER BY p.total_score DESC NULLS LAST, p.symbol
+                """,
+                [run_id],
+            ).fetchall()
+            if v2_rows:
+                conn.close()
+                db_date = str(run_date)[:10]
+                selected = [{
+                    "code": symbol, "ticker": symbol, "name": name or symbol,
+                    "market": "港股", "rating": rating,
+                    "composite": (float(total_score) / 100) if total_score is not None else 0,
+                    "industry": "科技", "theme": "科技/AI",
+                } for symbol, name, rating, total_score in v2_rows]
+                return {
+                    "generated_at": f"{db_date}T00:00:00",
+                    "source": "duckdb:recommendation_picks.system_tech_universe[HK]",
+                    "n_recommended": len(selected),
+                    "selected": selected,
+                    "all_entries": selected,
+                }
+        conn.close()
+    except Exception as e:
+        logger.warning(f"读取 V2 港股 picks 失败，回退 JSON: {e}")
+    return json_payload if isinstance(json_payload, dict) else None
+
+
 def _load_a_share_picks() -> dict | None:
     """Load A-share picks JSON, with DuckDB as fresher source of truth.
 
@@ -1503,7 +1557,7 @@ def build_brief(share_mode: bool = False) -> str:
     factor_scores = _load_json(REPO / "data" / "latest" / "factor_scores_today.json")
     events = _load_json(REPO / "data" / "event_calendar.json")
     a_share_picks = _load_a_share_picks()
-    hk_picks = _load_json(REPO / "data" / "latest" / "hk_picks.json")
+    hk_picks = _load_hk_picks()
     defense = _latest_defense_snapshot()
     history = _load_history()
     qgate_status = _quality_gate_status()

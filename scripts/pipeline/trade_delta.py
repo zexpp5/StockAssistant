@@ -215,10 +215,102 @@ def fetch_price(ticker):
         return None
 
 
-def _load_cn_plan_from_db() -> dict | None:
-    """Read latest A-share production picks from DuckDB, DB-first."""
+def _load_hk_plan_from_db() -> dict | None:
+    """V2 港股 picks（recommendation_picks.market='HK'）作为 hk plan。
+    hk_picks.py 走 V1 watchlist 路径，watchlist 空时不写 hk_picks.json。"""
     try:
         conn = stock_db.get_db()
+        v2_run = conn.execute(
+            """
+            SELECT run_id, run_date FROM recommendation_runs
+            WHERE universe_scope = 'system_tech_universe' AND status = 'generated'
+            ORDER BY generated_at DESC LIMIT 1
+            """
+        ).fetchone()
+        if not v2_run:
+            conn.close()
+            return None
+        run_id, run_date = v2_run
+        rows = conn.execute(
+            """
+            SELECT p.symbol,
+                   COALESCE(NULLIF(u.name, p.symbol), p.name) AS name,
+                   p.rating, p.total_score
+            FROM recommendation_picks p
+            LEFT JOIN system_universe u
+              ON p.market = u.market AND p.symbol = u.symbol
+            WHERE p.run_id = ? AND p.market = 'HK' AND p.signal = 'buy'
+            ORDER BY p.total_score DESC NULLS LAST, p.symbol
+            """,
+            [run_id],
+        ).fetchall()
+        conn.close()
+        if not rows:
+            return None
+        selected = [{
+            "code": symbol, "ticker": symbol, "name": name or symbol,
+            "market": "港股", "rating": rating,
+            "composite": (float(total_score) / 100) if total_score is not None else None,
+            "theme": "科技/AI", "industry": "科技",
+        } for symbol, name, rating, total_score in rows]
+        return {
+            "generated_at": f"{str(run_date)[:10]}T00:00:00",
+            "source": "duckdb:recommendation_picks.system_tech_universe[HK]",
+            "selected": selected,
+            "n_recommended": len(selected),
+        }
+    except Exception as e:
+        print(f"  ⚠️  V2 港股 picks 读取失败：{e}")
+        return None
+
+
+def _load_cn_plan_from_db() -> dict | None:
+    """Read latest A-share production picks from DuckDB, V2-first then V1.
+
+    V2 path: recommendation_picks 的最新 system_tech_universe run + market='CN'。
+    V1 path: 历史 picks 表 model_source='v6_cn'（V2 cutover 后空）。
+    """
+    try:
+        conn = stock_db.get_db()
+        # ── V2 优先 ──
+        v2_run = conn.execute(
+            """
+            SELECT run_id, run_date FROM recommendation_runs
+            WHERE universe_scope = 'system_tech_universe' AND status = 'generated'
+            ORDER BY generated_at DESC LIMIT 1
+            """
+        ).fetchone()
+        if v2_run:
+            run_id, run_date = v2_run
+            v2_rows = conn.execute(
+                """
+                SELECT p.symbol,
+                       COALESCE(NULLIF(u.name, p.symbol), p.name) AS name,
+                       p.market, p.rating, p.total_score
+                FROM recommendation_picks p
+                LEFT JOIN system_universe u
+                  ON p.market = u.market AND p.symbol = u.symbol
+                WHERE p.run_id = ? AND p.market = 'CN' AND p.signal = 'buy'
+                ORDER BY p.total_score DESC NULLS LAST, p.symbol
+                """,
+                [run_id],
+            ).fetchall()
+            if v2_rows:
+                conn.close()
+                selected = [{
+                    "code": symbol, "ticker": symbol, "name": name or symbol,
+                    "market": market or "A股", "rating": rating,
+                    "composite": (float(total_score) / 100) if total_score is not None else None,
+                    "theme": "科技/AI", "industry": "科技",
+                } for symbol, name, market, rating, total_score in v2_rows]
+                return {
+                    "generated_at": f"{str(run_date)[:10]}T00:00:00",
+                    "source": "duckdb:recommendation_picks.system_tech_universe",
+                    "selected": selected,
+                    "n_recommended": len(selected),
+                }
+
+        # ── V1 兜底 ──
         latest = conn.execute(
             "SELECT MAX(pick_date) FROM picks WHERE model_source = 'v6_cn'"
         ).fetchone()[0]
@@ -376,6 +468,10 @@ def build_delta(market: str, plan_file: str, out_file: str,
         plan = _load_cn_plan_from_db()
         if plan:
             source_label = plan.get("source", "duckdb:picks.v6_cn")
+    elif market == "hk":
+        plan = _load_hk_plan_from_db()
+        if plan:
+            source_label = plan.get("source", "duckdb:recommendation_picks[HK]")
 
     if plan is None and not os.path.exists(plan_file):
         print(f"  ⚠️  {plan_file} 不存在 — 该市场跳过。")
