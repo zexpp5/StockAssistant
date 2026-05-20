@@ -74,26 +74,29 @@ def run_crossref() -> dict[str, Any]:
     by_ticker = edgar.aggregate_signals_by_ticker(snaps)
     print(f"[13F] 聚合后 {len(by_ticker)} 只股票有信号")
 
-    # 2026-05-11 PM 第二轮:飞书 Bitable 100% 退役.
     # 13F 信号已落 snapshots(category='13f/...') + track_13f.json,dashboard 直接读那两个源.
-    # 不再回写飞书 watchlist 的 INSTITUTIONAL_13F 字段.
-    watchlist = feishu.fetch_watchlist()  # shim 读 DuckDB
+    # 2026-05-20 V2 cutover：交叉对象从 V1 watchlist 改为 V2 system_universe（系统科技/AI 池）。
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[2] / "scripts" / "lib"))
+    from stock_db import fetch_universe_for_ai_recommendations
+    universe = fetch_universe_for_ai_recommendations()
     matched = 0
-    for w in watchlist:
-        code = (w["normalized"]["code"] or "").upper().strip()
+    for u in universe:
+        code = str(u.get("symbol") or "").upper().strip()
         if not code:
             continue
         signals = by_ticker.get(code)
         if not signals:
             continue
         matched += 1
-        print(f"  · {w['normalized']['name']} ({code}): {len(signals)} 条信号")
+        print(f"  · {u.get('name') or code} ({code}): {len(signals)} 条信号")
 
-    print(f"[13F] watchlist 命中 {matched} 只 (信号已在 snapshots / track_13f.json,无需回写飞书)")
+    print(f"[13F] system_universe 命中 {matched} 只 (信号已在 snapshots / track_13f.json)")
     return {
         "snapshots_used": len(snaps),
         "tickers_with_signals": len(by_ticker),
-        "watchlist_matched": matched,
+        "universe_matched": matched,
     }
 
 

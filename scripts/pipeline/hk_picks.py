@@ -42,7 +42,7 @@ sys.path.insert(0, str(_REPO))
 sys.path.insert(0, str(_REPO / "scripts" / "lib"))
 
 from factor_model import fetch_factors_for
-from stock_db import fetch_all_watchlist, upsert_picks
+from stock_db import fetch_manual_watchlist_enriched, upsert_picks
 from stock_research.core.south_flow_signals import (
     compute_south_flow_signal,
     fetch_aggregate_south_flow,
@@ -102,12 +102,12 @@ def _is_hk_code(code: str) -> bool:
 
 
 def fetch_hk_candidates() -> list[dict]:
-    """读取 watchlist 港股候选，保持自选股完全由用户手动维护。"""
-    wl_records = fetch_all_watchlist()
+    """读取 V2 manual_watchlist 港股候选；自选股完全由用户在 dashboard 手动维护。"""
+    wl_records = fetch_manual_watchlist_enriched(market="HK")
     return [
         {"ticker": r["code"], "raw_ticker": r["code"].replace(".HK", "").lstrip("0"),
          "name": r.get("name", r["code"]), "sector": r.get("industry") or "",
-         "source": "watchlist"}
+         "source": "manual_watchlist"}
         for r in wl_records if _is_hk_code(r.get("code", ""))
     ]
 

@@ -30,7 +30,7 @@ from datetime import datetime
 from pathlib import Path
 
 import yfinance as yf
-from stock_db import fetch_all_watchlist
+from stock_db import fetch_universe_for_ai_recommendations  # V2 system_universe
 
 
 def to_yfinance_ticker(code: str, market: str) -> str | None:
@@ -58,21 +58,22 @@ def to_yfinance_ticker(code: str, market: str) -> str | None:
 
 
 def fetch_codes_from_db():
-    """从 DuckDB watchlist 拿所有股票(含美股/A股/港股).
+    """从 V2 system_universe 拿所有标的（含美股/A股/港股）。
 
-    2026-05-11 PM 第二轮:飞书 100% 退役,直接读 DuckDB.
+    2026-05-20 V2 cutover：fetch_all_watchlist → fetch_universe_for_ai_recommendations。
+    Dashboard 历史 K 线 tab 现在覆盖 141 只系统科技/AI universe（不是用户自选股）。
     """
-    rows = fetch_all_watchlist()
+    rows = fetch_universe_for_ai_recommendations()
+    market_label = {"US": "美股", "CN": "A股", "HK": "港股"}
     out = []
     for r in rows:
-        code = (r.get("code") or "").strip()
+        code = (r.get("symbol") or "").strip()
         if not code:
             continue
         name = r.get("name") or ""
-        market = r.get("market") or ""
+        market = market_label.get((r.get("market") or "").upper(), r.get("market") or "")
         yf_ticker = to_yfinance_ticker(code, market)
         if yf_ticker:
-            # 保持 dashboard 用的 key 形态:纯字母美股大写,其它保留原样
             key = code.upper() if yf_ticker == code.upper() else code
             out.append({"feishu_code": key, "yf_ticker": yf_ticker,
                         "name": name, "market": market})

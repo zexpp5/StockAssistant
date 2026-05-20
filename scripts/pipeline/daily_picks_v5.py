@@ -39,7 +39,7 @@ import pandas as pd
 from factor_model import DEFAULT_FACTOR_WEIGHTS, fetch_factors_for, combine_factors
 from early_signals import fetch_signals_for, score_analyst, score_insider
 from gics_classifier import classify, score_to_label
-from daily_picks import fetch_watchlist
+from stock_db import fetch_manual_watchlist_enriched as fetch_watchlist  # V2 manual_watchlist
 from stock_db import upsert_picks
 from stock_research.core import fundamental_deep  # Altman Z / Beneish M 软红旗
 

@@ -997,6 +997,142 @@ def delete_watchlist_item(code: str, *, conn: duckdb.DuckDBPyConnection | None =
 # ============================================================
 
 
+MANUAL_WATCHLIST_COLS = ["market", "symbol", "name", "notes"]
+
+
+def fetch_manual_watchlist(
+    *,
+    market: str | None = None,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> list[dict]:
+    """V2 manual_watchlist（dashboard 手动添加的自选股）。
+
+    返回 dict: market / symbol / name / notes / created_at / updated_at + code(=symbol) alias。
+    可选按 market 过滤。
+    """
+    own = conn is None
+    if own:
+        conn = get_db()
+    sql = ("SELECT market, symbol, name, notes, created_at, updated_at "
+           "FROM manual_watchlist")
+    params: list = []
+    if market:
+        sql += " WHERE UPPER(market) = ?"
+        params.append(market.upper())
+    sql += " ORDER BY market, symbol"
+    rows = conn.execute(sql, params).fetchall()
+    cols = ["market", "symbol", "name", "notes", "created_at", "updated_at"]
+    out = [dict(zip(cols, r)) for r in rows]
+    for r in out:
+        r["code"] = r["symbol"]
+    if own:
+        conn.close()
+    return out
+
+
+def upsert_manual_watchlist(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> int:
+    """新增 / 更新 manual_watchlist（按 (market, symbol) PK）。"""
+    own = conn is None
+    if own:
+        conn = get_db()
+    n = 0
+    now = datetime.now()
+    for r in rows:
+        symbol = r.get("symbol") or r.get("code")
+        if not symbol:
+            continue
+        market = r.get("market") or _infer_market_from_ticker(symbol)
+        conn.execute(
+            """
+            INSERT INTO manual_watchlist (market, symbol, name, notes, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT (market, symbol) DO UPDATE SET
+              name = excluded.name,
+              notes = excluded.notes,
+              updated_at = excluded.updated_at
+            """,
+            [market, symbol, r.get("name"), r.get("notes"), now, now],
+        )
+        n += 1
+    if own:
+        conn.close()
+    return n
+
+
+def fetch_manual_watchlist_enriched(
+    *,
+    market: str | None = None,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> list[dict]:
+    """manual_watchlist JOIN system_universe + price_daily 拿出富字段，
+    供「自选股·AI 优选」三个 jobs（daily_picks_v5 / hk_picks / a_share_picks）使用。
+
+    返回 dict 字段（与 V1 fetch_watchlist 兼容）：
+      code, name, market, industry, theme, ai_relevance, ai_logic, conclusion,
+      risks, credibility, latest_price, ytd_pct, one_year_pct, one_month_pct,
+      one_week_pct, forward_pe, peg, earnings_growth_pct
+    """
+    own = conn is None
+    if own:
+        conn = get_db()
+    sql = """
+        WITH latest_price AS (
+            SELECT * FROM price_daily
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY market, symbol ORDER BY trade_date DESC, fetched_at DESC) = 1
+        )
+        SELECT
+            w.symbol AS code, COALESCE(w.name, u.name, w.symbol) AS name,
+            w.market, u.industry, u.theme,
+            NULL AS ai_relevance, NULL AS ai_logic, NULL AS conclusion,
+            NULL AS risks, NULL AS credibility,
+            lp.close AS latest_price,
+            lp.ytd_pct, lp.one_year_pct, lp.one_month_pct, lp.one_week_pct,
+            lp.forward_pe, lp.peg_ratio AS peg, NULL AS earnings_growth_pct,
+            lp.currency, lp.market_cap
+        FROM manual_watchlist w
+        LEFT JOIN system_universe u ON u.market = w.market AND u.symbol = w.symbol
+        LEFT JOIN latest_price lp ON lp.market = w.market AND lp.symbol = w.symbol
+    """
+    params: list = []
+    if market:
+        sql += " WHERE UPPER(w.market) = ?"
+        params.append(market.upper())
+    sql += " ORDER BY w.market, w.symbol"
+    rows = conn.execute(sql, params).fetchall()
+    cols = ["code", "name", "market", "industry", "theme",
+            "ai_relevance", "ai_logic", "conclusion", "risks", "credibility",
+            "latest_price", "ytd_pct", "one_year_pct", "one_month_pct", "one_week_pct",
+            "forward_pe", "peg", "earnings_growth_pct", "currency", "market_cap"]
+    out = [dict(zip(cols, r)) for r in rows]
+    if own:
+        conn.close()
+    return out
+
+
+def delete_manual_watchlist(
+    market: str, symbol: str,
+    *, conn: duckdb.DuckDBPyConnection | None = None,
+) -> int:
+    own = conn is None
+    if own:
+        conn = get_db()
+    exists = conn.execute(
+        "SELECT 1 FROM manual_watchlist WHERE market=? AND symbol=?",
+        [market, symbol],
+    ).fetchone()
+    n = 0
+    if exists:
+        conn.execute("DELETE FROM manual_watchlist WHERE market=? AND symbol=?", [market, symbol])
+        n = 1
+    if own:
+        conn.close()
+    return n
+
+
 def fetch_universe_for_ai_recommendations(
     *,
     pool_type: str = "system_tech_universe",
