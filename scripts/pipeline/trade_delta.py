@@ -195,7 +195,7 @@ def fetch_price(ticker):
             if px and px.get("price"):
                 return float(px["price"])
         conn = stock_db.get_db()
-        # V2 优先：从 price_daily 读最新收盘价（V1 picks 表 entry_price 在 V2 空）
+        # V2：price_daily 最新 close，再退到 recommendation_picks.entry_price
         for code in candidates:
             row = conn.execute(
                 "SELECT close FROM price_daily WHERE symbol = ? "
@@ -209,17 +209,6 @@ def fetch_price(ticker):
                 "SELECT entry_price FROM recommendation_picks WHERE symbol = ? "
                 "AND entry_price IS NOT NULL "
                 "ORDER BY rowid DESC LIMIT 1",
-                [code],
-            ).fetchone()
-            if row and row[0]:
-                conn.close()
-                return float(row[0])
-        # V1 兜底
-        for code in candidates:
-            row = conn.execute(
-                "SELECT entry_price FROM picks "
-                "WHERE code = ? AND entry_price IS NOT NULL "
-                "ORDER BY pick_date DESC LIMIT 1",
                 [code],
             ).fetchone()
             if row and row[0]:
@@ -285,14 +274,9 @@ def _load_hk_plan_from_db() -> dict | None:
 
 
 def _load_cn_plan_from_db() -> dict | None:
-    """Read latest A-share production picks from DuckDB, V2-first then V1.
-
-    V2 path: recommendation_picks 的最新 system_tech_universe run + market='CN'。
-    V1 path: 历史 picks 表 model_source='v6_cn'（V2 cutover 后空）。
-    """
+    """V2 A-share production picks：最新 system_tech_universe run + market='CN'。"""
     try:
         conn = stock_db.get_db()
-        # ── V2 优先 ──
         v2_run = conn.execute(
             """
             SELECT run_id, run_date FROM recommendation_runs
@@ -330,42 +314,11 @@ def _load_cn_plan_from_db() -> dict | None:
                     "n_recommended": len(selected),
                 }
 
-        # ── V1 兜底 ──
-        latest = conn.execute(
-            "SELECT MAX(pick_date) FROM picks WHERE model_source = 'v6_cn'"
-        ).fetchone()[0]
-        if latest is None:
-            conn.close()
-            return None
-        rows = conn.execute("""
-            SELECT code, name, market, rating, total_score, ai_relevance, theme
-            FROM picks
-            WHERE model_source = 'v6_cn' AND pick_date = ?
-              AND signal = 'buy'
-            ORDER BY total_score DESC NULLS LAST, code
-        """, [latest]).fetchall()
         conn.close()
     except Exception as e:
-        print(f"  ⚠️  DuckDB A 股 picks 读取失败，回退 JSON: {e}")
+        print(f"  ⚠️  V2 A 股 picks 读取失败：{e}")
         return None
-    selected = []
-    for code, name, market, rating, total_score, ai_relevance, theme in rows:
-        selected.append({
-            "code": code,
-            "ticker": code,
-            "name": name or code,
-            "market": market,
-            "rating": rating,
-            "composite": (float(total_score) / 100) if total_score is not None else None,
-            "theme": theme,
-            "industry": theme or ai_relevance,
-        })
-    return {
-        "generated_at": f"{str(latest)[:10]}T00:00:00",
-        "source": "duckdb:picks.v6_cn",
-        "selected": selected,
-        "n_recommended": len(selected),
-    }
+    return None
 
 
 # ────────────────────────────────────────────────────────

@@ -326,7 +326,7 @@ if [ "$MODE" = "a_share_only" ]; then
     # a_share_picks 跑完后重跑约束器 — A 股 holdings 可能变化，需要刷新美股 plan_constrained
     run_step "10b/25 plan_a 后处理（美股仓位约束）" "-m stock_research.jobs.apply_a_share_constraints"
     run_step "24/25 DuckDB pipeline 同步" "scripts/migrate/migrate_pipeline_to_duckdb.py"
-    run_step "24b/25 产业链分级标注（重建 HTML 前）" "scripts/tools/classify_watchlist_chains.py"
+    # 2026-05-21 删 step 24b (classify_watchlist_chains 写 V1 watchlist.chain，已废)
     run_step "25/25 重建 HTML" "scripts/pipeline/build_stock_dashboard_html.py"
     run_step "26 早安简报（主入口 · 每天打开看这一份）" "-m stock_research.jobs.morning_brief"
     A_SHARE_ENABLED_NOW=$($PYTHON -c "from stock_research import config; print('1' if config.A_SHARE_PRODUCTION_ENABLED else '0')" 2>/dev/null || echo "0")
@@ -364,15 +364,11 @@ run_step "1b/25 V2 推荐 run（system_universe → recommendation_picks/portfol
 # R — SEC 13F 刷新（拉 10+ 大基金季度持仓变动，慢）
 is_research_step && run_step "2/25 SEC 13F 刷新" "-m stock_research.jobs.refresh_13f"
 is_research_step && run_step "3/25 SEC 13F → track_13f.json（dashboard 用）" "scripts/pipeline/_build_track_13f_from_sec.py"
-# M
-run_step "4/25 多源 enrichment" "-m stock_research.jobs.enrich_watchlist --skip-trends"
-run_step "4b/25 V2 系统池 enrichment（system_universe → 详情页字段）" \
+# M — V2 系统池 enrichment（system_universe → industry/earnings/详情页字段）
+run_step "4b/25 V2 系统池 enrichment" \
     "scripts/tools/enrich_system_universe_v2.py --skip-trends --skip-akshare --sleep-sec 0.02 --per-symbol-timeout-sec 18"
-run_step "5/25 跨源审计" "-m stock_research.jobs.daily_audit"
-# R — 旧 v1 评分 + 反向审查 + 历史回顾（仅用于研究对照）
-is_research_step && run_step "6/25 每日优选 v1（旧体系 · dry-run 基线）" "scripts/pipeline/daily_picks.py --dry-run"
-is_research_step && run_step "7/25 picks 反向审查" "-m stock_research.jobs.audit_picks --fast"
-is_research_step && run_step "8/25 历史回顾" "scripts/pipeline/weekly_review.py"
+# 2026-05-20 V1 cutover：删 step 4 (V1 enrich_watchlist) / 5 (V1 daily_audit) /
+# 6 (V1 daily_picks dry-run) / 7 (audit_picks V1 reviews) / 8 (weekly_review V1 picks)
 
 # R — 每日新闻同步飞书（财联社 100 条 → 国际/国内分类）
 is_research_step && run_step "8b/25 每日新闻同步飞书" "scripts/daily_news_to_feishu.py"
@@ -386,9 +382,9 @@ run_step "10b/25 plan_a 后处理（美股仓位约束）" "-m stock_research.jo
 run_step "10c/25 推荐质量闸门（调仓前）" "scripts/tools/recommendation_quality_gate.py"
 run_step "11/25 调整清单（卖/买/调）→ trade_delta.json" "scripts/pipeline/trade_delta.py"
 
-# M — 专业分析数据（风险指标 morning 必跑；legacy 对比 + history 预拉是 research）
+# M — 专业分析数据（风险指标 morning 必跑；history 预拉是 research）
 run_step "13/25 风险指标 (VaR/Sharpe/Calmar)" "scripts/pipeline/risk_metrics.py"
-is_research_step && run_step "14/25 仓位优化方法对比" "scripts/pipeline/optimize_portfolio_legacy.py"
+# 2026-05-20 删 step 14 (optimize_portfolio_legacy V1 路径)
 is_research_step && run_step "15/25 历史数据预拉（dashboard 历史 tab 用）" "scripts/pipeline/_fetch_history_for_dashboard.py"
 
 # M — 实盘防御（VIX + 200MA + 单股 -15% 止损）
@@ -416,7 +412,7 @@ run_step "23a/25 V2 pick alpha 评估" "scripts/tools/evaluate_v2_picks.py"
 run_step "23a2/25 V2 策略验证汇总" "scripts/tools/build_strategy_validation_v2.py"
 
 # R — 旧 discovery 准确度评估（V1 discovery_tracking 路径，clean v2 上无新数据）
-is_research_step && run_step "23b/25 推荐准确度评估（每日）" "scripts/tools/evaluate_discovery.py"
+# 2026-05-20 删 step 23b (evaluate_discovery V1 discovery_tracking)，已由 evaluate_v2_picks 取代
 # M
 run_step "23c/25 推荐质量闸门（收盘后复核）" "scripts/tools/recommendation_quality_gate.py"
 run_step "23d/25 推荐有效性证据报告" "scripts/tools/recommendation_evidence_report.py"
@@ -424,7 +420,7 @@ run_step "23d/25 推荐有效性证据报告" "scripts/tools/recommendation_evid
 # M — DuckDB pipeline 同步 + HTML 重建 + brief + 验收
 # （这几步在 morning 必跑，research mode 不重做避免覆盖 morning 已落地的 dashboard）
 is_morning_step && run_step "24/25 DuckDB pipeline 同步" "scripts/migrate/migrate_pipeline_to_duckdb.py"
-is_morning_step && run_step "24b/25 产业链分级标注（重建 HTML 前）" "scripts/tools/classify_watchlist_chains.py"
+# 2026-05-21 删 step 24b (classify_watchlist_chains 写 V1 watchlist.chain，已废)
 is_morning_step && run_step "25/25 重建 HTML" "scripts/pipeline/build_stock_dashboard_html.py"
 
 # R — 周一专属 walk-forward OOS 校验（每周一夜班 21:00 跑；morning 不跑）

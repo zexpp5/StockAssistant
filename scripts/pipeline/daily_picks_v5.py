@@ -506,7 +506,7 @@ def main():
             "theme": theme,
             "entry_price": (entry_prices.get(s["code"]) or {}).get("price"),
             "entry_currency": (entry_prices.get(s["code"]) or {}).get("currency"),
-            "model_source": "v6_us",
+            "model_source": "v2_us",
             "signal": sig,
             "coverage_score": coverage,
             "missing_factors": s.get("missing_factors"),

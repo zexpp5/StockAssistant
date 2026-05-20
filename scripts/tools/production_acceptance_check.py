@@ -11,7 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -38,9 +38,12 @@ CORE_LATEST_JSON = (
     "data/latest/plan_a_v5.json",
     "data/latest/plan_v6.json",
     "data/latest/recommendation_quality_gate.json",
+    "data/latest/recommendation_evidence.json",
+    "data/latest/pipeline_status.json",
     "data/latest/source_health.json",
     "data/latest/trade_delta.json",
     "data/latest/risk_metrics.json",
+    "data/discovery_candidates.json",
 )
 
 HK_LATEST_JSON = (
@@ -97,7 +100,7 @@ def _json_load(rel: str) -> tuple[dict[str, Any] | None, Path]:
 
 def _payload_dt(payload: dict[str, Any] | None, path: Path) -> datetime | None:
     if payload:
-        for key in ("generated_at", "as_of", "date", "timestamp"):
+        for key in ("generated_at", "updated_at", "completed_at", "as_of", "date", "timestamp"):
             dt = _parse_dt(payload.get(key))
             if dt:
                 return dt
@@ -201,6 +204,153 @@ def _extract_tickers(plan_payload: dict[str, Any]) -> set[str]:
                 if ticker:
                     out.add(str(ticker).upper())
     return out
+
+
+def _is_fallback_plan(plan_payload: dict[str, Any]) -> bool:
+    method = str(plan_payload.get("method") or "").lower()
+    risk_aware = plan_payload.get("risk_aware") if isinstance(plan_payload.get("risk_aware"), dict) else {}
+    constraints = plan_payload.get("constraints") if isinstance(plan_payload.get("constraints"), dict) else {}
+    engine = str(risk_aware.get("engine") or "").lower()
+    return bool(
+        constraints.get("use_legacy_mc")
+        or "fallback" in engine
+        or "legacy_monte_carlo" in engine
+        or ("markowitz mc" in method and "risk_aware_optimize" not in method)
+    )
+
+
+def _surface_artifact_checks(
+    *,
+    issues: list[dict[str, Any]],
+    summary: dict[str, Any],
+    now: datetime,
+    max_age_days: int,
+) -> None:
+    """Checks that final user-visible artifacts are fresh and internally labeled."""
+    artifact_summary: dict[str, Any] = {}
+    artifact_summary.update(_latest_json_checks(issues, CORE_LATEST_JSON, max_age_days=max_age_days))
+    summary["artifacts"] = artifact_summary
+
+    qgate, _ = _json_load("data/latest/recommendation_quality_gate.json")
+    if qgate and "_error" not in qgate:
+        qstatus = str(qgate.get("status") or "UNKNOWN")
+        summary["quality_gate_status"] = qstatus
+        if qstatus == "FAIL":
+            issues.append(_issue("FAIL", "quality_gate_fail", "recommendation_quality_gate 当前为 FAIL"))
+        elif qstatus == "WARN":
+            issues.append(_issue("WARN", "quality_gate_warn", "recommendation_quality_gate 当前为 WARN"))
+
+    plan_a, plan_path = _json_load("data/latest/plan_a_v5.json")
+    plan_v6, _ = _json_load("data/latest/plan_v6.json")
+    pipeline_status, _ = _json_load("data/latest/pipeline_status.json")
+    if pipeline_status and "_error" not in pipeline_status:
+        pstatus = str(pipeline_status.get("status") or "UNKNOWN").upper()
+        summary["pipeline_status"] = {
+            "run_id": pipeline_status.get("run_id"),
+            "mode": pipeline_status.get("mode"),
+            "status": pstatus,
+            "started_at": pipeline_status.get("started_at"),
+            "updated_at": pipeline_status.get("updated_at"),
+            "completed_at": pipeline_status.get("completed_at"),
+            "failed_steps": len(pipeline_status.get("failed_steps") or []),
+        }
+        if pipeline_status.get("failed_steps"):
+            issues.append(_issue(
+                "FAIL",
+                "pipeline_failed_steps_present",
+                "pipeline_status.json 存在失败步骤，不能只看最终 JSON 产物",
+                (pipeline_status.get("failed_steps") or [])[:10],
+            ))
+        updated = _parse_dt(pipeline_status.get("updated_at"))
+        if pstatus in {"RUNNING", "FAIL", "FAILED", "ERROR"}:
+            age = (now - updated) if updated else None
+            level = "FAIL" if pstatus in {"FAIL", "FAILED", "ERROR"} else "WARN"
+            issues.append(_issue(
+                level,
+                "pipeline_not_completed",
+                f"pipeline_status 当前为 {pstatus}，报告可能混用半成品/跨轮次产物",
+                {"updated_at": pipeline_status.get("updated_at"), "age_minutes": int(age.total_seconds() / 60) if age else None},
+            ))
+
+    brief = REPO / "morning_brief.md"
+    if plan_a and "_error" not in plan_a:
+        method = str(plan_a.get("method") or "")
+        engine = str((plan_a.get("risk_aware") or {}).get("engine") or "")
+        summary["plan_method"] = method
+        summary["plan_engine"] = engine
+        if "risk_aware_optimize" not in method and engine != "risk_aware_optimize":
+            issues.append(_issue("FAIL", "us_plan_not_risk_aware", "plan_a_v5.json 不是 risk-aware optimizer 产物"))
+        if _is_fallback_plan(plan_a):
+            brief_text = brief.read_text(encoding="utf-8") if brief.exists() else ""
+            if "仓位来源=legacy_monte_carlo fallback" in brief_text or "legacy_monte_carlo fallback" in brief_text:
+                issues.append(_issue(
+                    "INFO",
+                    "us_plan_risk_aware_fallback_labeled",
+                    "plan_a_v5.json 是 fallback/legacy 输出，morning_brief 已显式标注仓位来源",
+                    {"engine": engine},
+                ))
+            else:
+                issues.append(_issue(
+                    "FAIL",
+                    "us_plan_risk_aware_fallback_unlabeled",
+                    "plan_a_v5.json 是 fallback/legacy 输出，但 morning_brief 未标注仓位来源",
+                    {"engine": engine, "method": method},
+                ))
+    if plan_a and plan_v6 and "_error" not in plan_a and "_error" not in plan_v6:
+        if _extract_tickers(plan_a) != _extract_tickers(plan_v6):
+            issues.append(_issue("FAIL", "plan_a_v5_plan_v6_diverge", "plan_a_v5.json 与 plan_v6.json 标的集合不一致"))
+
+    rec_evidence, _ = _json_load("data/latest/recommendation_evidence.json")
+    evidence_dt = _payload_dt(rec_evidence, REPO / "data/latest/recommendation_evidence.json") if rec_evidence else None
+    ref_payloads = [p for p in (plan_a, qgate, pipeline_status) if p and "_error" not in p]
+    ref_dates = [_payload_dt(p, REPO) for p in ref_payloads]
+    ref_dates = [d for d in ref_dates if d is not None]
+    latest_ref = max(ref_dates) if ref_dates else None
+    if rec_evidence and "_error" not in rec_evidence:
+        summary["recommendation_evidence_generated_at"] = evidence_dt.isoformat(timespec="seconds") if evidence_dt else None
+        if latest_ref and evidence_dt and evidence_dt < latest_ref - timedelta(minutes=5):
+            issues.append(_issue(
+                "WARN",
+                "recommendation_evidence_older_than_current_run",
+                "recommendation_evidence.json 早于当前 plan/qgate/pipeline，morning_brief 不能把它当成本轮推荐证据",
+                {
+                    "evidence_at": evidence_dt.isoformat(timespec="seconds"),
+                    "latest_reference_at": latest_ref.isoformat(timespec="seconds"),
+                },
+            ))
+
+    discovery, _ = _json_load("data/discovery_candidates.json")
+    if discovery and "_error" not in discovery:
+        n_cands = len(discovery.get("candidates") or [])
+        universe_size = int(discovery.get("universe_size") or 0)
+        summary["discovery_candidates"] = {
+            "generated_at": discovery.get("generated_at"),
+            "universe_size": universe_size,
+            "candidate_count": n_cands,
+        }
+        if universe_size <= 0 or n_cands <= 0:
+            issues.append(_issue(
+                "FAIL",
+                "discovery_candidates_empty",
+                "全池 AI 推荐产物为空，AI 助手核心链路不可用",
+                summary["discovery_candidates"],
+            ))
+
+    dashboard = REPO / "stock_dashboard.html"
+    for path, code, label in (
+        (dashboard, "dashboard_missing", "stock_dashboard.html"),
+        (brief, "morning_brief_missing", "morning_brief.md"),
+    ):
+        if not path.exists():
+            issues.append(_issue("FAIL", code, f"{label} 不存在；完整链路未生成最终阅读产物"))
+            continue
+        mtime = datetime.fromtimestamp(path.stat().st_mtime)
+        summary[f"{label}_mtime"] = mtime.isoformat(timespec="seconds")
+        if (now.date() - mtime.date()).days > max_age_days:
+            issues.append(_issue("FAIL", f"{code}_stale", f"{label} 已滞后超过 {max_age_days} 天"))
+    if dashboard.exists() and plan_path.exists():
+        if dashboard.stat().st_mtime + 1 < plan_path.stat().st_mtime:
+            issues.append(_issue("WARN", "dashboard_older_than_plan", "dashboard 比最新 plan 更旧，需要重建 HTML"))
 
 
 def _build_payload(now: datetime, summary: dict[str, Any], issues: list[dict[str, Any]]) -> dict[str, Any]:
@@ -404,32 +554,28 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
                     for market, symbol in active_rows
                     if symbol
                 }
-                latest_enrichment_day = conn.execute(
+                enrichment_rows = conn.execute(
                     """
-                    SELECT MAX(business_date)
+                    SELECT business_date, market, payload_json
                     FROM source_raw_snapshots
                     WHERE source = 'v2_system_enrichment'
+                      AND json_extract_string(payload_json, '$.symbol') IS NOT NULL
+                    QUALIFY ROW_NUMBER() OVER (
+                        PARTITION BY market, json_extract_string(payload_json, '$.symbol')
+                        ORDER BY business_date DESC, fetched_at DESC
+                    ) = 1
                     """
-                ).fetchone()[0]
-                latest_enrichment_dt = _parse_dt(latest_enrichment_day)
-                enrichment_rows = []
-                if latest_enrichment_day is not None:
-                    enrichment_rows = conn.execute(
-                        """
-                        SELECT market, payload_json
-                        FROM source_raw_snapshots
-                        WHERE source = 'v2_system_enrichment'
-                          AND business_date = ?
-                        """,
-                        [latest_enrichment_day],
-                    ).fetchall()
+                ).fetchall()
 
                 seen_keys: set[tuple[str, str]] = set()
+                seen_by_day: dict[str, set[tuple[str, str]]] = {}
                 missing_fields: list[dict[str, Any]] = []
                 degraded_rows: list[dict[str, Any]] = []
                 bad_payloads = 0
                 required_detail_fields = ("earnings", "info_breakdown", "conclusion", "risks", "source_text")
-                for market, payload_json in enrichment_rows:
+                business_days: list[Any] = []
+                for business_date, market, payload_json in enrichment_rows:
+                    business_days.append(business_date)
                     try:
                         payload = json.loads(payload_json) if isinstance(payload_json, str) else payload_json
                     except Exception:
@@ -446,6 +592,7 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
                     key = (payload_market, symbol)
                     if key in active_keys:
                         seen_keys.add(key)
+                        seen_by_day.setdefault(str(business_date), set()).add(key)
                     blank = [field for field in required_detail_fields if not str(payload.get(field) or "").strip()]
                     if blank:
                         missing_fields.append({"market": payload_market, "symbol": symbol, "fields": blank})
@@ -457,10 +604,17 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
                         })
 
                 missing_keys = sorted(active_keys - seen_keys)
+                latest_enrichment_day = max(business_days) if business_days else None
+                oldest_seen_day = min(business_days) if business_days else None
+                latest_enrichment_dt = _parse_dt(latest_enrichment_day)
+                latest_day_key = str(latest_enrichment_day) if latest_enrichment_day else None
+                latest_day_seen = len(seen_by_day.get(latest_day_key, set())) if latest_day_key else 0
                 summary["v2_enrichment_coverage"] = {
                     "latest_business_date": str(latest_enrichment_day) if latest_enrichment_day else None,
+                    "oldest_latest_symbol_business_date": str(oldest_seen_day) if oldest_seen_day else None,
                     "active_system_symbols": len(active_keys),
                     "enriched_system_symbols": len(seen_keys),
+                    "latest_day_enriched_system_symbols": latest_day_seen,
                     "missing_system_symbols": len(missing_keys),
                     "missing_detail_rows": len(missing_fields),
                     "degraded_rows": len(degraded_rows),
@@ -473,6 +627,17 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
                         "FAIL",
                         "v2_enrichment_stale",
                         f"v2 系统池详情 enrichment 已滞后：{latest_enrichment_day}",
+                    ))
+                if latest_day_seen and latest_day_seen < len(active_keys):
+                    issues.append(_issue(
+                        "INFO",
+                        "v2_enrichment_latest_day_partial",
+                        "最新 enrichment 日期只覆盖部分系统池；验收按每只股票最新快照计算，完整覆盖仍可用",
+                        {
+                            "latest_business_date": str(latest_enrichment_day),
+                            "latest_day_enriched_system_symbols": latest_day_seen,
+                            "active_system_symbols": len(active_keys),
+                        },
                     ))
                 if missing_keys:
                     issues.append(_issue(
@@ -526,6 +691,12 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
         if conn is not None:
             conn.close()
             conn = None
+        _surface_artifact_checks(
+            issues=issues,
+            summary=summary,
+            now=now,
+            max_age_days=max_age_days,
+        )
         return _build_payload(now, summary, issues)
 
     watchlist_markets = _watchlist_market_flags(conn)
@@ -740,6 +911,35 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
 
     plan_a, plan_path = _json_load("data/latest/plan_a_v5.json")
     plan_v6, _ = _json_load("data/latest/plan_v6.json")
+    pipeline_status, _ = _json_load("data/latest/pipeline_status.json")
+    if pipeline_status and "_error" not in pipeline_status:
+        pstatus = str(pipeline_status.get("status") or "UNKNOWN").upper()
+        summary["pipeline_status"] = {
+            "run_id": pipeline_status.get("run_id"),
+            "mode": pipeline_status.get("mode"),
+            "status": pstatus,
+            "started_at": pipeline_status.get("started_at"),
+            "updated_at": pipeline_status.get("updated_at"),
+            "completed_at": pipeline_status.get("completed_at"),
+            "failed_steps": len(pipeline_status.get("failed_steps") or []),
+        }
+        if pipeline_status.get("failed_steps"):
+            issues.append(_issue(
+                "FAIL",
+                "pipeline_failed_steps_present",
+                "pipeline_status.json 存在失败步骤，不能只看最终 JSON 产物",
+                (pipeline_status.get("failed_steps") or [])[:10],
+            ))
+        updated = _parse_dt(pipeline_status.get("updated_at"))
+        if pstatus in {"RUNNING", "FAIL", "FAILED", "ERROR"}:
+            age = (now - updated) if updated else None
+            level = "FAIL" if pstatus in {"FAIL", "FAILED", "ERROR"} else "WARN"
+            issues.append(_issue(
+                level,
+                "pipeline_not_completed",
+                f"pipeline_status 当前为 {pstatus}，报告可能混用半成品/跨轮次产物",
+                {"updated_at": pipeline_status.get("updated_at"), "age_minutes": int(age.total_seconds() / 60) if age else None},
+            ))
     if plan_a and "_error" not in plan_a:
         method = str(plan_a.get("method") or "")
         engine = str((plan_a.get("risk_aware") or {}).get("engine") or "")
@@ -747,6 +947,13 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
         summary["plan_engine"] = engine
         if "risk_aware_optimize" not in method and engine != "risk_aware_optimize":
             issues.append(_issue("FAIL", "us_plan_not_risk_aware", "plan_a_v5.json 不是 risk-aware optimizer 产物"))
+        if _is_fallback_plan(plan_a):
+            issues.append(_issue(
+                "WARN",
+                "us_plan_risk_aware_fallback",
+                "plan_a_v5.json 标记为 fallback/legacy 优化输出；客户可见报告必须标注仓位来源",
+                {"engine": engine, "method": method},
+            ))
         plan_tickers = _extract_tickers(plan_a)
         non_buy = sorted(plan_tickers - latest_buy_sets.get("v6_us", set()))
         if non_buy and latest_buy_sets.get("v6_us"):
@@ -764,6 +971,41 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
                 issues.append(_issue("INFO", "a_share_trade_delta_disabled", f"{rel} 已按 A 股 disabled 输出只读状态"))
             else:
                 issues.append(_issue("FAIL", "trade_delta_blocked", f"{rel} 当前 trade_blocked=true", payload.get("block_reason")))
+
+    rec_evidence, _ = _json_load("data/latest/recommendation_evidence.json")
+    evidence_dt = _payload_dt(rec_evidence, REPO / "data/latest/recommendation_evidence.json") if rec_evidence else None
+    ref_payloads = [p for p in (plan_a, qgate, pipeline_status) if p and "_error" not in p]
+    ref_dates = [_payload_dt(p, REPO) for p in ref_payloads]
+    ref_dates = [d for d in ref_dates if d is not None]
+    latest_ref = max(ref_dates) if ref_dates else None
+    if rec_evidence and "_error" not in rec_evidence:
+        summary["recommendation_evidence_generated_at"] = evidence_dt.isoformat(timespec="seconds") if evidence_dt else None
+        if latest_ref and evidence_dt and evidence_dt < latest_ref - timedelta(minutes=5):
+            issues.append(_issue(
+                "WARN",
+                "recommendation_evidence_older_than_current_run",
+                "recommendation_evidence.json 早于当前 plan/qgate/pipeline，morning_brief 不能把它当成本轮推荐证据",
+                {
+                    "evidence_at": evidence_dt.isoformat(timespec="seconds"),
+                    "latest_reference_at": latest_ref.isoformat(timespec="seconds"),
+                },
+            ))
+    discovery, _ = _json_load("data/discovery_candidates.json")
+    if discovery and "_error" not in discovery:
+        n_cands = len(discovery.get("candidates") or [])
+        universe_size = int(discovery.get("universe_size") or 0)
+        summary["discovery_candidates"] = {
+            "generated_at": discovery.get("generated_at"),
+            "universe_size": universe_size,
+            "candidate_count": n_cands,
+        }
+        if universe_size <= 0 or n_cands <= 0:
+            issues.append(_issue(
+                "FAIL",
+                "discovery_candidates_empty",
+                "全池 AI 推荐产物为空，AI 助手核心链路不可用",
+                summary["discovery_candidates"],
+            ))
 
     dashboard = REPO / "stock_dashboard.html"
     brief = REPO / "morning_brief.md"

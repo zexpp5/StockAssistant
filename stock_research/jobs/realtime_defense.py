@@ -32,7 +32,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
 
 from .. import config
-from ..adapters import legacy_shim as feishu, store
+from ..adapters import store
 from ..core import defense_signals
 
 logger = logging.getLogger("stock_research.jobs.realtime_defense")
@@ -61,9 +61,12 @@ def run(notify: bool = True, **_legacy_kwargs) -> dict:
     print(f"  🛡 实盘防御检查 · {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print(f"{'='*80}\n")
 
-    # 1. 拉今日 picks (DuckDB)
-    print("[1/2] 拉 picks [DuckDB]...")
-    picks_raw = feishu.fetch_picks()  # shim 内部走 DuckDB
+    # 1. 拉今日 picks (V2 recommendation_picks)
+    print("[1/2] 拉 picks [DuckDB · V2]...")
+    import sys as _sys
+    _sys.path.insert(0, str(_REPO_ROOT / "scripts" / "lib"))
+    from stock_db import fetch_picks_normalized
+    picks_raw = fetch_picks_normalized()
     print(f"  共 {len(picks_raw)} 条")
 
     # 2. 综合诊断

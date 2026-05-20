@@ -7713,54 +7713,8 @@ def _runtime_db_stats() -> dict:
                     for r in rows
                 ]
 
-        if "prices" not in tables:
-            con.close()
-            return stats
-        rows = con.execute(
-            """
-            SELECT code, MAX(date) AS latest_date
-            FROM prices
-            GROUP BY code
-            """
-        ).fetchall()
-        for code, d in rows:
-            c = str(code or "").upper()
-            if d is not None:
-                ds = str(d)[:10]
-                cur = stats["prices"]["latest_date"]
-                stats["prices"]["latest_date"] = ds if cur is None or ds > cur else cur
-            if c.endswith(".HK"):
-                stats["prices"]["hk"] += 1
-            elif c.endswith((".SS", ".SZ", ".BJ")) or (c.isdigit() and len(c) == 6):
-                stats["prices"]["cn"] += 1
-            elif c.replace("-", "").replace(".", "").isalpha():
-                stats["prices"]["us"] += 1
-
-        pick_rows = []
-        if "picks" in tables:
-            pick_rows = con.execute(
-                """
-                WITH latest AS (
-                  SELECT model_source, MAX(pick_date) AS pick_date
-                  FROM picks
-                  WHERE model_source IN ('v6_us', 'v6_hk', 'v6_cn')
-                  GROUP BY model_source
-                )
-                SELECT p.model_source, p.pick_date,
-                       SUM(CASE WHEN COALESCE(p.signal, 'buy') = 'buy' THEN 1 ELSE 0 END) AS buy_n,
-                       COUNT(*) AS total_n
-                FROM picks p
-                INNER JOIN latest l ON l.model_source = p.model_source AND l.pick_date = p.pick_date
-                GROUP BY p.model_source, p.pick_date
-                """
-            ).fetchall()
+        # 2026-05-21 V1 cutover：原 V1 prices/picks fallback 全删，V2 path 上面已覆盖
         con.close()
-        for source, pick_date, buy_n, total_n in pick_rows:
-            stats["picks"][str(source)] = {
-                "latest_date": str(pick_date)[:10] if pick_date is not None else None,
-                "buy_n": int(buy_n or 0),
-                "total_n": int(total_n or 0),
-            }
     except Exception as e:
         stats["error"] = str(e)
     return stats
@@ -8911,7 +8865,21 @@ def compute_plan_forward_track(plan: dict, history: dict, benchmark: str = "SPY"
         if not d or not d.get("ts") or not d.get("close"):
             missing.append(tkr)
             continue
-        used.append((tkr, w, d["ts"], [float(c) for c in d["close"]]))
+        # 容错：close 序列里可能有 None（节假日 / yfinance 偶发漏值），筛掉再保留 ts ↔ close 对齐
+        close_clean = []
+        ts_clean = []
+        for t, c in zip(d["ts"], d["close"]):
+            if c is None:
+                continue
+            try:
+                close_clean.append(float(c))
+                ts_clean.append(t)
+            except (TypeError, ValueError):
+                continue
+        if not close_clean:
+            missing.append(tkr)
+            continue
+        used.append((tkr, w, ts_clean, close_clean))
 
     if not used:
         return {"tickers_missing": missing, "tickers_used": [], "inception_date": inception_date}
@@ -9309,6 +9277,33 @@ def _date_prefix(ts: str | None) -> str:
     return str(ts or "")[:10]
 
 
+def _parse_payload_ts(payload: dict | None):
+    if not isinstance(payload, dict):
+        return None
+    for key in ("generated_at", "updated_at", "completed_at", "as_of", "date", "timestamp"):
+        value = payload.get(key)
+        if not value:
+            continue
+        try:
+            return datetime.fromisoformat(str(value).replace("Z", "").split(".")[0])
+        except Exception:
+            continue
+    return None
+
+
+def _choose_fresher_payload(file_payload: dict, db_payload: dict) -> dict:
+    """Prefer the fresher artifact; DB pipeline mirrors can lag latest files."""
+    if not db_payload:
+        return file_payload or {}
+    if not file_payload:
+        return db_payload or {}
+    file_ts = _parse_payload_ts(file_payload)
+    db_ts = _parse_payload_ts(db_payload)
+    if file_ts and db_ts and file_ts > db_ts:
+        return file_payload
+    return db_payload
+
+
 def _load_latest_pick_dates_by_market() -> dict[str, str | None]:
     """DB-first latest production pick_date per market.
 
@@ -9324,38 +9319,31 @@ def _load_latest_pick_dates_by_market() -> dict[str, str | None]:
         import duckdb
         con = duckdb.connect(db_path, read_only=True)
         tables = {str(r[0]) for r in con.execute("SHOW TABLES").fetchall()}
-        clean_v2 = "recommendation_picks" in tables and "recommendation_runs" in tables and "picks" not in tables
-        if clean_v2:
+        if "recommendation_picks" in tables and "recommendation_runs" in tables:
             latest_run = con.execute(
                 "SELECT run_id, generated_at FROM recommendation_runs ORDER BY generated_at DESC LIMIT 1"
             ).fetchone()
-            if not latest_run:
+            if latest_run:
+                rows = con.execute(
+                    """
+                    SELECT market, MAX(created_at) AS latest_date
+                    FROM recommendation_picks
+                    WHERE run_id = ?
+                    GROUP BY market
+                    """,
+                    [latest_run[0]],
+                ).fetchall()
+                run_ts = str(latest_run[1]) if latest_run[1] is not None else None
+                for market, latest_date in rows:
+                    key = _pick_market_key(None, market)
+                    if key:
+                        out[key] = run_ts or (str(latest_date) if latest_date is not None else None)
+            if "picks" not in tables:
                 con.close()
                 return out
-            rows = con.execute(
-                """
-                SELECT market, MAX(created_at) AS latest_date
-                FROM recommendation_picks
-                WHERE run_id = ?
-                GROUP BY market
-                """,
-                [latest_run[0]],
-            ).fetchall()
-            con.close()
-            for market, latest_date in rows:
-                key = _pick_market_key(None, market)
-                if key and latest_date is not None:
-                    out[key] = str(latest_date)[:10]
-            return out
-        if "picks" not in tables:
-            con.close()
-            return out
-        rows = con.execute(
-            "SELECT code, market, COALESCE(model_source, 'legacy') AS model_source, "
-            "MAX(pick_date) AS latest_date "
-            "FROM picks GROUP BY code, market, model_source"
-        ).fetchall()
+        # 2026-05-21 V1 cutover：去 V1 picks 兜底，V2 path 上面已覆盖各市场最新日期
         con.close()
+        rows = []
     except Exception as e:
         print(f"  ⚠️  从 DuckDB 读 picks 日期失败: {e}")
         return out
@@ -9365,7 +9353,7 @@ def _load_latest_pick_dates_by_market() -> dict[str, str | None]:
         if not key or latest_date is None:
             continue
         d = str(latest_date)[:10]
-        if out[key] is None or d > str(out[key]):
+        if out[key] is None or d > str(out[key])[:10]:
             out[key] = d
     return out
 
@@ -9609,22 +9597,20 @@ def build():
             f"  v2 行情覆盖    = {coverage.get('priced', 0)}/{coverage.get('active_pool', 0)} "
             f"({coverage.get('pct', 0)}%)"
         )
-        print(f"  records (V2 fallback) = {len(records)} 条（个股研究 / 产业链地图 用）")
+        print(f"  records (V2) = {len(records)} 条（个股研究 / 产业链地图 用）")
     else:
-        from stock_db import fetch_records_view, fetch_picks_view
-        records = fetch_records_view()
-        picks = fetch_picks_view()
+        # V2 cutover 后 clean_v2 永远为 True；此分支理论上不进。
+        # 留个 graceful 兜底，避免老 DB 启动炸：返回空集让 dashboard 仍能渲染骨架。
+        print("  ⚠️  非 clean v2 DB — 系统已切到纯 V2 路径，records 留空")
+        records, picks = [], []
     # 兼容旧 schema: market_cap 字段(人工填写"$2.8T")现在格式化自 yf_market_cap
     for r in records:
         r["market_cap"] = _fmt_market_cap(r.get("yf_market_cap"))
-    if not clean_v2:
-        print(f"  共 {len(records)} 条 watchlist (含 prices JOIN)")
-        print(f"  共 {len(picks)} 条自选股·AI 优选 (来自 reviews + 最新 picks)")
 
     # 各市场 AI 计算时间 — DB picks 是事实源；JSON 仅在同日时补时分秒，不允许把
     # dashboard 日期拉回比 DB 更旧（防 A 股 JSON 滞后污染早盘看板）。
     picks_timestamps = _load_latest_pick_dates_by_market()
-    for key, fname in (("us", "data/latest/plan_a_v5_constrained.json"),
+    for key, fname in (("us", "data/latest/plan_a_v5.json"),
                        ("hk", "data/latest/hk_picks.json"),
                        ("cn", "data/a_share_picks.json")):
         fpath = os.path.join(_REPO, fname)
@@ -9712,6 +9698,7 @@ def build():
     optimization_db = _load_pipeline_db("optimization_result")
     plan_a_v6_db = _load_pipeline_db("plan_a_v5")
     history_data_db = _load_pipeline_db("history_data")
+    plan_a_v6_runtime = _choose_fresher_payload(plan_a_v6, plan_a_v6_db)
     db_explorer_snapshot = _runtime_db_explorer_snapshot()
 
     if risk_metrics:
@@ -9862,40 +9849,9 @@ def build():
             disc_hist = []
     html = html.replace("{DISCOVERY_HISTORY_JSON}", json.dumps(disc_hist, ensure_ascii=False, default=str))
 
-    # AI 评级:自选股每只的当前评级(来自 picks 最新一日,daily_picks_v5 学术因子产出)
+    # 2026-05-21 V1 cutover：原 V1 picks + watchlist 自选股 AI 评级查询已删
+    # V2 路径：自选股·AI 优选 picks 来自 manual_watchlist JOIN recommendation_picks（待补 V2 评级 panel）
     watchlist_ratings = {}
-    if clean_v2:
-        print("  自选股 AI 评级跳过 [clean v2 不读取 legacy picks/watchlist]")
-    else:
-        try:
-            from stock_db import get_db as _get_db
-            _conn = _get_db()
-            # 自选股 AI 评级列：保留 buy/avoid/watch 全档（avoid 的"⛔"对自选股是有价值的信号 —
-            # 提示用户考虑出掉），但带上 signal 让前端按结构化字段区分着色，而不是再去
-            # 解析 rating 文本前缀。
-            for code, rating, total_score, ai_score, signal in _conn.execute(
-                """
-                WITH latest AS (
-                  SELECT code, MAX(pick_date) AS pick_date
-                  FROM picks
-                  GROUP BY code
-                )
-                SELECT p.code, p.rating, p.total_score, p.ai_score, p.signal
-                FROM picks p
-                INNER JOIN watchlist w ON w.code = p.code
-                INNER JOIN latest l ON l.code = p.code AND l.pick_date = p.pick_date
-                """
-            ).fetchall():
-                watchlist_ratings[code] = {
-                    "rating": rating,
-                    "total_score": total_score,
-                    "ai_score": ai_score,
-                    "signal": signal,
-                }
-            _conn.close()
-            print(f"  自选股 AI 评级已加载 [DuckDB picks]({len(watchlist_ratings)} 只)")
-        except Exception as e:
-            print(f"  ⚠️ AI 评级加载失败: {e}")
     html = html.replace("{WATCHLIST_RATINGS_JSON}", json.dumps(watchlist_ratings, ensure_ascii=False))
     html = html.replace("{RECORDS_JSON}", json.dumps(records, ensure_ascii=False, default=str))
     html = html.replace("{PICKS_JSON}", json.dumps(picks, ensure_ascii=False, default=str))
@@ -9904,12 +9860,12 @@ def build():
     html = html.replace("{RISK_METRICS_JSON_DB}", json.dumps(risk_metrics_db, ensure_ascii=False))
     html = html.replace("{TRACK_13F_JSON_DB}", json.dumps(track_13f_db, ensure_ascii=False))
     html = html.replace("{OPTIMIZATION_JSON_DB}", json.dumps(optimization_db, ensure_ascii=False))
-    html = html.replace("{PLAN_A_V6_JSON_DB}", json.dumps(plan_a_v6_db, ensure_ascii=False))
+    html = html.replace("{PLAN_A_V6_JSON_DB}", json.dumps(plan_a_v6_runtime, ensure_ascii=False))
     html = html.replace("{DISCOVERY_JSON}", json.dumps(discovery, ensure_ascii=False))
     html = html.replace("{DB_EXPLORER_JSON}", json.dumps(db_explorer_snapshot, ensure_ascii=False))
 
     # AI 组合方案 — Static (A 类: buy-and-hold from inception) — DuckDB 优先，fallback JSON
-    plan_for_bt = plan_a_v6_db or plan_a_v6
+    plan_for_bt = plan_a_v6_runtime or plan_a_v6
     history_for_bt = history_data_db or history_data
     backtest_db = compute_plan_forward_track(plan_for_bt, history_for_bt)
     if backtest_db and backtest_db.get("metrics"):

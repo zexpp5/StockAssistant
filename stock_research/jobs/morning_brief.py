@@ -26,6 +26,7 @@
 from __future__ import annotations
 import json
 import logging
+import math
 import os
 import sys
 from datetime import datetime, date, timedelta
@@ -70,6 +71,121 @@ def _parse_ts(value: Any) -> datetime | None:
         return None
 
 
+def _payload_ts(payload: dict | None) -> datetime | None:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("generated_at", "updated_at", "completed_at", "as_of", "date", "timestamp"):
+        dt = _parse_ts(payload.get(key))
+        if dt:
+            return dt
+    return None
+
+
+def _pipeline_status_payload() -> dict:
+    payload = _load_json(REPO / "data" / "latest" / "pipeline_status.json")
+    return payload if isinstance(payload, dict) else {}
+
+
+def _fmt_plain_ts(dt: datetime | None) -> str:
+    return dt.strftime("%m-%d %H:%M") if dt else "?"
+
+
+def _value_to_iso(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat(timespec="seconds")
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value or "")
+
+
+def _latest_reference_ts(*payloads: dict | None) -> datetime | None:
+    values = [_payload_ts(p) for p in payloads]
+    values = [v for v in values if v is not None]
+    return max(values) if values else None
+
+
+def _plan_weight_source(plan: dict | None) -> dict[str, Any]:
+    if not isinstance(plan, dict):
+        return {
+            "kind": "missing",
+            "label": "仓位来源缺失",
+            "detail": "未找到 plan_a_v5.json",
+            "is_fallback": True,
+        }
+    risk_aware = plan.get("risk_aware") if isinstance(plan.get("risk_aware"), dict) else {}
+    constraints = plan.get("constraints") if isinstance(plan.get("constraints"), dict) else {}
+    method = str(plan.get("method") or "")
+    engine = str(risk_aware.get("engine") or "")
+    use_legacy_mc = bool(constraints.get("use_legacy_mc"))
+    stages = risk_aware.get("stages") if isinstance(risk_aware.get("stages"), list) else []
+    stage_errors = [
+        f"{s.get('label')}: {s.get('error')}"
+        for s in stages
+        if isinstance(s, dict) and s.get("error")
+    ]
+    fallback = use_legacy_mc or "fallback" in engine.lower() or "legacy_monte_carlo" in engine.lower()
+    if fallback:
+        return {
+            "kind": "fallback",
+            "label": "仓位来源=legacy_monte_carlo fallback",
+            "detail": "PyPortfolioOpt risk-aware 阶段未产出，权重来自 fallback 优化/约束后结果",
+            "engine": engine or "legacy_monte_carlo",
+            "stage_errors": stage_errors[:4],
+            "is_fallback": True,
+        }
+    if "risk_aware_optimize" in method or engine == "risk_aware_optimize":
+        return {
+            "kind": "risk_aware",
+            "label": "仓位来源=risk-aware optimizer",
+            "detail": "权重来自风险感知优化器",
+            "engine": engine or "risk_aware_optimize",
+            "stage_errors": stage_errors[:4],
+            "is_fallback": False,
+        }
+    return {
+        "kind": "unknown",
+        "label": "仓位来源=未知/未标注",
+        "detail": method or engine or "plan 未提供 method/engine",
+        "engine": engine,
+        "stage_errors": stage_errors[:4],
+        "is_fallback": True,
+    }
+
+
+def _format_f_score(value: Any) -> str:
+    if isinstance(value, bool):
+        return "缺失"
+    if isinstance(value, (int, float)):
+        return f"{int(value)}/9" if float(value).is_integer() else f"{float(value):.1f}/9"
+    return "缺失"
+
+
+def _fmt_metric(value: Any, suffix: str = "") -> str:
+    try:
+        x = float(value)
+    except Exception:
+        return "缺失"
+    if not math.isfinite(x):
+        return "缺失"
+    if x == 0:
+        txt = "0"
+    elif abs(x) >= 100:
+        txt = f"{x:.0f}"
+    else:
+        txt = f"{x:.2f}".rstrip("0").rstrip(".")
+    return f"{txt}{suffix}"
+
+
+def _entry_f_score(entry: dict) -> Any:
+    value = entry.get("f_score")
+    if value is None and entry.get("f_score_norm") is not None:
+        try:
+            value = float(entry.get("f_score_norm")) * 9.0
+        except Exception:
+            value = None
+    return value
+
+
 def _load_us_plan() -> dict | None:
     """读取美股生产 plan，避免旧 constrained 文件盖过最新 risk-aware plan。"""
     base = _load_json(REPO / "data" / "latest" / "plan_a_v5.json")
@@ -105,13 +221,13 @@ def _load_hk_picks() -> dict | None:
         conn = get_db()
         v2_run = conn.execute(
             """
-            SELECT run_id, run_date FROM recommendation_runs
+            SELECT run_id, run_date, generated_at FROM recommendation_runs
             WHERE universe_scope = 'system_tech_universe' AND status = 'generated'
             ORDER BY generated_at DESC LIMIT 1
             """
         ).fetchone()
         if v2_run:
-            run_id, run_date = v2_run
+            run_id, run_date, generated_at = v2_run
             v2_rows = conn.execute(
                 """
                 SELECT p.symbol,
@@ -127,7 +243,6 @@ def _load_hk_picks() -> dict | None:
             ).fetchall()
             if v2_rows:
                 conn.close()
-                db_date = str(run_date)[:10]
                 selected = [{
                     "code": symbol, "ticker": symbol, "name": name or symbol,
                     "market": "港股", "rating": rating,
@@ -135,7 +250,8 @@ def _load_hk_picks() -> dict | None:
                     "industry": "科技", "theme": "科技/AI",
                 } for symbol, name, rating, total_score in v2_rows]
                 return {
-                    "generated_at": f"{db_date}T00:00:00",
+                    "generated_at": _value_to_iso(generated_at),
+                    "run_date": str(run_date)[:10] if run_date else None,
                     "source": "duckdb:recommendation_picks.system_tech_universe[HK]",
                     "n_recommended": len(selected),
                     "selected": selected,
@@ -164,13 +280,13 @@ def _load_a_share_picks() -> dict | None:
         # ── V2 优先 ──
         v2_run = conn.execute(
             """
-            SELECT run_id, run_date FROM recommendation_runs
+            SELECT run_id, run_date, generated_at FROM recommendation_runs
             WHERE universe_scope = 'system_tech_universe' AND status = 'generated'
             ORDER BY generated_at DESC LIMIT 1
             """
         ).fetchone()
         if v2_run:
-            run_id, run_date = v2_run
+            run_id, run_date, generated_at = v2_run
             # JOIN system_universe 拿最新 name（picks 表里的 name 可能是 stale=symbol）
             v2_rows = conn.execute(
                 """
@@ -198,7 +314,8 @@ def _load_a_share_picks() -> dict | None:
                     "industry": "科技", "theme": "科技/AI",
                 } for symbol, name, market, rating, total_score in v2_rows]
                 return {
-                    "generated_at": f"{db_date}T00:00:00",
+                    "generated_at": _value_to_iso(generated_at),
+                    "run_date": db_date,
                     "source": "duckdb:recommendation_picks.system_tech_universe",
                     "n_recommended": len(selected),
                     "selected": selected,
@@ -318,13 +435,37 @@ def _evidence_lines() -> list[str]:
     ev = _load_json(REPO / "data" / "latest" / "recommendation_evidence.json")
     if not isinstance(ev, dict):
         return []
+    plan = _load_us_plan()
+    gate = _quality_gate_payload()
+    pipeline = _pipeline_status_payload()
+    ev_ts = _payload_ts(ev)
+    ref_ts = _latest_reference_ts(plan, gate, pipeline)
+    is_stale = bool(ev_ts and ref_ts and ev_ts < ref_ts - timedelta(minutes=5))
+    pipeline_status = str(pipeline.get("status") or "").upper()
+    pipeline_open = pipeline_status not in {"", "OK", "PASS", "SUCCESS"}
     grade = ev.get("evidence_grade", "UNKNOWN")
     cov = ev.get("review_coverage") or {}
     total_r = cov.get("total_reviewed", 0)
     total_m = cov.get("total_mature", 0)
     coverage = cov.get("coverage")
     cov_txt = "—" if coverage is None else f"{coverage * 100:.1f}%"
-    lines = [f"📐 **有效性证据 = {grade}** · 成熟回顾 {total_r}/{total_m} · 覆盖 {cov_txt}"]
+    if is_stale or pipeline_open:
+        lines = [
+            f"⚠️ **有效性证据 = {grade}（历史文件，不能单独证明本轮推荐）** "
+            f"· 成熟回顾 {total_r}/{total_m} · 覆盖 {cov_txt}"
+        ]
+        details = []
+        if is_stale:
+            details.append(f"证据 {_fmt_plain_ts(ev_ts)} 早于本轮产物 {_fmt_plain_ts(ref_ts)}")
+        if pipeline_open:
+            details.append(f"pipeline_status={pipeline_status or 'UNKNOWN'}")
+        if details:
+            lines.append("• " + "；".join(details) + "。今日结论以质量闸门/生产验收为准。")
+    else:
+        lines = [
+            f"📐 **有效性证据 = {grade}** · 成熟回顾 {total_r}/{total_m} · 覆盖 {cov_txt} "
+            f"· 证据时间 {_fmt_plain_ts(ev_ts)}"
+        ]
     rows = [r for r in (ev.get("review_metrics_by_source") or []) if r.get("signal") == "buy"]
     if rows:
         bits = []
@@ -444,7 +585,15 @@ def _ticker_sparkline(history: dict, ticker: str, window: int = 60) -> tuple[str
     closes = history[ticker].get("close") or []
     if len(closes) < 2:
         return "❓", None
-    recent = closes[-window:]
+    recent = []
+    for value in closes[-window:]:
+        try:
+            if value is not None:
+                recent.append(float(value))
+        except Exception:
+            continue
+    if len(recent) < 2:
+        return "❓", None
     pct = ((recent[-1] - recent[0]) / recent[0] * 100) if recent[0] else None
     return _trend_emoji(pct), pct
 
@@ -459,20 +608,30 @@ def _nav_sparkline(risk_metrics: dict | None, length: int = 15) -> dict | None:
     daily = risk_metrics.get("daily_values") or []
     if len(daily) < 5:
         return None
-    values = [float(d.get("value", 0)) for d in daily]
+    points: list[tuple[Any, float]] = []
+    for d in daily:
+        try:
+            value = float(d.get("value", 0))
+        except Exception:
+            continue
+        if math.isfinite(value) and value > 0:
+            points.append((d.get("date", "?"), value))
+    values = [v for _, v in points]
     if not values or values[0] <= 0:
         return None
     total_pct = (values[-1] - values[0]) / values[0] * 100
     # 算阶段分析：最近 30d 趋势
     recent_30 = values[-30:] if len(values) >= 30 else values
     pct_30 = ((recent_30[-1] - recent_30[0]) / recent_30[0] * 100) if recent_30[0] else 0
+    if not math.isfinite(total_pct) or not math.isfinite(pct_30):
+        return None
     return {
         "spark": _trend_emoji(total_pct),
         "spark_30d": _trend_emoji(pct_30),
         "pct_30d": pct_30,
         "total_pct": total_pct,
-        "start_date": daily[0].get("date", "?"),
-        "end_date": daily[-1].get("date", "?"),
+        "start_date": points[0][0],
+        "end_date": points[-1][0],
         "start_value": values[0],
         "end_value": values[-1],
         "n_days": len(values),
@@ -890,7 +1049,7 @@ def _humanize_picks(plan: list[dict], a_share: bool, history: dict | None = None
         if not a_share and _is_a_share(ticker):
             continue
         weight = entry.get("v5_weight") or entry.get("weight") or 0
-        f_score = entry.get("f_score", "?")
+        f_score = _format_f_score(_entry_f_score(entry))
         z = entry.get("composite_z", entry.get("composite", 0))
         spark, pct60 = _ticker_sparkline(history or {}, ticker)
         spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
@@ -915,7 +1074,7 @@ def _humanize_picks_grouped(plan: list[dict], a_share: bool, history: dict | Non
         if not a_share and _is_a_share(ticker):
             continue
         weight = entry.get("v5_weight") or entry.get("weight") or 0
-        f_score = entry.get("f_score", "?")
+        f_score = _format_f_score(_entry_f_score(entry))
         z = entry.get("composite_z", entry.get("composite", 0))
         spark, pct60 = _ticker_sparkline(history or {}, ticker)
         spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
@@ -940,20 +1099,22 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
     """
     if not plan and not hk_picks and not a_share_picks:
         return (
-            "#### 2. 🔝 自选股·AI 优选（三线独立）\n"
+            "#### 2. 🔝 AI 推荐与模型组合（三线独立）\n"
             "⚠️ 美股/港股/A 股三套数据源全部缺失 — 检查 daily_refresh.sh 是否跑完。\n"
         )
 
-    head = "#### 2. 🔝 自选股·AI 优选（三线独立 · 每只股附 ✅ 推荐理由 + ⚠️ 风险点）"
+    head = "#### 2. 🔝 AI 推荐与模型组合（三线独立 · 每只股附 ✅ 推荐理由 + ⚠️ 风险点）"
     if read_only:
         head += "\n🔴 **质量闸门 FAIL：以下只读观察，不作为买入/加仓清单。**"
     if plan:
         pm = plan.get("portfolio_metrics") or {}
         if pm:
+            weight_src = _plan_weight_source(plan)
             head += (
-                f"  ·  美股组合 Sharpe {pm.get('annual_sharpe', '?')} · "
-                f"年化 {pm.get('annual_return_pct', '?')}% · "
-                f"波动 {pm.get('annual_vol_pct', '?')}%"
+                f"  ·  模型回测 Sharpe {pm.get('annual_sharpe', '?')} · "
+                f"回测年化 {pm.get('annual_return_pct', '?')}% · "
+                f"波动 {pm.get('annual_vol_pct', '?')}% · "
+                f"{weight_src['label']}"
             )
     lines = [head]
 
@@ -964,7 +1125,13 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
         if us_lines:
             n_us = sum(1 for l in us_lines if l.startswith("•"))
             ts_us = _fmt_ts(plan.get("generated_at"))
-            lines.append(f"**🇺🇸 美股 ({n_us} 只 · 6 因子 + risk-aware 仓位)** · {ts_us}")
+            weight_src = _plan_weight_source(plan)
+            factor_label = "因子打分（F-Score 缺失则显式标注）"
+            lines.append(f"**🇺🇸 美股 ({n_us} 只 · {factor_label} · {weight_src['label']})** · {ts_us}")
+            if weight_src.get("is_fallback"):
+                lines.append(f"⚠️ {weight_src['detail']}。这些百分比不是新鲜 risk-aware optimizer 输出。")
+                if weight_src.get("stage_errors"):
+                    lines.append("• optimizer 失败摘要：" + " ｜ ".join(weight_src["stage_errors"]))
             lines.extend(us_lines)
         else:
             lines.append("**🇺🇸 美股** — _plan_v5 为空_")
@@ -978,8 +1145,8 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
             ticker = entry.get("code", "?")
             name = entry.get("name", "")
             score = entry.get("composite", 0)
-            f_score = entry.get("f_score")
-            f_str = f" · F={f_score}" if f_score is not None else ""
+            f_score = _entry_f_score(entry)
+            f_str = f" · F-Score {_format_f_score(f_score)}"
             spark, pct60 = _ticker_sparkline(history or {}, ticker)
             spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
             lines.append(f"• **{ticker}** {name} · 综合 {score:.3f}{f_str}{spark_str}")
@@ -1002,9 +1169,11 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
             ticker = entry.get("ticker", entry.get("code", "?"))
             name = entry.get("name", "")
             score = entry.get("composite", 0)
+            f_score = _entry_f_score(entry)
+            f_str = f" · F-Score {_format_f_score(f_score)}"
             spark, pct60 = _ticker_sparkline(history or {}, ticker)
             spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
-            lines.append(f"• **{ticker}** {name} · 综合 {score:.3f}{spark_str}")
+            lines.append(f"• **{ticker}** {name} · 综合 {score:.3f}{f_str}{spark_str}")
             pros, cons = _build_a_share_reasons(entry)
             lines.extend(_format_reason_lines(pros, cons))
     elif plan:
@@ -1251,18 +1420,19 @@ def section_ai_alpha(risk_metrics: dict | None) -> str:
     if risk_metrics:
         rm = risk_metrics
         lines.append("")
-        lines.append("_历史回测参考（不代表未来；崩盘期实测 alpha = **-9.77%**）_")
+        lines.append("⚠️ **以下是历史回测/模拟，不是实盘业绩；forward 样本仍很短，不能据此证明策略有效。**")
         # NAV 净值趋势 — emoji 双时间窗（近 30d + 总累计）
         nav = _nav_sparkline(rm)
         if nav:
             lines.append(
-                f"💰 **NAV 趋势** · 近 30d {nav['spark_30d']} {nav['pct_30d']:+.1f}% · "
-                f"总累计 {nav['spark']} {nav['total_pct']:+.1f}% ({nav['n_days']}d)"
+                f"历史 NAV：近 30d {nav['spark_30d']} {nav['pct_30d']:+.1f}% · "
+                f"累计 {nav['spark']} {nav['total_pct']:+.1f}% ({nav['n_days']}d)"
             )
         lines.append(
-            f"Sharpe **{rm.get('sharpe', '?')}** · "
-            f"MaxDD **{rm.get('max_drawdown_pct', '?')}%** · "
-            f"95% VaR {rm.get('var_95_pct', '?')}%"
+            f"回测 Sharpe {_fmt_metric(rm.get('sharpe'))} · "
+            f"MaxDD **{_fmt_metric(rm.get('max_drawdown_pct'), '%')}** · "
+            f"95% VaR {_fmt_metric(rm.get('var_95_pct'), '%')} · "
+            "崩盘期 alpha **-9.77%**（4/4 regime 3 跑输 SPY）"
         )
 
     return "\n".join(lines) + "\n"
@@ -1919,21 +2089,22 @@ def _build_card_payload() -> dict:
         blocks.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(evidence_lines)}})
         blocks.append({"tag": "hr"})
 
-    # ─── Section 2: 🔝 自选股·AI 优选（三线独立 · 白底）───
+    # ─── Section 2: 🔝 AI 推荐与模型组合（三线独立 · 白底）───
     if plan or hk_picks or a_share_picks:
         section2: list[dict] = [
             {"tag": "div", "text": {"tag": "lark_md", "content":
-                "**🔝 自选股·AI 优选（三线独立）**\n"
-                "_🇺🇸 美股 6 因子+risk-aware · 🇭🇰 港股 3 因子 · 🇨🇳 A 股 6 因子+龙虎榜+北向_"
+                "**🔝 AI 推荐与模型组合（三线独立）**\n"
+                "_系统科技/AI 股票池推荐；自选股池不自动混入_"
                 + ("\n🔴 **质量闸门 FAIL：本区只读观察，不作为买入/加仓清单。**" if trade_blocked else "")}}
         ]
         if plan:
             pm = plan.get("portfolio_metrics") or {}
             if pm:
+                weight_src = _plan_weight_source(plan)
                 section2.append(_kpi_row([
-                    ("美股 Sharpe", str(pm.get("annual_sharpe", "?"))),
-                    ("年化", f"{pm.get('annual_return_pct', '?')}%"),
-                    ("波动", f"{pm.get('annual_vol_pct', '?')}%"),
+                    ("回测Sharpe", str(pm.get("annual_sharpe", "?"))),
+                    ("回测年化", f"{pm.get('annual_return_pct', '?')}%"),
+                    ("仓位来源", weight_src["kind"]),
                 ]))
 
         # 🇺🇸 美股 — 每只股聚合多行 (ticker + ✅/⚠️ reason)，再 2 列拆分
@@ -1942,8 +2113,14 @@ def _build_card_payload() -> dict:
                                             factor_scores=factor_scores) if plan else []
         if us_blocks:
             ts_us = _fmt_ts((plan or {}).get("generated_at"))
+            weight_src = _plan_weight_source(plan)
             section2.append({"tag": "div", "text": {"tag": "lark_md",
-                "content": f"**🇺🇸 美股 ({len(us_blocks)} 只)** · {ts_us}\n_每只股附 ✅ 推荐理由 + ⚠️ 风险点_"}})
+                "content": (
+                    f"**🇺🇸 美股 ({len(us_blocks)} 只 · {weight_src['label']})** · {ts_us}\n"
+                    "_每只股附 ✅ 推荐理由 + ⚠️ 风险点_"
+                    + (f"\n⚠️ {weight_src['detail']}。这些百分比不是新鲜 risk-aware optimizer 输出。"
+                       if weight_src.get("is_fallback") else "")
+                )}})
             half = (len(us_blocks) + 1) // 2
             # 块间用空行分隔，避免上下两只股的 reasons 粘连
             section2.append(_two_col_lines(
@@ -1959,8 +2136,8 @@ def _build_card_payload() -> dict:
                 t = e.get("code", "?")
                 spark, pct60 = _ticker_sparkline(history or {}, t)
                 spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
-                f_score = e.get("f_score")
-                f_str = f" · F={f_score}" if f_score is not None else ""
+                f_score = _entry_f_score(e)
+                f_str = f" · F-Score {_format_f_score(f_score)}"
                 head = f"• **{t}** {e.get('name','')} · {e.get('composite', 0):.2f}{f_str}{spark_str}"
                 pros, cons = _build_hk_reasons(e)
                 rl = _format_reason_lines(pros, cons)
@@ -1992,7 +2169,9 @@ def _build_card_payload() -> dict:
                 t = e.get("ticker", e.get("code", "?"))
                 spark, pct60 = _ticker_sparkline(history or {}, t)
                 spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
-                head = f"• **{t}** {e.get('name','')} · {e.get('composite', 0):.2f}{spark_str}"
+                f_score = _entry_f_score(e)
+                f_str = f" · F-Score {_format_f_score(f_score)}"
+                head = f"• **{t}** {e.get('name','')} · {e.get('composite', 0):.2f}{f_str}{spark_str}"
                 pros, cons = _build_a_share_reasons(e)
                 rl = _format_reason_lines(pros, cons)
                 a_blocks.append("\n".join([head] + rl) if rl else head)
@@ -2105,22 +2284,21 @@ def _build_card_payload() -> dict:
     if risk_metrics:
         rm = risk_metrics
         section3.append({"tag": "div", "text": {"tag": "lark_md", "content":
-            "_历史回测参考（仅参考，不代表未来）_"}})
+            "⚠️ **历史回测/模拟，不是实盘业绩；forward 样本仍很短，不能证明策略有效。**"}})
         # NAV 净值趋势 — emoji 双时间窗（近 30d + 总累计）
         nav = _nav_sparkline(rm)
         if nav:
             section3.append({"tag": "div", "text": {"tag": "lark_md", "content":
-                f"💰 **NAV 净值趋势**\n"
-                f"近 30 天 {nav['spark_30d']} **{nav['pct_30d']:+.1f}%** · "
-                f"总累计 {nav['spark']} **{nav['total_pct']:+.1f}%**\n"
+                f"历史 NAV：近 30 天 {nav['spark_30d']} {nav['pct_30d']:+.1f}% · "
+                f"累计 {nav['spark']} {nav['total_pct']:+.1f}%\n"
                 f"_{nav['start_date']} → {nav['end_date']} ({nav['n_days']} 天)_"}})
         section3.append(_kpi_row([
-            ("回测 Sharpe", str(rm.get("sharpe", "?"))),
-            ("Max DD", f"{rm.get('max_drawdown_pct', '?')}%"),
-            ("95% VaR", f"{rm.get('var_95_pct', '?')}%"),
+            ("回测 Sharpe", _fmt_metric(rm.get("sharpe"))),
+            ("Max DD", _fmt_metric(rm.get("max_drawdown_pct"), "%")),
+            ("95% VaR", _fmt_metric(rm.get("var_95_pct"), "%")),
         ]))
         section3.append({"tag": "note", "elements": [
-            {"tag": "plain_text", "content": "回测含 survivorship bias 不代表未来；崩盘期实测 alpha = -9.77%。"}
+            {"tag": "plain_text", "content": "回测含 survivorship bias 不代表未来；崩盘期实测 alpha = -9.77%，4/4 regime 3 跑输 SPY。"}
         ]})
     blocks.extend(section3)
 

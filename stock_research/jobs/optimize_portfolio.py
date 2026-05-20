@@ -46,7 +46,7 @@ from .. import config
 from ..core import neutralization as nz
 from ..core import portfolio_constraints as pc
 from ..core import portfolio_optimizer_pro as opt_pro
-from ..adapters import store, legacy_shim as feishu  # noqa: F401
+from ..adapters import store
 
 import pandas as pd
 
@@ -188,7 +188,7 @@ def _industry_for(ticker: str, watchlist_lookup: dict) -> str:
     """
     # 1. 优先 THEME_MAPPING（粗粒度主题，每个主题通常 5-15 只）
     try:
-        from daily_picks import THEME_MAPPING  # type: ignore
+        from theme_mapping import THEME_MAPPING  # V2: extracted from daily_picks.py
         theme = THEME_MAPPING.get(ticker.upper())
         if theme:
             return theme
@@ -287,16 +287,9 @@ def run(capital: float = DEFAULT_CAPITAL,
     factors = cached["factors"]
     sig_map = {s["ticker"]: s for s in cached.get("signals", [])}
 
-    # ────── 2. 读 watchlist + V2 universe 拿行业 + 市值（用于中性化 + 行业 cap）──────
-    print("\n[1/5] 读 watchlist + V2 universe 拿行业 + 市值...")
+    # ────── 2. 读 V2 universe 拿行业 + 市值（用于中性化 + 行业 cap）──────
+    print("\n[1/5] 读 V2 system_universe 拿行业 + 市值...")
     wl_lookup: dict = {}
-    try:
-        watchlist = feishu.fetch_watchlist()
-        wl_lookup = {(r["normalized"]["code"] or "").upper(): r["fields"] for r in watchlist}
-        print(f"  watchlist: {len(wl_lookup)} 条")
-    except Exception as e:
-        print(f"  ⚠️ watchlist 拉取失败: {e}")
-    # 用 V2 system_universe 补齐：AI 组合方案候选可能不在 watchlist 里
     try:
         import sys as _sys
         _sys.path.insert(0, str(_REPO_ROOT / "scripts" / "lib"))

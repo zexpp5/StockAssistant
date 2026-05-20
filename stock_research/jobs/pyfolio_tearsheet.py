@@ -30,7 +30,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
 
 from .. import config
-from ..adapters import legacy_shim as feishu, store
+from ..adapters import store
 
 logger = logging.getLogger("stock_research.jobs.pyfolio_tearsheet")
 
@@ -44,7 +44,10 @@ def _build_portfolio_returns_from_picks(year: int, month: int) -> pd.Series | No
     """
     import yfinance as yf
 
-    picks = feishu.fetch_picks()
+    import sys as _sys
+    _sys.path.insert(0, str(_REPO_ROOT / "scripts" / "lib"))
+    from stock_db import fetch_picks_normalized
+    picks = fetch_picks_normalized()
     start_ts = datetime(year, month, 1).timestamp() * 1000
     if month == 12:
         end_ts = datetime(year + 1, 1, 1).timestamp() * 1000

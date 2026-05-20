@@ -27,10 +27,135 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "scripts" / "lib"))
 
 from stock_db import DB_PATH  # noqa: E402
-from stock_research.jobs.enrich_watchlist import (  # noqa: E402
-    _format_for_feishu as _format_enrichment_fields,
-    enrich_one as _fetch_enrichment,
-)
+
+try:  # noqa: E402
+    from stock_research.jobs.enrich_watchlist import (
+        _format_for_feishu as _format_enrichment_fields,
+        enrich_one as _fetch_enrichment,
+    )
+except (ModuleNotFoundError, ImportError):  # V2 cutover: legacy watchlist job may be removed.
+    from stock_research.core import akshare_client, baostock_client, finnhub_client, trends  # noqa: E402
+    from stock_research.core.watchlist_enrich import (  # noqa: E402
+        fetch_earnings_quarters,
+        fetch_earnings_summary,
+    )
+
+    def _is_us_stock(market: str, code: str) -> bool:
+        if "美股" in market or str(market).upper() == "US":
+            return True
+        return bool(code) and code.replace("-", "").replace(".", "").isalpha()
+
+    def _fetch_enrichment(
+        name: str,
+        code: str,
+        market: str,
+        do_trends: bool = True,
+        do_finnhub: bool = True,
+        do_akshare: bool = True,
+        do_baostock: bool = True,
+    ) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "name": name,
+            "code": code,
+            "market": market,
+            "fetched_at": datetime.now().isoformat(timespec="seconds"),
+            "sources_used": [],
+        }
+        if _is_us_stock(market, code):
+            if do_finnhub and finnhub_client.is_available():
+                fh = finnhub_client.fetch_enriched(code)
+                if fh and fh.get("finnhub"):
+                    out["finnhub"] = fh["finnhub"]
+                    out["sources_used"].append("finnhub")
+            if do_trends:
+                keyword = name if any("\u4e00" <= c <= "\u9fff" for c in name) else code
+                tr = trends.fetch_trend(keyword, geo="")
+                if tr:
+                    out["trends"] = tr
+                    out["sources_used"].append("trends")
+        else:
+            if do_akshare:
+                ak = akshare_client.fetch_enriched(code, market)
+                if ak.get("akshare"):
+                    out["akshare"] = ak["akshare"]
+                    out["sources_used"].append("akshare")
+            if do_baostock and "A股" in market:
+                bs_quote = baostock_client.fetch_a_share_quote(code)
+                if bs_quote:
+                    out["baostock"] = bs_quote
+                    out["sources_used"].append("baostock")
+            if do_trends:
+                tr = trends.fetch_trend(name, geo="CN" if "A股" in market else "")
+                if tr:
+                    out["trends"] = tr
+                    out["sources_used"].append("trends")
+
+        try:
+            import yfinance as yf
+
+            ticker_obj = yf.Ticker(code)
+            info_yf = ticker_obj.info or {}
+            quarters = fetch_earnings_quarters(info_yf, ticker_obj)
+            if quarters:
+                out["earnings_summary"] = fetch_earnings_summary(info_yf, ticker_obj)
+                out["earnings_quarters"] = quarters
+                out["sources_used"].append(f"yfinance_earnings({len(quarters)}q)")
+        except Exception:
+            pass
+        return out
+
+    def _format_enrichment_fields(enriched: dict[str, Any]) -> dict[str, str]:
+        lines: list[str] = []
+        sources: list[str] = []
+        finn = enriched.get("finnhub") or {}
+        if finn.get("insider"):
+            ins = finn["insider"]
+            lines.append(
+                f"内部人交易（90天）: 共 {ins['count']} 笔，买 {ins['buy_count']} / "
+                f"卖 {ins['sell_count']}，净 {ins['net_shares']:,} 股 [Finnhub]"
+            )
+            sources.append("Finnhub stock_insider_transactions")
+        if finn.get("analyst_recommendations"):
+            rec = finn["analyst_recommendations"]
+            lines.append(
+                f"分析师评级（{rec.get('period')}）: 强买 {rec['strong_buy']} / 买 {rec['buy']} / "
+                f"持有 {rec['hold']} / 卖 {rec['sell']} / 强卖 {rec['strong_sell']} [Finnhub]"
+            )
+            sources.append("Finnhub recommendation_trends")
+        if finn.get("price_target"):
+            pt = finn["price_target"]
+            lines.append(
+                f"分析师目标价: 中位 ${pt.get('target_median')} / 均值 ${pt.get('target_mean')} / "
+                f"区间 ${pt.get('target_low')} - ${pt.get('target_high')} [Finnhub]"
+            )
+            sources.append("Finnhub price_target")
+
+        ak = enriched.get("akshare") or {}
+        if ak.get("quote"):
+            q = ak["quote"]
+            lines.append(
+                f"akshare 实时: {q.get('name','')} 价 {q.get('price')} / "
+                f"涨幅 {q.get('change_pct')}% / PE {q.get('pe_ttm')} / PB {q.get('pb')} [akshare]"
+            )
+            sources.append(q.get("source", "akshare"))
+        if enriched.get("trends"):
+            tr = enriched["trends"]
+            lines.append(
+                f"Google Trends: 平均 {tr.get('avg')} / 最近 {tr.get('last')} / "
+                f"趋势 {tr.get('trend_pct'):+.1f}% [Google Trends]"
+            )
+            sources.append("Google Trends")
+        if enriched.get("earnings_summary"):
+            lines.append(f"{enriched['earnings_summary'].split(chr(10))[0]} [yfinance]")
+            sources.append("yfinance earnings")
+
+        if not lines:
+            return {"earnings": enriched["earnings_summary"]} if enriched.get("earnings_summary") else {}
+        return {
+            "info_breakdown": "\n".join(lines) + f"\n\n多源同步：{enriched.get('fetched_at')}",
+            "source": "\n".join(f"· {s}" for s in dict.fromkeys(sources)),
+            **({"earnings": enriched["earnings_summary"]} if enriched.get("earnings_summary") else {}),
+        }
 
 
 MARKET_LABEL = {"US": "美股", "HK": "港股", "CN": "A股"}

@@ -31,7 +31,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
 
 from .. import config
-from ..adapters import legacy_shim as feishu, store
+from ..adapters import store
 
 logger = logging.getLogger("stock_research.jobs.monthly_letter")
 
@@ -90,8 +90,11 @@ def _spy_return(start: datetime, end: datetime) -> float | None:
 
 def generate(year: int, month: int) -> dict:
     """生成指定月份的报告 dict（人可读的 markdown 由 to_markdown 渲染）。"""
-    print(f"[1/3] 拉 picks 历史...")
-    picks_raw = feishu.fetch_picks()
+    print(f"[1/3] 拉 picks 历史 [V2]...")
+    import sys as _sys
+    _sys.path.insert(0, str(_REPO_ROOT / "scripts" / "lib"))
+    from stock_db import fetch_picks_normalized
+    picks_raw = fetch_picks_normalized()
     picks = _filter_month(picks_raw, year, month)
     if not picks:
         return {"error": f"{year}-{month:02d} 月无 picks 记录"}

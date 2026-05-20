@@ -997,6 +997,79 @@ def delete_watchlist_item(code: str, *, conn: duckdb.DuckDBPyConnection | None =
 # ============================================================
 
 
+def fetch_picks_normalized(
+    *,
+    universe_scope: str = "system_tech_universe",
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> list[dict]:
+    """V2 picks 包装成 V1-normalized shape，给 defense_signals / realtime_defense /
+    pyfolio_tearsheet / monthly_letter 等遗留消费者使用。
+
+    每条返回：
+      {"record_id": "", "fields": {}, "normalized": {
+          name, code, rating, score, theme, ai_level, pick_date(ms),
+          peg_at_pick, pe_at_pick, y1_at_pick, cum_pct, days_held,
+      }}
+    cum_pct = (price_daily.close 今天 / recommendation_picks.entry_price - 1) × 100
+    days_held = today - run_date
+    """
+    own = conn is None
+    if own:
+        conn = get_db()
+    run_row = conn.execute(
+        """
+        SELECT run_id, run_date FROM recommendation_runs
+        WHERE universe_scope = ? AND status = 'generated'
+        ORDER BY generated_at DESC LIMIT 1
+        """,
+        [universe_scope],
+    ).fetchone()
+    if not run_row:
+        if own:
+            conn.close()
+        return []
+    run_id, run_date = run_row
+    rows = conn.execute(
+        """
+        WITH latest_close AS (
+            SELECT market, symbol, close, trade_date FROM price_daily
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY market, symbol ORDER BY trade_date DESC, fetched_at DESC) = 1
+        )
+        SELECT p.market, p.symbol, p.name, p.rating, p.signal,
+               p.total_score, p.entry_price, lc.close AS current_close, lc.trade_date
+        FROM recommendation_picks p
+        LEFT JOIN latest_close lc ON lc.market = p.market AND lc.symbol = p.symbol
+        WHERE p.run_id = ?
+        ORDER BY p.rank
+        """,
+        [run_id],
+    ).fetchall()
+    from datetime import date as _date
+    today = _date.today()
+    out = []
+    for market, symbol, name, rating, signal, total_score, entry_price, current_close, trade_date in rows:
+        cum_pct = None
+        if entry_price and current_close and float(entry_price) > 0:
+            cum_pct = round((float(current_close) / float(entry_price) - 1) * 100, 2)
+        days_held = (today - run_date).days if run_date else 0
+        out.append({
+            "record_id": "",
+            "fields": {},
+            "normalized": {
+                "name": name or symbol, "code": symbol,
+                "rating": rating or "",
+                "score": total_score, "theme": "科技/AI", "ai_level": "科技/AI universe",
+                "pick_date": int(datetime.combine(run_date, datetime.min.time()).timestamp() * 1000) if run_date else None,
+                "peg_at_pick": None, "pe_at_pick": None, "y1_at_pick": None,
+                "cum_pct": cum_pct, "days_held": days_held,
+                "signal": signal,
+            },
+        })
+    if own:
+        conn.close()
+    return out
+
+
 MANUAL_WATCHLIST_COLS = ["market", "symbol", "name", "notes"]
 
 

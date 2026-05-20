@@ -17,7 +17,6 @@ Web 部署时直接 import：
   from stock_research.jobs.enrich_watchlist import enrich_one
 """
 from __future__ import annotations
-import argparse
 import logging
 import sys
 import time
@@ -27,7 +26,7 @@ from typing import Any
 from .. import config
 from ..core import akshare_client, finnhub_client, trends, baostock_client
 from ..core.watchlist_enrich import fetch_earnings_quarters, fetch_earnings_summary
-from ..adapters import legacy_shim as feishu, store
+from ..adapters import store
 
 logger = logging.getLogger("stock_research.jobs.enrich_watchlist")
 
@@ -175,80 +174,6 @@ def _format_for_feishu(enriched: dict[str, Any]) -> dict[str, str]:
     return fields
 
 
-def run_all(only_code: str | None = None, do_trends: bool = True,
-            do_finnhub: bool = True, do_akshare: bool = True,
-            do_baostock: bool = True,
-            sleep_sec: float = 1.0) -> dict[str, Any]:
-    watchlist = feishu.fetch_watchlist()
-    print(f"[enrich] watchlist {len(watchlist)} 只")
-
-    # 2026-05-11 PM 第二轮:飞书 100% 退役,enrichment 直接 UPDATE DuckDB watchlist.
-    import sys as _sys
-    _sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[2] / "scripts" / "lib"))
-    from stock_db import update_watchlist_fields as _update_wl
-    from stock_db import upsert_earnings_history as _upsert_hist
-
-    results = []
-    db_updated = 0
-    history_rows = 0
-    for w in watchlist:
-        code = w["normalized"]["code"]
-        name = w["normalized"]["name"]
-        market = w["normalized"]["market"]
-        if only_code and only_code != code:
-            continue
-        if not code or not name:
-            continue
-        print(f"  → {name} ({code}, {market or '?'})")
-        try:
-            enriched = enrich_one(name, code, market,
-                                  do_trends=do_trends, do_finnhub=do_finnhub,
-                                  do_akshare=do_akshare, do_baostock=do_baostock)
-        except Exception as e:
-            logger.warning("enrich_one failed for %s: %s", code, e)
-            continue
-        results.append(enriched)
-        fields = _format_for_feishu(enriched)  # 现在返回 DuckDB 列名 dict
-        if fields:
-            db_updated += _update_wl(code, fields)
-            print(f"     ✓ 多源 [{', '.join(enriched['sources_used']) or '无'}]")
-        # earnings_history 写入（跟 watchlist.earnings 同源同 helper）
-        quarters = enriched.get("earnings_quarters") or []
-        if quarters:
-            try:
-                history_rows += _upsert_hist(code, quarters)
-            except Exception as e:
-                logger.debug("upsert_earnings_history failed for %s: %s", code, e)
-        time.sleep(sleep_sec)
-
-    if results:
-        store.save_json(results, config.ENRICH_DIR, "watchlist")
-
-    print(f"\n[enrich] 抓取 {len(results)} / UPDATE DuckDB watchlist {db_updated} 行")
-    return {
-        "fetched": len(results),
-        "db_updated": db_updated,
-    }
-
-
-def main() -> int:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s")
-    p = argparse.ArgumentParser(description="Watchlist multi-source enrichment")
-    p.add_argument("--code", help="只跑某只股票")
-    p.add_argument("--skip-trends", action="store_true", help="跳过 Google Trends（慢）")
-    p.add_argument("--skip-finnhub", action="store_true", help="跳过 Finnhub")
-    p.add_argument("--skip-akshare", action="store_true", help="跳过 akshare")
-    p.add_argument("--skip-baostock", action="store_true", help="跳过 A 股 baostock 二源")
-    args = p.parse_args()
-    run_all(
-        only_code=args.code,
-        do_trends=not args.skip_trends,
-        do_finnhub=not args.skip_finnhub,
-        do_akshare=not args.skip_akshare,
-        do_baostock=not args.skip_baostock,
-    )
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+# 2026-05-21 V1 cutover：删除 run_all + main 入口（它们 import V1 watchlist + V1 feishu.fetch_watchlist）。
+# 本文件现在只作为 enrich_one + _format_for_feishu 两个 utility 的 library 模块，
+# 由 scripts/tools/enrich_system_universe_v2.py 调用为 V2 system_universe 标的做 enrichment。
