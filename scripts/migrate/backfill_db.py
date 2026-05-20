@@ -126,7 +126,12 @@ def backfill_picks_from_feishu():
 
 def backfill_prices_from_snapshots():
     print("\n[2] 从本地 prices_*.json 快照回填 prices 表...")
-    files = sorted(glob.glob(os.path.join(DATA_DIR, "prices_*.json")))
+    # 2026-05-20: snapshots 已挪到 data/snapshots/prices/；同时扫旧根目录（兼容）
+    snapshot_dir = os.path.join(DATA_DIR, "data", "snapshots", "prices")
+    files = sorted(
+        glob.glob(os.path.join(snapshot_dir, "prices_*.json"))
+        + glob.glob(os.path.join(DATA_DIR, "prices_*.json"))
+    )
     # 按日期分组，取每天文件最大的
     by_date = {}
     for f in files:

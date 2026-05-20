@@ -34,6 +34,8 @@ DATA_DIR = _REPO
 INFO_CACHE_FILE = os.path.join(DATA_DIR, "data", "latest", "yf_info_cache.json")
 DEFAULT_INFO_TTL_HOURS = 12
 SOURCE_HEALTH_FILE = os.path.join(DATA_DIR, "data", "latest", "source_health.json")
+# 2026-05-20：快照不再写根目录，统一进 data/snapshots/prices/
+PRICES_SNAPSHOT_DIR = os.path.join(DATA_DIR, "data", "snapshots", "prices")
 
 
 def _tables_in_db(db_path: str) -> set[str]:
@@ -794,8 +796,9 @@ def main():
     )
     print(f"  来源健康已写入：{SOURCE_HEALTH_FILE}")
 
-    # 保存 JSON 快照
-    out_file = os.path.join(DATA_DIR, f"prices_{datetime.now().strftime('%Y-%m-%d_%H%M')}.json")
+    # 保存 JSON 快照（统一到 data/snapshots/prices/，不再污染根目录）
+    os.makedirs(PRICES_SNAPSHOT_DIR, exist_ok=True)
+    out_file = os.path.join(PRICES_SNAPSHOT_DIR, f"prices_{datetime.now().strftime('%Y-%m-%d_%H%M')}.json")
     with open(out_file, "w", encoding="utf-8") as f_out:
         json.dump(results, f_out, ensure_ascii=False, indent=2, default=str)
     print(f"  快照已保存：{out_file}")

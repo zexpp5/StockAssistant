@@ -32,8 +32,14 @@ logger = logging.getLogger("stock_research.jobs.daily_audit")
 # ────────────────────────────────────────────────────────
 
 def _load_latest_prices() -> dict[str, dict[str, Any]]:
-    """读 fetch_stock_prices.py 落的最新 prices_*.json 快照。"""
-    files = sorted(Path(config.BASE_DIR).glob("prices_*.json"), reverse=True)
+    """读 fetch_stock_prices.py 落的最新 prices_*.json 快照。
+
+    2026-05-20: 快照已挪到 data/snapshots/prices/；优先新路径，兼容旧根目录文件。
+    """
+    snapshot_dir = Path(config.BASE_DIR) / "data" / "snapshots" / "prices"
+    files = sorted(snapshot_dir.glob("prices_*.json"), reverse=True) if snapshot_dir.exists() else []
+    if not files:
+        files = sorted(Path(config.BASE_DIR).glob("prices_*.json"), reverse=True)
     if not files:
         return {}
     with open(files[0], encoding="utf-8") as f:

@@ -29,6 +29,8 @@ from stock_db import DB_PATH, upsert_reviews, get_db  # noqa: E402
 import yfinance as yf  # noqa: E402
 
 DATA_DIR = _REPO
+# 2026-05-20：快照不再写根目录，统一进 data/snapshots/reviews/
+REVIEWS_SNAPSHOT_DIR = os.path.join(DATA_DIR, "data", "snapshots", "reviews")
 
 
 def to_yfinance_ticker(code, market):
@@ -366,8 +368,9 @@ def main():
     except Exception as e:
         print(f"\n  DuckDB 写入失败（不阻塞主流程）：{e}")
 
-    # 保存 JSON 快照
-    out_file = os.path.join(DATA_DIR, f"review_{datetime.now().strftime('%Y-%m-%d_%H%M')}.json")
+    # 保存 JSON 快照（统一到 data/snapshots/reviews/，不再污染根目录）
+    os.makedirs(REVIEWS_SNAPSHOT_DIR, exist_ok=True)
+    out_file = os.path.join(REVIEWS_SNAPSHOT_DIR, f"review_{datetime.now().strftime('%Y-%m-%d_%H%M')}.json")
     with open(out_file, "w", encoding="utf-8") as fout:
         json.dump({
             "generated_at": datetime.now().isoformat(),

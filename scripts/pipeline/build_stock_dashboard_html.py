@@ -7411,6 +7411,95 @@ def _runtime_latest_log_failures(limit: int = 12) -> list[str]:
     return list(reversed(out))
 
 
+def _runtime_infra_status() -> dict:
+    """收集基础设施状态：3 条 launchd + defense_watcher cron + API + snapshots 新鲜度。
+
+    单元都设计成"用户看一眼就知道行不行"，每个值附带 status (OK / WARN / FAIL) + detail。
+    """
+    import subprocess
+    import time
+    out: dict[str, dict] = {}
+
+    # 1) 3 条 launchd 线
+    launchd_jobs = [
+        ("morning", "com.linearview.stockassistant.daily_refresh", "08:30 早班快线"),
+        ("a_share", "com.linearview.stockassistant.a_share_close",  "16:30 A/H 收盘线"),  # 可能未单独装
+        ("research", "com.linearview.stockassistant.research_nightly", "21:00 研究线"),
+    ]
+    try:
+        proc = subprocess.run(["launchctl", "list"], capture_output=True, text=True, timeout=3)
+        lines = proc.stdout.splitlines()
+    except Exception:
+        lines = []
+    for key, label, desc in launchd_jobs:
+        matched = next((ln for ln in lines if label in ln), None)
+        if not matched:
+            out[f"launchd_{key}"] = {"status": "FAIL", "detail": f"{desc} · 未装载（plist 不在 ~/Library/LaunchAgents/ 或未 load）"}
+            continue
+        parts = matched.split()
+        pid = parts[0] if len(parts) >= 1 else "-"
+        last_exit = parts[1] if len(parts) >= 2 else "?"
+        try:
+            exit_code = int(last_exit)
+        except ValueError:
+            exit_code = None
+        if exit_code in (0, None):  # 0 = 上次成功；- = 未跑过/常驻
+            status = "OK"
+        else:
+            status = "FAIL"
+        out[f"launchd_{key}"] = {
+            "status": status,
+            "detail": f"{desc} · 上次退出码 {last_exit} · PID {pid}",
+        }
+
+    # 2) defense_watcher cron（每 15 分钟跑）
+    log_path = os.path.join(_REPO, "data", "defense_watcher.log")
+    if os.path.exists(log_path):
+        mtime = os.path.getmtime(log_path)
+        age_min = (time.time() - mtime) / 60
+        status = "OK" if age_min < 30 else ("WARN" if age_min < 90 else "FAIL")
+        out["defense_watcher"] = {
+            "status": status,
+            "detail": f"日志 {age_min:.0f} 分钟前更新（每 15 分钟一次 · cron 调度）",
+        }
+    else:
+        out["defense_watcher"] = {"status": "WARN", "detail": "data/defense_watcher.log 不存在（cron 可能还没装）"}
+
+    # 3) API 服务（8765 端口）
+    try:
+        import urllib.request
+        with urllib.request.urlopen("http://127.0.0.1:8765/health", timeout=2) as resp:
+            ok = resp.status == 200
+        out["api_8765"] = {
+            "status": "OK" if ok else "WARN",
+            "detail": "127.0.0.1:8765 · /health 200 · launchd 常驻",
+        }
+    except Exception as e:
+        out["api_8765"] = {"status": "FAIL", "detail": f"127.0.0.1:8765 不可达：{type(e).__name__}"}
+
+    # 4) snapshots 新鲜度
+    import glob
+    for kind, label in (("prices", "价格快照"), ("reviews", "周回顾快照")):
+        snap_dir = os.path.join(_REPO, "data", "snapshots", kind)
+        files = sorted(glob.glob(os.path.join(snap_dir, f"{kind[:-1] if kind == 'reviews' else 'prices'}_*.json"))) if os.path.exists(snap_dir) else []
+        # 兼容旧根目录残留
+        if not files:
+            old = sorted(glob.glob(os.path.join(_REPO, f"{kind[:-1] if kind == 'reviews' else 'prices'}_*.json")))
+            files = old
+        if not files:
+            out[f"snapshots_{kind}"] = {"status": "WARN", "detail": f"{label} 无文件 · 期望 data/snapshots/{kind}/"}
+            continue
+        latest = files[-1]
+        mtime = os.path.getmtime(latest)
+        age_h = (time.time() - mtime) / 3600
+        status = "OK" if age_h < 24 else ("WARN" if age_h < 72 else "FAIL")
+        out[f"snapshots_{kind}"] = {
+            "status": status,
+            "detail": f"{label} · {os.path.basename(latest)} · {age_h:.1f} 小时前 · 共 {len(files)} 份",
+        }
+    return out
+
+
 def _runtime_db_stats() -> dict:
     stats = {
         "prices": {"us": 0, "cn": 0, "hk": 0, "latest_date": None},
@@ -7418,6 +7507,9 @@ def _runtime_db_stats() -> dict:
         "v2": {},
         "source_fetch_log": [],
         "pipeline_steps": [],
+        # 2026-05-20：补 alpha 评估 + 基础设施 + 全表概览
+        "pick_outcomes_by_market": {},  # {US: {1d: {...}, 5d:..., 20d:...}, HK: {...}, CN: {...}}
+        "v2_table_stats": {},  # {table_name: {count, max_date}}
     }
     db_path = _duckdb_path()
     if not os.path.exists(db_path):
@@ -7514,6 +7606,55 @@ def _runtime_db_stats() -> dict:
                         bucket["total_n"] += int(n or 0)
                         if str(signal) == "buy":
                             bucket["buy_n"] += int(n or 0)
+            # 2026-05-20：pick_outcomes 按 market × horizon 拆 — runtime status 三市场展示
+            if "pick_outcomes" in tables:
+                rows = con.execute(
+                    """
+                    SELECT market, horizon,
+                           COUNT(*) AS n_reviewed,
+                           SUM(CASE WHEN is_success THEN 1 ELSE 0 END) AS n_win,
+                           ROUND(AVG(alpha_pct), 2) AS avg_alpha,
+                           ROUND(AVG(return_pct), 2) AS avg_return,
+                           MAX(outcome_date) AS latest_outcome
+                    FROM pick_outcomes
+                    WHERE alpha_pct IS NOT NULL
+                    GROUP BY market, horizon
+                    """
+                ).fetchall()
+                for market, horizon, n_rev, n_win, avg_alpha, avg_ret, latest in rows:
+                    key = str(market).upper()
+                    bucket = stats["pick_outcomes_by_market"].setdefault(key, {})
+                    bucket[str(horizon)] = {
+                        "n_reviewed": int(n_rev or 0),
+                        "n_win": int(n_win or 0),
+                        "win_rate": (int(n_win or 0) / int(n_rev or 0) * 100) if n_rev else 0,
+                        "avg_alpha": float(avg_alpha) if avg_alpha is not None else None,
+                        "avg_return": float(avg_return) if (avg_return := avg_ret) is not None else None,
+                        "latest_outcome": str(latest)[:10] if latest else None,
+                    }
+            # V2 table stats with max_date — 全表概览块用
+            v2_table_date_col = {
+                "price_daily": "trade_date",
+                "recommendation_runs": "run_date",
+                "recommendation_picks": "created_at",
+                "portfolio_plans": "created_at",
+                "pick_outcomes": "outcome_date",
+                "holdings": "entry_date",
+                "manual_watchlist": "updated_at",
+                "system_universe": "last_seen_at",
+                "pool_membership": "last_seen_at",
+            }
+            for t, col in v2_table_date_col.items():
+                if t not in tables:
+                    continue
+                try:
+                    row = con.execute(f"SELECT COUNT(*), MAX({col}) FROM {t}").fetchone()
+                    stats["v2_table_stats"][t] = {
+                        "count": int(row[0] or 0),
+                        "max_date": str(row[1])[:19] if row[1] else None,
+                    }
+                except Exception:
+                    pass
             if "source_fetch_log" in tables:
                 rows = con.execute(
                     """
@@ -7864,15 +8005,15 @@ def today_decision_panel_html() -> str:
         <a href="#discovery" onclick="setTimeout(()=>switchDiscoveryView('today'),50)"
            class="text-xs text-violet-700 hover:text-violet-900">完整列表 →</a>
       </div>
-      <div class="overflow-x-auto">
+      <div class="overflow-x-auto px-4 py-2">
         <table class="w-full text-sm">
           <thead class="text-xs text-slate-500 bg-white border-b border-slate-100">
             <tr>
-              <th class="py-2 px-3 text-left">代码</th>
+              <th class="py-2 pr-3 text-left">代码</th>
               <th class="py-2 px-3 text-left">名称</th>
               <th class="py-2 px-3 text-left">市场</th>
               <th class="py-2 px-3 text-right">综合 z</th>
-              <th class="py-2 px-3 text-right">1 月涨幅</th>
+              <th class="py-2 pl-3 text-right">1 月涨幅</th>
             </tr>
           </thead>
           <tbody>{''.join(top_rows)}</tbody>
@@ -7953,6 +8094,63 @@ def runtime_status_panel_html() -> str:
     fmp_status = "OK" if str(fmp.get("status") or "ok") in ("ok", "healthy") else "WARN"
     fmp_detail = str(fmp.get("impact") or "FMP 当前未报告降级")
 
+    # 2026-05-20：基础设施 + 各市场 V2 alpha 数据采集
+    infra = _runtime_infra_status()
+    outcomes_by_market = db.get("pick_outcomes_by_market") or {}
+    v2_table_stats = db.get("v2_table_stats") or {}
+
+    def market_v2_rows(market_code: str) -> list[str]:
+        """给一个市场（US/CN/HK）生成 V2 picks + V2 plan + alpha 评估三行。"""
+        market_label_map = {"US": "v2_us", "CN": "v2_cn", "HK": "v2_hk"}
+        m_key = market_label_map.get(market_code)
+        v2_market_pick = (db.get("picks") or {}).get(m_key) or {}
+        rows = []
+        # V2 picks（本市场）
+        if v2_market_pick:
+            rows.append(_runtime_row(
+                f"V2 AI 推荐（{market_code}）",
+                "OK" if v2_market_pick.get("buy_n") else "WARN",
+                "DuckDB.recommendation_picks",
+                f"{v2_market_pick.get('latest_date') or '—'} · buy {v2_market_pick.get('buy_n', 0)} / total {v2_market_pick.get('total_n', 0)}",
+                "若 buy=0，检查 build_v2_recommendations 是否产出该市场候选",
+            ))
+        else:
+            rows.append(_runtime_row(
+                f"V2 AI 推荐（{market_code}）",
+                "WARN",
+                "DuckDB.recommendation_picks",
+                "今日 run 暂无该市场候选",
+                "等 1b/25 V2 推荐 run 出本市场候选；或检查 system_universe 是否含该市场标的",
+            ))
+        # alpha 评估（按 horizon）
+        m_alpha = outcomes_by_market.get(market_code) or {}
+        if m_alpha:
+            parts = []
+            for h in ("1d", "5d", "20d"):
+                d = m_alpha.get(h) or {}
+                if not d.get("n_reviewed"):
+                    parts.append(f"{h}=待累积")
+                    continue
+                alpha = d.get("avg_alpha")
+                alpha_s = f"{alpha:+.2f}%" if alpha is not None else "—"
+                parts.append(f"{h}: n={d['n_reviewed']} win={d['win_rate']:.0f}% α̅={alpha_s}")
+            rows.append(_runtime_row(
+                f"V2 推荐 alpha 评估（{market_code}）",
+                "OK" if any(m_alpha.values()) else "WARN",
+                "DuckDB.pick_outcomes",
+                " · ".join(parts),
+                "样本不足时继续累积（每天 evaluate_v2_picks 增量算）",
+            ))
+        else:
+            rows.append(_runtime_row(
+                f"V2 推荐 alpha 评估（{market_code}）",
+                "WARN",
+                "DuckDB.pick_outcomes",
+                "暂无成熟样本（样本积累 1d 需 ≥1 天，5d 需 ≥5 天）",
+                "明天起 evaluate_v2_picks 会自动 backfill 已成熟样本",
+            ))
+        return rows
+
     price_latest = db.get("prices", {}).get("latest_date") or "—"
     us_price = db.get("prices", {}).get("us", 0)
     cn_price = db.get("prices", {}).get("cn", 0)
@@ -7977,55 +8175,30 @@ def runtime_status_panel_html() -> str:
         return status, f"成功 {success} / 总 {total} · 失败 {fail}"
 
     us_rows = [
-        _runtime_row("US 市场健康", market_status("US")[0], "data/latest/source_health.json", market_status("US")[1], "先修复美股行情源或 ticker 映射"),
-        _runtime_row("HK 市场健康", market_status("HK")[0], "data/latest/source_health.json", market_status("HK")[1], "先修复港股行情源或 ticker 映射"),
-        _runtime_row("CN 市场健康", market_status("CN")[0], "data/latest/source_health.json", market_status("CN")[1], "先修复 A 股行情源或 ticker 映射"),
-        _runtime_row(
-            "v2 系统股票池",
-            "OK" if int(v2.get("system_universe") or 0) else "FAIL",
-            "DuckDB.system_universe + pool_membership",
-            f"system_universe={v2.get('system_universe', 0)} · pool_membership={v2.get('pool_membership', 0)}",
-            "应只包含系统科技/AI 池，不包含手动自选股",
-        ),
-        _runtime_row(
-            "v2 行情拉取",
-            "OK" if float(coverage.get("pct") or 0) >= 80 else ("WARN" if float(coverage.get("pct") or 0) >= 50 else "FAIL"),
-            "DuckDB.price_daily",
-            f"美股 {us_price} · A股 {cn_price} · 港股 {hk_price} · 覆盖 {coverage.get('priced', 0)}/{coverage.get('active_pool', 0)} ({coverage.get('pct', 0)}%) · 最新 {price_latest}",
-            "覆盖不足时先修复行情源 fallback",
-        ),
-        _runtime_row(
-            "v2 AI 推荐",
-            "OK" if int(v2_pick.get("buy_n") or 0) > 0 else "FAIL",
-            "DuckDB.recommendation_runs + recommendation_picks",
-            f"run={v2_pick.get('latest_run_id') or '—'} · buy {v2_pick.get('buy_n', 0)} / total {v2_pick.get('total_n', 0)}",
-            "只允许 universe_scope=system_tech_universe/source_origin=system_pool",
-        ),
-        _runtime_row(
-            "v2 AI 组合方案",
-            "OK" if int(v2.get("portfolio_plans") or 0) > 0 else "FAIL",
-            "DuckDB.portfolio_plans",
-            f"{v2.get('portfolio_plans', 0)} 行目标组合",
-            "方案不是真实持仓，真实持仓只由用户确认写入",
-        ),
-        _runtime_row("推荐质量闸门", quality_status, "data/latest/recommendation_quality_gate.json", f"fail={quality_summary.get('fail', '—')} warn={quality_summary.get('warn', '—')}", "FAIL 时只读观察，先修复 issues"),
+        _runtime_row("市场健康", market_status("US")[0], "data/latest/source_health.json", market_status("US")[1], "先修复美股行情源或 ticker 映射"),
+        _runtime_row("行情拉取", "OK" if us_price else "FAIL", "DuckDB.price_daily[US]", f"{us_price} 只 · 最新 {price_latest}", "若为 0，检查 yfinance 美股 ticker"),
+        *market_v2_rows("US"),
+        _runtime_row("自选股·AI 优选 picks", us_pick_status, "DuckDB.picks(v6_us) → V2 兜底", us_pick_detail, "watchlist 空时静默退出是 V2 spec 正确行为"),
         _runtime_row("FMP/yfinance 深度数据", fmp_status, "data/latest/source_health.json", fmp_detail[:140], str(fmp.get("operator_action") or "FMP 降级不一定阻断主推荐")),
     ]
 
     cn_rows = [
-        _runtime_row("股票池/行情拉取", "OK" if cn_price else "FAIL", "DuckDB.prices", f"{cn_price} 只 · 最新行情 {price_latest}", "若为 0，检查 A 股 universe 与 Sina/akshare fallback"),
-        artifact_row("事件日历", "data/event_calendar.json", "data/event_calendar.json", "事件数据存在", "重跑 stock_research.jobs.event_calendar_daily"),
-        artifact_row("政策事件", "data/policy_events.json", "data/policy_events.json", "政策事件存在", "重跑 stock_research.jobs.policy_scan_daily"),
-        artifact_row("A 股权重校准", "data/calibrated_factor_weights.json", "data/calibrated_factor_weights.json", "校准权重存在", "重跑 stock_research.jobs.calibrate_a_share_factor_weights"),
-        _runtime_row("v6_cn 生产 picks", cn_pick_status, "DuckDB.picks + data/a_share_picks.json", cn_pick_detail, "若缺失，收盘后重跑 ./daily_refresh.sh --a-share-only"),
-        artifact_row("A 股调仓差额", "data/latest/trade_delta_cn.json", "data/latest/trade_delta_cn.json", "A 股调仓差额存在", "重跑 A 股闭环或 trade_delta_cn 相关步骤"),
+        _runtime_row("市场健康", market_status("CN")[0], "data/latest/source_health.json", market_status("CN")[1], "先修复 A 股行情源或 ticker 映射"),
+        _runtime_row("行情拉取", "OK" if cn_price else "FAIL", "DuckDB.price_daily[CN]", f"{cn_price} 只 · 最新 {price_latest}", "若为 0，检查 Sina / akshare fallback"),
+        *market_v2_rows("CN"),
+        _runtime_row("自选股·AI 优选 picks (v6_cn)", cn_pick_status, "DuckDB.picks(v6_cn) → V2 兜底", cn_pick_detail, "watchlist 空时静默退出是 V2 spec 正确行为；A 股闭环 16:30 单独跑"),
+        artifact_row("事件日历", "data/event_calendar.json", "data/event_calendar.json", "解禁/减增持/财报事件", "重跑 stock_research.jobs.event_calendar_daily"),
+        artifact_row("政策事件", "data/policy_events.json", "data/policy_events.json", "近 7 天政策受益主题", "重跑 stock_research.jobs.policy_scan_daily"),
+        artifact_row("A 股权重校准", "data/calibrated_factor_weights.json", "data/calibrated_factor_weights.json", "因子 IC 校准", "重跑 stock_research.jobs.calibrate_a_share_factor_weights"),
+        artifact_row("A 股调仓差额", "data/latest/trade_delta_cn.json", "data/latest/trade_delta_cn.json", "目标 - 持仓差额清单", "重跑 trade_delta.py --market cn"),
     ]
 
     hk_rows = [
-        _runtime_row("股票池/行情拉取", "OK" if hk_price else "FAIL", "DuckDB.prices", f"{hk_price} 只 · 最新行情 {price_latest}", "若为 0，检查港股 universe/yfinance 后缀 .HK"),
-        _runtime_row("v6_hk / 港股 picks", hk_pick_status, "DuckDB.picks", hk_pick_detail, "若缺失，重跑 scripts/pipeline/hk_picks.py"),
-        artifact_row("港股 picks JSON", "data/latest/hk_picks.json", "data/latest/hk_picks.json", "港股 picks JSON 存在", "重跑 scripts/pipeline/hk_picks.py"),
-        artifact_row("港股调仓差额", "data/latest/trade_delta_hk.json", "data/latest/trade_delta_hk.json", "港股调仓差额存在", "检查 trade_blocked 原因或重跑 trade_delta_hk"),
+        _runtime_row("市场健康", market_status("HK")[0], "data/latest/source_health.json", market_status("HK")[1], "先修复港股行情源或 ticker 映射"),
+        _runtime_row("行情拉取", "OK" if hk_price else "FAIL", "DuckDB.price_daily[HK]", f"{hk_price} 只 · 最新 {price_latest}", "若为 0，检查 yfinance 港股 .HK 后缀"),
+        *market_v2_rows("HK"),
+        _runtime_row("自选股·AI 优选 picks (v6_hk)", hk_pick_status, "DuckDB.picks(v6_hk) → V2 兜底", hk_pick_detail, "watchlist 空时静默退出是 V2 spec 正确行为"),
+        artifact_row("港股调仓差额", "data/latest/trade_delta_hk.json", "data/latest/trade_delta_hk.json", "目标 - 持仓差额清单", "重跑 trade_delta.py --market hk"),
     ]
 
     runtime_v2_candidates = _runtime_v2_recommendations(limit=20)
@@ -8179,6 +8352,107 @@ def runtime_status_panel_html() -> str:
     </div>
 """
 
+    # 基础设施块（2026-05-20）：3 launchd + cron + API + snapshots
+    infra_rows = []
+    infra_meta = [
+        ("launchd_morning", "🌅 早班 (08:30)", "每天 08:30 跑 --morning 快线（价格 → V2 推荐 → 组合 → dashboard）"),
+        ("launchd_a_share", "🇨🇳 收盘线 (16:30)", "工作日 16:30 跑 A 股闭环（北向 T+1 + 龙虎榜）"),
+        ("launchd_research", "🌙 夜班 (21:00)", "每天 21:00 跑 --research 慢任务（13F / OpenBB / history 预拉 / 事件日历）"),
+        ("defense_watcher", "🛡️ 防御信号 (15 min)", "每 15 分钟扫市场层防御（VIX / 200MA），升档即时通知"),
+        ("api_8765", "🔌 API 服务", "8765 端口 dashboard 后端 + 个股全历史接口"),
+        ("snapshots_prices", "📸 价格快照", "fetch_stock_prices.py 每次跑落一份；用于 daily_audit 跨源校验"),
+        ("snapshots_reviews", "📸 周回顾快照", "weekly_review.py 每次跑落一份；用于 alpha 跟踪"),
+    ]
+    for key, label, why in infra_meta:
+        item = infra.get(key) or {"status": "WARN", "detail": "未采集"}
+        infra_rows.append(f"""
+          <tr class="border-b border-slate-100 align-top">
+            <td class="py-2 pr-3 font-medium text-slate-900 whitespace-nowrap">{html_lib.escape(label)}</td>
+            <td class="py-2 pr-3">{_runtime_badge(str(item.get('status') or 'UNKNOWN'))}</td>
+            <td class="py-2 pr-3 text-xs text-slate-700">{html_lib.escape(str(item.get('detail') or ''))}</td>
+            <td class="py-2 text-xs text-slate-500">{html_lib.escape(why)}</td>
+          </tr>
+""")
+    infra_html = f"""
+  <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-4 mb-6">
+    <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
+      <div>
+        <h3 class="font-bold text-emerald-950">⚙️ 基础设施 — 自动化运行机制</h3>
+        <p class="text-xs text-emerald-800">这块告诉你「系统每天到底有没有自动跑起来」。3 条 launchd 线、1 个 cron、1 个 API 服务、2 类快照文件。</p>
+      </div>
+    </div>
+    <div class="overflow-x-auto bg-white rounded-lg border border-emerald-100">
+      <table class="w-full text-left text-sm">
+        <thead class="text-xs text-emerald-900 border-b border-emerald-100 bg-emerald-50/50">
+          <tr><th class="py-2 pl-3 pr-3">组件</th><th class="py-2 pr-3">状态</th><th class="py-2 pr-3">详情</th><th class="py-2 pr-3">为什么需要它</th></tr>
+        </thead>
+        <tbody>{''.join(infra_rows)}</tbody>
+      </table>
+    </div>
+  </div>
+"""
+
+    # V2 全表概览（2026-05-20）：所有 DuckDB 表的 row count + max_date 一览
+    v2_table_meaning = {
+        "system_universe":      "系统科技/AI 股票池（每条 = 一只候选标的）",
+        "pool_membership":      "标的当前是否仍在系统池里（active = TRUE）",
+        "price_daily":          "每只标的每日的收盘价 + 估值 + 市值",
+        "recommendation_runs":  "每次跑 build_v2_recommendations 都是一个 run（一天可能多个）",
+        "recommendation_picks": "每个 run 选出的 30 只候选（含信号/总分/factor scores）",
+        "portfolio_plans":      "每个 run 的目标组合（10 只 × 目标仓位）",
+        "pick_outcomes":        "每个 pick 在 1d / 5d / 20d 的 alpha 评估（每天 evaluate_v2_picks 增量）",
+        "holdings":             "你的真实持仓（V2 schema: market + symbol）",
+        "manual_watchlist":     "你手动加的自选股（dashboard 直接 CRUD）",
+    }
+    v2_table_rows = []
+    for tbl, meaning in v2_table_meaning.items():
+        st = v2_table_stats.get(tbl)
+        if not st:
+            v2_table_rows.append(f"""
+              <tr class="border-b border-slate-100">
+                <td class="py-2 pr-3 font-mono text-xs text-slate-700">{tbl}</td>
+                <td class="py-2 pr-3 text-right text-slate-400">—</td>
+                <td class="py-2 pr-3 text-xs text-slate-400">表不存在</td>
+                <td class="py-2 text-xs text-slate-500">{html_lib.escape(meaning)}</td>
+              </tr>
+""")
+            continue
+        count = st.get("count") or 0
+        max_d = st.get("max_date") or "—"
+        # 0 行的"用户预期就空"的表（holdings / manual_watchlist）标 INFO 不是 FAIL
+        if count == 0 and tbl in ("holdings", "manual_watchlist"):
+            count_color = "text-slate-400"
+        elif count == 0:
+            count_color = "text-rose-600 font-bold"
+        else:
+            count_color = "text-slate-900 font-semibold"
+        v2_table_rows.append(f"""
+              <tr class="border-b border-slate-100">
+                <td class="py-2 pr-3 font-mono text-xs text-slate-700">{tbl}</td>
+                <td class="py-2 pr-3 text-right {count_color}">{count:,}</td>
+                <td class="py-2 pr-3 text-xs text-slate-600 whitespace-nowrap">{html_lib.escape(max_d)}</td>
+                <td class="py-2 text-xs text-slate-500">{html_lib.escape(meaning)}</td>
+              </tr>
+""")
+    v2_tables_html = f"""
+  <div class="rounded-xl border border-violet-200 bg-violet-50 p-4 mt-6">
+    <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
+      <div>
+        <h3 class="font-bold text-violet-950">🗄️ DuckDB 全表概览</h3>
+        <p class="text-xs text-violet-800">本地 stock_history_v2.duckdb 所有核心表的行数和最近更新时间。空表里 holdings / manual_watchlist 是预期（V2 spec：等用户手动维护）。</p>
+      </div>
+    </div>
+    <div class="overflow-x-auto bg-white rounded-lg border border-violet-100">
+      <table class="w-full text-left text-sm">
+        <thead class="text-xs text-violet-900 border-b border-violet-100 bg-violet-50/50">
+          <tr><th class="py-2 pl-3 pr-3">表名</th><th class="py-2 pr-3 text-right">行数</th><th class="py-2 pr-3">最新时间</th><th class="py-2 pr-3">含义</th></tr>
+        </thead>
+        <tbody>{''.join(v2_table_rows)}</tbody>
+      </table>
+    </div>
+  </div>
+"""
+
     failure_html = ""
     if failures:
         items = "".join(f"<li>{html_lib.escape(x)}</li>" for x in failures)
@@ -8201,6 +8475,7 @@ def runtime_status_panel_html() -> str:
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">{cards_html}</div>
   </div>
   {data_clock_html}
+  {infra_html}
   <div class="rounded-xl border border-sky-200 bg-sky-50 p-4 mb-6">
     <h3 class="font-bold text-sky-950 mb-3">数据落点怎么读</h3>
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
@@ -8227,6 +8502,7 @@ def runtime_status_panel_html() -> str:
     {market_card("🇨🇳 A 股链路", cn_rows)}
     {market_card("🇭🇰 港股链路", hk_rows)}
   </div>
+  {v2_tables_html}
   {failure_html}
   {pipeline_steps_html}
 """
