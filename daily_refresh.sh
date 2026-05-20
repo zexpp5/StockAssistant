@@ -34,8 +34,19 @@ for arg in "$@"; do
     case "$arg" in
         --a-share-only) MODE="a_share_only" ;;
         --skip-a-share) MODE="skip_a_share" ;;
+        --morning)      MODE="morning" ;;      # 08:30 早班：快线，跳过慢研究
+        --research)     MODE="research" ;;     # 21:00 夜班：只跑慢研究
     esac
 done
+
+# is_research_step / is_morning_step：用来给慢研究步骤打守卫，让 morning 跳过、research 才跑
+is_research_step() {
+    [ "$MODE" = "full" ] || [ "$MODE" = "research" ]
+}
+# is_morning_step：morning + full 都跑；research 跳过（不重复算）
+is_morning_step() {
+    [ "$MODE" = "full" ] || [ "$MODE" = "morning" ]
+}
 
 # 默认值可以被环境变量覆盖；部署时 export DIR=/your/path
 DIR="${DIR:-$(cd "$(dirname "$0")" && pwd)}"
@@ -341,97 +352,78 @@ if [ "$MODE" = "a_share_only" ]; then
     exit $?
 fi
 
+# ────── M = morning 必跑（今日决策路径）；R = research 单独跑（慢任务夜班）──────
+# M
 run_step "1/25 抓价格（手动 watchlist + 科技/AI universe）" "scripts/pipeline/fetch_stock_prices.py --source both"
-# V2 推荐 run（2026-05-20 加入 daily_refresh）：读 price_daily + system_universe，
-# 写 recommendation_runs + recommendation_picks + portfolio_plans。
-# 必须在 step 10 (optimize_portfolio V2 fallback) 和 step 23 (build_pool_recommendations) 之前跑，
-# 让两者都能拿到今日 picks 而不是昨日。
+# M — V2 推荐 run（必须在 step 10/23 之前跑，让两者拿到今日 picks 而不是昨日）
 run_step "1b/25 V2 推荐 run（system_universe → recommendation_picks/portfolio_plans）" \
     "scripts/tools/build_v2_recommendations.py"
-run_step "2/25 SEC 13F 刷新" "-m stock_research.jobs.refresh_13f"
-run_step "3/25 SEC 13F → track_13f.json（dashboard 用）" "scripts/pipeline/_build_track_13f_from_sec.py"
+# R — SEC 13F 刷新（拉 10+ 大基金季度持仓变动，慢）
+is_research_step && run_step "2/25 SEC 13F 刷新" "-m stock_research.jobs.refresh_13f"
+is_research_step && run_step "3/25 SEC 13F → track_13f.json（dashboard 用）" "scripts/pipeline/_build_track_13f_from_sec.py"
+# M
 run_step "4/25 多源 enrichment" "-m stock_research.jobs.enrich_watchlist --skip-trends"
 run_step "5/25 跨源审计" "-m stock_research.jobs.daily_audit"
-run_step "6/25 每日优选 v1（旧体系 · dry-run 基线）" "scripts/pipeline/daily_picks.py --dry-run"
-run_step "7/25 picks 反向审查" "-m stock_research.jobs.audit_picks --fast"
-run_step "8/25 历史回顾" "scripts/pipeline/weekly_review.py"
+# R — 旧 v1 评分 + 反向审查 + 历史回顾（仅用于研究对照）
+is_research_step && run_step "6/25 每日优选 v1（旧体系 · dry-run 基线）" "scripts/pipeline/daily_picks.py --dry-run"
+is_research_step && run_step "7/25 picks 反向审查" "-m stock_research.jobs.audit_picks --fast"
+is_research_step && run_step "8/25 历史回顾" "scripts/pipeline/weekly_review.py"
 
-# 每日新闻同步飞书（财联社 100 条 → 国际/国内分类 → 删历史只保留当天）
-run_step "8b/25 每日新闻同步飞书" "scripts/daily_news_to_feishu.py"
+# R — 每日新闻同步飞书（财联社 100 条 → 国际/国内分类）
+is_research_step && run_step "8b/25 每日新闻同步飞书" "scripts/daily_news_to_feishu.py"
 
-# v6 学术因子流水线（Piotroski + 12-1 动量 + 1 月反转 + PEAD + 分析师）
+# M — v6 学术因子流水线（watchlist 空时静默退出，无慢操作）
 run_step "9/25 v6 学术因子选股（已落 DuckDB picks）" "scripts/pipeline/daily_picks_v5.py"
-# 9b 港股 picks：3 因子学术版（F-Score + 12-1 mom + 1m rev）
-# south_flow 模块已写但权重临时 0（五审发现 akshare 个股持股 % API 列名失效）
-# 待 daily prefetch cache 方案落地后恢复 south_flow 0.15
-# 早班可跑（akshare 年报 + yfinance entry），与美股 daily_picks_v5 同时段
 run_step "9b/25 港股 picks（3 因子 + DuckDB picks 表，south_flow standby）" "scripts/pipeline/hk_picks.py"
 run_step "10/25 risk-aware 仓位优化（方案 A v6）" "-m stock_research.jobs.optimize_portfolio"
-# 2026-05-12: step 22 (apply_a_share_constraints) 从 run_a_share_steps 拆出来挪到这里
-#   它的输入是 plan_a_v5.json（美股 plan），输出 plan_a_v5_constrained.json
-#   命名上叫 "a_share_constraints" 但实际处理美股仓位约束（A 股 holdings → 美股 plan），
-#   不该和 A 股 picks 绑定收盘时间。早班 7:30 就要跑出最新 constrained 版供 dashboard 用。
+# step 10b 处理美股 plan_constrained（A 股 holdings → 美股 plan），早班必须跑
 run_step "10b/25 plan_a 后处理（美股仓位约束）" "-m stock_research.jobs.apply_a_share_constraints"
 run_step "10c/25 推荐质量闸门（调仓前）" "scripts/tools/recommendation_quality_gate.py"
 run_step "11/25 调整清单（卖/买/调）→ trade_delta.json" "scripts/pipeline/trade_delta.py"
-# Step 12 已废 (2026-05-11 PM 第二轮): 飞书 Bitable 100% 退役,trade_delta 走 JSON+DuckDB
 
-# 专业分析数据
+# M — 专业分析数据（风险指标 morning 必跑；legacy 对比 + history 预拉是 research）
 run_step "13/25 风险指标 (VaR/Sharpe/Calmar)" "scripts/pipeline/risk_metrics.py"
-run_step "14/25 仓位优化方法对比" "scripts/pipeline/optimize_portfolio_legacy.py"
-run_step "15/25 历史数据预拉（dashboard 历史 tab 用）" "scripts/pipeline/_fetch_history_for_dashboard.py"
+is_research_step && run_step "14/25 仓位优化方法对比" "scripts/pipeline/optimize_portfolio_legacy.py"
+is_research_step && run_step "15/25 历史数据预拉（dashboard 历史 tab 用）" "scripts/pipeline/_fetch_history_for_dashboard.py"
 
-# v7 实盘防御（C 终极版：VIX + 200MA + 单股 -15% 止损 + 宏观 + PCR）
+# M — 实盘防御（VIX + 200MA + 单股 -15% 止损）
 run_step "16/25 实盘防御检查" "-m stock_research.jobs.realtime_defense"
 
-# v7.5 OpenBB 综合情报（宏观 + 行业轮动 + 商品 + PCR + 内部人）
-run_step "17/25 OpenBB 综合情报" "-m stock_research.jobs.openbb_intelligence --quick"
+# R — OpenBB 宏观 + 行业轮动（quick 但仍要 1-2 分钟）
+is_research_step && run_step "17/25 OpenBB 综合情报" "-m stock_research.jobs.openbb_intelligence --quick"
 
-# v8.0 A 股事件层（新增）：
-#   - IPO 日历：每天抓即将申购+已申购未上市+近 30 日上市，AI 主题打标
-#   - 事件日历：解禁 90d + 减增持 ±60d + 最近 4 季财报公告日（PEAD 用真实日）
-#   - 政策事件：扫 7 天新闻流，识别政策受益主题（用于 daily_picks 主题加权）
-run_step "18/25 IPO 打新日历" "-m stock_research.jobs.ipo_daily"
-run_step "19/25 事件日历（解禁/减持/财报）" "-m stock_research.jobs.event_calendar_daily"
-run_step "20/25 产业政策事件扫描" "-m stock_research.jobs.policy_scan_daily"
+# R — A 股事件层（IPO / 解禁 / 政策；19 比较慢）
+is_research_step && run_step "18/25 IPO 打新日历" "-m stock_research.jobs.ipo_daily"
+is_research_step && run_step "19/25 事件日历（解禁/减持/财报）" "-m stock_research.jobs.event_calendar_daily"
+is_research_step && run_step "20/25 产业政策事件扫描" "-m stock_research.jobs.policy_scan_daily"
 
-# v9.0 A 股选股闭环：
-#   - a_share_picks: 6 因子合成（Piotroski + 动量 + 反转 + LHB + 北向 + PEAD + 政策）
-#                    + 风险加权 + ST/涨停过滤 + sector_cap → data/a_share_picks.json
-# ⚠️ 仅在收盘后（≥16:00 工作日 或 周末）执行；早班 7:30 跑会被 A_SHARE_READY=0 跳过
-# 注：apply_a_share_constraints 已从此处拆出（见 step 10b），不再受收盘时间锁
-run_a_share_steps
+# v9.0 A 股选股闭环（仅 morning + full 兜底；A 股 picks 主路径走 --a-share-only 16:30 单独跑）
+# - 早班 08:30 (morning) 跑会被 A_SHARE_READY=0 自动跳过
+# - 21:00 research 路径不进 A 股 picks（避免和 16:30 a-share line 重复）
+is_morning_step && run_a_share_steps
 
-# AI 推荐：用今天已落 DuckDB 的 price_daily + recommendation_picks 做全池快速排名。
-# 不排除 watchlist，避免 AI 推荐页变成"自选股之外"的补充名单。
-# 深因子全量慢跑保留在 scripts/tools/discover_candidates.py，适合离线/周末跑。
+# M — AI 推荐（dashboard 全池排名 + 质量闸门复核 + 证据报告）
 run_step "23/25 全池 AI 推荐（每日）" "scripts/tools/build_pool_recommendations.py"
 
-# 2026-05-11 PM: 推荐准确度评估 — 每天跑(即使 discovery 本身跳过),
-# 因为要给过去 70 天的所有推荐刷新 1d/5d/20d/60d alpha 数据。
-run_step "23b/25 推荐准确度评估（每日）" "scripts/tools/evaluate_discovery.py"
+# R — 推荐准确度评估（扫过去 70 天历次推荐刷新 alpha，慢）
+is_research_step && run_step "23b/25 推荐准确度评估（每日）" "scripts/tools/evaluate_discovery.py"
+# M
 run_step "23c/25 推荐质量闸门（收盘后复核）" "scripts/tools/recommendation_quality_gate.py"
 run_step "23d/25 推荐有效性证据报告" "scripts/tools/recommendation_evidence_report.py"
 
-# DuckDB pipeline 同步：把今天刷新过的根目录数据 JSON（risk_metrics / track_13f / plan_a_v5
-# / history_data / optimization_result / factor_scores_today / reverse_validation_*）
-# 增量插入到 stock_history.duckdb 的 snapshots(category='pipeline') 表，
-# 使「数据源切换 = DuckDB」的看板能拿到当天数据。脚本幂等，按 mtime 时间戳去重。
-run_step "24/25 DuckDB pipeline 同步" "scripts/migrate/migrate_pipeline_to_duckdb.py"
+# M — DuckDB pipeline 同步 + HTML 重建 + brief + 验收
+# （这几步在 morning 必跑，research mode 不重做避免覆盖 morning 已落地的 dashboard）
+is_morning_step && run_step "24/25 DuckDB pipeline 同步" "scripts/migrate/migrate_pipeline_to_duckdb.py"
+is_morning_step && run_step "24b/25 产业链分级标注（重建 HTML 前）" "scripts/tools/classify_watchlist_chains.py"
+is_morning_step && run_step "25/25 重建 HTML" "scripts/pipeline/build_stock_dashboard_html.py"
 
-run_step "24b/25 产业链分级标注（重建 HTML 前）" "scripts/tools/classify_watchlist_chains.py"
-
-run_step "25/25 重建 HTML" "scripts/pipeline/build_stock_dashboard_html.py"
-
-# 25b 周一专属：walk-forward OOS 校验（验证近 12 个月因子组合月度表现）
-# 学术依据：Bailey & Lopez de Prado (2014) JPM — walk-forward 是减少 backtest overfit 的金标准
-# DOW=1 表示周一（date +%u 输出 1=Mon...7=Sun）；其他日子跳过
-if [ "$DOW" = "1" ]; then
+# R — 周一专属 walk-forward OOS 校验（每周一夜班 21:00 跑；morning 不跑）
+if is_research_step && [ "$DOW" = "1" ]; then
     WF_START=$($PYTHON -c "from datetime import date; d=date.today(); y=d.year-1; print(f'{y}-{d.month:02d}')")
     WF_END=$(date '+%Y-%m')
     run_step "25b/25 walk-forward OOS 校验（每周一）" \
         "-m stock_research.jobs.walk_forward_backtest --start $WF_START --end $WF_END --top-k 5"
-else
+elif is_research_step; then
     echo ""
     echo "[25b/25 walk-forward OOS] 跳过 — 仅周一执行（今天 weekday=$DOW，1=Mon）"
     ts=$(date '+%Y-%m-%d %H:%M:%S')
@@ -439,14 +431,15 @@ else
     write_pipeline_status "RUNNING" ""
 fi
 
-# 26 早安简报 — 这是真正的"主入口"，把所有 JSON 拼成一份每天能读完的 markdown。
-# 设了 FEISHU_BRIEF_WEBHOOK 还会自动推送到飞书群机器人。
-run_step "26 早安简报（主入口 · 每天打开看这一份）" "-m stock_research.jobs.morning_brief"
+# M — 早安简报 + 生产验收
+is_morning_step && run_step "26 早安简报（主入口 · 每天打开看这一份）" "-m stock_research.jobs.morning_brief"
 A_SHARE_ENABLED_NOW=$($PYTHON -c "from stock_research import config; print('1' if config.A_SHARE_PRODUCTION_ENABLED else '0')" 2>/dev/null || echo "0")
-if [ "$A_SHARE_ENABLED_NOW" = "1" ]; then
-    run_step "27 生产闭环验收" "scripts/tools/production_acceptance_check.py"
-else
-    run_step "27 生产闭环验收" "scripts/tools/production_acceptance_check.py --allow-a-share-disabled"
+if is_morning_step; then
+    if [ "$A_SHARE_ENABLED_NOW" = "1" ]; then
+        run_step "27 生产闭环验收" "scripts/tools/production_acceptance_check.py"
+    else
+        run_step "27 生产闭环验收" "scripts/tools/production_acceptance_check.py --allow-a-share-disabled"
+    fi
 fi
 
 DONE_TS=$(date '+%Y-%m-%d %H:%M:%S')
