@@ -744,6 +744,108 @@ def fetch_records_view(*, conn: duckdb.DuckDBPyConnection | None = None) -> list
     return out
 
 
+def fetch_research_records_v2(*, conn: duckdb.DuckDBPyConnection | None = None) -> list[dict]:
+    """V2 路径：从 system_universe + price_daily + 最新 recommendation_picks 拼出
+    给「个股研究 / 产业链地图 / 买前审查」的展示用 records。
+
+    与 fetch_records_view 形状对齐（同字段名），但纯 V2 表，没有任何 V1 watchlist/prices 依赖。
+    缺失的 V1 主观字段（business / ai_logic / conclusion / risks / peers / rhythm /
+    chain / chain_tier / chain_role / layman_intro 等）填 None — 前端做空值处理或隐藏。
+    """
+    own = conn is None
+    if own:
+        conn = get_db()
+    rows = conn.execute("""
+        WITH latest_price AS (
+            SELECT * FROM price_daily
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY market, symbol ORDER BY trade_date DESC, fetched_at DESC) = 1
+        ),
+        latest_run AS (
+            SELECT run_id, generated_at
+            FROM recommendation_runs
+            WHERE universe_scope = 'system_tech_universe' AND status = 'generated'
+            ORDER BY generated_at DESC LIMIT 1
+        ),
+        latest_picks AS (
+            SELECT rp.market, rp.symbol, rp.rating, rp.signal, rp.total_score, rp.factor_scores_json
+            FROM recommendation_picks rp JOIN latest_run lr USING(run_id)
+        ),
+        latest_snap AS (
+            SELECT
+                market,
+                json_extract_string(payload_json, '$.symbol') AS symbol,
+                json_extract_string(payload_json, '$.business') AS business,
+                json_extract_string(payload_json, '$.ai_logic') AS ai_logic,
+                json_extract_string(payload_json, '$.earnings') AS earnings,
+                json_extract_string(payload_json, '$.conclusion') AS conclusion,
+                json_extract_string(payload_json, '$.risks') AS risks,
+                json_extract_string(payload_json, '$.info_breakdown') AS info_breakdown,
+                json_extract_string(payload_json, '$.source_text') AS source_text,
+                json_extract_string(payload_json, '$.credibility') AS credibility,
+                json_extract_string(payload_json, '$.verification') AS verification,
+                fetched_at
+            FROM source_raw_snapshots
+            WHERE source = 'v2_system_enrichment'
+              AND json_extract_string(payload_json, '$.symbol') IS NOT NULL
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY market, json_extract_string(payload_json, '$.symbol')
+                ORDER BY business_date DESC, fetched_at DESC
+            ) = 1
+        )
+        SELECT
+            u.symbol AS code, u.name, u.market,
+            ls.business,
+            u.industry,
+            COALESCE(u.theme, '科技/AI universe') AS ai_relevance,
+            COALESCE(ls.ai_logic, ls.source_text) AS ai_logic,
+            ls.conclusion,
+            ls.risks,
+            NULL AS peers, NULL AS rhythm, NULL AS status, u.source, ls.credibility,
+            ls.earnings, ls.verification, ls.info_breakdown,
+            NULL AS chain, NULL AS chain_tier, NULL AS chain_role, NULL AS layman_intro,
+            u.theme,
+            lp.close          AS latest_price,
+            lp.market_cap     AS yf_market_cap,
+            lp.forward_pe,
+            lp.peg_ratio      AS peg,
+            NULL              AS earnings_growth_pct,
+            lp.ytd_pct,
+            lp.one_year_pct,
+            lp.one_month_pct,
+            lp.one_week_pct,
+            lp.trade_date     AS price_date,
+            lp.fetched_at     AS price_fetched_at,
+            COALESCE(ls.fetched_at, u.last_seen_at) AS analysis_updated_at,
+            lpk.rating        AS pick_rating,
+            lpk.signal        AS pick_signal,
+            lpk.total_score   AS pick_total_score,
+            lpk.factor_scores_json AS pick_factor_scores_json
+        FROM system_universe u
+        LEFT JOIN latest_price lp ON lp.market = u.market AND lp.symbol = u.symbol
+        LEFT JOIN latest_picks lpk ON lpk.market = u.market AND lpk.symbol = u.symbol
+        LEFT JOIN latest_snap ls ON ls.market = u.market AND ls.symbol = u.symbol
+        WHERE u.active = TRUE
+        ORDER BY u.market, u.symbol
+    """).fetchall()
+    cols = [
+        "code", "name", "market", "business", "industry",
+        "ai_relevance", "ai_logic", "conclusion", "risks", "peers",
+        "rhythm", "status", "source", "credibility",
+        "earnings", "verification", "info_breakdown",
+        "chain", "chain_tier", "chain_role", "layman_intro",
+        "theme",
+        "latest_price", "yf_market_cap", "forward_pe", "peg",
+        "earnings_growth_pct", "ytd_pct", "one_year_pct",
+        "one_month_pct", "one_week_pct", "price_date",
+        "price_fetched_at", "analysis_updated_at",
+        "pick_rating", "pick_signal", "pick_total_score", "pick_factor_scores_json",
+    ]
+    out = [dict(zip(cols, r)) for r in rows]
+    if own:
+        conn.close()
+    return out
+
+
 # ============================================================
 # Watchlist CRUD（2026-05-11 起：从飞书迁移到 DuckDB，权威源）
 # ============================================================

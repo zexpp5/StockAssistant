@@ -257,8 +257,8 @@ MY_VIEW = {
 # ============================================================
 def stock_signal(rec):
     """简化判断：基于 AI 关联度+研究状态返回简单的视觉信号。"""
-    ar = rec.get("ai_relevance", "")
-    st = rec.get("status", "")
+    ar = str(rec.get("ai_relevance") or "")
+    st = str(rec.get("status") or "")
     if "极强" in ar:
         return ("🔥", "极强", "red")
     if "强" in ar:
@@ -273,12 +273,21 @@ def stock_signal(rec):
 
 
 def yahoo_link(code, market):
-    if "美股" in market:
+    code = str(code or "")
+    market = str(market or "")
+    market_upper = market.upper()
+    if "美股" in market or market_upper in {"US", "UNITED STATES"}:
         return f'<a href="https://finance.yahoo.com/quote/{code}" target="_blank" class="text-blue-600 hover:underline font-mono">{code} ↗</a>'
-    if "A股" in market:
-        prefix = "sz" if code.startswith(("0", "1", "2", "3")) else "sh"
-        return f'<a href="https://quote.eastmoney.com/{prefix}{code}.html" target="_blank" class="text-blue-600 hover:underline font-mono">{code} ↗</a>'
-    if "港股" in market:
+    if "A股" in market or market_upper in {"CN", "CHINA"}:
+        clean_code = code.split(".")[0]
+        if code.upper().endswith(".BJ"):
+            prefix = "bj"
+        elif code.upper().endswith(".SS"):
+            prefix = "sh"
+        else:
+            prefix = "sz" if clean_code.startswith(("0", "1", "2", "3")) else "sh"
+        return f'<a href="https://quote.eastmoney.com/{prefix}{clean_code}.html" target="_blank" class="text-blue-600 hover:underline font-mono">{code} ↗</a>'
+    if "港股" in market or market_upper in {"HK", "HONG KONG"}:
         clean_code = code.split(".")[0]
         return f'<a href="https://www.aastocks.com/sc/stocks/quote/detailquote.aspx?symbol={clean_code}" target="_blank" class="text-blue-600 hover:underline font-mono">{code} ↗</a>'
     if "其他" in market or "韩股" in market:
@@ -6784,7 +6793,8 @@ def event_card_html(ev):
 
 def stock_card_html(rec):
     safe = lambda s: (s or "").replace("\n", "<br>").replace("**", "")
-    search_text = f"{rec['name']} {rec['code']} {rec['business']} {rec['industry']} {rec['ai_relevance']}"
+    field = lambda key: rec.get(key) or ""
+    search_text = f"{field('name')} {field('code')} {field('business')} {field('industry')} {field('ai_relevance')}"
     icon, label, color = stock_signal(rec)
     color_class = {
         "red": "bg-red-100 text-red-700",
@@ -6803,7 +6813,7 @@ def stock_card_html(rec):
 
     cred_badge = ""
     if rec.get("credibility"):
-        c = rec["credibility"]
+        c = str(rec.get("credibility") or "")
         if "高" in c:
             cred_badge = '<span class="text-xs px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-mono" title="数据可信度">🟢</span>'
         elif "中" in c:
@@ -6813,7 +6823,7 @@ def stock_card_html(rec):
 
     verif_badge = ""
     if rec.get("verification"):
-        v = rec["verification"]
+        v = str(rec.get("verification") or "")
         if "✅" in v or "已交叉" in v:
             verif_badge = '<span class="text-xs px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700" title="双源验证">✅ 双源</span>'
         elif "⚠️" in v or "单源" in v:
@@ -6888,47 +6898,47 @@ def stock_card_html(rec):
     return f'''<div data-search="{search_text}" class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 hover:shadow-lg transition">
   <div class="flex items-start justify-between mb-2">
     <div class="flex-1">
-      <h4 class="text-base font-bold text-slate-900">{rec['name']}</h4>
-      <div class="text-xs mt-0.5">{yahoo_link(rec['code'], rec['market'])} <span class="text-slate-500">· {rec['market']}</span></div>
+      <h4 class="text-base font-bold text-slate-900">{field('name')}</h4>
+      <div class="text-xs mt-0.5">{yahoo_link(field('code'), field('market'))} <span class="text-slate-500">· {field('market')}</span></div>
     </div>
     <div class="flex flex-col items-end gap-1 flex-shrink-0">
       <span class="text-xs px-2 py-1 rounded {color_class}">{icon} {label}</span>
       <div class="flex gap-1">{cred_badge}{verif_badge}</div>
     </div>
   </div>
-  <div class="text-xs text-slate-500 mb-2">{rec['industry']}</div>
+  <div class="text-xs text-slate-500 mb-2">{field('industry')}</div>
   {price_block}
 
   <details class="mt-2">
     <summary class="text-xs font-semibold text-slate-700 hover:text-violet-700"><span class="arrow"></span>主营业务</summary>
-    <p class="text-xs text-slate-600 mt-1 field-block pl-4">{safe(rec['business'])}</p>
+    <p class="text-xs text-slate-600 mt-1 field-block pl-4">{safe(field('business'))}</p>
   </details>
 
   <details class="mt-1">
     <summary class="text-xs font-semibold text-slate-700 hover:text-violet-700"><span class="arrow"></span>AI 关联逻辑</summary>
-    <p class="text-xs text-slate-600 mt-1 field-block pl-4">{safe(rec['ai_logic'])}</p>
+    <p class="text-xs text-slate-600 mt-1 field-block pl-4">{safe(field('ai_logic'))}</p>
   </details>
 
   <details class="mt-1">
     <summary class="text-xs font-semibold text-slate-700 hover:text-violet-700"><span class="arrow"></span>最近季度业绩</summary>
-    <p class="text-xs text-slate-600 mt-1 field-block pl-4">{safe(rec['earnings'])}</p>
+    <p class="text-xs text-slate-600 mt-1 field-block pl-4">{safe(field('earnings'))}</p>
   </details>
 
   <details class="mt-1">
     <summary class="text-xs font-semibold text-emerald-700 hover:text-emerald-900"><span class="arrow"></span>研究结论</summary>
-    <p class="text-xs text-slate-700 mt-1 field-block pl-4 bg-emerald-50 p-2 rounded">{safe(rec['conclusion'])}</p>
+    <p class="text-xs text-slate-700 mt-1 field-block pl-4 bg-emerald-50 p-2 rounded">{safe(field('conclusion'))}</p>
   </details>
 
   <details class="mt-1">
     <summary class="text-xs font-semibold text-rose-700 hover:text-rose-900"><span class="arrow"></span>关键风险</summary>
-    <p class="text-xs text-slate-700 mt-1 field-block pl-4 bg-rose-50 p-2 rounded">{safe(rec['risks'])}</p>
+    <p class="text-xs text-slate-700 mt-1 field-block pl-4 bg-rose-50 p-2 rounded">{safe(field('risks'))}</p>
   </details>
 
   {info_breakdown_block}
 
   <div class="mt-3 pt-2 border-t border-slate-100 text-xs text-slate-500">
-    <div>市值：{rec['market_cap']}</div>
-    <div>跟踪：{rec['rhythm']} · 状态：{rec['status']}</div>
+    <div>市值：{field('market_cap')}</div>
+    <div>跟踪：{field('rhythm')} · 状态：{field('status')}</div>
   </div>
 </div>'''
 
@@ -9581,7 +9591,10 @@ def build():
     db_stats = _runtime_db_stats()
     v2_stats = db_stats.get("v2") or {}
     if clean_v2:
-        records = []
+        # V2 path：直接走 V2 表（system_universe + price_daily + recommendation_picks），
+        # 不再调任何 V1 函数。chain/chain_tier 等 V1-only 主观字段为 None，前端做空值处理。
+        from stock_db import fetch_research_records_v2
+        records = fetch_research_records_v2()
         picks = []
         pool_total = int(v2_stats.get("system_universe") or 0)
         pool_membership = int(v2_stats.get("pool_membership") or 0)
@@ -9596,7 +9609,7 @@ def build():
             f"  v2 行情覆盖    = {coverage.get('priced', 0)}/{coverage.get('active_pool', 0)} "
             f"({coverage.get('pct', 0)}%)"
         )
-        print("  旧 watchlist / 自选 AI 优选 口径已退场，当前摘要只读 v2 系统池")
+        print(f"  records (V2 fallback) = {len(records)} 条（个股研究 / 产业链地图 用）")
     else:
         from stock_db import fetch_records_view, fetch_picks_view
         records = fetch_records_view()
