@@ -198,21 +198,15 @@ def cli_refresh():
 
     import sys as _sys
     _sys.path.insert(0, str(REPO / "scripts" / "lib"))
-    from stock_db import fetch_all_watchlist  # type: ignore
+    from stock_db import fetch_universe_for_ai_recommendations  # V2 system_universe
 
-    records = fetch_all_watchlist()
-    a_share_codes = []
-    for r in records:
-        code = (r.get("code") or "").strip()
-        market = r.get("market") or ""
-        is_a = (
-            "A股" in market or "A 股" in market or
-            "深交所" in market or "上交所" in market or
-            "科创" in market or "北交" in market or
-            (code.isdigit() and len(code) == 6)
-        )
-        if is_a:
-            a_share_codes.append(code)
+    # 2026-05-21 V1 cutover：从 V1 watchlist → V2 system_universe（CN market）
+    records = fetch_universe_for_ai_recommendations()
+    a_share_codes = [
+        (r.get("symbol") or "").strip()
+        for r in records
+        if (r.get("market") or "").upper() == "CN" and (r.get("symbol") or "").strip()
+    ]
 
     if args.limit:
         a_share_codes = a_share_codes[:args.limit]

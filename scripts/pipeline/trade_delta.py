@@ -151,9 +151,11 @@ def load_current_from_holdings(total_capital: float, market: str | None = None) 
     holdings = stock_db.fetch_all_holdings()
     if not holdings:
         return {}
+    # V2 name lookup：manual_watchlist + system_universe（V1 watchlist 表已删）
     try:
-        watchlist = stock_db.fetch_all_watchlist()
-        name_map = {r["code"]: r.get("name") or r["code"] for r in watchlist}
+        mw = stock_db.fetch_manual_watchlist()
+        u = stock_db.fetch_universe_for_ai_recommendations()
+        name_map = {r["code"]: r.get("name") or r["code"] for r in mw + u}
     except Exception:
         name_map = {}
     agg: dict = {}

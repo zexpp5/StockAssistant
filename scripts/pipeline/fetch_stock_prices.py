@@ -22,7 +22,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
 import duckdb  # noqa: E402
-from stock_db import DB_PATH, upsert_prices, fetch_all_watchlist  # noqa: E402
+from stock_db import DB_PATH, upsert_prices, fetch_manual_watchlist  # V2 manual_watchlist
 from stock_research.core import akshare_client  # noqa: E402
 from stock_research.core.hk_universe import fetch_hk_tech_universe  # noqa: E402
 from stock_research.core.us_universe import fetch_us_ai_tech_universe  # noqa: E402
@@ -287,11 +287,15 @@ def _tech_universe_items() -> list[dict]:
 
 
 def _load_price_items(source: str) -> list[dict]:
+    """source = watchlist | tech-universe | both
+
+    2026-05-21 V1 cutover：watchlist source 从 V1 watchlist → V2 manual_watchlist。
+    """
     rows: list[dict] = []
     if source in {"watchlist", "both"}:
-        wl = fetch_all_watchlist()
-        print(f"  手动 watchlist: {len(wl)} 条")
-        rows.extend({**r, "_price_source": "watchlist"} for r in wl)
+        wl = fetch_manual_watchlist()
+        print(f"  手动自选股 (manual_watchlist): {len(wl)} 条")
+        rows.extend({**r, "_price_source": "manual_watchlist"} for r in wl)
     if source in {"tech-universe", "both"}:
         tech = _tech_universe_items()
         print(f"  科技/AI universe: {len(tech)} 条")
@@ -302,8 +306,8 @@ def _load_price_items(source: str) -> list[dict]:
         code = (row.get("code") or "").strip()
         if not code:
             continue
-        # 手动 watchlist 优先，避免同代码时覆盖用户维护的名称/市场。
-        if code not in dedup or row.get("_price_source") == "watchlist":
+        # 手动自选股优先（用户主动加），避免被 universe 覆盖
+        if code not in dedup or row.get("_price_source") == "manual_watchlist":
             dedup[code] = row
     return list(dedup.values())
 

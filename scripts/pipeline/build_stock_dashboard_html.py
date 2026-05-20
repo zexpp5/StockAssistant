@@ -9786,47 +9786,20 @@ def build():
         n_picks_db = audit_snap_db.get("picks_today_count", 0)
         print(f"  反向审查快照已加载 [DuckDB]（{n_picks_db} 只 picks @ {ts_db}）")
 
-    # RECORDS / PICKS / SIMULATION 来自飞书 watchlist 实时拉，其它走 DuckDB
-    # 从 DuckDB 拉 watchlist 链条信息(chain/chain_tier/chain_role/layman_intro)
-    # 用于 Stock Pill 组件 — 任何 tab 显示股票时都能查到链条上下文
-    if clean_v2:
-        chain_info = {}
-        print("  Stock Pill 链条上下文跳过 [clean v2 无手动 watchlist legacy 表]")
-    else:
-      try:
-        from stock_db import fetch_all_watchlist
-        wl_rows = fetch_all_watchlist()
-        chain_info = {
-            r["code"]: {
-                "name": r.get("name"),
-                "chain": r.get("chain"),
-                "chain_tier": r.get("chain_tier"),
-                "chain_role": r.get("chain_role"),
-                "layman_intro": r.get("layman_intro"),
-            }
-            for r in wl_rows
-        }
-        n_wl = len(chain_info)
-        # 2026-05-11 PM: 合并 candidate / 其他非 watchlist ticker 的链条覆盖文件
-        # (让AI 推荐里的 ticker 也能在 stockPill 显示链条信息)
-        overrides_path = os.path.join(_REPO, "data", "stock_chain_overrides.json")
-        if os.path.exists(overrides_path):
+    # Stock Pill 链条上下文：V2 路径只读 data/stock_chain_overrides.json（V1 watchlist 链条字段已删）
+    chain_info: dict = {}
+    overrides_path = os.path.join(_REPO, "data", "stock_chain_overrides.json")
+    if os.path.exists(overrides_path):
+        try:
             with open(overrides_path, encoding="utf-8") as f:
                 overrides = json.load(f)
-            n_added = 0
             for code, meta in overrides.items():
-                if code.startswith("_"):  # 跳过 _comment / _schema_version 这些元数据键
+                if code.startswith("_"):
                     continue
-                if code not in chain_info:  # watchlist 优先
-                    chain_info[code] = meta
-                    n_added += 1
-            print(f"  Stock Pill 链条上下文已加载 [DuckDB+overrides]"
-                  f"({n_wl} watchlist + {n_added} overrides = {len(chain_info)} 条)")
-        else:
-            print(f"  Stock Pill 链条上下文已加载 [DuckDB]({n_wl} 条)")
-      except Exception as e:
-        print(f"  ⚠️ 链条上下文加载失败: {e}")
-        chain_info = {}
+                chain_info[code] = meta
+            print(f"  Stock Pill 链条上下文已加载 [overrides]({len(chain_info)} 条)")
+        except Exception as e:
+            print(f"  ⚠️ 链条上下文加载失败: {e}")
     html = html.replace("{WATCHLIST_CHAIN_INFO_JSON}", json.dumps(chain_info, ensure_ascii=False))
 
     # AI 推荐的历史推荐 + 准确度跟踪(DuckDB discovery_history JOIN tracking)

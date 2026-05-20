@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.join(_REPO, "scripts", "lib"))  # 2026-05-11 lib 迁�
 import numpy as np
 from datetime import datetime, timedelta
 
+import pandas as pd
 import yfinance as yf
 
 # 运行时从 plan_a_v5.json 动态加载（v6 risk-aware 当前推荐组合；文件名保留兼容）
@@ -37,6 +38,7 @@ except Exception:
 FX_TO_RMB = {"USD": 7.10, "HKD": 0.91, "AUD": 4.60, "CNY": 1.0}
 RISK_FREE_RATE = 0.045  # 美国 10Y 国债收益率 ~4.5%
 TRADING_DAYS = 252
+_HISTORY_CACHE = None
 
 
 def _ccy_from_ticker(ticker: str) -> str:
@@ -127,7 +129,44 @@ def load_portfolio_from_plan():
     return portfolio, cash_pct
 
 
+def _load_history_cache():
+    global _HISTORY_CACHE
+    if _HISTORY_CACHE is not None:
+        return _HISTORY_CACHE
+    path = os.path.join(_REPO, "data", "latest", "history_data.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        _HISTORY_CACHE = payload.get("tickers") or {}
+    except Exception as e:
+        print(f"  ⚠️ 本地 history_data.json 不可用: {e}")
+        _HISTORY_CACHE = {}
+    return _HISTORY_CACHE
+
+
+def _history_from_cache(ticker: str, lookback_days: int):
+    row = _load_history_cache().get(ticker)
+    if not isinstance(row, dict):
+        return None
+    dates = row.get("ts") or row.get("dates") or []
+    closes = row.get("close") or row.get("closes") or []
+    if not dates or not closes or len(dates) != len(closes):
+        return None
+    try:
+        s = pd.Series(pd.to_numeric(closes, errors="coerce"), index=pd.to_datetime(dates), name=ticker).dropna()
+    except Exception:
+        return None
+    if s.empty:
+        return None
+    cutoff = pd.Timestamp(datetime.now() - timedelta(days=lookback_days))
+    s = s[s.index >= cutoff]
+    return s if len(s) >= 100 else None
+
+
 def fetch_history(ticker, lookback_days=400):
+    cached = _history_from_cache(ticker, lookback_days)
+    if cached is not None:
+        return cached
     end = datetime.now()
     start = end - timedelta(days=lookback_days)
     try:
@@ -183,6 +222,9 @@ def main():
     # 关键：用「所有 12 只股票都有数据的最早日期」作为统一起点 D0
     # 这样每只股票的「first_price」是 D0 那天的价格（一致基准）
     earliest_dates = [s.index[0].date() for s in series.values()]
+    if not earliest_dates:
+        print("  ❌ 没有任何标的拿到可用历史数据，风险指标不可生成")
+        sys.exit(1)
     D0 = max(earliest_dates)
     print(f"  统一起点 D0 = {D0}（所有 12 只都有数据的最早一天）")
 

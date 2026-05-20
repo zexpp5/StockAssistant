@@ -16,7 +16,7 @@ import os
 import signal
 import sys
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -311,6 +311,109 @@ def _latest_recommendation(
     }
 
 
+def _load_recent_payload(
+    conn: duckdb.DuckDBPyConnection,
+    target: dict[str, Any],
+    max_age_days: int,
+) -> dict[str, Any] | None:
+    """Return a recent V2 enrichment payload for the same symbol.
+
+    This deliberately reuses only this job's own V2 snapshots. It does not read
+    legacy watchlist rows, old DuckDB backups, or data/latest caches.
+    """
+    if max_age_days <= 0:
+        return None
+    cutoff = date.today() - timedelta(days=max_age_days)
+    raw_symbol = str(target.get("raw_symbol") or "").strip().upper()
+    candidates = [target["symbol"]]
+    if raw_symbol and raw_symbol not in candidates:
+        candidates.append(raw_symbol)
+    rows = conn.execute(
+        """
+        SELECT payload_json, fetched_at
+        FROM source_raw_snapshots
+        WHERE source = 'v2_system_enrichment'
+          AND market = ?
+          AND business_date >= ?
+          AND (
+            upper(json_extract_string(payload_json, '$.symbol')) IN (?, ?)
+            OR upper(json_extract_string(payload_json, '$.raw_symbol')) IN (?, ?)
+          )
+        ORDER BY fetched_at DESC
+        LIMIT 1
+        """,
+        [
+            target["market"],
+            cutoff,
+            candidates[0],
+            candidates[1] if len(candidates) > 1 else candidates[0],
+            candidates[0],
+            candidates[1] if len(candidates) > 1 else candidates[0],
+        ],
+    ).fetchall()
+    if not rows:
+        return None
+    payload_json, fetched_at = rows[0]
+    try:
+        payload = json.loads(payload_json) if isinstance(payload_json, str) else payload_json
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    payload["_reused_from_fetched_at"] = (
+        fetched_at.isoformat(sep=" ", timespec="seconds") if hasattr(fetched_at, "isoformat") else str(fetched_at)
+    )
+    return payload
+
+
+def _reuse_recent_enrichment(
+    target: dict[str, Any],
+    recent: dict[str, Any],
+    recommendation: dict[str, Any],
+    fetched_at: datetime,
+) -> dict[str, Any]:
+    sources = list(dict.fromkeys(str(s) for s in (recent.get("sources_used") or []) if s))
+    reused_from = str(recent.get("_reused_from_fetched_at") or recent.get("fetched_at") or "")
+    earnings = recent.get("earnings") or _fallback_earnings_status(
+        target,
+        {"sources_used": sources},
+        "recent V2 snapshot had no earnings field",
+        fetched_at,
+    )
+    conclusion, risks = _analysis_text(target, recommendation)
+    fields = {"earnings": str(earnings)}
+    info_breakdown = _fallback_info_breakdown(target, fields, recommendation, fetched_at)
+    source_lines = []
+    if recent.get("source_text"):
+        source_lines.append(str(recent["source_text"]))
+    elif sources:
+        source_lines.extend(f"· {s}" for s in sources)
+    source_lines.append(
+        f"· V2 recent snapshot reuse: external fields reused from {reused_from or 'recent V2 snapshot'}; "
+        "recommendation/conclusion refreshed for current run"
+    )
+    return {
+        "enriched": {
+            "name": target["name"],
+            "code": target["symbol"],
+            "market": target["market_label"],
+            "fetched_at": fetched_at.isoformat(timespec="seconds"),
+            "sources_used": ["v2_recent_snapshot_reuse", *sources],
+            "earnings_summary": earnings,
+            "earnings_quarters": [],
+        },
+        "fields": {
+            "earnings": str(earnings),
+            "source": "\n".join(source_lines),
+        },
+        "info_breakdown": info_breakdown,
+        "conclusion": conclusion,
+        "risks": risks,
+        "external_source_error": "",
+        "reuse_note": reused_from,
+    }
+
+
 def _analysis_text(target: dict[str, Any], recommendation: dict[str, Any]) -> tuple[str, str]:
     if not recommendation:
         conclusion = (
@@ -486,6 +589,7 @@ def _record_fetch_log(
     fetched: int,
     failed: int,
     degraded: int,
+    reused: int,
     financial_rows: int,
 ) -> None:
     if failed == 0 and degraded == 0:
@@ -515,7 +619,7 @@ def _record_fetch_log(
             fallback_source,
             fetched_at,
             (
-                f"写入 V2 enrichment {fetched} 条，降级 {degraded} 条，"
+                f"写入 V2 enrichment {fetched} 条，复用近端 V2 快照 {reused} 条，降级 {degraded} 条，"
                 f"失败 {failed} 条，financial_statements {financial_rows} 行"
             ),
         ],
@@ -553,6 +657,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     fetched = 0
     failed = 0
     degraded = 0
+    reused = 0
     financial_rows = 0
     failures: list[dict[str, str]] = []
 
@@ -560,39 +665,51 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         print(f"  → {target['symbol']} {target['name']} ({target['market']})", flush=True)
         try:
             enrich_error = ""
-            try:
-                enriched = _with_timeout(
-                    args.per_symbol_timeout_sec,
-                    _fetch_enrichment,
-                    target["name"],
-                    target["symbol"],
-                    target["market_label"],
-                    do_trends=not args.skip_trends,
-                    do_finnhub=not args.skip_finnhub,
-                    do_akshare=not args.skip_akshare,
-                    do_baostock=not args.skip_baostock,
-                )
-            except Exception as exc:
-                degraded += 1
-                enrich_error = str(exc)
-                enriched = {
-                    "name": target["name"],
-                    "code": target["symbol"],
-                    "market": target["market_label"],
-                    "fetched_at": datetime.now().isoformat(timespec="seconds"),
-                    "sources_used": [],
-                }
-            fields = _format_enrichment_fields(enriched)
             recommendation = _latest_recommendation(conn, target["market"], target["symbol"])
-            conclusion, risks = _analysis_text(target, recommendation)
             fetched_at = datetime.now()
-            earnings = (
-                fields.get("earnings")
-                or enriched.get("earnings_summary")
-                or _fallback_earnings_status(target, enriched, enrich_error, fetched_at)
-            )
-            fields = {**fields, "earnings": earnings}
-            info_breakdown = _fallback_info_breakdown(target, fields, recommendation, fetched_at)
+            recent_payload = _load_recent_payload(conn, target, args.reuse_recent_days)
+            if recent_payload:
+                reused += 1
+                reuse = _reuse_recent_enrichment(target, recent_payload, recommendation, fetched_at)
+                enriched = reuse["enriched"]
+                fields = reuse["fields"]
+                earnings = fields["earnings"]
+                info_breakdown = reuse["info_breakdown"]
+                conclusion = reuse["conclusion"]
+                risks = reuse["risks"]
+                enrich_error = reuse["external_source_error"]
+            else:
+                try:
+                    enriched = _with_timeout(
+                        args.per_symbol_timeout_sec,
+                        _fetch_enrichment,
+                        target["name"],
+                        target["symbol"],
+                        target["market_label"],
+                        do_trends=not args.skip_trends,
+                        do_finnhub=not args.skip_finnhub,
+                        do_akshare=not args.skip_akshare,
+                        do_baostock=not args.skip_baostock,
+                    )
+                except Exception as exc:
+                    degraded += 1
+                    enrich_error = str(exc)
+                    enriched = {
+                        "name": target["name"],
+                        "code": target["symbol"],
+                        "market": target["market_label"],
+                        "fetched_at": datetime.now().isoformat(timespec="seconds"),
+                        "sources_used": [],
+                    }
+                fields = _format_enrichment_fields(enriched)
+                conclusion, risks = _analysis_text(target, recommendation)
+                earnings = (
+                    fields.get("earnings")
+                    or enriched.get("earnings_summary")
+                    or _fallback_earnings_status(target, enriched, enrich_error, fetched_at)
+                )
+                fields = {**fields, "earnings": earnings}
+                info_breakdown = _fallback_info_breakdown(target, fields, recommendation, fetched_at)
             payload = {
                 "schema_version": "v2_system_enrichment_v1",
                 "run_id": run_id,
@@ -613,6 +730,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "risks": risks,
                 "notes": "",
                 "external_source_error": enrich_error,
+                "reused_recent_v2_snapshot": bool(recent_payload),
+                "reused_from_fetched_at": recent_payload.get("_reused_from_fetched_at") if recent_payload else None,
                 "recommendation": recommendation,
             }
             _upsert_snapshot(conn, target, payload, fetched_at)
@@ -635,6 +754,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         fetched=fetched,
         failed=failed,
         degraded=degraded,
+        reused=reused,
         financial_rows=financial_rows,
     )
     conn.close()
@@ -645,6 +765,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "fetched": fetched,
         "failed": failed,
         "degraded": degraded,
+        "reused": reused,
         "financial_statement_rows": financial_rows,
         "failures": failures[:20],
     }
@@ -656,6 +777,15 @@ def main() -> int:
     parser.add_argument("--symbols", help="Comma-separated symbols, e.g. NVDA,TSM,300308.SZ")
     parser.add_argument("--limit", type=int, help="Limit rows for smoke tests.")
     parser.add_argument("--missing-only", action="store_true", help="Only enrich active system_universe symbols without today's v2 snapshot.")
+    parser.add_argument(
+        "--reuse-recent-days",
+        type=int,
+        default=0,
+        help=(
+            "Reuse this job's recent V2 snapshots for external earnings/source fields, "
+            "while refreshing today's recommendation/conclusion/risk text. 0 disables reuse."
+        ),
+    )
     parser.add_argument("--skip-trends", action="store_true", help="Skip Google Trends.")
     parser.add_argument("--skip-finnhub", action="store_true", help="Skip Finnhub US enrichment.")
     parser.add_argument("--skip-akshare", action="store_true", help="Skip akshare CN/HK enrichment.")
@@ -670,7 +800,7 @@ def main() -> int:
     else:
         print(
             f"\nV2 enrichment: fetched={summary['fetched']}/{summary['target_count']} "
-            f"failed={summary['failed']} degraded={summary['degraded']} "
+            f"failed={summary['failed']} degraded={summary['degraded']} reused={summary['reused']} "
             f"financial_rows={summary['financial_statement_rows']}"
         )
     return 0 if summary["failed"] == 0 else 1

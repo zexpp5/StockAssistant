@@ -62,13 +62,16 @@ def create_app():
     @app.get("/health")
     def health():
         from .. import config as _c
-        import stock_db  # 与其他 endpoint 一致：local import 避免启动时初始化 db
-        wl_n = len(stock_db.fetch_all_watchlist())
+        import stock_db
+        # 2026-05-21 V1 cutover：health 报告 V2 三表行数（manual_watchlist 用户自选股 / system_universe 系统池 / pool_membership）
+        mw_n = len(stock_db.fetch_manual_watchlist())
+        u_n = len(stock_db.fetch_universe_for_ai_recommendations())
         return {
             "status": "ok",
             "investors_tracked": len(_c.INVESTORS_13F),
-            "watchlist_rows": wl_n,
-            "data_source": "DuckDB (飞书 Bitable 已 100% 退役)",
+            "manual_watchlist_rows": mw_n,
+            "system_universe_rows": u_n,
+            "data_source": "V2 DuckDB",
         }
 
     # ────────── 13F 查询 ──────────
@@ -91,13 +94,12 @@ def create_app():
         filings = edgar.list_13f_filings(cik)
         return filings[:limit]
 
-    # ────────── Watchlist (DuckDB · single source of truth · 2026-05-11 起) ──────────
+    # ────────── Manual Watchlist (V2 单源真相 · 2026-05-21 V1 cutover) ──────────
     @app.get("/api/watchlist")
     def list_watchlist() -> list[dict[str, Any]]:
-        """读 DuckDB watchlist 全表。"""
-        import stock_db  # local import 避免启动时初始化 db connection
-        rows = stock_db.fetch_all_watchlist()
-        # datetime → ISO string (FastAPI JSON 序列化兼容)
+        """读 V2 manual_watchlist 全表（用户在 dashboard 手动加的自选股）。"""
+        import stock_db
+        rows = stock_db.fetch_manual_watchlist()
         for r in rows:
             for k in ("created_at", "updated_at"):
                 v = r.get(k)

@@ -63,6 +63,7 @@ def _default_capital() -> float:
 
 
 DEFAULT_CAPITAL = _default_capital()
+_HISTORY_CACHE: dict | None = None
 
 
 def _safe_float(value, default=None):
@@ -153,8 +154,82 @@ def _load_factor_scores() -> dict | None:
     }
 
 
+def _load_history_cache() -> dict:
+    global _HISTORY_CACHE
+    if _HISTORY_CACHE is not None:
+        return _HISTORY_CACHE
+    path = _REPO_ROOT / "data" / "latest" / "history_data.json"
+    try:
+        with open(path, encoding="utf-8") as f:
+            payload = json.load(f)
+        _HISTORY_CACHE = payload.get("tickers") or {}
+    except Exception as e:
+        logger.warning("history_data.json 不可用: %s", e)
+        _HISTORY_CACHE = {}
+    return _HISTORY_CACHE
+
+
+def _cached_close_series(ticker: str, lookback_days: int) -> pd.Series | None:
+    row = _load_history_cache().get(ticker)
+    if not isinstance(row, dict):
+        return None
+    dates = row.get("ts") or row.get("dates") or []
+    closes = row.get("close") or row.get("closes") or []
+    if not dates or not closes or len(dates) != len(closes):
+        return None
+    try:
+        series = pd.Series(pd.to_numeric(closes, errors="coerce"), index=pd.to_datetime(dates), name=ticker).dropna()
+    except Exception:
+        return None
+    cutoff = pd.Timestamp(datetime.now() - timedelta(days=lookback_days + 60))
+    series = series[series.index >= cutoff]
+    return series if len(series) >= 60 else None
+
+
+def _adv_from_cache_or_price_daily(ticker: str, close_series: pd.Series | None) -> float | None:
+    row = _load_history_cache().get(ticker)
+    if isinstance(row, dict) and row.get("volume") and close_series is not None and len(close_series) >= 30:
+        try:
+            volume = pd.Series(pd.to_numeric(row["volume"], errors="coerce")).dropna().tail(30)
+            if len(volume) > 0:
+                return float(volume.mean()) * float(close_series.iloc[-1])
+        except Exception:
+            pass
+    try:
+        import duckdb
+        import stock_db
+
+        con = duckdb.connect(str(stock_db.DB_PATH), read_only=True)
+        row_db = con.execute(
+            """
+            SELECT market_cap
+            FROM price_daily
+            WHERE symbol = ? AND market_cap IS NOT NULL
+            ORDER BY trade_date DESC, fetched_at DESC
+            LIMIT 1
+            """,
+            [ticker],
+        ).fetchone()
+        con.close()
+        mcap = _safe_float(row_db[0] if row_db else None)
+        if mcap and mcap > 0:
+            # history_data.json currently has closes but not volume. Use a
+            # conservative turnover proxy so ADV gates stay active without a
+            # live yfinance dependency.
+            return mcap * 0.003
+    except Exception as e:
+        logger.debug("price_daily ADV proxy failed for %s: %s", ticker, e)
+    return None
+
+
 def _fetch_returns_and_adv(ticker: str, lookback_days: int = 252):
-    """yfinance 拉历史收益 + 当前 ADV（美元）。"""
+    """历史收益 + 当前 ADV；优先用本地 V2 history/price_daily，缺失再打 yfinance。"""
+    cached = _cached_close_series(ticker, lookback_days)
+    if cached is not None:
+        rets = cached.pct_change().dropna().values
+        adv = _adv_from_cache_or_price_daily(ticker, cached)
+        if len(rets) >= 60 and adv and adv > 0:
+            return rets[-lookback_days:], adv
     try:
         import yfinance as yf
     except ImportError:

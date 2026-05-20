@@ -366,7 +366,7 @@ is_research_step && run_step "2/25 SEC 13F 刷新" "-m stock_research.jobs.refre
 is_research_step && run_step "3/25 SEC 13F → track_13f.json（dashboard 用）" "scripts/pipeline/_build_track_13f_from_sec.py"
 # M — V2 系统池 enrichment（system_universe → industry/earnings/详情页字段）
 run_step "4b/25 V2 系统池 enrichment" \
-    "scripts/tools/enrich_system_universe_v2.py --skip-trends --skip-akshare --sleep-sec 0.02 --per-symbol-timeout-sec 18"
+    "scripts/tools/enrich_system_universe_v2.py --reuse-recent-days 7 --skip-trends --skip-akshare --sleep-sec 0.02 --per-symbol-timeout-sec 18"
 # 2026-05-20 V1 cutover：删 step 4 (V1 enrich_watchlist) / 5 (V1 daily_audit) /
 # 6 (V1 daily_picks dry-run) / 7 (audit_picks V1 reviews) / 8 (weekly_review V1 picks)
 

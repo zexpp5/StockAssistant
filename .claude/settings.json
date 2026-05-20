@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sed -n '316,316p;524,524p' scripts/tools/recommendation_quality_gate.py)",
+      "Bash(sed -n '316,524p' scripts/tools/recommendation_quality_gate.py)"
+    ]
+  }
+}
