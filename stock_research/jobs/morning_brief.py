@@ -94,7 +94,11 @@ def _load_us_plan() -> dict | None:
 
 
 def _load_a_share_picks() -> dict | None:
-    """Load A-share picks JSON, with DuckDB v6_cn as fresher source of truth."""
+    """Load A-share picks JSON, with DuckDB as fresher source of truth.
+
+    2026-05-20: 优先 V2 recommendation_picks（最新 system_tech_universe run 的 CN 筛选），
+    再退 V1 picks.v6_cn（用户没维护自选股时会空），最后兜 a_share_picks.json。
+    """
     json_payload = _load_json(REPO / "data" / "a_share_picks.json")
     try:
         lib_path = str(REPO / "scripts" / "lib")
@@ -103,6 +107,51 @@ def _load_a_share_picks() -> dict | None:
         from stock_db import get_db
 
         conn = get_db()
+        # ── V2 优先 ──
+        v2_run = conn.execute(
+            """
+            SELECT run_id, run_date FROM recommendation_runs
+            WHERE universe_scope = 'system_tech_universe' AND status = 'generated'
+            ORDER BY generated_at DESC LIMIT 1
+            """
+        ).fetchone()
+        if v2_run:
+            run_id, run_date = v2_run
+            # JOIN system_universe 拿最新 name（picks 表里的 name 可能是 stale=symbol）
+            v2_rows = conn.execute(
+                """
+                SELECT p.symbol,
+                       COALESCE(NULLIF(u.name, p.symbol), p.name) AS name,
+                       p.market, p.rating, p.total_score
+                FROM recommendation_picks p
+                LEFT JOIN system_universe u
+                  ON p.market = u.market AND p.symbol = u.symbol
+                WHERE p.run_id = ? AND p.market = 'CN' AND p.signal = 'buy'
+                ORDER BY p.total_score DESC NULLS LAST, p.symbol
+                """,
+                [run_id],
+            ).fetchall()
+            if v2_rows:
+                conn.close()
+                db_date = str(run_date)[:10]
+                json_date = str((json_payload or {}).get("generated_at") or "")[:10]
+                if isinstance(json_payload, dict) and json_date > db_date:
+                    return json_payload  # 极少情况 JSON 比 V2 还新
+                selected = [{
+                    "code": symbol, "ticker": symbol, "name": name,
+                    "market": market or "A股", "rating": rating,
+                    "composite": (float(total_score) / 100) if total_score is not None else 0,
+                    "industry": "科技", "theme": "科技/AI",
+                } for symbol, name, market, rating, total_score in v2_rows]
+                return {
+                    "generated_at": f"{db_date}T00:00:00",
+                    "source": "duckdb:recommendation_picks.system_tech_universe",
+                    "n_recommended": len(selected),
+                    "selected": selected,
+                    "all_entries": selected,
+                }
+
+        # ── V1 兜底 ──
         latest = conn.execute(
             "SELECT MAX(pick_date) FROM picks WHERE model_source = 'v6_cn'"
         ).fetchone()[0]

@@ -7474,7 +7474,7 @@ def _runtime_db_stats() -> dict:
                 }
             if "recommendation_picks" in tables and "recommendation_runs" in tables:
                 latest_run = con.execute(
-                    "SELECT run_id FROM recommendation_runs ORDER BY generated_at DESC LIMIT 1"
+                    "SELECT run_id, run_date FROM recommendation_runs ORDER BY generated_at DESC LIMIT 1"
                 ).fetchone()
                 if latest_run:
                     rows = con.execute(
@@ -7488,10 +7488,32 @@ def _runtime_db_stats() -> dict:
                     ).fetchall()
                     stats["picks"]["system_tech_universe"] = {
                         "latest_run_id": latest_run[0],
+                        "latest_date": str(latest_run[1])[:10] if latest_run[1] else None,
                         "buy_n": sum(int(n or 0) for sig, n in rows if str(sig) == "buy"),
                         "total_n": sum(int(n or 0) for _, n in rows),
                         "signals": {str(sig): int(n or 0) for sig, n in rows},
                     }
+                    # 按 market 拆 — 今日决策台 / 运行状态 三市场视图用
+                    market_rows = con.execute(
+                        """
+                        SELECT market, signal, COUNT(*)
+                        FROM recommendation_picks
+                        WHERE run_id = ?
+                        GROUP BY market, signal
+                        """,
+                        [latest_run[0]],
+                    ).fetchall()
+                    for market, signal, n in market_rows:
+                        key = {"US": "v2_us", "CN": "v2_cn", "HK": "v2_hk"}.get(str(market).upper())
+                        if not key:
+                            continue
+                        bucket = stats["picks"].setdefault(key, {
+                            "latest_date": str(latest_run[1])[:10] if latest_run[1] else None,
+                            "buy_n": 0, "total_n": 0,
+                        })
+                        bucket["total_n"] += int(n or 0)
+                        if str(signal) == "buy":
+                            bucket["buy_n"] += int(n or 0)
             if "source_fetch_log" in tables:
                 rows = con.execute(
                     """
@@ -7912,7 +7934,11 @@ def runtime_status_panel_html() -> str:
     )
 
     def pick_detail(source: str) -> tuple[str, str]:
-        row = (db.get("picks") or {}).get(source) or {}
+        picks = db.get("picks") or {}
+        row = picks.get(source) or {}
+        # V2 兜底：legacy v6_X 空时，转 V2 同市场（v6_us → v2_us）
+        if not row and source.startswith("v6_"):
+            row = picks.get(source.replace("v6_", "v2_")) or {}
         if not row:
             return "FAIL", "无最新 production picks"
         status = "OK" if int(row.get("buy_n") or 0) > 0 else "WARN"
