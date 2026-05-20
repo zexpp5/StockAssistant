@@ -794,9 +794,8 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
         print("  (dry-run 模式，跳过 DuckDB picks 写入)")
         return 0
 
-    # 写 DuckDB picks（让 dashboard #picks tab 自动展示 A 股优选 · 2026-05-12 三线独立化）
+    # 2026-05-21 V1 cutover：picks 表已删；只算 entry_price 不写库
     try:
-        from stock_db import upsert_picks
         # A 股当前价：优先 snapshot.by_code（akshare 快照），缺失则 fallback 到 yfinance
         # 盘前 / 节假日 snapshot 可能拿不到价格 — yfinance 兜底
         price_map = {}
@@ -868,10 +867,10 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
                 "factor_weights_used": e.factor_weights_used,
             })
         if db_rows:
-            n = upsert_picks(db_rows)
-            print(f"  ✅ DuckDB picks 写入 {n} 行（市场=A 股）")
+            filled = sum(1 for r in db_rows if r.get("entry_price") is not None)
+            print(f"  ({len(db_rows)} 行 · entry_price 已算 {filled}/{len(db_rows)} · JSON 已落 a_share_picks.json)")
     except Exception as db_e:
-        print(f"  ⚠️  DuckDB picks 写入失败: {db_e}")
+        print(f"  ⚠️  entry_price 计算失败: {db_e}")
     return 0
 
 

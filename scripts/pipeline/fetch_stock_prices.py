@@ -22,7 +22,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
 import duckdb  # noqa: E402
-from stock_db import DB_PATH, upsert_prices, fetch_manual_watchlist  # V2 manual_watchlist
+from stock_db import DB_PATH, fetch_manual_watchlist  # V2 manual_watchlist
 from stock_research.core import akshare_client  # noqa: E402
 from stock_research.core.hk_universe import fetch_hk_tech_universe  # noqa: E402
 from stock_research.core.us_universe import fetch_us_ai_tech_universe  # noqa: E402
@@ -814,13 +814,9 @@ def main():
     # 落 DuckDB（按 fetched_at 的日期，同日多次抓取会覆盖）
     if results:
         try:
-            use_v2 = args.db_schema == "v2" or (args.db_schema == "auto" and _is_v2_db(DB_PATH))
-            if use_v2:
-                n = _upsert_v2_price_daily(results, DB_PATH, total_count=len(items), fail_count=len(fail_codes))
-                print(f"  DuckDB：已写入 {n} 行 ({DB_PATH} · price_daily)")
-            else:
-                n = upsert_prices(results)
-                print(f"  DuckDB：已写入 {n} 行 ({DB_PATH} · prices)")
+            # 2026-05-21 V1 cutover：永远只写 V2 price_daily（V1 prices 表已删）
+            n = _upsert_v2_price_daily(results, DB_PATH, total_count=len(items), fail_count=len(fail_codes))
+            print(f"  DuckDB：已写入 {n} 行 ({DB_PATH} · price_daily)")
         except Exception as e:
             print(f"  DuckDB 写入失败（不阻塞主流程）：{e}")
 

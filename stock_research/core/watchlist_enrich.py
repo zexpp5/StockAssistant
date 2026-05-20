@@ -359,14 +359,8 @@ def enrich_one(code: str, name: str | None = None) -> dict[str, Any]:
             if quarters:
                 out["earnings"] = _summary_from_quarter(quarters[0])
                 meta["sources"].append(f"earnings: yfinance {quarters[0]['source']}")
-                # 写 history 表（API 入库时立即归档全季度）
-                try:
-                    import stock_db  # type: ignore
-                    n = stock_db.upsert_earnings_history(code, quarters)
-                    if n:
-                        meta["sources"].append(f"earnings_history: {n} 季 upsert")
-                except Exception as e:
-                    meta["warnings"].append(f"earnings_history upsert failed: {e}")
+                # 2026-05-21 V1 cutover：V1 earnings_history 表已删；
+                # V2 财报存到 source_raw_snapshots 由 enrich_system_universe_v2 写
             else:
                 meta["warnings"].append("earnings: yfinance 无季报 & TTM 数据")
         except Exception as e:

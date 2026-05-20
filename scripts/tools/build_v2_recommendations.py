@@ -9,6 +9,8 @@ Outputs:
 
 This script intentionally does not read legacy watchlist/prices/picks tables or
 data/latest artifacts. It is the clean v2 path for AI Assistant recommendations.
+When the newest same-day price row is a minimal market snapshot, factor fields
+are backfilled from the most recent non-null price_daily row for the same symbol.
 """
 from __future__ import annotations
 
@@ -102,6 +104,59 @@ def _signal(total: float) -> str:
     return "avoid"
 
 
+def _same_day(a: Any, b: Any) -> bool:
+    if a is None or b is None:
+        return False
+    return str(a)[:10] == str(b)[:10]
+
+
+def _quality_flags(row: dict[str, Any]) -> list[dict[str, Any]]:
+    flags: list[dict[str, Any]] = []
+    if not row.get("momentum_trade_date"):
+        flags.append({
+            "code": "MOMENTUM_MISSING",
+            "severity": "medium",
+            "message": "price_daily has no non-null momentum fields for this symbol; default momentum score may be used.",
+        })
+    elif not _same_day(row.get("momentum_trade_date"), row.get("trade_date")):
+        flags.append({
+            "code": "MOMENTUM_REUSED_RECENT_V2_SNAPSHOT",
+            "severity": "low",
+            "message": (
+                "Latest price row has incomplete momentum fields; reused the most recent "
+                f"non-null V2 price_daily snapshot from {str(row.get('momentum_trade_date'))[:10]}."
+            ),
+        })
+    if not row.get("fundamentals_trade_date"):
+        flags.append({
+            "code": "FUNDAMENTALS_MISSING",
+            "severity": "medium",
+            "message": "price_daily has no non-null valuation fields for this symbol.",
+        })
+    elif not _same_day(row.get("fundamentals_trade_date"), row.get("trade_date")):
+        flags.append({
+            "code": "FUNDAMENTALS_REUSED_RECENT_V2_SNAPSHOT",
+            "severity": "low",
+            "message": (
+                "Latest price row has incomplete valuation fields; reused the most recent "
+                f"non-null V2 price_daily snapshot from {str(row.get('fundamentals_trade_date'))[:10]}."
+            ),
+        })
+    return flags
+
+
+def _reason(row: dict[str, Any]) -> str:
+    scores = row["factor_scores"]
+    momentum_date = str(row.get("momentum_trade_date") or "")[:10] or "missing"
+    fundamentals_date = str(row.get("fundamentals_trade_date") or "")[:10] or "missing"
+    return (
+        f"momentum={scores['momentum']}, valuation={scores['valuation']}, "
+        f"coverage={scores['coverage']}; "
+        f"momentum_source=price_daily:{momentum_date}, "
+        f"valuation_source=price_daily:{fundamentals_date}"
+    )
+
+
 def _load_candidates(conn: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
@@ -109,18 +164,71 @@ def _load_candidates(conn: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
             SELECT market, symbol, MAX(trade_date) AS trade_date
             FROM price_daily
             GROUP BY market, symbol
+        ),
+        latest_price AS (
+            SELECT p.*
+            FROM price_daily p
+            JOIN latest l
+              ON l.market = p.market AND l.symbol = p.symbol AND l.trade_date = p.trade_date
+        ),
+        latest_momentum AS (
+            SELECT *
+            FROM (
+                SELECT
+                    market, symbol, trade_date, source, fetched_at,
+                    ytd_pct, one_week_pct, one_month_pct, one_year_pct,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY market, symbol
+                        ORDER BY trade_date DESC, fetched_at DESC
+                    ) AS rn
+                FROM price_daily
+                WHERE ytd_pct IS NOT NULL
+                   OR one_week_pct IS NOT NULL
+                   OR one_month_pct IS NOT NULL
+                   OR one_year_pct IS NOT NULL
+            )
+            WHERE rn = 1
+        ),
+        latest_fundamentals AS (
+            SELECT *
+            FROM (
+                SELECT
+                    market, symbol, trade_date, source, fetched_at,
+                    market_cap, forward_pe, trailing_pe, peg_ratio,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY market, symbol
+                        ORDER BY trade_date DESC, fetched_at DESC
+                    ) AS rn
+                FROM price_daily
+                WHERE market_cap IS NOT NULL
+                   OR forward_pe IS NOT NULL
+                   OR trailing_pe IS NOT NULL
+                   OR peg_ratio IS NOT NULL
+            )
+            WHERE rn = 1
         )
         SELECT
             m.pool_id, m.market, m.symbol, u.name, u.theme, u.industry,
             p.trade_date, p.close, p.prev_close, p.currency, p.market_cap,
-            p.forward_pe, p.trailing_pe, p.peg_ratio, p.ytd_pct,
-            p.one_week_pct, p.one_month_pct, p.one_year_pct, p.source,
-            p.fetched_at
+            COALESCE(p.forward_pe, f.forward_pe) AS forward_pe,
+            COALESCE(p.trailing_pe, f.trailing_pe) AS trailing_pe,
+            COALESCE(p.peg_ratio, f.peg_ratio) AS peg_ratio,
+            COALESCE(p.ytd_pct, mo.ytd_pct) AS ytd_pct,
+            COALESCE(p.one_week_pct, mo.one_week_pct) AS one_week_pct,
+            COALESCE(p.one_month_pct, mo.one_month_pct) AS one_month_pct,
+            COALESCE(p.one_year_pct, mo.one_year_pct) AS one_year_pct,
+            p.source, p.fetched_at,
+            mo.trade_date AS momentum_trade_date,
+            mo.source AS momentum_source,
+            f.trade_date AS fundamentals_trade_date,
+            f.source AS fundamentals_source
         FROM pool_membership m
-        JOIN latest l
-          ON l.market = m.market AND l.symbol = m.symbol
-        JOIN price_daily p
-          ON p.market = l.market AND p.symbol = l.symbol AND p.trade_date = l.trade_date
+        JOIN latest_price p
+          ON p.market = m.market AND p.symbol = m.symbol
+        LEFT JOIN latest_momentum mo
+          ON mo.market = m.market AND mo.symbol = m.symbol
+        LEFT JOIN latest_fundamentals f
+          ON f.market = m.market AND f.symbol = m.symbol
         LEFT JOIN system_universe u
           ON u.pool_id = m.pool_id AND u.market = m.market AND u.symbol = m.symbol
         WHERE m.active = TRUE
@@ -132,7 +240,8 @@ def _load_candidates(conn: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
         "trade_date", "close", "prev_close", "currency", "market_cap",
         "forward_pe", "trailing_pe", "peg_ratio", "ytd_pct",
         "one_week_pct", "one_month_pct", "one_year_pct", "source",
-        "fetched_at",
+        "fetched_at", "momentum_trade_date", "momentum_source",
+        "fundamentals_trade_date", "fundamentals_source",
     ]
     return [dict(zip(cols, row)) for row in rows]
 
@@ -163,6 +272,7 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
             **row,
             "total_score": total,
             "factor_scores": scores,
+            "risk_flags": _quality_flags(row),
             "rating": _rating(total),
             "signal": _signal(total),
         })
@@ -170,7 +280,7 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
     selected: list[dict[str, Any]] = []
     for market in ("US", "HK", "CN"):
         market_rows = [r for r in scored if r["market"] == market]
-        market_rows.sort(key=lambda x: x["total_score"], reverse=True)
+        market_rows.sort(key=lambda x: (-x["total_score"], x["symbol"]))
         selected.extend(market_rows[:top_per_market])
     selected.sort(key=lambda x: (x["market"], -x["total_score"], x["symbol"]))
 
@@ -245,8 +355,8 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
                 row["signal"],
                 row["total_score"],
                 json.dumps(row["factor_scores"], ensure_ascii=False),
-                f"momentum={row['factor_scores']['momentum']}, valuation={row['factor_scores']['valuation']}, coverage={row['factor_scores']['coverage']}",
-                json.dumps([], ensure_ascii=False),
+                _reason(row),
+                json.dumps(row["risk_flags"], ensure_ascii=False),
                 row["close"],
                 row["currency"],
                 now,

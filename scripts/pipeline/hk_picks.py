@@ -42,7 +42,8 @@ sys.path.insert(0, str(_REPO))
 sys.path.insert(0, str(_REPO / "scripts" / "lib"))
 
 from factor_model import fetch_factors_for
-from stock_db import fetch_manual_watchlist_enriched, upsert_picks
+from stock_db import fetch_manual_watchlist_enriched
+# 2026-05-21 V1 cutover：upsert_picks 已删；hk_picks 只写 JSON
 from stock_research.core.south_flow_signals import (
     compute_south_flow_signal,
     fetch_aggregate_south_flow,
@@ -489,13 +490,10 @@ def run_hk_picks(top_k: int = 12, mode: str = "tertile", dry_run: bool = False,
             "missing_factors": e.missing_factors,
             "factor_weights_used": json.dumps(FACTOR_WEIGHTS, sort_keys=True),
         })
+    # 2026-05-21 V1 cutover：picks 表已删；hk_picks 不再写 DuckDB
     if db_rows:
-        try:
-            n = upsert_picks(db_rows)
-            filled = sum(1 for r in db_rows if r.get("entry_price") is not None)
-            print(f"  DuckDB picks 写入 {n} 行（市场=港股 · entry_price 已填 {filled}/{n}）")
-        except Exception as db_e:
-            print(f"  ⚠️  DuckDB picks 写入失败: {db_e}")
+        filled = sum(1 for r in db_rows if r.get("entry_price") is not None)
+        print(f"  ({len(db_rows)} 行 · entry_price 已算 {filled}/{len(db_rows)} · JSON 已落 hk_picks.json)")
     return 0
 
 

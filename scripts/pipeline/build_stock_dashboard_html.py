@@ -3632,35 +3632,63 @@ function _dbExplorerDetailRow(r) {
 
   const longCards = groupWatchLong.map(([k, v, kind]) => longBlock(k, v, kind)).join("");
 
+  const actionBar = `
+    <div class="mt-3 flex gap-2 flex-wrap">
+      <button class="text-xs px-3 py-1.5 rounded bg-violet-600 border border-violet-600 text-white hover:bg-violet-700 font-semibold"
+              data-code="${_esc(r.code)}" data-name="${_esc(r.name || '')}"
+              onclick="event.stopPropagation();openStockDetail(this.dataset.code, this.dataset.name)">
+        📊 看完整历史数据 →
+      </button>
+      <a class="text-xs px-3 py-1.5 rounded bg-white border border-slate-300 text-slate-700 hover:bg-slate-50"
+         href="${_esc(_yahooLink(r.code, r.market))}" target="_blank">📊 Yahoo Finance ↗</a>
+      <button class="text-xs px-3 py-1.5 rounded bg-white border border-slate-300 text-slate-700 hover:bg-slate-50"
+              onclick="event.stopPropagation();location.hash='#watchlist-edit';setTimeout(()=>openWatchlistEditor('${_esc(r.code)}'),200)">
+        ✏️ 在自选股里编辑
+      </button>
+    </div>`;
+
+  const innerBody = `
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+      ${kvBlock("📋 watchlist 元数据", groupWatchMeta)}
+      ${kvBlock("📈 prices 最新一行", groupPrices)}
+      ${kvBlock("🤖 picks 最新一次", groupPicks)}
+    </div>
+    <div class="grid grid-cols-1 gap-3 mt-3">
+      ${longCards}
+    </div>
+    ${actionBar}`;
+
   return `
     <tr class="detail-row bg-slate-50">
       <td colspan="20" class="p-0">
         <div class="db-detail-sticky" style="position: sticky; left: 0; width: calc(100vw - 18rem); max-width: 80rem; padding: 1rem; box-sizing: border-box;">
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-          ${kvBlock("📋 watchlist 元数据", groupWatchMeta)}
-          ${kvBlock("📈 prices 最新一行", groupPrices)}
-          ${kvBlock("🤖 picks 最新一次", groupPicks)}
-        </div>
-        <div class="grid grid-cols-1 gap-3 mt-3">
-          ${longCards}
-        </div>
-        <div class="mt-3 flex gap-2 flex-wrap">
-          <button class="text-xs px-3 py-1.5 rounded bg-violet-600 border border-violet-600 text-white hover:bg-violet-700 font-semibold"
-                  data-code="${_esc(r.code)}" data-name="${_esc(r.name || '')}"
-                  onclick="event.stopPropagation();openStockDetail(this.dataset.code, this.dataset.name)">
-            📊 看完整历史数据 →
-          </button>
-          <a class="text-xs px-3 py-1.5 rounded bg-white border border-slate-300 text-slate-700 hover:bg-slate-50"
-             href="${_esc(_yahooLink(r.code, r.market))}" target="_blank">📊 Yahoo Finance ↗</a>
-          <button class="text-xs px-3 py-1.5 rounded bg-white border border-slate-300 text-slate-700 hover:bg-slate-50"
-                  onclick="event.stopPropagation();location.hash='#watchlist-edit';setTimeout(()=>openWatchlistEditor('${_esc(r.code)}'),200)">
-            ✏️ 在自选股里编辑
-          </button>
-        </div>
+        ${innerBody}
         </div><!-- /db-detail-sticky (六审 P1-2: 补缺失的 sticky div 关闭，原嵌套布局错位) -->
       </td>
     </tr>
   `;
+}
+
+// AI 推荐 detail 复用：把 _dbExplorerDetailRow 的核心三卡 + 长文卡 + 操作按钮抽出来，
+// 不带 sticky/table 包装；调用方负责自己嵌套到目标容器里。
+function _buildDbExplorerDetailInner(r) {
+  if (!r) return "";
+  // 当 r 不为 null 时，_dbExplorerDetailRow 的所有局部变量需要重新构造一遍；
+  // 但为了避免重复维护两份字段映射，直接复用 _dbExplorerDetailRow 的 HTML，
+  // 然后用一个简易剥壳：从返回的 `<tr><td><div>` 三层 wrapper 里抽出 inner。
+  const full = _dbExplorerDetailRow(r);
+  const m = full.match(/<div class="db-detail-sticky"[^>]*>([\s\S]*?)<\/div><!-- \/db-detail-sticky/);
+  return m ? m[1] : full;
+}
+
+// 在 _dbExplorerData 里按 ticker（== code）查找对应行。
+function _findDbRowForTicker(ticker) {
+  if (!ticker || !_dbExplorerData || !_dbExplorerData.groups) return null;
+  for (const mkt of ["美股", "A股", "港股", "其他"]) {
+    const found = (_dbExplorerData.groups[mkt] || []).find(x => (x.code || "") === ticker);
+    if (found) return found;
+  }
+  return null;
 }
 
 // ============ 🗂 个股全历史中介页（从已拉取股票池跳过来）============
@@ -6178,9 +6206,6 @@ function _renderReasonPanel(c) {
     <span><strong>AI 算于 ${ts.short}</strong> ${ts.age}</span>
     ${ts.age.includes("⚠️") ? '<span class="ml-auto text-[11px]">⚠️ 数据已过期 — 跑 daily_refresh.sh 刷新</span>' : ''}
   </div>`;
-  if (!pros.length && !cons.length) {
-    return tsBanner + `<div class="text-xs text-slate-400 py-2 px-3">_未拉到详细分解（detail 字段缺失，需重跑 build_pool_recommendations.py）_</div>`;
-  }
   const prosHtml = pros.length
     ? `<div class="space-y-1">
          <div class="text-xs font-semibold text-emerald-700 mb-1">✅ 推荐理由</div>
@@ -6193,20 +6218,70 @@ function _renderReasonPanel(c) {
          ${cons.map(p => `<div class="text-sm text-slate-700 pl-4">• ${p}</div>`).join("")}
        </div>`
     : "";
-  return tsBanner + `<div class="bg-slate-50 px-4 py-3 grid grid-cols-1 md:grid-cols-2 gap-4">
-    ${prosHtml}
-    ${consHtml}
-  </div>`;
+  const reasonHtml = (pros.length || cons.length)
+    ? `<div class="bg-slate-50 px-4 py-3 grid grid-cols-1 md:grid-cols-2 gap-4">
+         ${prosHtml}
+         ${consHtml}
+       </div>`
+    : `<div class="text-xs text-slate-400 py-2 px-3">_未拉到详细分解（detail 字段缺失，需重跑 build_pool_recommendations.py）_</div>`;
+
+  // 额外加一块：复用「已拉取股票池」的详情卡（watchlist 元数据 / prices / picks / 长文卡 / 操作按钮）。
+  // 数据从 _dbExplorerData 缓存（构建时嵌入或在线 API）里按 ticker == code 查询；
+  // 没命中（数据未加载 / 该 ticker 不在系统池）时给一个 lazy-load slot，等 toggleDiscoveryDetail 触发加载后再回填。
+  const tk = _esc(c.ticker || "");
+  const dbRow = _findDbRowForTicker(c.ticker);
+  const richHtml = dbRow
+    ? `<div class="bg-white px-4 py-3 border-t border-slate-100">
+         <div class="text-xs font-semibold text-slate-700 mb-2">📦 系统池详情（watchlist / prices / picks）</div>
+         <div id="disc-rich-${tk}">${_buildDbExplorerDetailInner(dbRow)}</div>
+       </div>`
+    : `<div class="bg-white px-4 py-3 border-t border-slate-100">
+         <div class="text-xs font-semibold text-slate-700 mb-2">📦 系统池详情（watchlist / prices / picks）</div>
+         <div id="disc-rich-${tk}" class="text-xs text-slate-400 py-2">⏳ 详情数据未加载，展开本行时会自动拉取…</div>
+       </div>`;
+
+  return tsBanner + reasonHtml + richHtml;
 }
 
-// 切换 detail row 显隐
-function toggleDiscoveryDetail(ticker) {
+// 切换 detail row 显隐 + 首次展开懒加载 _dbExplorerData（用于回填"系统池详情"卡）
+async function toggleDiscoveryDetail(ticker) {
   const row = document.getElementById("disc-detail-" + ticker);
   const btn = document.getElementById("disc-toggle-" + ticker);
   if (!row) return;
   const willShow = row.classList.contains("hidden");
   row.classList.toggle("hidden");
   if (btn) btn.textContent = willShow ? "▼" : "▶";
+  if (willShow) await _ensureDiscoveryRichLoaded(ticker);
+}
+
+// 当 _dbExplorerData 还没拉取时，启动一次后台加载，并把所有可见的 disc-rich-* slot 回填内容。
+// 多次调用并发安全：用 _discoveryRichLoading 共享 Promise 去重。
+let _discoveryRichLoading = null;
+async function _ensureDiscoveryRichLoaded(triggeringTicker) {
+  if (!_dbExplorerData) {
+    if (!_discoveryRichLoading) {
+      _discoveryRichLoading = (async () => {
+        try { await loadDbExplorer(); } catch (e) { /* loadDbExplorer 内部已落 banner */ }
+      })();
+    }
+    await _discoveryRichLoading;
+  }
+  // 数据可能仍为空（API 失败 + 无嵌入快照），此时 slot 保持 "未加载" 文案
+  if (!_dbExplorerData) return;
+  // 回填所有当前已经渲染出来的 disc-rich slot（包括默认展开的第一行）
+  const cands = (typeof DISCOVERY !== "undefined" && Array.isArray(DISCOVERY.candidates)) ? DISCOVERY.candidates : [];
+  cands.forEach(c => {
+    const slot = document.getElementById("disc-rich-" + c.ticker);
+    if (!slot) return;
+    const r = _findDbRowForTicker(c.ticker);
+    if (r) {
+      slot.innerHTML = _buildDbExplorerDetailInner(r);
+      slot.className = "";  // 去掉 loading 文案的 text-slate-400
+    } else if (c.ticker === triggeringTicker) {
+      // 这只 ticker 不在已拉取股票池里（比如新发现 / 还没入库）
+      slot.innerHTML = `<div class="text-xs text-slate-400 py-2">— 这只标的尚未在「已拉取股票池」表里建档（系统池或自选股入库后会自动出现）—</div>`;
+    }
+  });
 }
 
 // 工具:从 DISCOVERY_HISTORY 找 (date, ticker) 对应的 alpha 记录
@@ -6419,6 +6494,10 @@ function _computeDiscoveryStats() {
 
     // 异步加载 watchlist,把已在自选里的票按钮置灰
     _markDiscoveryAddedButtons();
+    // 默认展开的第一行需要"系统池详情"卡：若 _dbExplorerData 未就绪，懒加载后回填
+    if (cands.length && !_dbExplorerData) {
+      _ensureDiscoveryRichLoaded(cands[0].ticker);
+    }
   }
 
   // ── 推荐历史(按日期分组,折叠/展开)
@@ -9802,24 +9881,8 @@ def build():
             print(f"  ⚠️ 链条上下文加载失败: {e}")
     html = html.replace("{WATCHLIST_CHAIN_INFO_JSON}", json.dumps(chain_info, ensure_ascii=False))
 
-    # AI 推荐的历史推荐 + 准确度跟踪(DuckDB discovery_history JOIN tracking)
-    if clean_v2:
-        disc_hist = []
-        print("  Discovery 历史跳过 [clean v2 不读取 legacy discovery_history]")
-    else:
-        try:
-            from stock_db import fetch_discovery_history
-            disc_hist = fetch_discovery_history(days=90)  # 过去 90 天
-            # date / datetime → ISO string,方便 JSON
-            for r in disc_hist:
-                for k in ("generated_date", "last_refreshed_at"):
-                    v = r.get(k)
-                    if v is not None and hasattr(v, "isoformat"):
-                        r[k] = v.isoformat()
-            print(f"  Discovery 历史已加载 [DuckDB]({len(disc_hist)} 条推荐记录)")
-        except Exception as e:
-            print(f"  ⚠️ Discovery 历史加载失败: {e}")
-            disc_hist = []
+    # 2026-05-21 V1 cutover：V1 discovery_history 表已删；V2 历史在 pick_outcomes 已覆盖
+    disc_hist: list = []
     html = html.replace("{DISCOVERY_HISTORY_JSON}", json.dumps(disc_hist, ensure_ascii=False, default=str))
 
     # 2026-05-21 V1 cutover：原 V1 picks + watchlist 自选股 AI 评级查询已删

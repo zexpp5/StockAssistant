@@ -109,10 +109,12 @@ def create_app():
 
     @app.get("/api/watchlist/{code}")
     def get_watchlist_one(code: str) -> dict[str, Any]:
+        """V2 manual_watchlist 单条读取（按 symbol/code 模糊匹配第一只）。"""
         import stock_db
-        row = stock_db.get_watchlist_item(code)
-        if not row:
-            raise HTTPException(404, f"watchlist code not found: {code}")
+        rows = [r for r in stock_db.fetch_manual_watchlist() if r.get("symbol") == code]
+        if not rows:
+            raise HTTPException(404, f"manual_watchlist code not found: {code}")
+        row = rows[0]
         for k in ("created_at", "updated_at"):
             v = row.get(k)
             if v is not None and hasattr(v, "isoformat"):
@@ -121,40 +123,42 @@ def create_app():
 
     @app.post("/api/watchlist")
     def create_watchlist(item: dict[str, Any] = Body(...)) -> dict[str, Any]:
-        """新增 watchlist 一条；code 必填；如已存在则 upsert 更新。
+        """V2 manual_watchlist 新增一条（按 (market, symbol) PK upsert）。
 
         入库成功后**异步触发** daily_picks_v5 评级（不阻塞响应）。
         """
         import stock_db
-        if not item.get("code"):
-            raise HTTPException(400, "code is required")
-        n = stock_db.upsert_watchlist([item])
+        if not item.get("code") and not item.get("symbol"):
+            raise HTTPException(400, "code/symbol is required")
+        n = stock_db.upsert_manual_watchlist([item])
         rerun_info: dict[str, Any] = {}
         try:
-            rerun_info = _spawn_picks_rerun(trigger=f"watchlist:add:{item['code']}")
-        except Exception as e:  # 不让评级失败拖垮添加流程
+            rerun_info = _spawn_picks_rerun(trigger=f"watchlist:add:{item.get('code') or item.get('symbol')}")
+        except Exception as e:
             rerun_info = {"status": "error", "error": str(e)}
         return {
             "status": "ok",
-            "code": item["code"],
+            "code": item.get("code") or item.get("symbol"),
             "rows_affected": n,
             "rerun": rerun_info,
         }
 
     @app.put("/api/watchlist/{code}")
     def update_watchlist(code: str, item: dict[str, Any] = Body(...)) -> dict[str, Any]:
-        """更新 watchlist 一条；body 里的 code 会被 URL code 覆盖。"""
+        """V2 manual_watchlist 更新一条（URL code 强制覆盖 body）。"""
         import stock_db
         item["code"] = code
-        n = stock_db.upsert_watchlist([item])
+        n = stock_db.upsert_manual_watchlist([item])
         return {"status": "ok", "code": code, "rows_affected": n}
 
     @app.delete("/api/watchlist/{code}")
     def delete_watchlist(code: str) -> dict[str, Any]:
+        """V2 manual_watchlist 删除（按 symbol 找市场再删）。"""
         import stock_db
-        n = stock_db.delete_watchlist_item(code)
-        if n == 0:
-            raise HTTPException(404, f"watchlist code not found: {code}")
+        rows = [r for r in stock_db.fetch_manual_watchlist() if r.get("symbol") == code]
+        if not rows:
+            raise HTTPException(404, f"manual_watchlist code not found: {code}")
+        n = stock_db.delete_manual_watchlist(rows[0]["market"], code)
         return {"status": "ok", "code": code, "rows_deleted": n}
 
     # ────────── DB 全库浏览（深度研究 → DB 全库 tab） ──────────
@@ -559,7 +563,9 @@ def create_app():
         conn = stock_db.get_db()
         try:
             tables = {str(r[0]) for r in conn.execute("SHOW TABLES").fetchall()}
-            wl_row = stock_db.get_watchlist_item(code, conn=conn)
+            # V2 manual_watchlist 单条查询（按 symbol）
+            wl_rows = [r for r in stock_db.fetch_manual_watchlist(conn=conn) if r.get("symbol") == code]
+            wl_row = wl_rows[0] if wl_rows else None
 
             def _rows(q: str) -> list[dict[str, Any]]:
                 cur = conn.execute(q, [code])

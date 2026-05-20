@@ -40,7 +40,8 @@ from factor_model import DEFAULT_FACTOR_WEIGHTS, fetch_factors_for, combine_fact
 from early_signals import fetch_signals_for, score_analyst, score_insider
 from gics_classifier import classify, score_to_label
 from stock_db import fetch_manual_watchlist_enriched as fetch_watchlist  # V2 manual_watchlist
-from stock_db import upsert_picks
+# 2026-05-21 V1 cutover：picks 表已删，daily_picks_v5 不再写库；factor_scores_today.json 是唯一持久产物
+# from stock_db import upsert_picks  # removed
 from stock_research.core import fundamental_deep  # Altman Z / Beneish M 软红旗
 
 
@@ -75,18 +76,19 @@ def _load_entry_prices(codes: list[str]) -> dict[str, dict]:
 
     conn = None
     try:
-        from stock_db import get_db, latest_price
+        from stock_db import get_db
         conn = get_db()
+        # V2：price_daily 取最新 close（V1 prices.latest_price 已删）
         for code in codes:
-            px = latest_price(code, conn=conn)
-            price = px.get("price") if px else None
-            if price:
-                out[code] = {
-                    "price": float(price),
-                    "currency": px.get("currency") or "USD",
-                }
+            row = conn.execute(
+                "SELECT close, currency FROM price_daily WHERE symbol = ? "
+                "ORDER BY trade_date DESC, fetched_at DESC LIMIT 1",
+                [code],
+            ).fetchone()
+            if row and row[0]:
+                out[code] = {"price": float(row[0]), "currency": row[1] or "USD"}
     except Exception as e:
-        print(f"  ⚠️ 本地 prices 取入选价失败: {e}")
+        print(f"  ⚠️ 本地 price_daily 取入选价失败: {e}")
     finally:
         if conn is not None:
             conn.close()
@@ -514,13 +516,8 @@ def main():
         })
         success += 1
 
-    print(f"\n[4/5] 写 DuckDB picks...")
-    if db_rows:
-        try:
-            n = upsert_picks(db_rows)
-            print(f"  DuckDB 写入 {n} 行")
-        except Exception as e:
-            print(f"  DuckDB 失败: {e}")
+    # 2026-05-21 V1 cutover：原 [4/5] 写 V1 DuckDB picks 已删；
+    # daily_picks_v5 现在只写 factor_scores_today.json 给 optimize_portfolio 用
 
     print(
         f"\n✅ 已写入 {success} 行评级"

@@ -22,7 +22,6 @@ sys.path.insert(0, os.path.join(REPO, "scripts", "lib"))
 
 from stock_db import (  # noqa: E402
     get_db,
-    upsert_discovery_history,
     fetch_universe_for_ai_recommendations,
     fetch_latest_recommendation_picks,
 )
@@ -332,15 +331,8 @@ def build_recommendations(top: int = 20, out_path: str = "data/discovery_candida
     with open(abs_out, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
 
-    conn = get_db()
-    try:
-        today = date.today()
-        conn.execute("DELETE FROM discovery_tracking WHERE generated_date = ?", [today])
-        conn.execute("DELETE FROM discovery_history WHERE generated_date = ?", [today])
-        upsert_discovery_history(candidates, generated_date=today, conn=conn)
-    finally:
-        conn.close()
-
+    # 2026-05-21 V1 cutover：V1 discovery_history/tracking 表已删；
+    # V2 历史在 recommendation_runs + pick_outcomes 由 build_v2_recommendations + evaluate_v2_picks 维护
     return payload
 
 

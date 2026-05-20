@@ -24,6 +24,7 @@
   export FEISHU_BRIEF_WEBHOOK='https://open.feishu.cn/open-apis/bot/v2/hook/XXX'
 """
 from __future__ import annotations
+import argparse
 import json
 import logging
 import math
@@ -2460,6 +2461,14 @@ def push_to_feishu(brief_personal: str, brief_shared: str) -> list[str]:
 # ────────────────────────────────────────────────────────
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Build and optionally push the morning brief.")
+    parser.add_argument(
+        "--no-push",
+        action="store_true",
+        help="Only generate local brief files; used while the pipeline is still running.",
+    )
+    args = parser.parse_args()
+
     brief_personal = build_brief(share_mode=False)
     brief_shared = build_brief(share_mode=True)
 
@@ -2475,6 +2484,10 @@ def main() -> int:
     logger.info(f"✅ 早安简报已生成: {archive_path}")
     logger.info(f"   最新版镜像:    {latest_path}")
     logger.info(f"   完整版字数: {len(brief_personal)} chars · 共享版字数: {len(brief_shared)} chars")
+
+    if args.no_push:
+        logger.info("📨 --no-push：pipeline 仍在验收/收尾，本次只生成本地简报，不推送飞书")
+        return 0
 
     sent = push_to_feishu(brief_personal, brief_shared)
     if sent:

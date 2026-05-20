@@ -192,10 +192,6 @@ def fetch_price(ticker):
         if t.endswith(suffix):
             candidates.append(t[:-len(suffix)])
     try:
-        for code in candidates:
-            px = stock_db.latest_price(code)
-            if px and px.get("price"):
-                return float(px["price"])
         conn = stock_db.get_db()
         # V2：price_daily 最新 close，再退到 recommendation_picks.entry_price
         for code in candidates:
