@@ -530,14 +530,65 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
 
     watchlist_markets = _watchlist_market_flags(conn)
     required_sources: list[str] = []
+    # V2 spec：watchlist 空时 v6_us/v6_hk/v6_cn 都是"自选股·AI 优选"路径，
+    # 用户没维护自选股就该空，不应作为生产 FAIL 标准（由 V2 检查替代）。
+    # 只在 watchlist 有用户主动添加的股票时才把 v6_X 列为必需。
     if watchlist_markets["us"]:
         required_sources.append("v6_us")
     if watchlist_markets["hk"]:
         required_sources.append("v6_hk")
-    if config.A_SHARE_PRODUCTION_ENABLED:
+    if config.A_SHARE_PRODUCTION_ENABLED and watchlist_markets.get("cn"):
         required_sources.append("v6_cn")
     summary["watchlist_market_flags"] = watchlist_markets
     summary["required_production_sources"] = required_sources
+
+    # V2 acceptance：检查 recommendation_runs / recommendation_picks / portfolio_plans
+    # 在 V2 spec 下 watchlist 空是合法状态，但 V2 system_tech_universe 推荐必须每天有产出
+    v2_summary: dict[str, Any] = {}
+    if conn is not None and "recommendation_runs" in db_tables and "recommendation_picks" in db_tables:
+        v2_run = conn.execute(
+            """
+            SELECT run_id, run_date, generated_at FROM recommendation_runs
+            WHERE universe_scope = 'system_tech_universe' AND status = 'generated'
+            ORDER BY generated_at DESC LIMIT 1
+            """
+        ).fetchone()
+        if not v2_run:
+            issues.append(_issue("FAIL", "v2_recommendation_run_missing",
+                                 "V2 system_tech_universe 无 generated run；跑 build_v2_recommendations"))
+            v2_summary["latest_run"] = None
+        else:
+            run_id, run_date, gen_at = v2_run
+            today = now.date().isoformat()
+            run_date_str = str(run_date)[:10]
+            v2_summary["latest_run"] = {
+                "run_id": run_id, "run_date": run_date_str, "generated_at": str(gen_at)[:19],
+            }
+            if run_date_str < today:
+                issues.append(_issue("WARN", "v2_recommendation_run_stale",
+                                     f"V2 推荐 run 日期 {run_date_str} 旧于今日 {today}"))
+            # 按 market 统计 buy/total
+            market_rows = conn.execute(
+                """
+                SELECT market, signal, COUNT(*) FROM recommendation_picks
+                WHERE run_id = ? GROUP BY market, signal
+                """,
+                [run_id],
+            ).fetchall()
+            per_market: dict[str, dict[str, int]] = {}
+            for market, signal, n in market_rows:
+                per_market.setdefault(str(market), {})[str(signal)] = int(n)
+            v2_summary["picks_by_market"] = per_market
+            for m in ("US", "CN", "HK"):
+                if not per_market.get(m, {}).get("buy"):
+                    issues.append(_issue("WARN", f"v2_no_buy_{m.lower()}",
+                                         f"V2 {m} 市场最新 run 没有 buy 信号；检查 build_v2_recommendations 评分阈值"))
+        if "portfolio_plans" in db_tables:
+            plan_n = int(conn.execute("SELECT COUNT(*) FROM portfolio_plans").fetchone()[0])
+            v2_summary["portfolio_plans_total"] = plan_n
+            if plan_n == 0:
+                issues.append(_issue("FAIL", "v2_portfolio_plans_empty", "portfolio_plans 表为空；build_v2_recommendations 没写"))
+    summary["v2"] = v2_summary
 
     latest_by_source: dict[str, str | None] = {}
     latest_buy_sets: dict[str, set[str]] = {}

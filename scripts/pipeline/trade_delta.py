@@ -195,6 +195,26 @@ def fetch_price(ticker):
             if px and px.get("price"):
                 return float(px["price"])
         conn = stock_db.get_db()
+        # V2 优先：从 price_daily 读最新收盘价（V1 picks 表 entry_price 在 V2 空）
+        for code in candidates:
+            row = conn.execute(
+                "SELECT close FROM price_daily WHERE symbol = ? "
+                "ORDER BY trade_date DESC, fetched_at DESC LIMIT 1",
+                [code],
+            ).fetchone()
+            if row and row[0]:
+                conn.close()
+                return float(row[0])
+            row = conn.execute(
+                "SELECT entry_price FROM recommendation_picks WHERE symbol = ? "
+                "AND entry_price IS NOT NULL "
+                "ORDER BY rowid DESC LIMIT 1",
+                [code],
+            ).fetchone()
+            if row and row[0]:
+                conn.close()
+                return float(row[0])
+        # V1 兜底
         for code in candidates:
             row = conn.execute(
                 "SELECT entry_price FROM picks "

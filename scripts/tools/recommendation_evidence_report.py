@@ -43,6 +43,85 @@ def _coverage(n: int, d: int) -> float | None:
     return n / d
 
 
+def _v2_market_metrics(conn) -> list[dict[str, Any]]:
+    """V2 路径：pick_outcomes 按 (market, horizon) 聚合 alpha 评估指标。
+
+    返回与 _source_metrics 一致的字段形状，让 _grade / markdown 渲染兼容。
+    market_source 用 'v2_us/v2_hk/v2_cn'，signal 全部当 'buy'（V2 picks 只产 buy/avoid，
+    其中只有 alpha_pct 不空的进入 outcomes，全是 buy）。
+    """
+    tables = {str(r[0]) for r in conn.execute("SHOW TABLES").fetchall()}
+    if "pick_outcomes" not in tables:
+        return []
+    rows = conn.execute(
+        """
+        SELECT market, horizon,
+               COUNT(*) AS n,
+               ROUND(AVG(return_pct), 2) AS avg_pct,
+               ROUND(AVG(benchmark_pct), 2) AS avg_benchmark_pct,
+               ROUND(AVG(alpha_pct), 2) AS avg_alpha_pct,
+               ROUND(SUM(CASE WHEN is_success THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) AS hit_rate
+        FROM pick_outcomes
+        WHERE alpha_pct IS NOT NULL
+        GROUP BY market, horizon
+        ORDER BY market, horizon
+        """
+    ).fetchall()
+    out = []
+    for market, horizon, n, avg_pct, avg_bench, avg_alpha, hit_rate in rows:
+        out.append({
+            "model_source": f"v2_{str(market).lower()}",
+            "signal": f"buy ({horizon})",
+            "n": int(n or 0),
+            "avg_pct": avg_pct,
+            "avg_benchmark_pct": avg_bench,
+            "avg_alpha_pct": avg_alpha,
+            "signal_hit_rate": hit_rate,
+        })
+    return out
+
+
+def _v2_latest_pick_metrics(conn) -> dict[str, Any]:
+    """V2 路径：最新 system_tech_universe run 的 picks 按 market 拆。"""
+    tables = {str(r[0]) for r in conn.execute("SHOW TABLES").fetchall()}
+    if "recommendation_picks" not in tables or "recommendation_runs" not in tables:
+        return {}
+    latest = conn.execute(
+        """
+        SELECT run_id, run_date FROM recommendation_runs
+        WHERE universe_scope = 'system_tech_universe' AND status = 'generated'
+        ORDER BY generated_at DESC LIMIT 1
+        """
+    ).fetchone()
+    if not latest:
+        return {}
+    run_id, run_date = latest
+    rows = conn.execute(
+        """
+        SELECT market,
+               COUNT(*) AS n,
+               SUM(CASE WHEN entry_price IS NOT NULL THEN 1 ELSE 0 END) AS with_entry,
+               SUM(CASE WHEN signal = 'buy' THEN 1 ELSE 0 END) AS buy_n,
+               SUM(CASE WHEN signal = 'avoid' THEN 1 ELSE 0 END) AS avoid_n
+        FROM recommendation_picks
+        WHERE run_id = ?
+        GROUP BY market
+        """,
+        [run_id],
+    ).fetchall()
+    out = {}
+    for market, n, with_entry, buy_n, avoid_n in rows:
+        key = f"v2_{str(market).lower()}"
+        out[key] = {
+            "latest_date": str(run_date)[:10],
+            "n": int(n or 0),
+            "with_entry_price": int(with_entry or 0),
+            "buy_n": int(buy_n or 0),
+            "avoid_n": int(avoid_n or 0),
+        }
+    return out
+
+
 def _source_metrics(conn) -> list[dict[str, Any]]:
     # picks 表自 2026-05-14 起有结构化 signal 字段；reviews 表自 b3f8239 起有 signal。
     # rating LIKE '%不建议%' 仅作为历史 reviews（signal IS NULL 且无 picks JOIN）的兜底。
@@ -321,12 +400,18 @@ def _to_markdown(payload: dict[str, Any]) -> str:
 
 def build_report() -> dict[str, Any]:
     conn = get_db()
+    # V1 + V2 metrics 合并（V1 picks/reviews 在 V2 cutover 后空 → V1 函数返回空 list/dict；
+    # V2 pick_outcomes / recommendation_picks 提供 grade 计算所需的实际数据）
+    v1_latest = _latest_pick_metrics(conn)
+    v2_latest = _v2_latest_pick_metrics(conn)
+    v1_metrics = _source_metrics(conn)
+    v2_metrics = _v2_market_metrics(conn)
     payload = {
         "generated_at": datetime.now().isoformat(),
         "quality_gate": _load_json("data/latest/recommendation_quality_gate.json") or {},
-        "latest_picks": _latest_pick_metrics(conn),
+        "latest_picks": {**v1_latest, **v2_latest},
         "review_coverage": _review_coverage(conn),
-        "review_metrics_by_source": _source_metrics(conn),
+        "review_metrics_by_source": v1_metrics + v2_metrics,
         "discovery_metrics": _discovery_metrics(conn),
     }
     conn.close()
