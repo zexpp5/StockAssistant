@@ -7537,11 +7537,21 @@ def _runtime_db_stats() -> dict:
             for table in (
                 "manual_watchlist", "holdings", "system_universe", "pool_membership",
                 "price_daily", "recommendation_runs", "recommendation_picks",
-                "portfolio_plans", "strategy_review_reports", "pipeline_runs",
+                "portfolio_plans", "pick_outcomes", "portfolio_performance",
+                "factor_attribution", "strategy_review_reports", "pipeline_runs",
                 "pipeline_steps", "source_fetch_log",
             ):
                 if table in tables:
-                    stats["v2"][table] = int(con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+                    if table == "system_universe":
+                        stats["v2"][table] = int(con.execute(
+                            "SELECT COUNT(*) FROM system_universe WHERE active = TRUE"
+                        ).fetchone()[0])
+                    elif table == "pool_membership":
+                        stats["v2"][table] = int(con.execute(
+                            "SELECT COUNT(*) FROM pool_membership WHERE active = TRUE"
+                        ).fetchone()[0])
+                    else:
+                        stats["v2"][table] = int(con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
             if "pool_membership" in tables:
                 active_pool = int(con.execute(
                     "SELECT COUNT(*) FROM pool_membership WHERE active = TRUE AND pool_type = 'system_tech_universe'"
@@ -7639,6 +7649,9 @@ def _runtime_db_stats() -> dict:
                 "recommendation_picks": "created_at",
                 "portfolio_plans": "created_at",
                 "pick_outcomes": "outcome_date",
+                "portfolio_performance": "as_of_date",
+                "factor_attribution": "updated_at",
+                "strategy_review_reports": "generated_at",
                 "holdings": "entry_date",
                 "manual_watchlist": "updated_at",
                 "system_universe": "last_seen_at",

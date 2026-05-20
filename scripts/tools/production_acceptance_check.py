@@ -259,10 +259,21 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
             issues.append(_issue("FAIL", "v2_schema_missing_tables", "v2 新库缺少 P0 表", missing_v2))
         if conn is not None:
             for table in ("manual_watchlist", "holdings", "system_universe", "pool_membership",
-                          "price_daily", "recommendation_runs", "recommendation_picks", "portfolio_plans"):
+                          "price_daily", "recommendation_runs", "recommendation_picks", "portfolio_plans",
+                          "pick_outcomes", "portfolio_performance", "factor_attribution",
+                          "strategy_review_reports"):
                 if table in db_tables:
                     try:
-                        summary[f"{table}_count"] = int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+                        if table == "system_universe":
+                            summary[f"{table}_count"] = int(conn.execute(
+                                "SELECT COUNT(*) FROM system_universe WHERE active = TRUE"
+                            ).fetchone()[0])
+                        elif table == "pool_membership":
+                            summary[f"{table}_count"] = int(conn.execute(
+                                "SELECT COUNT(*) FROM pool_membership WHERE active = TRUE"
+                            ).fetchone()[0])
+                        else:
+                            summary[f"{table}_count"] = int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
                     except Exception as e:
                         issues.append(_issue("FAIL", f"{table}_count_failed", f"无法读取 {table} 行数", str(e)))
             if "system_universe" in db_tables and summary.get("system_universe_count", 0) <= 0:
@@ -310,6 +321,12 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
                 issues.append(_issue("FAIL", "v2_no_recommendation_runs", "v2 还没有生成 recommendation_runs"))
             if "recommendation_picks" in db_tables and summary.get("recommendation_picks_count", 0) <= 0:
                 issues.append(_issue("FAIL", "v2_no_recommendation_picks", "v2 还没有生成 recommendation_picks"))
+            if "strategy_review_reports" in db_tables and summary.get("strategy_review_reports_count", 0) <= 0:
+                issues.append(_issue(
+                    "INFO",
+                    "v2_strategy_review_not_built",
+                    "v2 策略验证报告尚未生成；不阻断今日推荐，但不能证明策略有效性",
+                ))
             if "recommendation_picks" in db_tables and summary.get("recommendation_picks_count", 0) > 0:
                 latest_run = conn.execute(
                     "SELECT run_id FROM recommendation_runs ORDER BY generated_at DESC LIMIT 1"
@@ -330,39 +347,49 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
                     buy_count = signal_counts["system_tech_universe"].get("buy", 0)
                     if buy_count <= 0:
                         issues.append(_issue("FAIL", "v2_latest_run_no_buy", "v2 最新推荐批次没有 buy 推荐"))
-                bad_scope = conn.execute(
-                    """
-                    SELECT market, symbol, universe_scope, source_origin
-                    FROM recommendation_picks
-                    WHERE universe_scope <> 'system_tech_universe'
-                       OR source_origin <> 'system_pool'
-                    LIMIT 30
-                    """
-                ).fetchall()
-                if bad_scope:
-                    issues.append(_issue(
-                        "FAIL",
-                        "v2_pick_scope_origin_invalid",
-                        "v2 系统池推荐必须标记 system_tech_universe/system_pool",
-                        [{"market": r[0], "symbol": r[1], "universe_scope": r[2], "source_origin": r[3]} for r in bad_scope],
-                    ))
-                orphan = conn.execute(
-                    """
-                    SELECT p.market, p.symbol
-                    FROM recommendation_picks p
-                    LEFT JOIN pool_membership m
-                      ON m.market = p.market AND m.symbol = p.symbol AND m.active = TRUE
-                    WHERE m.symbol IS NULL
-                    LIMIT 30
-                    """
-                ).fetchall()
-                if orphan:
-                    issues.append(_issue(
-                        "FAIL",
-                        "v2_pick_not_in_system_pool",
-                        "v2 系统推荐出现未属于 pool_membership 的股票",
-                        [{"market": r[0], "symbol": r[1]} for r in orphan],
-                    ))
+                if latest_run_id:
+                    bad_scope = conn.execute(
+                        """
+                        SELECT market, symbol, universe_scope, source_origin
+                        FROM recommendation_picks
+                        WHERE run_id = ?
+                          AND (
+                            COALESCE(universe_scope, '') <> 'system_tech_universe'
+                            OR COALESCE(source_origin, '') <> 'system_pool'
+                          )
+                        LIMIT 30
+                        """,
+                        [latest_run_id],
+                    ).fetchall()
+                    if bad_scope:
+                        issues.append(_issue(
+                            "FAIL",
+                            "v2_pick_scope_origin_invalid",
+                            "v2 最新系统池推荐必须标记 system_tech_universe/system_pool",
+                            [{"market": r[0], "symbol": r[1], "universe_scope": r[2], "source_origin": r[3]} for r in bad_scope],
+                        ))
+                    orphan = conn.execute(
+                        """
+                        SELECT p.market, p.symbol
+                        FROM recommendation_picks p
+                        LEFT JOIN pool_membership m
+                          ON m.market = p.market
+                         AND m.symbol = p.symbol
+                         AND m.active = TRUE
+                         AND m.pool_type = 'system_tech_universe'
+                        WHERE p.run_id = ?
+                          AND m.symbol IS NULL
+                        LIMIT 30
+                        """,
+                        [latest_run_id],
+                    ).fetchall()
+                    if orphan:
+                        issues.append(_issue(
+                            "FAIL",
+                            "v2_pick_not_in_system_pool",
+                            "v2 最新系统推荐出现未属于 pool_membership 的股票",
+                            [{"market": r[0], "symbol": r[1]} for r in orphan],
+                        ))
 
             if {"system_universe", "source_raw_snapshots"}.issubset(db_tables):
                 active_rows = conn.execute(
@@ -727,7 +754,7 @@ def main() -> int:
     print(f"Production acceptance: {payload['status']}")
     s = payload["summary"]
     print(f"  fail={s['fail']} warn={s['warn']} info={s['info']}")
-    print(f"  latest={s.get('latest_pick_dates')}")
+    print(f"  latest={s.get('latest_pick_dates') or s.get('latest_recommendation_run_id')}")
     print(f"  signals={s.get('latest_signal_counts')}")
     if payload["issues"]:
         for item in payload["issues"][:16]:

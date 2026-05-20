@@ -355,6 +355,8 @@ fi
 
 # ────── M = morning 必跑（今日决策路径）；R = research 单独跑（慢任务夜班）──────
 # M
+run_step "0b/25 V2 系统池刷新（live universe → system_universe/pool_membership）" \
+    "scripts/tools/refresh_system_universe_v2.py"
 run_step "1/25 抓价格（手动 watchlist + 科技/AI universe）" "scripts/pipeline/fetch_stock_prices.py --source both"
 # M — V2 推荐 run（必须在 step 10/23 之前跑，让两者拿到今日 picks 而不是昨日）
 run_step "1b/25 V2 推荐 run（system_universe → recommendation_picks/portfolio_plans）" \
@@ -411,6 +413,7 @@ run_step "23/25 全池 AI 推荐（每日）" "scripts/tools/build_pool_recommen
 # M — V2 pick alpha 评估（扫过去 70 天 recommendation_runs，每只 pick 算 1d/5d/20d
 # alpha 写 pick_outcomes；已成熟样本不重算，幂等；带网络 yfinance benchmark 但有内存缓存）
 run_step "23a/25 V2 pick alpha 评估" "scripts/tools/evaluate_v2_picks.py"
+run_step "23a2/25 V2 策略验证汇总" "scripts/tools/build_strategy_validation_v2.py"
 
 # R — 旧 discovery 准确度评估（V1 discovery_tracking 路径，clean v2 上无新数据）
 is_research_step && run_step "23b/25 推荐准确度评估（每日）" "scripts/tools/evaluate_discovery.py"

@@ -113,6 +113,10 @@ def _run_v2_checks(conn, now: datetime) -> dict:
     def count(table: str) -> int:
         if table not in tables:
             return 0
+        if table == "system_universe":
+            return int(conn.execute("SELECT COUNT(*) FROM system_universe WHERE active = TRUE").fetchone()[0])
+        if table == "pool_membership":
+            return int(conn.execute("SELECT COUNT(*) FROM pool_membership WHERE active = TRUE").fetchone()[0])
         return int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
 
     summary: dict[str, Any] = {
@@ -218,24 +222,28 @@ def _run_v2_checks(conn, now: datetime) -> dict:
             if signal_counts.get("buy", 0) <= 0:
                 issues.append(_issue("FAIL", "v2_latest_run_no_buy", "v2 最新推荐批次没有 buy 推荐"))
 
-        bad_scope = conn.execute(
-            """
-            SELECT market, symbol, universe_scope, source_origin
-            FROM recommendation_picks
-            WHERE COALESCE(universe_scope, '') <> 'system_tech_universe'
-               OR COALESCE(source_origin, '') <> 'system_pool'
-            LIMIT 30
-            """
-        ).fetchall()
-        if bad_scope:
-            issues.append(_issue(
-                "FAIL",
-                "v2_pick_scope_origin_invalid",
-                "v2 系统池推荐必须标记 system_tech_universe/system_pool",
-                [{"market": r[0], "symbol": r[1], "universe_scope": r[2], "source_origin": r[3]} for r in bad_scope],
-            ))
+            bad_scope = conn.execute(
+                """
+                SELECT market, symbol, universe_scope, source_origin
+                FROM recommendation_picks
+                WHERE run_id = ?
+                  AND (
+                    COALESCE(universe_scope, '') <> 'system_tech_universe'
+                    OR COALESCE(source_origin, '') <> 'system_pool'
+                  )
+                LIMIT 30
+                """,
+                [latest_row[0]],
+            ).fetchall()
+            if bad_scope:
+                issues.append(_issue(
+                    "FAIL",
+                    "v2_pick_scope_origin_invalid",
+                    "v2 最新系统池推荐必须标记 system_tech_universe/system_pool",
+                    [{"market": r[0], "symbol": r[1], "universe_scope": r[2], "source_origin": r[3]} for r in bad_scope],
+                ))
 
-        if "pool_membership" in tables:
+        if "pool_membership" in tables and latest.get("run_id"):
             orphan = conn.execute(
                 """
                 SELECT p.market, p.symbol
@@ -245,9 +253,11 @@ def _run_v2_checks(conn, now: datetime) -> dict:
                  AND m.symbol = p.symbol
                  AND m.active = TRUE
                  AND m.pool_type = 'system_tech_universe'
-                WHERE m.symbol IS NULL
+                WHERE p.run_id = ?
+                  AND m.symbol IS NULL
                 LIMIT 30
-                """
+                """,
+                [latest["run_id"]],
             ).fetchall()
             if orphan:
                 issues.append(_issue(
