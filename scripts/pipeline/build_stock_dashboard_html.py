@@ -3540,18 +3540,18 @@ function _dbExplorerDetailRow(r) {
       ],
     },
     conclusion: {
-      source: "👤 用户 / AI 主观分析（系统不自动生成）",
-      refresh: "在「自选股」编辑器里手填，或 AI 深研后人工录入",
+      source: "V2 recommendation_picks.recommendation_reason（系统池推荐理由）",
+      refresh: "daily_refresh.sh step 4b (enrich_system_universe_v2) 从 V2 推荐记录生成",
       formulas: [],
     },
     risks: {
-      source: "👤 用户 / AI 主观分析（系统不自动生成）",
-      refresh: "在「自选股」编辑器里手填，或 AI 深研后人工录入",
+      source: "V2 recommendation_picks.risk_flags_json + 系统规则兜底",
+      refresh: "daily_refresh.sh step 4b (enrich_system_universe_v2) 从 V2 推荐记录生成",
       formulas: [],
     },
     info_breakdown: {
-      source: "Finnhub（美股：内部人/分析师/新闻）+ akshare（A/港股：实时报价/北向/南向）+ Google Trends",
-      refresh: "daily_refresh.sh step 4 (jobs/enrich_watchlist) 每天 7:30 自动刷",
+      source: "V2 source_raw_snapshots.v2_system_enrichment：Finnhub / akshare / yfinance",
+      refresh: "daily_refresh.sh step 4b (enrich_system_universe_v2) 每天自动刷",
       formulas: [
         "内部人交易（90 天）= Finnhub /stock/insider-transactions",
         "分析师评级 = Finnhub /stock/recommendation （最新一期，强买/买/持有/卖/强卖）",
@@ -3590,7 +3590,7 @@ function _dbExplorerDetailRow(r) {
     const sourceTime = _extractSourceTime(kind, body);
     const sourceTimeLine = sourceTime
       ? `<div><strong>📅 数据来源时间:</strong> <span class="font-mono">${_esc(sourceTime)}</span></div>`
-      : `<div><strong>📅 数据来源时间:</strong> <span class="text-slate-400">无独立时间戳（${kind === 'conclusion' || kind === 'risks' || kind === 'notes' ? '主观字段，以「分析时间」为准' : '正文为空'}）</span></div>`;
+      : `<div><strong>📅 数据来源时间:</strong> <span class="text-slate-400">无独立时间戳（${kind === 'notes' ? '用户便签，以「分析时间」为准' : '正文为空'}）</span></div>`;
     // 详情 popover 内容（点 ⓘ 后展开看，默认折叠不干扰正文）
     const detailParts = [];
     if (m.source) detailParts.push(`<div><strong>📦 数据源:</strong> ${_esc(m.source)}</div>`);
@@ -3617,7 +3617,7 @@ function _dbExplorerDetailRow(r) {
                 <div class="text-xs font-bold text-slate-700">${_esc(title)}</div>
                 ${compactMeta}
               </div>
-              <div class="text-xs text-slate-700 whitespace-pre-wrap leading-relaxed">${empty ? '<span class="text-slate-300">— 暂无（' + (kind === 'conclusion' || kind === 'risks' ? '主观字段，需用户/AI 手填' : kind === 'notes' ? '主观便签，需用户手填' : kind === 'info_breakdown' ? 'jobs/enrich_watchlist 尚未对该标的跑过多源 enrich' : '数据源未返回') + '）</span>' : _esc(String(body))}</div>
+              <div class="text-xs text-slate-700 whitespace-pre-wrap leading-relaxed">${empty ? '<span class="text-slate-300">— 暂无（' + (kind === 'conclusion' || kind === 'risks' ? 'V2 enrichment 尚未生成该字段' : kind === 'notes' ? '用户便签，需用户手填' : kind === 'info_breakdown' ? 'V2 系统池 enrichment 尚未跑过' : '数据源未返回') + '）</span>' : _esc(String(body))}</div>
             </div>`;
   };
 
@@ -9070,6 +9070,61 @@ def _load_latest_pick_dates_by_market() -> dict[str, str | None]:
     return out
 
 
+def _runtime_v2_enrichment_map(con, tables: set[str]) -> dict[str, dict]:
+    """Latest v2 system-universe enrichment keyed by symbol and market:symbol."""
+    if "source_raw_snapshots" not in tables:
+        return {}
+    try:
+        rows = con.execute(
+            """
+            SELECT payload_json, fetched_at
+            FROM source_raw_snapshots
+            WHERE source = 'v2_system_enrichment'
+            ORDER BY fetched_at DESC
+            """
+        ).fetchall()
+    except Exception:
+        return {}
+
+    out: dict[str, dict] = {}
+    for payload_json, fetched_at in rows:
+        try:
+            payload = json.loads(payload_json) if isinstance(payload_json, str) else payload_json
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        symbol = str(payload.get("symbol") or "").strip().upper()
+        raw_symbol = str(payload.get("raw_symbol") or "").strip().upper()
+        market = str(payload.get("market") or "").strip().upper()
+        if not symbol:
+            continue
+        fetched_ts = payload.get("fetched_at") or (
+            fetched_at.isoformat(sep=" ", timespec="seconds") if hasattr(fetched_at, "isoformat") else fetched_at
+        )
+        row = {
+            "earnings": payload.get("earnings") or "",
+            "conclusion": payload.get("conclusion") or "",
+            "risks": payload.get("risks") or "",
+            "info_breakdown": payload.get("info_breakdown") or "",
+            "notes": payload.get("notes") or "",
+            "verification": payload.get("source_text") or "",
+            "updated_at": fetched_ts,
+            "earnings_fetched_at": fetched_ts,
+            "_v2_enrichment_source": "source_raw_snapshots.v2_system_enrichment",
+        }
+        keys = {symbol}
+        if raw_symbol:
+            keys.add(raw_symbol)
+        if market:
+            keys.add(f"{market}:{symbol}")
+            if raw_symbol:
+                keys.add(f"{market}:{raw_symbol}")
+        for key in keys:
+            out.setdefault(key, row)
+    return out
+
+
 def _runtime_db_explorer_snapshot() -> dict:
     """构造 /api/db/all-stocks 的构建时快照。
 
@@ -9121,7 +9176,8 @@ def _runtime_db_explorer_snapshot() -> dict:
         if latest_run:
             pick_rows = con.execute(
                 """
-                SELECT market, symbol, name, signal, total_score, factor_scores_json,
+                SELECT market, symbol, name, rating, signal, total_score,
+                       factor_scores_json, recommendation_reason, risk_flags_json,
                        universe_scope, source_origin
                 FROM recommendation_picks
                 WHERE run_id = ?
@@ -9131,11 +9187,16 @@ def _runtime_db_explorer_snapshot() -> dict:
         picks_by_code = {}
         for row in pick_rows:
             data = dict(zip(
-                ["market", "symbol", "name", "signal", "total_score", "factor_scores_json", "universe_scope", "source_origin"],
+                [
+                    "market", "symbol", "name", "rating", "signal", "total_score",
+                    "factor_scores_json", "recommendation_reason", "risk_flags_json",
+                    "universe_scope", "source_origin",
+                ],
                 row,
             ))
             picks_by_code[str(data.get("symbol") or "")] = data
 
+        enrichment_by_code = _runtime_v2_enrichment_map(con, tables)
         groups: dict[str, list[dict[str, Any]]] = {"美股": [], "A股": [], "港股": [], "其他": []}
         market_map = {"US": "美股", "HK": "港股", "CN": "A股"}
         rows = con.execute(
@@ -9158,6 +9219,14 @@ def _runtime_db_explorer_snapshot() -> dict:
                 "_source_origin": "system_pool",
                 "earnings_fetched_at": None,
             }
+            enrich_row = (
+                enrichment_by_code.get(f"{str(market or '').upper()}:{code}")
+                or enrichment_by_code.get(code)
+                or enrichment_by_code.get(str(raw_symbol or "").strip().upper())
+                or {}
+            )
+            if enrich_row:
+                meta.update(enrich_row)
             price_row = prices_by_code.get(code) or prices_by_code.get(str(raw_symbol or "").strip()) or {}
             merged = {k: _jsonify(v) for k, v in meta.items()}
             for k, v in price_row.items():
@@ -9183,6 +9252,16 @@ def _runtime_db_explorer_snapshot() -> dict:
                     merged["pick_trend_score"] = fs.get("momentum")
                     merged["pick_cred_score"] = fs.get("data_quality")
                     merged["pick_coverage_score"] = fs.get("coverage")
+                    merged["pick_ai_score"] = fs.get("ai_relevance")
+                except Exception:
+                    pass
+            if pick_row.get("recommendation_reason") and not merged.get("conclusion"):
+                merged["conclusion"] = pick_row.get("recommendation_reason")
+            if pick_row.get("risk_flags_json") and not merged.get("risks"):
+                try:
+                    flags = json.loads(pick_row.get("risk_flags_json"))
+                    if flags:
+                        merged["risks"] = "\n".join(f"- {flag}" for flag in flags)
                 except Exception:
                     pass
             if latest_run:
@@ -9321,6 +9400,8 @@ def build():
                 "universe_size": v2_stats_main.get("system_universe") or len(v2_candidates_main),
                 "candidates": v2_candidates_main,
             }
+    elif clean_v2 and not discovery.get("source"):
+        discovery = {**discovery, "source": "v2:discovery_candidates"}
 
     # DuckDB 源
     risk_metrics_db = _load_pipeline_db("risk_metrics")
@@ -9459,56 +9540,59 @@ def build():
     html = html.replace("{WATCHLIST_CHAIN_INFO_JSON}", json.dumps(chain_info, ensure_ascii=False))
 
     # AI 推荐的历史推荐 + 准确度跟踪(DuckDB discovery_history JOIN tracking)
-    try:
-        if clean_v2:
-            raise RuntimeError("clean v2 不读取 legacy discovery_history")
-        from stock_db import fetch_discovery_history
-        disc_hist = fetch_discovery_history(days=90)  # 过去 90 天
-        # date / datetime → ISO string,方便 JSON
-        for r in disc_hist:
-            for k in ("generated_date", "last_refreshed_at"):
-                v = r.get(k)
-                if v is not None and hasattr(v, "isoformat"):
-                    r[k] = v.isoformat()
-        print(f"  Discovery 历史已加载 [DuckDB]({len(disc_hist)} 条推荐记录)")
-    except Exception as e:
-        print(f"  ⚠️ Discovery 历史加载失败: {e}")
+    if clean_v2:
         disc_hist = []
+        print("  Discovery 历史跳过 [clean v2 不读取 legacy discovery_history]")
+    else:
+        try:
+            from stock_db import fetch_discovery_history
+            disc_hist = fetch_discovery_history(days=90)  # 过去 90 天
+            # date / datetime → ISO string,方便 JSON
+            for r in disc_hist:
+                for k in ("generated_date", "last_refreshed_at"):
+                    v = r.get(k)
+                    if v is not None and hasattr(v, "isoformat"):
+                        r[k] = v.isoformat()
+            print(f"  Discovery 历史已加载 [DuckDB]({len(disc_hist)} 条推荐记录)")
+        except Exception as e:
+            print(f"  ⚠️ Discovery 历史加载失败: {e}")
+            disc_hist = []
     html = html.replace("{DISCOVERY_HISTORY_JSON}", json.dumps(disc_hist, ensure_ascii=False, default=str))
 
     # AI 评级:自选股每只的当前评级(来自 picks 最新一日,daily_picks_v5 学术因子产出)
     watchlist_ratings = {}
-    try:
-        if clean_v2:
-            raise RuntimeError("clean v2 不读取 legacy picks/watchlist")
-        from stock_db import get_db as _get_db
-        _conn = _get_db()
-        # 自选股 AI 评级列：保留 buy/avoid/watch 全档（avoid 的"⛔"对自选股是有价值的信号 —
-        # 提示用户考虑出掉），但带上 signal 让前端按结构化字段区分着色，而不是再去
-        # 解析 rating 文本前缀。
-        for code, rating, total_score, ai_score, signal in _conn.execute(
-            """
-            WITH latest AS (
-              SELECT code, MAX(pick_date) AS pick_date
-              FROM picks
-              GROUP BY code
-            )
-            SELECT p.code, p.rating, p.total_score, p.ai_score, p.signal
-            FROM picks p
-            INNER JOIN watchlist w ON w.code = p.code
-            INNER JOIN latest l ON l.code = p.code AND l.pick_date = p.pick_date
-            """
-        ).fetchall():
-            watchlist_ratings[code] = {
-                "rating": rating,
-                "total_score": total_score,
-                "ai_score": ai_score,
-                "signal": signal,
-            }
-        _conn.close()
-        print(f"  自选股 AI 评级已加载 [DuckDB picks]({len(watchlist_ratings)} 只)")
-    except Exception as e:
-        print(f"  ⚠️ AI 评级加载失败: {e}")
+    if clean_v2:
+        print("  自选股 AI 评级跳过 [clean v2 不读取 legacy picks/watchlist]")
+    else:
+        try:
+            from stock_db import get_db as _get_db
+            _conn = _get_db()
+            # 自选股 AI 评级列：保留 buy/avoid/watch 全档（avoid 的"⛔"对自选股是有价值的信号 —
+            # 提示用户考虑出掉），但带上 signal 让前端按结构化字段区分着色，而不是再去
+            # 解析 rating 文本前缀。
+            for code, rating, total_score, ai_score, signal in _conn.execute(
+                """
+                WITH latest AS (
+                  SELECT code, MAX(pick_date) AS pick_date
+                  FROM picks
+                  GROUP BY code
+                )
+                SELECT p.code, p.rating, p.total_score, p.ai_score, p.signal
+                FROM picks p
+                INNER JOIN watchlist w ON w.code = p.code
+                INNER JOIN latest l ON l.code = p.code AND l.pick_date = p.pick_date
+                """
+            ).fetchall():
+                watchlist_ratings[code] = {
+                    "rating": rating,
+                    "total_score": total_score,
+                    "ai_score": ai_score,
+                    "signal": signal,
+                }
+            _conn.close()
+            print(f"  自选股 AI 评级已加载 [DuckDB picks]({len(watchlist_ratings)} 只)")
+        except Exception as e:
+            print(f"  ⚠️ AI 评级加载失败: {e}")
     html = html.replace("{WATCHLIST_RATINGS_JSON}", json.dumps(watchlist_ratings, ensure_ascii=False))
     html = html.replace("{RECORDS_JSON}", json.dumps(records, ensure_ascii=False, default=str))
     html = html.replace("{PICKS_JSON}", json.dumps(picks, ensure_ascii=False, default=str))

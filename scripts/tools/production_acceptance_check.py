@@ -364,6 +364,117 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
                         [{"market": r[0], "symbol": r[1]} for r in orphan],
                     ))
 
+            if {"system_universe", "source_raw_snapshots"}.issubset(db_tables):
+                active_rows = conn.execute(
+                    """
+                    SELECT market, symbol
+                    FROM system_universe
+                    WHERE active = TRUE
+                    """
+                ).fetchall()
+                active_keys = {
+                    (str(market or "").upper(), str(symbol or "").upper())
+                    for market, symbol in active_rows
+                    if symbol
+                }
+                latest_enrichment_day = conn.execute(
+                    """
+                    SELECT MAX(business_date)
+                    FROM source_raw_snapshots
+                    WHERE source = 'v2_system_enrichment'
+                    """
+                ).fetchone()[0]
+                latest_enrichment_dt = _parse_dt(latest_enrichment_day)
+                enrichment_rows = []
+                if latest_enrichment_day is not None:
+                    enrichment_rows = conn.execute(
+                        """
+                        SELECT market, payload_json
+                        FROM source_raw_snapshots
+                        WHERE source = 'v2_system_enrichment'
+                          AND business_date = ?
+                        """,
+                        [latest_enrichment_day],
+                    ).fetchall()
+
+                seen_keys: set[tuple[str, str]] = set()
+                missing_fields: list[dict[str, Any]] = []
+                degraded_rows: list[dict[str, Any]] = []
+                bad_payloads = 0
+                required_detail_fields = ("earnings", "info_breakdown", "conclusion", "risks", "source_text")
+                for market, payload_json in enrichment_rows:
+                    try:
+                        payload = json.loads(payload_json) if isinstance(payload_json, str) else payload_json
+                    except Exception:
+                        bad_payloads += 1
+                        continue
+                    if not isinstance(payload, dict):
+                        bad_payloads += 1
+                        continue
+                    payload_market = str(payload.get("market") or market or "").upper()
+                    symbol = str(payload.get("symbol") or "").upper()
+                    if not symbol:
+                        bad_payloads += 1
+                        continue
+                    key = (payload_market, symbol)
+                    if key in active_keys:
+                        seen_keys.add(key)
+                    blank = [field for field in required_detail_fields if not str(payload.get(field) or "").strip()]
+                    if blank:
+                        missing_fields.append({"market": payload_market, "symbol": symbol, "fields": blank})
+                    if str(payload.get("external_source_error") or "").strip():
+                        degraded_rows.append({
+                            "market": payload_market,
+                            "symbol": symbol,
+                            "error": str(payload.get("external_source_error"))[:160],
+                        })
+
+                missing_keys = sorted(active_keys - seen_keys)
+                summary["v2_enrichment_coverage"] = {
+                    "latest_business_date": str(latest_enrichment_day) if latest_enrichment_day else None,
+                    "active_system_symbols": len(active_keys),
+                    "enriched_system_symbols": len(seen_keys),
+                    "missing_system_symbols": len(missing_keys),
+                    "missing_detail_rows": len(missing_fields),
+                    "degraded_rows": len(degraded_rows),
+                    "bad_payloads": bad_payloads,
+                }
+                if latest_enrichment_dt is None:
+                    issues.append(_issue("FAIL", "v2_enrichment_missing", "v2 系统池详情 enrichment 尚未生成"))
+                elif (now.date() - latest_enrichment_dt.date()).days > max_age_days:
+                    issues.append(_issue(
+                        "FAIL",
+                        "v2_enrichment_stale",
+                        f"v2 系统池详情 enrichment 已滞后：{latest_enrichment_day}",
+                    ))
+                if missing_keys:
+                    issues.append(_issue(
+                        "FAIL",
+                        "v2_enrichment_incomplete",
+                        "v2 系统池详情 enrichment 未覆盖全部 active system_universe 标的",
+                        [{"market": m, "symbol": s} for m, s in missing_keys[:30]],
+                    ))
+                if bad_payloads:
+                    issues.append(_issue(
+                        "FAIL",
+                        "v2_enrichment_bad_payload",
+                        f"v2 系统池详情存在 {bad_payloads} 条无法解析的 payload",
+                    ))
+                if missing_fields:
+                    issues.append(_issue(
+                        "FAIL",
+                        "v2_enrichment_blank_detail_fields",
+                        "v2 系统池详情存在空白关键字段",
+                        missing_fields[:30],
+                    ))
+                if degraded_rows:
+                    issues.append(_issue(
+                        "WARN",
+                        "v2_enrichment_source_degraded",
+                        "v2 系统池详情存在外部源降级；页面已展示 V2 fallback，但需要排查源稳定性",
+                        degraded_rows[:30],
+                    ))
+
         source_health, _ = _json_load("data/latest/source_health.json")
         if isinstance(source_health, dict) and source_health.get("_error") is None:
             yfinance_health = ((source_health.get("sources") or {}).get("yfinance") or {})

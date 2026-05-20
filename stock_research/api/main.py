@@ -10,6 +10,7 @@
   uvicorn stock_research.api.main:app --reload
 """
 from __future__ import annotations
+import json
 import logging
 from typing import Any
 
@@ -217,6 +218,7 @@ def create_app():
         try:
             tables = {str(r[0]) for r in conn.execute("SHOW TABLES").fetchall()}
             is_v2 = "system_universe" in tables and "price_daily" in tables
+            enrichment_by_code: dict[str, dict[str, Any]] = {}
             if is_v2:
                 pool_meta = {}
                 market_label_map = {"US": "美股", "HK": "港股", "CN": "A股"}
@@ -275,18 +277,66 @@ def create_app():
                 if latest_run:
                     pick_rows = conn.execute(
                         """
-                        SELECT market, symbol, name, signal, total_score, factor_scores_json, universe_scope, source_origin
+                        SELECT market, symbol, name, rating, signal, total_score,
+                               factor_scores_json, recommendation_reason, risk_flags_json,
+                               universe_scope, source_origin
                         FROM recommendation_picks
                         WHERE run_id = ?
                         """,
                         [latest_run[0]],
                     ).fetchall()
-                pick_cols = ["market", "symbol", "name", "signal", "total_score", "factor_scores_json", "universe_scope", "source_origin"]
+                pick_cols = [
+                    "market", "symbol", "name", "rating", "signal", "total_score",
+                    "factor_scores_json", "recommendation_reason", "risk_flags_json",
+                    "universe_scope", "source_origin",
+                ]
                 picks_by_code = {}
                 for r in pick_rows:
                     row = dict(zip(pick_cols, r))
                     code = str(row.get("symbol") or "")
                     picks_by_code[code] = row
+
+                if "source_raw_snapshots" in tables:
+                    for payload_json, fetched_at in conn.execute(
+                        """
+                        SELECT payload_json, fetched_at
+                        FROM source_raw_snapshots
+                        WHERE source = 'v2_system_enrichment'
+                        ORDER BY fetched_at DESC
+                        """
+                    ).fetchall():
+                        try:
+                            payload = json.loads(payload_json) if isinstance(payload_json, str) else payload_json
+                        except Exception:
+                            continue
+                        if not isinstance(payload, dict):
+                            continue
+                        symbol = str(payload.get("symbol") or "").strip().upper()
+                        raw_symbol = str(payload.get("raw_symbol") or "").strip().upper()
+                        market_code = str(payload.get("market") or "").strip().upper()
+                        if not symbol:
+                            continue
+                        fetched_ts = payload.get("fetched_at") or _jsonify(fetched_at)
+                        enrich_row = {
+                            "earnings": payload.get("earnings") or "",
+                            "conclusion": payload.get("conclusion") or "",
+                            "risks": payload.get("risks") or "",
+                            "info_breakdown": payload.get("info_breakdown") or "",
+                            "notes": payload.get("notes") or "",
+                            "verification": payload.get("source_text") or "",
+                            "updated_at": fetched_ts,
+                            "earnings_fetched_at": fetched_ts,
+                            "_v2_enrichment_source": "source_raw_snapshots.v2_system_enrichment",
+                        }
+                        keys = {symbol}
+                        if raw_symbol:
+                            keys.add(raw_symbol)
+                        if market_code:
+                            keys.add(f"{market_code}:{symbol}")
+                            if raw_symbol:
+                                keys.add(f"{market_code}:{raw_symbol}")
+                        for key in keys:
+                            enrichment_by_code.setdefault(key, enrich_row)
 
                 earnings_fetched = {}
                 prices_date = conn.execute("SELECT MAX(trade_date) FROM price_daily").fetchone()[0]
@@ -370,6 +420,9 @@ def create_app():
                 "market": meta.get("market") or _infer_market_from_code(str(code)),
                 "earnings_fetched_at": earnings_fetched.get(code),
             }
+            enrich_row = enrichment_by_code.get(str(code).upper()) or {}
+            if enrich_row:
+                base.update(enrich_row)
             merged: dict[str, Any] = {}
             for k, v in base.items():
                 merged[k] = _jsonify(v)
@@ -382,6 +435,26 @@ def create_app():
                 if k in ("code", "name", "market", "symbol"):
                     continue
                 merged[f"pick_{k}"] = _jsonify(v)
+            fs_json = pk.get("factor_scores_json") if pk else None
+            if fs_json:
+                try:
+                    fs = json.loads(fs_json) if isinstance(fs_json, str) else fs_json
+                    merged["pick_val_score"] = fs.get("valuation")
+                    merged["pick_trend_score"] = fs.get("momentum")
+                    merged["pick_cred_score"] = fs.get("data_quality")
+                    merged["pick_coverage_score"] = fs.get("coverage")
+                    merged["pick_ai_score"] = fs.get("ai_relevance")
+                except Exception:
+                    pass
+            if pk.get("recommendation_reason") and not merged.get("conclusion"):
+                merged["conclusion"] = pk.get("recommendation_reason")
+            if pk.get("risk_flags_json") and not merged.get("risks"):
+                try:
+                    flags = json.loads(pk.get("risk_flags_json"))
+                    if flags:
+                        merged["risks"] = "\n".join(f"- {flag}" for flag in flags)
+                except Exception:
+                    pass
             groups[_classify(merged.get("market"))].append(merged)
 
         return {
@@ -483,6 +556,7 @@ def create_app():
         import stock_db
         conn = stock_db.get_db()
         try:
+            tables = {str(r[0]) for r in conn.execute("SHOW TABLES").fetchall()}
             wl_row = stock_db.get_watchlist_item(code, conn=conn)
 
             def _rows(q: str) -> list[dict[str, Any]]:
@@ -524,6 +598,43 @@ def create_app():
                 )
                 if v2_wl:
                     wl_row = v2_wl[0]
+            if wl_row and "source_raw_snapshots" in tables:
+                enrich_rows = conn.execute(
+                    """
+                    SELECT payload_json, fetched_at
+                    FROM source_raw_snapshots
+                    WHERE source = 'v2_system_enrichment'
+                      AND json_extract_string(payload_json, '$.symbol') = ?
+                    ORDER BY fetched_at DESC
+                    LIMIT 1
+                    """,
+                    [code],
+                ).fetchall()
+                if enrich_rows:
+                    payload_json, fetched_at = enrich_rows[0]
+                    try:
+                        payload = json.loads(payload_json) if isinstance(payload_json, str) else payload_json
+                    except Exception:
+                        payload = {}
+                    if isinstance(payload, dict):
+                        wl_row = {
+                            **wl_row,
+                            "earnings": payload.get("earnings") or "",
+                            "conclusion": payload.get("conclusion") or "",
+                            "risks": payload.get("risks") or "",
+                            "info_breakdown": payload.get("info_breakdown") or "",
+                            "notes": payload.get("notes") or "",
+                            "verification": payload.get("source_text") or "",
+                            "updated_at": payload.get("fetched_at") or fetched_at,
+                            "_v2_enrichment_source": "source_raw_snapshots.v2_system_enrichment",
+                        }
+            if not earnings_history and "financial_statements" in tables:
+                earnings_history = _rows(
+                    "SELECT symbol AS code, period_end_date AS fiscal_period, source, "
+                    "fetched_at, payload_json "
+                    "FROM financial_statements WHERE symbol = ? "
+                    "ORDER BY period_end_date DESC, fetched_at DESC"
+                )
         finally:
             conn.close()
 

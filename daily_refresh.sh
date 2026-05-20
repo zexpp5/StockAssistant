@@ -100,6 +100,7 @@ pipeline_sink_for_label() {
         *"13F → track_13f"*) echo "data/latest/track_13f.json + DuckDB.snapshots" ;;
         *"SEC 13F"*) echo "data/sec_13f/* + data/latest/track_13f.json" ;;
         *"多源 enrichment"*) echo "DuckDB.watchlist enrichment fields" ;;
+        *"V2 系统池 enrichment"*) echo "DuckDB.source_raw_snapshots(v2_system_enrichment) + financial_statements" ;;
         *"跨源审计"*) echo "data/snapshots/audit/*" ;;
         *"每日优选"*|*"v6 学术因子"*|*"港股 picks"*|*"A 股优选"*) echo "DuckDB.picks + data/latest/factor caches" ;;
         *"picks 反向审查"*) echo "DuckDB.snapshots(category='picks_audit')" ;;
@@ -363,6 +364,8 @@ is_research_step && run_step "2/25 SEC 13F 刷新" "-m stock_research.jobs.refre
 is_research_step && run_step "3/25 SEC 13F → track_13f.json（dashboard 用）" "scripts/pipeline/_build_track_13f_from_sec.py"
 # M
 run_step "4/25 多源 enrichment" "-m stock_research.jobs.enrich_watchlist --skip-trends"
+run_step "4b/25 V2 系统池 enrichment（system_universe → 详情页字段）" \
+    "scripts/tools/enrich_system_universe_v2.py --skip-trends --skip-akshare --sleep-sec 0.02 --per-symbol-timeout-sec 18"
 run_step "5/25 跨源审计" "-m stock_research.jobs.daily_audit"
 # R — 旧 v1 评分 + 反向审查 + 历史回顾（仅用于研究对照）
 is_research_step && run_step "6/25 每日优选 v1（旧体系 · dry-run 基线）" "scripts/pipeline/daily_picks.py --dry-run"
