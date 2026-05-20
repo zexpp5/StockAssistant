@@ -405,7 +405,11 @@ is_morning_step && run_a_share_steps
 # M — AI 推荐（dashboard 全池排名 + 质量闸门复核 + 证据报告）
 run_step "23/25 全池 AI 推荐（每日）" "scripts/tools/build_pool_recommendations.py"
 
-# R — 推荐准确度评估（扫过去 70 天历次推荐刷新 alpha，慢）
+# M — V2 pick alpha 评估（扫过去 70 天 recommendation_runs，每只 pick 算 1d/5d/20d
+# alpha 写 pick_outcomes；已成熟样本不重算，幂等；带网络 yfinance benchmark 但有内存缓存）
+run_step "23a/25 V2 pick alpha 评估" "scripts/tools/evaluate_v2_picks.py"
+
+# R — 旧 discovery 准确度评估（V1 discovery_tracking 路径，clean v2 上无新数据）
 is_research_step && run_step "23b/25 推荐准确度评估（每日）" "scripts/tools/evaluate_discovery.py"
 # M
 run_step "23c/25 推荐质量闸门（收盘后复核）" "scripts/tools/recommendation_quality_gate.py"

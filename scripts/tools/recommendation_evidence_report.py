@@ -164,9 +164,60 @@ def _review_coverage(conn) -> dict[str, Any]:
         m = mature_map.get(src, 0)
         r = reviewed_map.get(src, 0)
         by_source[src] = {"mature": m, "reviewed": r, "coverage": _coverage(r, m)}
-    total_m = sum(x["mature"] for x in by_source.values())
-    total_r = sum(x["reviewed"] for x in by_source.values())
-    return {"by_source": by_source, "total_mature": total_m, "total_reviewed": total_r, "coverage": _coverage(total_r, total_m)}
+
+    # V2 path: pick_outcomes 里每个 (run_id, market, symbol, horizon) 都是一个 reviewed 样本
+    # mature 计数 = 每个 V2 pick 在每个 horizon 上是否已成熟（today >= run_date + horizon_days）
+    v2_total_reviewed = 0
+    v2_total_mature = 0
+    by_horizon: dict[str, dict] = {}
+    try:
+        tables = {str(r[0]) for r in conn.execute("SHOW TABLES").fetchall()}
+        if "pick_outcomes" in tables and "recommendation_picks" in tables and "recommendation_runs" in tables:
+            # mature = (run_date + horizon_days) <= today，针对 system_tech_universe 系列
+            v2_mature_rows = conn.execute(
+                """
+                SELECT horizon, COUNT(*) FROM (
+                    SELECT rp.run_id, rp.market, rp.symbol, h.horizon
+                    FROM recommendation_picks rp
+                    JOIN recommendation_runs rr ON rp.run_id = rr.run_id
+                    CROSS JOIN (VALUES ('1d', 1), ('5d', 5), ('20d', 20)) AS h(horizon, days)
+                    WHERE rr.universe_scope = 'system_tech_universe'
+                      AND rr.status = 'generated'
+                      AND rp.signal = 'buy'
+                      AND (rr.run_date + INTERVAL (h.days) DAY) <= CURRENT_DATE
+                )
+                GROUP BY horizon
+                """
+            ).fetchall()
+            v2_reviewed_rows = conn.execute(
+                """
+                SELECT horizon, COUNT(*) FROM pick_outcomes
+                WHERE alpha_pct IS NOT NULL
+                GROUP BY horizon
+                """
+            ).fetchall()
+            mature_by_h = {h: int(n) for h, n in v2_mature_rows}
+            reviewed_by_h = {h: int(n) for h, n in v2_reviewed_rows}
+            for h in ("1d", "5d", "20d"):
+                m = mature_by_h.get(h, 0)
+                r = reviewed_by_h.get(h, 0)
+                by_horizon[h] = {"mature": m, "reviewed": r, "coverage": _coverage(r, m)}
+                v2_total_mature += m
+                v2_total_reviewed += r
+    except Exception as e:
+        by_horizon["error"] = str(e)
+
+    total_m = sum(x["mature"] for x in by_source.values()) + v2_total_mature
+    total_r = sum(x["reviewed"] for x in by_source.values()) + v2_total_reviewed
+    return {
+        "by_source": by_source,
+        "v2_by_horizon": by_horizon,
+        "v2_total_mature": v2_total_mature,
+        "v2_total_reviewed": v2_total_reviewed,
+        "total_mature": total_m,
+        "total_reviewed": total_r,
+        "coverage": _coverage(total_r, total_m),
+    }
 
 
 def _discovery_metrics(conn) -> dict[str, Any]:
