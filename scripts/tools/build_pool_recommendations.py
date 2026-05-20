@@ -17,9 +17,15 @@ from statistics import mean, pstdev
 from typing import Any
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, REPO)
 sys.path.insert(0, os.path.join(REPO, "scripts", "lib"))
 
-from stock_db import get_db, upsert_discovery_history  # noqa: E402
+from stock_db import (  # noqa: E402
+    get_db,
+    upsert_discovery_history,
+    fetch_universe_for_ai_recommendations,
+    fetch_latest_recommendation_picks,
+)
 
 
 FX_TO_USD = {
@@ -86,7 +92,14 @@ def _ai_text_score(text: str | None) -> float | None:
     return 0.0
 
 
+_MARKET_LABEL_BY_V2 = {"US": "United States", "HK": "Hong Kong", "CN": "China"}
+
+
 def _market_label(code: str, market: str | None) -> str:
+    # V2 优先：market 直接来自 system_universe 的 US/HK/CN 标签
+    if market and market.upper() in _MARKET_LABEL_BY_V2:
+        return _MARKET_LABEL_BY_V2[market.upper()]
+    # 后缀兜底（旧调用方传 ticker）
     c = (code or "").upper()
     if c.endswith(".HK") or "港" in (market or ""):
         return "Hong Kong"
@@ -102,63 +115,91 @@ def _market_label(code: str, market: str | None) -> str:
 
 
 def _load_pool_rows() -> list[dict]:
+    """V2 路径：system_universe + pool_membership 作为候选池；price_daily 取最新行情；
+    最新 recommendation_picks 作为 pick_* 字段来源。
+    V2 design (docs/V2/产品基线.md)：AI 推荐严禁读 watchlist。"""
+    universe = fetch_universe_for_ai_recommendations()
+    if not universe:
+        return []
+    picks = fetch_latest_recommendation_picks()
+    picks_by_symbol = {(p["market"], p["symbol"]): p for p in picks}
+
     conn = get_db()
     try:
         rows = conn.execute(
             """
-            WITH latest_prices AS (
-              SELECT *
-              FROM prices
-              WHERE (code, date) IN (SELECT code, MAX(date) FROM prices GROUP BY code)
-            ),
-            latest_picks AS (
-              SELECT *
-              FROM picks
-              WHERE (code, pick_date) IN (SELECT code, MAX(pick_date) FROM picks GROUP BY code)
-            )
-            SELECT
-              p.code, COALESCE(p.name, w.name) AS name,
-              COALESCE(w.market, '') AS market,
-              COALESCE(w.industry, '') AS industry,
-              COALESCE(w.theme, '') AS theme,
-              COALESCE(w.ai_relevance, '') AS ai_relevance,
-              p.currency, p.market_cap, p.forward_pe, p.peg_ratio,
-              p.earnings_growth_pct, p.revenue_growth_pct,
-              p.ytd_pct, p.one_year_pct, p.one_month_pct, p.one_week_pct,
-              lp.rating AS pick_rating,
-              lp.total_score AS pick_total_score,
-              lp.ai_score AS pick_ai_score,
-              lp.val_score AS pick_val_score,
-              lp.trend_score AS pick_trend_score,
-              lp.cred_score AS pick_cred_score,
-              lp.model_source AS pick_model_source,
-              COALESCE(lp.signal, 'buy') AS pick_signal,
-              lp.coverage_score AS pick_coverage_score,
-              lp.missing_factors AS pick_missing_factors
-            FROM latest_prices p
-            LEFT JOIN watchlist w ON w.code = p.code
-            LEFT JOIN latest_picks lp ON lp.code = p.code
+            SELECT pd.market, pd.symbol,
+                   pd.currency, pd.market_cap, pd.forward_pe, pd.peg_ratio,
+                   pd.ytd_pct, pd.one_year_pct, pd.one_month_pct, pd.one_week_pct,
+                   pd.close, pd.trade_date
+            FROM price_daily pd
+            JOIN (
+                SELECT market, symbol, MAX(trade_date) AS d
+                FROM price_daily
+                GROUP BY market, symbol
+            ) latest
+              ON pd.market = latest.market AND pd.symbol = latest.symbol
+             AND pd.trade_date = latest.d
             """
         ).fetchall()
     finally:
         conn.close()
 
-    cols = [
-        "code", "name", "market", "industry", "theme", "ai_relevance",
-        "currency", "market_cap", "forward_pe", "peg_ratio",
-        "earnings_growth_pct", "revenue_growth_pct",
+    price_cols = [
+        "market", "symbol", "currency", "market_cap", "forward_pe", "peg_ratio",
         "ytd_pct", "one_year_pct", "one_month_pct", "one_week_pct",
-        "pick_rating", "pick_total_score", "pick_ai_score", "pick_val_score",
-        "pick_trend_score", "pick_cred_score", "pick_model_source",
-        "pick_signal", "pick_coverage_score", "pick_missing_factors",
+        "close", "trade_date",
     ]
-    return [dict(zip(cols, r)) for r in rows]
+    price_by_symbol = {(r[0], r[1]): dict(zip(price_cols, r)) for r in rows}
+
+    out = []
+    for u in universe:
+        key = (u["market"], u["symbol"])
+        price = price_by_symbol.get(key) or {}
+        pick = picks_by_symbol.get(key) or {}
+        factor_scores = pick.get("factor_scores") or {}
+        row = {
+            "code": u["symbol"],
+            "name": u.get("name") or u["symbol"],
+            "market": u.get("market") or "",
+            "industry": u.get("industry") or "",
+            "theme": u.get("theme") or "",
+            "ai_relevance": "科技/AI universe",
+            "pool_source": u.get("source") or "",
+            # 行情字段（price_daily 没有的列保持 None）
+            "currency": price.get("currency"),
+            "market_cap": price.get("market_cap"),
+            "forward_pe": price.get("forward_pe"),
+            "peg_ratio": price.get("peg_ratio"),
+            "earnings_growth_pct": None,  # V2 price_daily 不再存 growth 字段
+            "revenue_growth_pct": None,
+            "ytd_pct": price.get("ytd_pct"),
+            "one_year_pct": price.get("one_year_pct"),
+            "one_month_pct": price.get("one_month_pct"),
+            "one_week_pct": price.get("one_week_pct"),
+            # V2 recommendation_picks 字段映射
+            "pick_rating": pick.get("rating"),
+            "pick_total_score": pick.get("total_score"),
+            "pick_ai_score": None,  # V2 没有 ai_score 细分
+            "pick_val_score": factor_scores.get("valuation"),
+            "pick_trend_score": factor_scores.get("momentum"),
+            "pick_cred_score": factor_scores.get("data_quality"),
+            "pick_model_source": pick.get("run_id"),
+            "pick_signal": pick.get("signal") or "buy",
+            "pick_coverage_score": factor_scores.get("coverage"),
+            "pick_missing_factors": None,
+        }
+        out.append(row)
+    return out
 
 
 def build_recommendations(top: int = 20, out_path: str = "data/discovery_candidates.json") -> dict:
     rows = _load_pool_rows()
     if not rows:
-        raise RuntimeError("prices 表没有最新快照，无法生成全池 AI 推荐")
+        raise RuntimeError(
+            "system_universe / price_daily 无数据，无法生成全池 AI 推荐 — "
+            "确认 daily_refresh 的 step 1 (fetch_stock_prices) 已成功跑过"
+        )
 
     # Local derived fields used for cross-sectional z-scores.
     for r in rows:
@@ -278,9 +319,9 @@ def build_recommendations(top: int = 20, out_path: str = "data/discovery_candida
         "universe_size": len(rows),
         "watchlist_excluded": 0,
         "avoid_excluded": skipped_avoid,
-        "universe_scope": "all_db_prices",
+        "universe_scope": "tech_universe_db_prices",
         "exclude_watchlist": False,
-        "etf_sources": ["DuckDB prices", "latest picks when available"],
+        "etf_sources": ["tech/AI universe", "DuckDB prices", "latest picks when available"],
         "method": "Fast full-pool score: latest v6 pick score + momentum/growth/valuation/AI-theme proxies",
         "min_market_cap_usd": None,
         "candidates": candidates,

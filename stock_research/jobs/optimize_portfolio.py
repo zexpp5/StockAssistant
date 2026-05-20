@@ -94,13 +94,63 @@ def _write_latest_plan(result: dict) -> None:
 # ─────────── 数据获取 ───────────
 
 def _load_factor_scores() -> dict | None:
-    """读 daily_picks_v5 / build_plan_a_v5 共享的 factor_scores_today.json 缓存。"""
+    """读 daily_picks_v5 / build_plan_a_v5 共享的 factor_scores_today.json 缓存。
+
+    fallback：当缓存缺失（v5 因 watchlist 空未产 cache）时，从 V2 recommendation_picks
+    构造一个轻量版 factors 列表，仅用于驱动 risk-aware 组合优化，跳过 combine_factors。
+    V2 design 要求 AI 组合方案 candidate 池来自系统 AI 推荐池，而不是 watchlist。
+    """
     cache = _REPO_ROOT / "data" / "latest" / "factor_scores_today.json"
-    if not cache.exists():
-        logger.error("缓存 %s 不存在，先跑 daily_picks_v5.py", cache)
+    if cache.exists():
+        with open(cache, encoding="utf-8") as f:
+            data = json.load(f)
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        cache_date = (data.get("date") or "")[:10]
+        factors_n = len(data.get("factors") or [])
+        # cache 当天 + 覆盖足够（≥5 只）才使用；否则走 V2 fallback
+        if cache_date == today_str and factors_n >= 5:
+            return data
+        logger.info(
+            "factor_scores cache 已过期或覆盖不足（date=%s, factors=%d）→ V2 fallback",
+            cache_date or "?", factors_n,
+        )
+
+    # V2 fallback：用最新 recommendation_picks 作为候选池
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(_REPO_ROOT / "scripts" / "lib"))
+        from stock_db import fetch_latest_recommendation_picks  # type: ignore
+    except Exception as e:
+        logger.error("fallback 加载 stock_db 失败: %s", e)
         return None
-    with open(cache, encoding="utf-8") as f:
-        return json.load(f)
+    picks = fetch_latest_recommendation_picks()
+    if not picks:
+        logger.error("缓存 %s 不存在 且 recommendation_picks 无最新 run", cache)
+        return None
+    factors = []
+    signals = []
+    for p in picks:
+        ticker = p["symbol"]
+        factors.append({
+            "ticker": ticker,
+            "composite": p.get("total_score"),
+            "piotroski": {"f_score": None},
+            "momentum": {"momentum_12_1": None, "reversal_1m": None},
+            "pead": {"acceleration": None},
+            "quality": None,
+        })
+        signals.append({"ticker": ticker, "analyst": None})
+    logger.info(
+        "factor_scores cache 缺失 → fallback 用 V2 recommendation_picks（run=%s, %d 只）",
+        picks[0].get("run_id"), len(picks),
+    )
+    return {
+        "factors": factors,
+        "signals": signals,
+        "fallback_v2": True,
+        "fallback_run_id": picks[0].get("run_id"),
+        "fallback_run_date": str(picks[0].get("run_date")),
+    }
 
 
 def _fetch_returns_and_adv(ticker: str, lookback_days: int = 252):
@@ -237,53 +287,87 @@ def run(capital: float = DEFAULT_CAPITAL,
     factors = cached["factors"]
     sig_map = {s["ticker"]: s for s in cached.get("signals", [])}
 
-    # ────── 2. 读 watchlist 拿行业 + 市值（用于中性化）──────
-    print("\n[1/5] 读 watchlist 拿行业 + 市值...")
+    # ────── 2. 读 watchlist + V2 universe 拿行业 + 市值（用于中性化 + 行业 cap）──────
+    print("\n[1/5] 读 watchlist + V2 universe 拿行业 + 市值...")
+    wl_lookup: dict = {}
     try:
         watchlist = feishu.fetch_watchlist()
         wl_lookup = {(r["normalized"]["code"] or "").upper(): r["fields"] for r in watchlist}
         print(f"  watchlist: {len(wl_lookup)} 条")
     except Exception as e:
-        print(f"  ⚠️ 飞书拉取失败: {e}；跳过中性化")
-        wl_lookup = {}
+        print(f"  ⚠️ watchlist 拉取失败: {e}")
+    # 用 V2 system_universe 补齐：AI 组合方案候选可能不在 watchlist 里
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(_REPO_ROOT / "scripts" / "lib"))
+        from stock_db import fetch_universe_for_ai_recommendations  # type: ignore
+        v2_added = 0
+        for u in fetch_universe_for_ai_recommendations():
+            key = (u["symbol"] or "").upper()
+            if key and key not in wl_lookup:
+                wl_lookup[key] = {
+                    "行业归类": u.get("industry") or u.get("theme") or "",
+                    "yf市值": "",
+                }
+                v2_added += 1
+        if v2_added:
+            print(f"  V2 universe 补齐: +{v2_added} 条")
+    except Exception as e:
+        print(f"  ⚠️ V2 universe 加载失败: {e}")
+    if not wl_lookup:
         skip_neutralize = True
+    print(f"  合并 lookup: {len(wl_lookup)} 条")
 
     # ────── 3. 用因子 + 中性化重新排序 ──────
-    print(f"\n[2/5] 因子合成{'（含中性化）' if not skip_neutralize else '（不中性化，对照模式）'}...")
-    from factor_model import DEFAULT_FACTOR_WEIGHTS, combine_factors
-    from early_signals import score_analyst
-    from stock_research.core.factor_ic_gate import evaluate_gate, format_report
+    fallback_v2 = bool(cached.get("fallback_v2"))
+    if fallback_v2:
+        # V2 fallback：跳过 combine_factors + IC gate（V2 推荐 run 已合成 total_score）
+        print(f"\n[2/5] V2 fallback 模式：直接用 recommendation_picks.total_score 作为 composite "
+              f"（run_id={cached.get('fallback_run_id')}）")
+        df = pd.DataFrame([
+            {"ticker": f["ticker"], "composite": f.get("composite") or 0.0}
+            for f in factors
+        ])
+        df = df.sort_values("composite", ascending=False).reset_index(drop=True)
+        df["composite_neutral"] = df["composite"]
+        factor_weights = {}
+        skip_neutralize = True
+    else:
+        print(f"\n[2/5] 因子合成{'（含中性化）' if not skip_neutralize else '（不中性化，对照模式）'}...")
+        from factor_model import DEFAULT_FACTOR_WEIGHTS, combine_factors
+        from early_signals import score_analyst
+        from stock_research.core.factor_ic_gate import evaluate_gate, format_report
 
-    gate = evaluate_gate()
-    print(format_report(gate))
-    factor_weights = dict(DEFAULT_FACTOR_WEIGHTS)
-    if not gate.passed:
-        healthy = set(gate.healthy_factors or [])
-        if not healthy:
-            return {"error": "factor_ic_gate_no_healthy_factors", "gate_reason": gate.reason}
-        factor_weights = {
-            k: (v if k in healthy else 0.0)
-            for k, v in DEFAULT_FACTOR_WEIGHTS.items()
+        gate = evaluate_gate()
+        print(format_report(gate))
+        factor_weights = dict(DEFAULT_FACTOR_WEIGHTS)
+        if not gate.passed:
+            healthy = set(gate.healthy_factors or [])
+            if not healthy:
+                return {"error": "factor_ic_gate_no_healthy_factors", "gate_reason": gate.reason}
+            factor_weights = {
+                k: (v if k in healthy else 0.0)
+                for k, v in DEFAULT_FACTOR_WEIGHTS.items()
+            }
+            dropped = [k for k, v in factor_weights.items() if v <= 0]
+            print(
+                "  🟡 IC gate 未全通过：组合优化只使用 healthy 因子 "
+                f"{sorted(healthy)}；降权 {dropped}"
+            )
+
+        analyst = {
+            tk: (None if not s.get("analyst") or "error" in (s.get("analyst") or {})
+                 else score_analyst(s.get("analyst"))[0])
+            for tk, s in sig_map.items()
         }
-        dropped = [k for k, v in factor_weights.items() if v <= 0]
-        print(
-            "  🟡 IC gate 未全通过：组合优化只使用 healthy 因子 "
-            f"{sorted(healthy)}；降权 {dropped}"
+        df = combine_factors(
+            factors,
+            analyst_signals=analyst,
+            include_reversal=True,
+            factor_weights=factor_weights,
         )
 
-    analyst = {
-        tk: (None if not s.get("analyst") or "error" in (s.get("analyst") or {})
-             else score_analyst(s.get("analyst"))[0])
-        for tk, s in sig_map.items()
-    }
-    df = combine_factors(
-        factors,
-        analyst_signals=analyst,
-        include_reversal=True,
-        factor_weights=factor_weights,
-    )
-
-    if not skip_neutralize and not df.empty and len(wl_lookup) > 0:
+    if not fallback_v2 and not skip_neutralize and not df.empty and len(wl_lookup) > 0:
         df["industry"] = df["ticker"].apply(lambda t: _industry_for(t, wl_lookup))
         df["market_cap"] = df["ticker"].apply(lambda t: _market_cap_for(t, wl_lookup))
         # 对各因子做行业 + 市值中性化
@@ -554,12 +638,20 @@ def run(capital: float = DEFAULT_CAPITAL,
             "use_legacy_mc": use_legacy_mc,
             "factor_weights_used": factor_weights,
         },
-        "factor_ic_gate": {
-            "passed": gate.passed,
-            "reason": gate.reason,
-            "healthy_factors": gate.healthy_factors,
-            "inverted_factors": gate.inverted_factors,
-        },
+        "factor_ic_gate": (
+            {
+                "passed": gate.passed,
+                "reason": gate.reason,
+                "healthy_factors": gate.healthy_factors,
+                "inverted_factors": gate.inverted_factors,
+            } if not fallback_v2 else {
+                "passed": None,
+                "reason": "v2_fallback_skipped",
+                "healthy_factors": None,
+                "inverted_factors": None,
+                "fallback_run_id": cached.get("fallback_run_id"),
+            }
+        ),
         "kelly_clipped": kelly_clipped,
         "vol_target": vol_target_info,
         "portfolio_metrics": {

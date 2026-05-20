@@ -48,6 +48,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "scripts" / "lib"))  # 2026-05-11 lib 迁移
 
+from stock_research import config
 from stock_research.core.a_share_filters import (
     fetch_spot_snapshot, filter_tradable, _strip_code,
 )
@@ -61,7 +62,7 @@ from stock_research.core.event_calendar import (
 from stock_research.core.policy_events import themes_under_policy_tailwind
 
 # 复用现有 A 股因子模型（Piotroski + 动量 + 反转）
-from factor_model_china import fetch_factors_a_share
+from factor_model_china import fetch_factors_a_share, momentum_a_share
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -88,6 +89,7 @@ DEFAULT_FACTOR_WEIGHTS = {
 assert abs(sum(DEFAULT_FACTOR_WEIGHTS.values()) - 1.0) < 1e-9
 CALIBRATED_WEIGHTS_PATH = REPO / "data" / "calibrated_factor_weights.json"
 A_SHARE_FACTOR_CACHE = REPO / "data" / "latest" / "a_share_factor_cache.json"
+A_SHARE_PRICE_HISTORY_CACHE = REPO / "data" / "latest" / "a_share_price_history_cache.json"
 
 
 def _load_calibrated_weights() -> tuple[dict[str, float] | None, str]:
@@ -230,6 +232,74 @@ def fetch_a_share_watchlist() -> list[dict]:
     return out
 
 
+def _a_share_market(raw_ticker: str) -> str:
+    if raw_ticker.startswith(("00", "20", "30")):
+        return "A股·深交所"
+    if raw_ticker.startswith(("8", "9", "43")):
+        return "A股·北交所"
+    return "A股·上交所"
+
+
+def _universe_item_to_record(item: dict) -> dict:
+    raw = str(item.get("raw_ticker") or item.get("ticker") or "").split(".")[0]
+    return {
+        "code": raw,
+        "name": item.get("name") or raw,
+        "market": _a_share_market(raw),
+        "industry": item.get("sector") or item.get("industry") or "",
+        "theme": "A-share AI/tech",
+        "ai_logic": f"production universe: {item.get('source') or 'a_share_universe'}",
+        "source": item.get("source") or "a_share_universe",
+    }
+
+
+def _static_a_share_universe_records(limit: int | None = None) -> list[dict]:
+    return _dynamic_a_share_universe_records(limit=limit)
+
+
+def _dynamic_a_share_universe_records(limit: int | None = None) -> list[dict]:
+    from stock_research.core.a_share_universe import fetch_a_share_tech_universe
+    items = fetch_a_share_tech_universe()
+    if limit and limit > 0:
+        items = items[:limit]
+    return [_universe_item_to_record(item) for item in items]
+
+
+def fetch_a_share_candidate_records(
+    *,
+    universe: str = "auto",
+    limit: int | None = None,
+) -> tuple[list[dict], str]:
+    """A 股生产输入池。
+
+    watchlist 是用户自选，不再作为生产推荐的唯一输入。默认 auto：
+    仅使用动态 A 股科技池；若动态池为空则保持为空。用户自选 A 股只作为
+    额外覆盖/补充，不为空也不会排除生产 universe。
+    """
+    manual = fetch_a_share_watchlist()
+    if universe == "watchlist":
+        return manual, "watchlist"
+
+    if universe == "static":
+        records = _static_a_share_universe_records(limit=limit)
+        source = "dynamic_universe"
+    else:
+        source = "dynamic_universe"
+        try:
+            records = _dynamic_a_share_universe_records(limit=limit)
+        except Exception as e:
+            if universe == "dynamic":
+                raise
+            logger.warning("A 股动态 universe 失败，保持空池: %s", e)
+            records = []
+
+    by_code = {r["code"]: r for r in records}
+    for r in manual:
+        # 用户自选覆盖 universe 的名称/行业/备注；不在 universe 中则追加。
+        by_code[r["code"]] = {**by_code.get(r["code"], {}), **r}
+    return list(by_code.values()), source + ("+watchlist_overlay" if manual else "")
+
+
 def _load_a_share_factor_cache() -> dict:
     try:
         data = json.loads(A_SHARE_FACTOR_CACHE.read_text(encoding="utf-8"))
@@ -249,56 +319,112 @@ def _save_a_share_factor_cache(cache: dict) -> None:
     tmp.replace(A_SHARE_FACTOR_CACHE)
 
 
-def _cached_a_share_bundle(cache_items: dict, code: str, as_of_today: str) -> dict | None:
+def _load_a_share_price_cache() -> dict:
+    try:
+        data = json.loads(A_SHARE_PRICE_HISTORY_CACHE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {"items": {}}
+    except Exception:
+        return {"items": {}}
+
+
+def _price_factors_from_cache(code: str, as_of_today: str, price_cache: dict) -> tuple[float | None, float | None]:
+    item = (price_cache.get("items") or {}).get(_strip_code(code))
+    rows = item.get("rows") if isinstance(item, dict) else None
+    if not isinstance(rows, list):
+        return None, None
+    usable = sorted(
+        (r for r in rows if str(r.get("date", "")) <= as_of_today and r.get("close") is not None),
+        key=lambda r: str(r.get("date", "")),
+    )
+    if len(usable) < 253:
+        return None, None
+    try:
+        closes = [float(r["close"]) for r in usable]
+        t_now = closes[-1]
+        t_minus_21 = closes[-22]
+        t_minus_252 = closes[-253]
+        if min(t_now, t_minus_21, t_minus_252) <= 0:
+            return None, None
+        mom = (t_minus_21 / t_minus_252 - 1.0) * 100.0
+        rev = -((t_now / t_minus_21 - 1.0) * 100.0)
+        return round(mom, 2), round(rev, 2)
+    except Exception:
+        return None, None
+
+
+def _cached_a_share_bundle(cache_items: dict, code: str, as_of_today: str,
+                           active_factors: set[str]) -> dict | None:
     key = _strip_code(code)
     item = cache_items.get(key)
     if isinstance(item, dict) and item.get("date") == as_of_today and isinstance(item.get("bundle"), dict):
-        return item["bundle"]
+        bundle = item["bundle"]
+        fetched = set(bundle.get("_fetched_factors") or DEFAULT_FACTOR_WEIGHTS)
+        if active_factors.issubset(fetched):
+            return bundle
     return None
 
 
 def _fetch_a_share_factor_bundle(code: str, as_of_today: str,
-                                 cache_items: dict) -> tuple[dict, dict | None, bool]:
+                                 cache_items: dict,
+                                 price_cache: dict,
+                                 active_factors: set[str]) -> tuple[dict, dict | None, bool]:
     """Network-heavy A-share factor bundle with same-day cache.
 
     The tradability filter, LHB batch, event calendar, and policy scan stay
     outside the cache because they are already batch-level or cheap local reads.
     """
     norm = _strip_code(code)
-    cached = _cached_a_share_bundle(cache_items, norm, as_of_today)
+    cached = _cached_a_share_bundle(cache_items, norm, as_of_today, active_factors)
     if cached is not None:
         return cached, None, True
 
     f_score = mom = rev = None
-    try:
-        f_data = fetch_factors_a_share(norm, as_of=as_of_today)
-        f_score = (f_data.get("piotroski") or {}).get("f_score")
-        mom = (f_data.get("momentum") or {}).get("momentum_12_1")
-        rev = (f_data.get("momentum") or {}).get("reversal_1m")
-    except Exception as e:
-        logger.debug("factor_model_china failed for %s: %s", norm, e)
+    if "f_score" in active_factors:
+        try:
+            f_data = fetch_factors_a_share(norm, as_of=as_of_today)
+            f_score = (f_data.get("piotroski") or {}).get("f_score")
+            mom = (f_data.get("momentum") or {}).get("momentum_12_1")
+            rev = (f_data.get("momentum") or {}).get("reversal_1m")
+        except Exception as e:
+            logger.debug("factor_model_china failed for %s: %s", norm, e)
+    elif active_factors & {"momentum", "reversal"}:
+        mom, rev = _price_factors_from_cache(norm, as_of_today, price_cache)
+        if mom is None or rev is None:
+            try:
+                m_data = momentum_a_share(norm, as_of=as_of_today)
+                mom = m_data.get("momentum_12_1")
+                rev = m_data.get("reversal_1m")
+            except Exception as e:
+                logger.debug("momentum_a_share failed for %s: %s", norm, e)
 
-    try:
-        n_sig = compute_north_flow_signal(norm, lookback_days=20)
-        north_score = n_sig.score
-    except Exception as e:
+    if "north_flow" in active_factors:
+        try:
+            n_sig = compute_north_flow_signal(norm, lookback_days=20)
+            north_score = n_sig.score
+        except Exception as e:
+            north_score = 0.5
+            logger.debug("north flow failed for %s: %s", norm, e)
+    else:
         north_score = 0.5
-        logger.debug("north flow failed for %s: %s", norm, e)
 
-    try:
-        from stock_research.core.a_share_fundamental_deep import (
-            altman_z_double_prime_a, beneish_m_score_a, build_a_share_risk_flags,
-        )
-        from stock_research.core.a_share_industry import get_industry as _get_ind
-        altman = altman_z_double_prime_a(norm)
-        beneish = beneish_m_score_a(norm)
-        ind_info = _get_ind(norm) or {}
-        z_inapp = ind_info.get("z_prime_inapplicable", False)
-        risk_flags = build_a_share_risk_flags(altman, beneish, z_prime_inapplicable=z_inapp)
-        altman_z_val = altman.get("z_score") if not altman.get("error") else None
-        beneish_m_val = beneish.get("m_score_adjusted") if not beneish.get("error") else None
-    except Exception as fe:
-        logger.debug("a_share_fundamental_deep failed for %s: %s", norm, fe)
+    run_deep_risk = os.environ.get("A_SHARE_DEEP_RISK", "0").strip().lower() in {"1", "true", "yes", "on"}
+    if run_deep_risk or "f_score" in active_factors:
+        try:
+            from stock_research.core.a_share_fundamental_deep import (
+                altman_z_double_prime_a, beneish_m_score_a, build_a_share_risk_flags,
+            )
+            from stock_research.core.a_share_industry import get_industry as _get_ind
+            altman = altman_z_double_prime_a(norm)
+            beneish = beneish_m_score_a(norm)
+            ind_info = _get_ind(norm) or {}
+            z_inapp = ind_info.get("z_prime_inapplicable", False)
+            risk_flags = build_a_share_risk_flags(altman, beneish, z_prime_inapplicable=z_inapp)
+            altman_z_val = altman.get("z_score") if not altman.get("error") else None
+            beneish_m_val = beneish.get("m_score_adjusted") if not beneish.get("error") else None
+        except Exception as fe:
+            logger.debug("a_share_fundamental_deep failed for %s: %s", norm, fe)
+            altman_z_val, beneish_m_val, risk_flags = None, None, []
+    else:
         altman_z_val, beneish_m_val, risk_flags = None, None, []
 
     bundle = {
@@ -309,6 +435,7 @@ def _fetch_a_share_factor_bundle(code: str, as_of_today: str,
         "altman_z": altman_z_val,
         "beneish_m": beneish_m_val,
         "risk_flags": risk_flags,
+        "_fetched_factors": sorted(active_factors),
     }
     return bundle, {"date": as_of_today, "bundle": bundle}, False
 
@@ -318,33 +445,41 @@ def _build_a_share_entry(
     *,
     as_of_today: str,
     cache_items: dict,
+    price_cache: dict,
     snapshot,
     lhb_factors: dict,
     cal: EventCalendar,
     tailwind: dict,
     theme_field: str,
+    active_factors: set[str],
 ) -> tuple[APickEntry, tuple, dict | None, str]:
     code = r["code"]
     norm = _strip_code(code)
     name = r.get("name", code)
-    bundle, cache_update, cache_hit = _fetch_a_share_factor_bundle(norm, as_of_today, cache_items)
+    bundle, cache_update, cache_hit = _fetch_a_share_factor_bundle(
+        norm, as_of_today, cache_items, price_cache, active_factors,
+    )
 
     f_score = bundle.get("f_score")
     mom = bundle.get("mom")
     rev = bundle.get("rev")
 
-    try:
-        pead = pead_factor(norm, cal)
-    except Exception as e:
+    if "pead" in active_factors:
+        try:
+            pead = pead_factor(norm, cal)
+        except Exception as e:
+            pead = {"score": 0.5, "in_event_window": False}
+            logger.debug("pead failed for %s: %s", norm, e)
+    else:
         pead = {"score": 0.5, "in_event_window": False}
-        logger.debug("pead failed for %s: %s", norm, e)
 
     theme_text = (r.get(theme_field, "") or r.get("industry", "")
                   or r.get("ai_logic", "") or "")
     policy_boost = 0.0
-    for theme, count in tailwind.items():
-        if theme in theme_text:
-            policy_boost = max(policy_boost, min(0.30, count * 0.05))
+    if "policy_theme" in active_factors:
+        for theme, count in tailwind.items():
+            if theme in theme_text:
+                policy_boost = max(policy_boost, min(0.30, count * 0.05))
 
     event_risk = cal.risk_score(norm) if cal.events else 1.0
 
@@ -361,7 +496,7 @@ def _build_a_share_entry(
         tradable, block_reasons = True, []
 
     lhb = lhb_factors.get(norm) or lhb_factors.get(code)
-    lhb_score = lhb.score if lhb else 0.5
+    lhb_score = lhb.score if ("lhb" in active_factors and lhb) else 0.5
 
     entry = APickEntry(
         code=norm, name=name,
@@ -401,7 +536,9 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
                       require_after_close: bool = False,
                       bypass_ic_gate: bool = False,
                       bypass_audit_gate: bool = False,
-                      workers: int = 3):
+                      workers: int = 3,
+                      universe: str = "auto",
+                      universe_limit: int | None = 80):
     """主入口。
 
     参数：
@@ -451,44 +588,62 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
     print(f"\n📊 A 股每日优选 — {datetime.now():%Y-%m-%d %H:%M}")
     print("=" * 70)
 
-    # 1. 拉 watchlist
-    print("\n[1/7] 拉飞书 A 股 watchlist...")
-    records = fetch_a_share_watchlist()
-    print(f"  {len(records)} 只 A 股标的")
+    # 1. 拉 A 股生产候选池（不依赖用户自选股）
+    print("\n[1/7] 拉 A 股生产候选池...")
+    records, records_source = fetch_a_share_candidate_records(
+        universe=universe,
+        limit=universe_limit,
+    )
+    print(f"  {len(records)} 只 A 股标的（source={records_source}）")
     if not records:
-        print("  (无 A 股标的，退出)")
+        print("  (无 A 股候选，退出)")
         return 0
+
+    weights, weights_source = load_weights()
+    active_factors = {k for k, v in weights.items() if float(v) > 0}
+    print(f"  权重源={weights_source} · active_factors={','.join(sorted(active_factors)) or 'none'}")
 
     # 2. 抓全市场 spot 快照（一次性，用于过滤）
     print("\n[2/7] 抓 A 股全市场 spot 快照...")
     snapshot = fetch_spot_snapshot()
     if snapshot is None:
-        print("  ⚠️ 快照获取失败 — 跳过 ST/涨停过滤（保守策略：所有标的 tradable=True）")
+        print("  🔴 快照获取失败 — 无法过滤 ST/停牌/涨停，强制 dry-run（不写 DB）")
+        dry_run = True
     else:
         print(f"  抓取 {snapshot.raw_count} 只全 A 股，分类完成")
 
     # 3. 抓 LHB / 北向 / 事件日历 (一次性)
     print("\n[3/7] 抓龙虎榜 (近 5 日) ...")
     codes = [r["code"] for r in records]
-    lhb_factors = compute_lhb_factors(codes, lookback_days=5)
-    print(f"  覆盖 {len(lhb_factors)} 只")
+    if "lhb" in active_factors:
+        lhb_factors = compute_lhb_factors(codes, lookback_days=5)
+        print(f"  覆盖 {len(lhb_factors)} 只")
+    else:
+        lhb_factors = {}
+        print("  跳过（当前校准权重未启用 lhb）")
 
     print("\n[4/7] 构建事件日历（解禁/减持/财报）...")
     cal: EventCalendar = build_calendar(
-        horizon_unlock_days=90, horizon_insider_days=60, include_earnings=True,
+        horizon_unlock_days=90,
+        horizon_insider_days=60,
+        include_earnings=("pead" in active_factors),
     )
     print(f"  {len(cal.events)} 条事件")
 
     print("\n[5/7] 扫描政策受益主题（最近 14 天）...")
-    try:
-        tailwind = themes_under_policy_tailwind(days=14, min_count=2)
-    except Exception as e:
-        logger.warning("policy scan failed: %s", e)
+    if "policy_theme" in active_factors:
+        try:
+            tailwind = themes_under_policy_tailwind(days=14, min_count=2)
+        except Exception as e:
+            logger.warning("policy scan failed: %s", e)
+            tailwind = {}
+    else:
         tailwind = {}
     if tailwind:
         print(f"  受益主题：{', '.join(f'{t}({c})' for t, c in sorted(tailwind.items(), key=lambda x: -x[1])[:5])}")
     else:
-        print(f"  无明显主题受益")
+        msg = "未启用 policy_theme" if "policy_theme" not in active_factors else "无明显主题受益"
+        print(f"  {msg}")
 
     # 4. 逐股算因子 + 信号 (北向是 per-stock API，无法批量；其他都已批量)
     print(f"\n[6/7] 逐股计算因子 ({len(records)} 只)...")
@@ -498,6 +653,7 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
     raw_metrics = []  # 用于横截面归一化
     factor_cache = _load_a_share_factor_cache()
     cache_items = factor_cache.setdefault("items", {})
+    price_cache = _load_a_share_price_cache()
     cache_dirty = False
     worker_count = max(1, min(workers, len(records)))
     print(f"  并发 workers={worker_count} · 当天 cache={A_SHARE_FACTOR_CACHE}")
@@ -508,11 +664,13 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
                 r,
                 as_of_today=as_of_today,
                 cache_items=cache_items,
+                price_cache=price_cache,
                 snapshot=snapshot,
                 lhb_factors=lhb_factors,
                 cal=cal,
                 tailwind=tailwind,
                 theme_field=theme_field,
+                active_factors=active_factors,
             ): (idx, r)
             for idx, r in enumerate(records, 1)
         }
@@ -544,8 +702,6 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
     revs = [r for _, r in raw_metrics]
     mom_ranks = _winsorize_rank(moms)
     rev_ranks = _winsorize_rank(revs)
-
-    weights, weights_source = load_weights()
 
     # 6. 合成综合分
     print(f"\n[7/7] 合成综合分（{len(entries)} 只，权重源={weights_source}）...")
@@ -628,6 +784,9 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
         "cutoff": cutoff,
         "top_k": top_k,
         "sector_cap_count": sector_cap_count,
+        "universe": universe,
+        "universe_source": records_source,
+        "a_share_production_enabled": config.A_SHARE_PRODUCTION_ENABLED,
         "factor_weights": weights,
         "factor_weights_source": weights_source,
         "calibration_status": calibration_status,
@@ -828,6 +987,12 @@ def main():
                         help="⚠️ 强行跳过跨源 audit CONFLICT 闸门（需自担风险）")
     parser.add_argument("--workers", type=int, default=int(os.getenv("STOCK_ASSISTANT_A_WORKERS", "3")),
                         help="缓存未命中时并发拉 A 股因子的线程数（默认 3）")
+    parser.add_argument("--universe", choices=["auto", "static", "dynamic", "watchlist"],
+                        default=os.getenv("A_SHARE_UNIVERSE", "auto"),
+                        help="A 股候选池：auto=动态失败回退静态；watchlist=仅用户自选")
+    parser.add_argument("--universe-limit", type=int,
+                        default=int(os.getenv("A_SHARE_UNIVERSE_LIMIT", "80")),
+                        help="A 股候选池最多评估多少只（默认 80；0 表示不限）")
     args = parser.parse_args()
     return run_a_share_picks(
         top_k=args.top, mode=args.mode, dry_run=args.dry_run,
@@ -836,6 +1001,8 @@ def main():
         bypass_ic_gate=args.bypass_ic_gate,
         bypass_audit_gate=args.bypass_audit_gate,
         workers=args.workers,
+        universe=args.universe,
+        universe_limit=(args.universe_limit or None),
     )
 
 

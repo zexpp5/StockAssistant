@@ -25,12 +25,17 @@ from datetime import datetime
 
 import yfinance as yf
 import stock_db
+from stock_research import config
 
 try:
     TOTAL_CAPITAL = stock_db.get_config("total_capital")
 except Exception:
     TOTAL_CAPITAL = 500000  # 默认 50 万 RMB
 USD_TO_RMB = 7.10
+
+
+def _a_share_enabled() -> bool:
+    return bool(config.A_SHARE_PRODUCTION_ENABLED)
 
 
 # ────────────────────────────────────────────────────────
@@ -61,10 +66,44 @@ def _quality_gate_status(payload: dict | None = None) -> str:
     return str(payload.get("status") or "UNKNOWN")
 
 
+def _quality_issue_blocks_market(market: str, issue: dict) -> bool:
+    code = str(issue.get("code") or "")
+    details = issue.get("details")
+    global_codes = {
+        "production_entry_price_missing",
+        "legacy_rating_mislabeled_as_v6",
+        "legacy_in_dashboard_view",
+    }
+    if code in global_codes:
+        # These checks may carry source-level details; when they do, scope them
+        # to the requested market instead of blocking every market's delta.
+        source = {
+            "us": "v6_us",
+            "hk": "v6_hk",
+            "cn": "v6_cn",
+        }.get(market)
+        if isinstance(details, list) and source:
+            return any(str(row.get("source") or "") == source for row in details if isinstance(row, dict))
+        return True
+    prefixes = {
+        "us": ("v6_us", "us_"),
+        "hk": ("v6_hk", "hk_"),
+        "cn": ("v6_cn", "a_share", "cn_"),
+    }.get(market, ())
+    return code.startswith(prefixes)
+
+
 def _quality_gate_block_reason(market: str, payload: dict) -> str | None:
     status = _quality_gate_status(payload)
     if status == "FAIL":
-        return "recommendation_quality_gate FAIL — 暂停买入/卖出/调仓，先修复数据质量"
+        fail_issues = [i for i in payload.get("issues") or [] if i.get("level") == "FAIL"]
+        blocking = [i for i in fail_issues if _quality_issue_blocks_market(market, i)]
+        if blocking:
+            first = blocking[0]
+            return (
+                f"recommendation_quality_gate FAIL({first.get('code')}) — "
+                "暂停本市场买入/卖出/调仓，先修复数据质量"
+            )
     if market == "cn":
         stale_codes = {"v6_cn_missing", "v6_cn_stale", "v6_cn_stale_after_close", "a_share_db_lags_json"}
         for issue in payload.get("issues") or []:
@@ -273,6 +312,35 @@ def build_delta(market: str, plan_file: str, out_file: str,
     print("=" * 100)
     print(f"  💼 {market_label} 调整清单（基于 {total_capital/10000:.0f} 万 {currency}）")
     print("=" * 100)
+
+    if market == "cn" and not _a_share_enabled():
+        payload = {
+            "generated_at": datetime.now().isoformat(),
+            "market": market,
+            "market_label": market_label,
+            "total_capital_rmb": total_capital,
+            "a_share_production_enabled": False,
+            "trade_blocked": True,
+            "disabled": True,
+            "block_reason": (
+                "A 股生产推荐未启用：缺少已验证的 data/calibrated_factor_weights.json；"
+                "设置 A_SHARE_PRODUCTION_ENABLED=1 后才生成 A 股调仓单"
+            ),
+            "sells": [],
+            "buys": [],
+            "adjusts": [],
+            "summary": {
+                "total_sell_rmb": 0,
+                "total_buy_rmb": 0,
+                "total_adjust_rmb": 0,
+                "net_cash_need_rmb": 0,
+            },
+        }
+        with open(out_file, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
+        print(f"  ⏸️  {payload['block_reason']}")
+        print(f"  ✅ {out_file}")
+        return payload
 
     qgate_payload = _quality_gate_payload()
     qgate = _quality_gate_status(qgate_payload)

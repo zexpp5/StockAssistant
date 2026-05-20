@@ -26,27 +26,18 @@ from datetime import datetime, timedelta
 
 import yfinance as yf
 
-# 方案 A 当前仓位（v2 含北方稀土）
-CURRENT_PLAN = [
-    ("NVDA",       "NVDA",       0.12),
-    ("TSM",        "TSM",        0.10),
-    ("GOOGL",      "GOOGL",      0.10),
-    ("MSFT",       "MSFT",       0.10),
-    ("AMD",        "AMD",        0.08),
-    ("Vertiv",     "VRT",        0.10),
-    ("北方稀土",     "600111.SS",  0.08),
-    ("Cameco",     "CCJ",        0.07),
-    ("Datadog",    "DDOG",       0.05),
-    ("中际旭创",     "300308.SZ",  0.05),
-    ("阿里巴巴",     "9988.HK",    0.05),
-    ("海光信息",     "688041.SS",  0.05),
-]
-CASH_PCT = 0.05
+# 当前仓位基线（用于 Kelly / Risk Parity 方法对比）。
+# 2026-05-20：以前是手编 NVDA/TSM/... 列表，已迁到 V2 portfolio_plans。
+# 没有 V2 plan 时返回空 list，下面的 fetch_returns 段就什么都不跑、graceful skip。
 try:
     import stock_db
+    CURRENT_PLAN = stock_db.fetch_latest_portfolio_plan_baseline()
     TOTAL = stock_db.get_config("total_capital")
-except Exception:
+except Exception as _e:
+    print(f"  ⚠️ V2 portfolio_plans 读取失败 ({_e})，CURRENT_PLAN 为空")
+    CURRENT_PLAN = []
     TOTAL = 500000
+CASH_PCT = 0.05
 
 LOOKBACK_DAYS = 250
 
@@ -119,6 +110,11 @@ def main():
     print("  📊 方案 A · 三种专业仓位优化")
     print("=" * 70)
 
+    if not CURRENT_PLAN:
+        print("\n⚠️  CURRENT_PLAN 为空（V2 portfolio_plans 还没产）— 跳过方法对比")
+        print("    先跑：python3 scripts/tools/build_v2_recommendations.py")
+        return
+
     print("\n[1/3] 拉过去 ~1 年历史收益率...")
     returns_dict = {}
     for name, ticker, _w in CURRENT_PLAN:
@@ -128,6 +124,10 @@ def main():
             print(f"  ✅ {name:<14}{ticker:<14}{len(r)} 天")
         else:
             print(f"  ❌ {name:<14}{ticker:<14}失败")
+
+    if not returns_dict:
+        print("\n⚠️  全部 ticker 拉取失败 — 跳过方法对比")
+        return
 
     # 对齐长度（取最短）
     min_len = min(len(r) for r in returns_dict.values())

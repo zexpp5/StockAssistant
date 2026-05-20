@@ -195,9 +195,16 @@ def fetch_spot_snapshot(use_cache: bool = True) -> SpotSnapshot | None:
 
     try:
         df = ak.stock_zh_a_spot_em()
+        source = "eastmoney"
     except Exception as e:
         logger.warning("akshare spot_em failed: %s", e)
-        return None
+        try:
+            df = ak.stock_zh_a_spot()
+            source = "sina"
+            logger.warning("akshare spot fallback succeeded: stock_zh_a_spot/sina")
+        except Exception as e2:
+            logger.warning("akshare spot sina fallback failed: %s", e2)
+            return None
 
     if df is None or df.empty:
         return None
@@ -217,7 +224,8 @@ def fetch_spot_snapshot(use_cache: bool = True) -> SpotSnapshot | None:
 
     by_code: dict[str, StockStatus] = {}
     for _, r in df.iterrows():
-        code = str(r.get("代码", "")).strip()
+        raw_code = str(r.get("代码", "")).strip()
+        code = raw_code[-6:] if len(raw_code) >= 6 else raw_code
         if not code:
             continue
 
@@ -290,6 +298,7 @@ def fetch_spot_snapshot(use_cache: bool = True) -> SpotSnapshot | None:
         raw_count=len(by_code),
         is_premarket=is_premarket,
     )
+    logger.info("a_share_filters: spot snapshot source=%s rows=%s", source, len(by_code))
     _SNAPSHOT_CACHE["all"] = (time.time(), snapshot)
     return snapshot
 

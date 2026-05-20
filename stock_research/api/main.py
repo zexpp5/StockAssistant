@@ -157,7 +157,7 @@ def create_app():
     # ────────── DB 全库浏览（深度研究 → DB 全库 tab） ──────────
     @app.get("/api/db/all-stocks")
     def db_all_stocks() -> dict[str, Any]:
-        """按市场分组返回 DB 内全部股票 + 最新行情 + 最新 picks 评级。
+        """按市场分组返回系统已拉取科技/AI 股票池 + 最新行情 + 最新 picks 评级。
 
         返回结构：
           {
@@ -165,66 +165,166 @@ def create_app():
             "counts": {"美股": 82, "A股": 12, "港股": 6, "其他": 8, "total": 108},
             "groups": {"美股": [row, ...], "A股": [...], "港股": [...], "其他": [...]},
           }
-        每行包含 watchlist 全 25 列 + price_* 字段 + pick_* 字段。
+        重要边界：
+          - 这里不是 watchlist，不展示用户手动自选股身份。
+          - 若同一 ticker 也在 watchlist，它在本接口里仍只按系统科技池记录展示。
+          - watchlist / 自选股 AI 优选 属于“我的池子”模块。
         """
         import stock_db
-        conn = stock_db.get_db()
+
+        def _jsonify(v):
+            if v is None:
+                return None
+            if hasattr(v, "isoformat"):
+                if hasattr(v, "hour"):
+                    return v.isoformat(sep=" ", timespec="seconds")
+                return v.isoformat()
+            return v
+
+        def _tech_pool_meta() -> dict[str, dict[str, Any]]:
+            from stock_research.core.hk_universe import fetch_hk_tech_universe
+            from stock_research.core.us_universe import fetch_us_ai_tech_universe
+            from stock_research.core.a_share_universe import fetch_a_share_tech_universe
+
+            meta: dict[str, dict[str, Any]] = {}
+
+            def add(item: dict[str, Any], market: str, theme: str) -> None:
+                ticker = str(item["ticker"])
+                raw = str(item.get("raw_ticker") or ticker.split(".")[0])
+                row = {
+                    "code": ticker,
+                    "name": item.get("name") or ticker,
+                    "market": market,
+                    "industry": item.get("sector") or "",
+                    "theme": theme,
+                    "ai_relevance": "科技/AI universe",
+                    "source": f"tech_universe:{item.get('source') or ''}",
+                    "_source_origin": "system_pool",
+                }
+                meta[ticker] = row
+                meta[raw] = {**row, "code": raw}
+
+            for item in fetch_us_ai_tech_universe():
+                add(item, "美股", "US AI/tech")
+            for item in fetch_hk_tech_universe():
+                add(item, "港股", "HK tech")
+            for item in fetch_a_share_tech_universe():
+                add(item, "A股", "A-share AI/tech")
+            return meta
+
+        import duckdb
+        conn = duckdb.connect(stock_db.DB_PATH, read_only=True)
         try:
-            wl_rows = stock_db.fetch_all_watchlist(conn=conn)
-            wl_codes = {r["code"] for r in wl_rows}
+            tables = {str(r[0]) for r in conn.execute("SHOW TABLES").fetchall()}
+            is_v2 = "system_universe" in tables and "price_daily" in tables
+            if is_v2:
+                pool_meta = {}
+                market_label_map = {"US": "美股", "HK": "港股", "CN": "A股"}
 
-            latest_prices_q = conn.execute(
-                """
-                SELECT * FROM prices
-                WHERE (code, date) IN (SELECT code, MAX(date) FROM prices GROUP BY code)
-                """
-            ).fetchall()
-            price_cols = [d[0] for d in conn.description]
-            prices_by_code = {r[price_cols.index("code")]: dict(zip(price_cols, r)) for r in latest_prices_q}
+                def _add_v2(item: dict[str, Any]) -> None:
+                    ticker = str(item.get("symbol") or item.get("ticker") or "").strip()
+                    if not ticker:
+                        return
+                    market_code = str(item.get("market") or "").upper()
+                    market = market_label_map.get(market_code, market_code)
+                    row = {
+                        "code": ticker,
+                        "name": item.get("name") or ticker,
+                        "market": market,
+                        "industry": item.get("industry") or "",
+                        "theme": item.get("theme") or "",
+                        "ai_relevance": "科技/AI universe",
+                        "source": f"pool:{item.get('pool_id') or 'system_tech_universe'}",
+                        "_source_origin": "system_pool",
+                    }
+                    pool_meta[ticker] = row
 
-            latest_picks_q = conn.execute(
-                """
-                SELECT * FROM picks
-                WHERE (code, pick_date) IN (SELECT code, MAX(pick_date) FROM picks GROUP BY code)
-                """
-            ).fetchall()
-            pick_cols = [d[0] for d in conn.description]
-            picks_by_code = {r[pick_cols.index("code")]: dict(zip(pick_cols, r)) for r in latest_picks_q}
+                for row in conn.execute(
+                    "SELECT pool_id, market, symbol, raw_symbol, name, theme, industry, source FROM system_universe WHERE active = TRUE"
+                ).fetchall():
+                    _add_v2({
+                        "pool_id": row[0],
+                        "market": row[1],
+                        "symbol": row[2],
+                        "raw_symbol": row[3],
+                        "name": row[4],
+                        "theme": row[5],
+                        "industry": row[6],
+                        "source": row[7],
+                    })
 
-            # earnings_history.fetched_at 最新值 — 每只股票"财报最近一次实际从 yfinance 抓取的时间"
-            # 跟 watchlist.updated_at（分析时间）不同：updated_at 还可能被 enrich/用户编辑等触发
-            earnings_fetched = {
-                code: dt for code, dt in conn.execute(
-                    "SELECT code, MAX(fetched_at) FROM earnings_history GROUP BY code"
+                price_rows = conn.execute(
+                    """
+                    SELECT market, symbol, trade_date, close, prev_close, currency, market_cap,
+                           forward_pe, trailing_pe, peg_ratio, ytd_pct, one_week_pct,
+                           one_month_pct, one_year_pct, source, fetched_at
+                    FROM price_daily
+                    QUALIFY ROW_NUMBER() OVER (
+                        PARTITION BY market, symbol
+                        ORDER BY trade_date DESC, fetched_at DESC
+                    ) = 1
+                    """
                 ).fetchall()
-            }
+                price_cols = [d[0] for d in conn.description]
+                prices_by_code = {f"{r[price_cols.index('symbol')]}": dict(zip(price_cols, r)) for r in price_rows}
 
-            # 找 picks 表里不在 watchlist 的标的（如 hk_picks 的 hk_universe.py 白名单股、a_share_picks 额外评的）
-            # signal='buy' 过滤：avoid/watch 档不算"额外候选"，避免把 daily_picks_v5 的负向 picks 当推荐展示。
-            picks_only_q = conn.execute(
-                """
-                SELECT DISTINCT code, FIRST(name) AS name, FIRST(market) AS market FROM picks
-                WHERE code NOT IN (SELECT code FROM watchlist)
-                  AND COALESCE(signal, 'buy') = 'buy'
-                GROUP BY code
-                """
-            ).fetchall()
-            picks_only = [{"code": r[0], "name": r[1], "market": r[2]} for r in picks_only_q]
+                pick_rows = []
+                latest_run = conn.execute(
+                    "SELECT run_id FROM recommendation_runs ORDER BY generated_at DESC LIMIT 1"
+                ).fetchone()
+                if latest_run:
+                    pick_rows = conn.execute(
+                        """
+                        SELECT market, symbol, name, signal, total_score, factor_scores_json, universe_scope, source_origin
+                        FROM recommendation_picks
+                        WHERE run_id = ?
+                        """,
+                        [latest_run[0]],
+                    ).fetchall()
+                pick_cols = ["market", "symbol", "name", "signal", "total_score", "factor_scores_json", "universe_scope", "source_origin"]
+                picks_by_code = {}
+                for r in pick_rows:
+                    row = dict(zip(pick_cols, r))
+                    code = str(row.get("symbol") or "")
+                    picks_by_code[code] = row
 
-            # 找 discovery_history 表里不在 watchlist 的标的（美股 AI ETF 扫出来的候选）
-            disc_only_q = conn.execute(
-                """
-                SELECT DISTINCT ticker AS code, FIRST(name) AS name, FIRST(sector) AS sector,
-                       FIRST(market) AS market FROM discovery_history
-                WHERE ticker NOT IN (SELECT code FROM watchlist)
-                  AND ticker NOT IN (SELECT code FROM picks)
-                GROUP BY ticker
-                """
-            ).fetchall()
-            disc_only = [{"code": r[0], "name": r[1], "industry": r[2], "market": r[3]} for r in disc_only_q]
+                earnings_fetched = {}
+                prices_date = conn.execute("SELECT MAX(trade_date) FROM price_daily").fetchone()[0]
+                picks_date = conn.execute("SELECT MAX(generated_at) FROM recommendation_runs").fetchone()[0]
+            else:
+                pool_meta = _tech_pool_meta()
+                latest_prices_q = conn.execute(
+                    """
+                    SELECT * FROM prices
+                    WHERE (code, date) IN (SELECT code, MAX(date) FROM prices GROUP BY code)
+                    """
+                ).fetchall()
+                price_cols = [d[0] for d in conn.description]
+                prices_by_code = {r[price_cols.index("code")]: dict(zip(price_cols, r)) for r in latest_prices_q}
 
-            prices_date = conn.execute("SELECT MAX(date) FROM prices").fetchone()[0]
-            picks_date = conn.execute("SELECT MAX(pick_date) FROM picks").fetchone()[0]
+                latest_picks_q = conn.execute(
+                    """
+                    SELECT * FROM picks
+                    WHERE (code, pick_date) IN (SELECT code, MAX(pick_date) FROM picks GROUP BY code)
+                    """
+                ).fetchall()
+                pick_cols = [d[0] for d in conn.description]
+                picks_by_code = {}
+                for r in latest_picks_q:
+                    row = dict(zip(pick_cols, r))
+                    code = str(row.get("code") or "")
+                    if code:
+                        picks_by_code[code] = row
+                        picks_by_code.setdefault(code.split(".")[0], row)
+
+                earnings_fetched = {
+                    code: dt for code, dt in conn.execute(
+                        "SELECT code, MAX(fetched_at) FROM earnings_history GROUP BY code"
+                    ).fetchall()
+                }
+
+                prices_date = conn.execute("SELECT MAX(date) FROM prices").fetchone()[0]
+                picks_date = conn.execute("SELECT MAX(pick_date) FROM picks").fetchone()[0]
         finally:
             conn.close()
 
@@ -259,52 +359,35 @@ def create_app():
                 return "港股"
             return "其他"
 
-        def _jsonable(v):
-            if v is None:
-                return None
-            if hasattr(v, "isoformat"):
-                # 去掉 ISO 8601 的 T 分隔符 + 截到秒（2026-05-12 08:32:00）
-                if hasattr(v, "hour"):
-                    return v.isoformat(sep=" ", timespec="seconds")
-                return v.isoformat()
-            return v
-
-        # 把 picks_only / disc_only 也合并进 wl_rows（伪 watchlist 行，标记 _source_origin）
-        for w in wl_rows:
-            w["_source_origin"] = "watchlist"
-        for r in picks_only:
-            r["_source_origin"] = "picks_only"
-            r["market"] = r.get("market") or _infer_market_from_code(r["code"])
-            wl_rows.append(r)
-        for r in disc_only:
-            r["_source_origin"] = "discovery_only"
-            r["market"] = r.get("market") or _infer_market_from_code(r["code"])
-            wl_rows.append(r)
-
         groups: dict[str, list[dict[str, Any]]] = {"美股": [], "A股": [], "港股": [], "其他": []}
-        for w in wl_rows:
-            code = w.get("code")
+        for code, meta in pool_meta.items():
+            price_row = prices_by_code.get(str(code)) or prices_by_code.get(str(code).split(".")[0]) or {}
+            if not meta:
+                continue
             # 每行带上 earnings 真实抓取时间（earnings_history.fetched_at 的 max）
-            w["earnings_fetched_at"] = earnings_fetched.get(code)
+            base = {
+                **meta,
+                "market": meta.get("market") or _infer_market_from_code(str(code)),
+                "earnings_fetched_at": earnings_fetched.get(code),
+            }
             merged: dict[str, Any] = {}
-            for k, v in w.items():
-                merged[k] = _jsonable(v)
-            p = prices_by_code.get(code) or {}
-            for k, v in p.items():
-                if k in ("code", "name"):
+            for k, v in base.items():
+                merged[k] = _jsonify(v)
+            for k, v in price_row.items():
+                if k in ("code", "name", "symbol", "market"):
                     continue
-                merged[f"price_{k}"] = _jsonable(v)
-            pk = picks_by_code.get(code) or {}
+                merged[f"price_{k}"] = _jsonify(v)
+            pk = picks_by_code.get(str(code)) or picks_by_code.get(str(code).split(".")[0]) or {}
             for k, v in pk.items():
-                if k in ("code", "name", "market"):
+                if k in ("code", "name", "market", "symbol"):
                     continue
-                merged[f"pick_{k}"] = _jsonable(v)
+                merged[f"pick_{k}"] = _jsonify(v)
             groups[_classify(merged.get("market"))].append(merged)
 
         return {
             "as_of": {
-                "prices_date": _jsonable(prices_date),
-                "picks_date": _jsonable(picks_date),
+                "prices_date": _jsonify(prices_date),
+                "picks_date": _jsonify(picks_date),
             },
             "counts": {k: len(v) for k, v in groups.items()} | {"total": sum(len(v) for v in groups.values())},
             "groups": groups,

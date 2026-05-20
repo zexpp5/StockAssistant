@@ -24,11 +24,11 @@ from typing import Iterable, Mapping, Any
 
 import duckdb
 
-# 2026-05-11 PM: scripts/lib 重构后,DB_PATH 默认指 repo root (scripts/lib/.. /.. = repo)
+# 2026-05-15: 默认切到 clean v2 DB；旧 stock_history.duckdb 已不再作为生产入口。
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DB_PATH = os.environ.get(
     "STOCK_DB_PATH",
-    os.path.join(_REPO_ROOT, "stock_history.duckdb"),
+    os.path.join(_REPO_ROOT, "stock_history_v2.duckdb"),
 )
 
 
@@ -84,6 +84,8 @@ CREATE TABLE IF NOT EXISTS picks (
     coverage_score    DOUBLE,    -- 因子有效覆盖率；低覆盖推荐会被降权/降级
     missing_factors   VARCHAR,   -- 逗号分隔的缺失因子名
     factor_weights_used VARCHAR, -- JSON: IC gate 后实际参与 composite 的因子权重
+    universe_scope    VARCHAR,   -- manual_watchlist / system_tech_universe
+    source_origin     VARCHAR,   -- self_pool / system_pool
     PRIMARY KEY (pick_date, code)
 );
 
@@ -152,6 +154,8 @@ ALTER TABLE picks     ADD COLUMN IF NOT EXISTS signal            VARCHAR;
 ALTER TABLE picks     ADD COLUMN IF NOT EXISTS coverage_score    DOUBLE;
 ALTER TABLE picks     ADD COLUMN IF NOT EXISTS missing_factors   VARCHAR;
 ALTER TABLE picks     ADD COLUMN IF NOT EXISTS factor_weights_used VARCHAR;
+ALTER TABLE picks     ADD COLUMN IF NOT EXISTS universe_scope    VARCHAR;
+ALTER TABLE picks     ADD COLUMN IF NOT EXISTS source_origin     VARCHAR;
 ALTER TABLE reviews   ADD COLUMN IF NOT EXISTS entry_spy_price   DOUBLE;
 ALTER TABLE reviews   ADD COLUMN IF NOT EXISTS current_spy_price DOUBLE;
 ALTER TABLE reviews   ADD COLUMN IF NOT EXISTS alpha_pct         DOUBLE;
@@ -432,6 +436,7 @@ PICK_COLS = [
     "ai_relevance", "theme", "entry_price", "entry_currency",
     "peg_at_pick", "fpe_at_pick", "ytd_at_pick", "one_week_at_pick", "one_year_at_pick",
     "model_source", "signal", "coverage_score", "missing_factors", "factor_weights_used",
+    "universe_scope", "source_origin",
 ]
 
 
@@ -494,6 +499,8 @@ def upsert_picks(
             r.get("coverage_score"),
             r.get("missing_factors"),
             r.get("factor_weights_used"),
+            r.get("universe_scope"),
+            r.get("source_origin"),
         ]
         placeholders = ",".join(["?"] * len(PICK_COLS))
         update_set = ",".join(f"{c}=excluded.{c}" for c in PICK_COLS if c not in ("pick_date", "code"))
@@ -879,23 +886,202 @@ def delete_watchlist_item(code: str, *, conn: duckdb.DuckDBPyConnection | None =
 
 
 # ============================================================
-# Holdings (2026-05-12: localStorage → DuckDB 迁移)
+# V2 AI 推荐 / 组合方案候选池（2026-05-20）
+# 按 docs/V2/产品基线.md：AI 推荐 / AI 组合方案严禁读 watchlist；
+# 它们的候选范围是 system_universe + 最新 recommendation_picks。
+# 这里两个 helper 提供 V1-watchlist 兼容形状（code/name/market/industry/theme），
+# 让 optimize_portfolio / build_pool_recommendations / apply_a_share_constraints
+# 直接迁移过来，不依赖 watchlist 是否被用户填充。
 # ============================================================
 
-HOLDINGS_COLS = ["code", "entry_price", "shares", "entry_date", "source", "notes"]
+
+def fetch_universe_for_ai_recommendations(
+    *,
+    pool_type: str = "system_tech_universe",
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> list[dict]:
+    """读 system_universe ∩ pool_membership.active 作为 AI 推荐候选池。
+
+    返回 dict 字段：code (=symbol), raw_symbol, market, name, industry, theme,
+    pool_id, source。code 与 symbol 同值，便于既读 V1 风格 code 又读 V2 symbol 的调用方。
+    """
+    own = conn is None
+    if own:
+        conn = get_db()
+    rows = conn.execute(
+        """
+        SELECT u.symbol, u.raw_symbol, u.market, u.name, u.industry, u.theme,
+               u.pool_id, u.source
+        FROM system_universe u
+        JOIN pool_membership m
+          ON u.pool_id = m.pool_id AND u.market = m.market AND u.symbol = m.symbol
+        WHERE m.active = TRUE AND m.pool_type = ?
+        ORDER BY u.market, u.symbol
+        """,
+        [pool_type],
+    ).fetchall()
+    out = []
+    for r in rows:
+        symbol, raw_symbol, market, name, industry, theme, pool_id, source = r
+        out.append({
+            "code": symbol,
+            "symbol": symbol,
+            "raw_symbol": raw_symbol,
+            "market": market,
+            "name": name,
+            "industry": industry,
+            "theme": theme,
+            "pool_id": pool_id,
+            "source": source,
+        })
+    if own:
+        conn.close()
+    return out
+
+
+def fetch_latest_portfolio_plan_baseline(
+    *,
+    universe_scope: str = "system_tech_universe",
+    plan_version: str | None = None,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> list[tuple[str, str, float]]:
+    """返回最新 portfolio_plans 的 (name, ticker, target_weight) 列表，给 legacy 对比脚本用。
+
+    替代旧的 CURRENT_PLAN_A 硬编码。当 V2 还没产 portfolio_plans 时返回空 list，
+    调用方应该 graceful exit 而不是用 NVDA 等默认值兜底。
+    """
+    own = conn is None
+    if own:
+        conn = get_db()
+    run_row = conn.execute(
+        """
+        SELECT run_id FROM recommendation_runs
+        WHERE universe_scope = ? AND status = 'generated'
+        ORDER BY generated_at DESC LIMIT 1
+        """,
+        [universe_scope],
+    ).fetchone()
+    if not run_row:
+        if own:
+            conn.close()
+        return []
+    run_id = run_row[0]
+    sql = """
+        SELECT COALESCE(u.name, pp.symbol) AS name, pp.symbol AS ticker, pp.target_weight
+        FROM portfolio_plans pp
+        LEFT JOIN system_universe u
+          ON pp.market = u.market AND pp.symbol = u.symbol AND u.pool_id = ?
+        WHERE pp.run_id = ?
+    """
+    params: list = [universe_scope, run_id]
+    if plan_version:
+        sql += " AND pp.plan_version = ?"
+        params.append(plan_version)
+    sql += " ORDER BY pp.target_weight DESC, pp.symbol"
+    rows = conn.execute(sql, params).fetchall()
+    if own:
+        conn.close()
+    return [(name, ticker, float(w)) for name, ticker, w in rows]
+
+
+def fetch_latest_recommendation_picks(
+    *,
+    universe_scope: str = "system_tech_universe",
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> list[dict]:
+    """读最新一次 recommendation_runs（status='generated'）下的全部 recommendation_picks。
+
+    返回字段：market, symbol, code(=symbol), name, rank, rating, signal,
+    total_score, factor_scores(dict from factor_scores_json), entry_price,
+    universe_scope, run_id, run_date。
+    无最新 run 时返回 []。
+    """
+    own = conn is None
+    if own:
+        conn = get_db()
+    row = conn.execute(
+        """
+        SELECT run_id, run_date FROM recommendation_runs
+        WHERE universe_scope = ? AND status = 'generated'
+        ORDER BY generated_at DESC LIMIT 1
+        """,
+        [universe_scope],
+    ).fetchone()
+    if not row:
+        if own:
+            conn.close()
+        return []
+    run_id, run_date = row
+    rows = conn.execute(
+        """
+        SELECT market, symbol, name, rank, rating, signal, total_score,
+               factor_scores_json, entry_price, universe_scope
+        FROM recommendation_picks
+        WHERE run_id = ?
+        ORDER BY rank
+        """,
+        [run_id],
+    ).fetchall()
+    import json as _json
+    out = []
+    for r in rows:
+        market, symbol, name, rank, rating, signal, total_score, fs_json, entry_price, scope = r
+        try:
+            fs = _json.loads(fs_json) if fs_json else {}
+        except Exception:
+            fs = {}
+        out.append({
+            "market": market,
+            "symbol": symbol,
+            "code": symbol,
+            "name": name,
+            "rank": rank,
+            "rating": rating,
+            "signal": signal,
+            "total_score": total_score,
+            "factor_scores": fs,
+            "entry_price": entry_price,
+            "universe_scope": scope,
+            "run_id": run_id,
+            "run_date": run_date,
+        })
+    if own:
+        conn.close()
+    return out
+
+
+# ============================================================
+# Holdings (2026-05-20: V2 schema (market, symbol) replaces V1 `code`)
+# 兼容：fetch_* 返回字典里仍提供 code=symbol 别名给老调用方（risk_metrics 等）。
+# ============================================================
+
+HOLDINGS_COLS = ["market", "symbol", "entry_price", "shares", "entry_date", "source", "notes"]
 HOLDINGS_FULL_COLS = ["id"] + HOLDINGS_COLS + ["created_at", "updated_at"]
 
 
+def _infer_market_from_ticker(ticker: str) -> str:
+    s = (ticker or "").upper().strip()
+    if s.endswith(".SS") or s.endswith(".SZ") or s.endswith(".SH"):
+        return "CN"
+    if s.endswith(".HK"):
+        return "HK"
+    return "US"
+
+
 def fetch_all_holdings(*, conn: duckdb.DuckDBPyConnection | None = None) -> list[dict]:
-    """读全部持仓，按 entry_date 倒序。"""
+    """读全部持仓，按 entry_date 倒序。返回字段含 symbol 与 code(alias=symbol) 双形态。"""
     own = conn is None
     if own:
         conn = get_db()
     rows = conn.execute(
         f"SELECT {','.join(HOLDINGS_FULL_COLS)} "
-        "FROM holdings ORDER BY entry_date DESC NULLS LAST, code"
+        "FROM holdings ORDER BY entry_date DESC NULLS LAST, symbol"
     ).fetchall()
-    out = [dict(zip(HOLDINGS_FULL_COLS, r)) for r in rows]
+    out = []
+    for r in rows:
+        d = dict(zip(HOLDINGS_FULL_COLS, r))
+        d["code"] = d.get("symbol")
+        out.append(d)
     if own:
         conn.close()
     return out
@@ -911,16 +1097,22 @@ def get_holding(holding_id: int, *, conn: duckdb.DuckDBPyConnection | None = Non
     ).fetchone()
     if own:
         conn.close()
-    return dict(zip(HOLDINGS_FULL_COLS, row)) if row else None
+    if not row:
+        return None
+    d = dict(zip(HOLDINGS_FULL_COLS, row))
+    d["code"] = d.get("symbol")
+    return d
 
 
 def _normalize_holding(item: Mapping[str, Any]) -> list:
-    """item → SQL values 对齐 HOLDINGS_COLS。"""
-    code = item.get("code")
-    if not code:
-        raise ValueError("holding requires code")
+    """item → SQL values 对齐 HOLDINGS_COLS。接受 V1 `code` 输入：自动按后缀派生 market。"""
+    symbol = item.get("symbol") or item.get("code")
+    if not symbol:
+        raise ValueError("holding requires symbol (or legacy code)")
+    market = item.get("market") or _infer_market_from_ticker(symbol)
     return [
-        code,
+        market,
+        symbol,
         float(item.get("entry_price") or 0),
         float(item.get("shares") or 0),
         _to_date(item.get("entry_date") or item.get("date")),
@@ -937,7 +1129,7 @@ def insert_holding(item: Mapping[str, Any], *, conn: duckdb.DuckDBPyConnection |
     vals = _normalize_holding(item)
     conn.execute(
         f"INSERT INTO holdings ({','.join(HOLDINGS_COLS)}, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
         vals,
     )
     new_id = int(conn.execute("SELECT currval('holdings_id_seq')").fetchone()[0])
@@ -961,8 +1153,8 @@ def update_holding(
     if exists:
         vals = _normalize_holding(item)
         conn.execute(
-            "UPDATE holdings SET code=?, entry_price=?, shares=?, entry_date=?, source=?, notes=?, "
-            "updated_at=CURRENT_TIMESTAMP WHERE id = ?",
+            "UPDATE holdings SET market=?, symbol=?, entry_price=?, shares=?, entry_date=?, "
+            "source=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id = ?",
             vals + [holding_id],
         )
         n = 1

@@ -18,7 +18,11 @@ from typing import Any
 import duckdb
 
 REPO = Path(__file__).resolve().parents[2]
-DB_PATH = REPO / "stock_history.duckdb"
+sys.path.insert(0, str(REPO))
+
+from stock_research import config  # noqa: E402
+
+DB_PATH = Path(config.DUCKDB_PATH)
 OUT_PATH = REPO / "data" / "latest" / "production_acceptance_check.json"
 
 PRODUCTION_SOURCES = ("v6_us", "v6_hk", "v6_cn")
@@ -136,6 +140,24 @@ def _calibrated_a_share_weights_status() -> tuple[bool, str]:
     return True, "validated"
 
 
+def _watchlist_market_flags(conn: duckdb.DuckDBPyConnection | None) -> dict[str, bool]:
+    flags = {"us": False, "hk": False}
+    if conn is None:
+        return flags
+    try:
+        rows = conn.execute("SELECT code, COALESCE(market, '') FROM watchlist").fetchall()
+    except Exception:
+        return flags
+    for code, market in rows:
+        c = str(code or "").upper()
+        m = str(market or "")
+        if c.endswith(".HK") or "港股" in m:
+            flags["hk"] = True
+        elif c.replace("-", "").replace(".", "").isalpha() or "美股" in m:
+            flags["us"] = True
+    return flags
+
+
 def _latest_json_checks(
     issues: list[dict[str, Any]],
     rel_paths: tuple[str, ...],
@@ -181,13 +203,32 @@ def _extract_tickers(plan_payload: dict[str, Any]) -> set[str]:
     return out
 
 
+def _build_payload(now: datetime, summary: dict[str, Any], issues: list[dict[str, Any]]) -> dict[str, Any]:
+    n_fail = sum(1 for x in issues if x["level"] == "FAIL")
+    n_warn = sum(1 for x in issues if x["level"] == "WARN")
+    return {
+        "generated_at": now.isoformat(timespec="seconds"),
+        "status": "FAIL" if n_fail else ("WARN" if n_warn else "PASS"),
+        "summary": {
+            **summary,
+            "fail": n_fail,
+            "warn": n_warn,
+            "info": sum(1 for x in issues if x["level"] == "INFO"),
+        },
+        "issues": issues,
+    }
+
+
 def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> dict[str, Any]:
     now = datetime.now()
+    allow_a_share_disabled = allow_a_share_disabled or not config.A_SHARE_PRODUCTION_ENABLED
     issues: list[dict[str, Any]] = []
+    signal_counts: dict[str, dict[str, int]] = {}
     summary: dict[str, Any] = {
         "generated_at": now.isoformat(timespec="seconds"),
         "db_path": str(DB_PATH),
         "a_share_ready": _a_share_ready(now),
+        "a_share_production_enabled": config.A_SHARE_PRODUCTION_ENABLED,
     }
 
     if not DB_PATH.exists():
@@ -196,11 +237,178 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
     else:
         conn = duckdb.connect(str(DB_PATH), read_only=True)
 
-    latest_by_source: dict[str, str | None] = {}
-    latest_buy_sets: dict[str, set[str]] = {}
-    signal_counts: dict[str, dict[str, int]] = {}
+    db_tables: set[str] = set()
     if conn is not None:
         try:
+            db_tables = {str(r[0]) for r in conn.execute("SHOW TABLES").fetchall()}
+        except Exception as e:
+            issues.append(_issue("FAIL", "duckdb_table_list_failed", "无法读取 DuckDB 表清单", str(e)))
+    v2_required_tables = {
+        "manual_watchlist", "holdings", "system_universe", "pool_membership",
+        "price_daily", "recommendation_runs", "recommendation_picks",
+        "portfolio_plans", "strategy_versions", "strategy_review_reports",
+        "pipeline_runs", "pipeline_steps", "source_fetch_log",
+        "data_quality_checks", "source_raw_snapshots",
+    }
+    is_v2_schema = "recommendation_picks" in db_tables or "system_universe" in db_tables
+    summary["schema_mode"] = "v2" if is_v2_schema else "legacy"
+    summary["db_tables"] = sorted(db_tables)
+    if is_v2_schema:
+        missing_v2 = sorted(v2_required_tables - db_tables)
+        if missing_v2:
+            issues.append(_issue("FAIL", "v2_schema_missing_tables", "v2 新库缺少 P0 表", missing_v2))
+        if conn is not None:
+            for table in ("manual_watchlist", "holdings", "system_universe", "pool_membership",
+                          "price_daily", "recommendation_runs", "recommendation_picks", "portfolio_plans"):
+                if table in db_tables:
+                    try:
+                        summary[f"{table}_count"] = int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+                    except Exception as e:
+                        issues.append(_issue("FAIL", f"{table}_count_failed", f"无法读取 {table} 行数", str(e)))
+            if "system_universe" in db_tables and summary.get("system_universe_count", 0) <= 0:
+                issues.append(_issue("FAIL", "v2_system_universe_empty", "v2 system_universe 为空"))
+            if "pool_membership" in db_tables and summary.get("pool_membership_count", 0) <= 0:
+                issues.append(_issue("FAIL", "v2_pool_membership_empty", "v2 pool_membership 为空"))
+            if "price_daily" in db_tables and summary.get("price_daily_count", 0) <= 0:
+                issues.append(_issue("FAIL", "v2_price_daily_empty", "v2 还没有从新数据源拉取行情"))
+            if "price_daily" in db_tables and "pool_membership" in db_tables and summary.get("price_daily_count", 0) > 0:
+                active_pool_count = int(conn.execute(
+                    "SELECT COUNT(*) FROM pool_membership WHERE active = TRUE AND pool_type = 'system_tech_universe'"
+                ).fetchone()[0])
+                priced_count = int(conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM (
+                        SELECT DISTINCT p.market, p.symbol
+                        FROM price_daily p
+                        JOIN pool_membership m
+                          ON m.market = p.market AND m.symbol = p.symbol
+                         AND m.active = TRUE
+                         AND m.pool_type = 'system_tech_universe'
+                    )
+                    """
+                ).fetchone()[0])
+                coverage = (priced_count / active_pool_count) if active_pool_count else 0.0
+                summary["v2_price_coverage"] = {
+                    "priced_count": priced_count,
+                    "active_pool_count": active_pool_count,
+                    "coverage_pct": round(coverage * 100, 2),
+                }
+                if coverage < 0.50:
+                    issues.append(_issue(
+                        "FAIL",
+                        "v2_price_coverage_too_low",
+                        f"v2 行情覆盖率过低：{priced_count}/{active_pool_count}",
+                    ))
+                elif coverage < 0.80:
+                    issues.append(_issue(
+                        "WARN",
+                        "v2_price_coverage_low",
+                        f"v2 行情覆盖率偏低：{priced_count}/{active_pool_count}",
+                    ))
+            if "recommendation_runs" in db_tables and summary.get("recommendation_runs_count", 0) <= 0:
+                issues.append(_issue("FAIL", "v2_no_recommendation_runs", "v2 还没有生成 recommendation_runs"))
+            if "recommendation_picks" in db_tables and summary.get("recommendation_picks_count", 0) <= 0:
+                issues.append(_issue("FAIL", "v2_no_recommendation_picks", "v2 还没有生成 recommendation_picks"))
+            if "recommendation_picks" in db_tables and summary.get("recommendation_picks_count", 0) > 0:
+                latest_run = conn.execute(
+                    "SELECT run_id FROM recommendation_runs ORDER BY generated_at DESC LIMIT 1"
+                ).fetchone()
+                latest_run_id = latest_run[0] if latest_run else None
+                summary["latest_recommendation_run_id"] = latest_run_id
+                if latest_run_id:
+                    rows = conn.execute(
+                        """
+                        SELECT signal, COUNT(*)
+                        FROM recommendation_picks
+                        WHERE run_id=?
+                        GROUP BY signal
+                        """,
+                        [latest_run_id],
+                    ).fetchall()
+                    signal_counts["system_tech_universe"] = {str(sig): int(n) for sig, n in rows}
+                    buy_count = signal_counts["system_tech_universe"].get("buy", 0)
+                    if buy_count <= 0:
+                        issues.append(_issue("FAIL", "v2_latest_run_no_buy", "v2 最新推荐批次没有 buy 推荐"))
+                bad_scope = conn.execute(
+                    """
+                    SELECT market, symbol, universe_scope, source_origin
+                    FROM recommendation_picks
+                    WHERE universe_scope <> 'system_tech_universe'
+                       OR source_origin <> 'system_pool'
+                    LIMIT 30
+                    """
+                ).fetchall()
+                if bad_scope:
+                    issues.append(_issue(
+                        "FAIL",
+                        "v2_pick_scope_origin_invalid",
+                        "v2 系统池推荐必须标记 system_tech_universe/system_pool",
+                        [{"market": r[0], "symbol": r[1], "universe_scope": r[2], "source_origin": r[3]} for r in bad_scope],
+                    ))
+                orphan = conn.execute(
+                    """
+                    SELECT p.market, p.symbol
+                    FROM recommendation_picks p
+                    LEFT JOIN pool_membership m
+                      ON m.market = p.market AND m.symbol = p.symbol AND m.active = TRUE
+                    WHERE m.symbol IS NULL
+                    LIMIT 30
+                    """
+                ).fetchall()
+                if orphan:
+                    issues.append(_issue(
+                        "FAIL",
+                        "v2_pick_not_in_system_pool",
+                        "v2 系统推荐出现未属于 pool_membership 的股票",
+                        [{"market": r[0], "symbol": r[1]} for r in orphan],
+                    ))
+
+        source_health, _ = _json_load("data/latest/source_health.json")
+        if isinstance(source_health, dict) and source_health.get("_error") is None:
+            yfinance_health = ((source_health.get("sources") or {}).get("yfinance") or {})
+            yfinance_status = str(yfinance_health.get("status") or "").lower()
+            summary["source_health_status"] = yfinance_status or "unknown"
+            summary["source_health_reason"] = yfinance_health.get("reason")
+            summary["source_health_markets"] = source_health.get("markets") or {}
+            if yfinance_status in {"source_down", "source_degraded"} and summary.get("price_daily_count", 0) <= 0:
+                issues.append(_issue(
+                    "FAIL",
+                    "v2_price_source_degraded",
+                    f"v2 行情源当前降级({yfinance_status})，导致 price_daily 仍为空",
+                    {
+                        "reason": yfinance_health.get("reason"),
+                        "operator_action": yfinance_health.get("operator_action"),
+                        "summary": source_health.get("summary"),
+                        "markets": source_health.get("markets") or {},
+                    },
+                ))
+
+        summary["latest_signal_counts"] = signal_counts
+        if conn is not None:
+            conn.close()
+            conn = None
+        return _build_payload(now, summary, issues)
+
+    watchlist_markets = _watchlist_market_flags(conn)
+    required_sources: list[str] = []
+    if watchlist_markets["us"]:
+        required_sources.append("v6_us")
+    if watchlist_markets["hk"]:
+        required_sources.append("v6_hk")
+    if config.A_SHARE_PRODUCTION_ENABLED:
+        required_sources.append("v6_cn")
+    summary["watchlist_market_flags"] = watchlist_markets
+    summary["required_production_sources"] = required_sources
+
+    latest_by_source: dict[str, str | None] = {}
+    latest_buy_sets: dict[str, set[str]] = {}
+    if conn is not None and "picks" in db_tables:
+        try:
+            try:
+                summary["watchlist_count"] = int(conn.execute("SELECT COUNT(*) FROM watchlist").fetchone()[0])
+            except Exception:
+                summary["watchlist_count"] = None
             cols = {r[1] for r in conn.execute("PRAGMA table_info('picks')").fetchall()}
             missing_cols = sorted(REQUIRED_PICK_COLUMNS - cols)
             summary["picks_schema_columns"] = sorted(cols)
@@ -245,7 +453,7 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
             latest_by_source = {src: str(d)[:10] if d else None for src, d in latest_rows}
             summary["latest_pick_dates"] = latest_by_source
 
-            for src in PRODUCTION_SOURCES:
+            for src in required_sources:
                 latest = latest_by_source.get(src)
                 if not latest:
                     if src == "v6_cn" and (not _a_share_ready(now) or allow_a_share_disabled):
@@ -304,6 +512,14 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
                         ))
         finally:
             conn.close()
+            conn = None
+    elif conn is not None and not is_v2_schema:
+        issues.append(_issue("FAIL", "missing_picks_table", "DuckDB 缺少 legacy picks 表"))
+        conn.close()
+        conn = None
+    elif conn is not None:
+        conn.close()
+        conn = None
     summary["latest_signal_counts"] = signal_counts
 
     a_weights_ok, a_weights_status = _calibrated_a_share_weights_status()
@@ -318,7 +534,8 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
 
     artifact_summary: dict[str, Any] = {}
     artifact_summary.update(_latest_json_checks(issues, CORE_LATEST_JSON, max_age_days=max_age_days))
-    artifact_summary.update(_latest_json_checks(issues, HK_LATEST_JSON, max_age_days=max_age_days))
+    if watchlist_markets["hk"]:
+        artifact_summary.update(_latest_json_checks(issues, HK_LATEST_JSON, max_age_days=max_age_days))
     if _a_share_ready(now) and (a_weights_ok or not allow_a_share_disabled):
         artifact_summary.update(_latest_json_checks(issues, CN_LATEST_JSON, max_age_days=max_age_days))
     summary["artifacts"] = artifact_summary
@@ -350,9 +567,14 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
             issues.append(_issue("FAIL", "plan_a_v5_plan_v6_diverge", "plan_a_v5.json 与 plan_v6.json 标的集合不一致"))
 
     for rel in ("data/latest/trade_delta.json", "data/latest/trade_delta_hk.json", "data/latest/trade_delta_cn.json"):
+        if rel == "data/latest/trade_delta_hk.json" and not watchlist_markets["hk"]:
+            continue
         payload, _ = _json_load(rel)
         if payload and "_error" not in payload and payload.get("trade_blocked") is True:
-            issues.append(_issue("FAIL", "trade_delta_blocked", f"{rel} 当前 trade_blocked=true", payload.get("block_reason")))
+            if payload.get("disabled") is True and payload.get("market") == "cn" and allow_a_share_disabled:
+                issues.append(_issue("INFO", "a_share_trade_delta_disabled", f"{rel} 已按 A 股 disabled 输出只读状态"))
+            else:
+                issues.append(_issue("FAIL", "trade_delta_blocked", f"{rel} 当前 trade_blocked=true", payload.get("block_reason")))
 
     dashboard = REPO / "stock_dashboard.html"
     brief = REPO / "morning_brief.md"
@@ -371,20 +593,7 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
         if dashboard.stat().st_mtime + 1 < plan_path.stat().st_mtime:
             issues.append(_issue("WARN", "dashboard_older_than_plan", "dashboard 比最新 plan 更旧，需要重建 HTML"))
 
-    n_fail = sum(1 for x in issues if x["level"] == "FAIL")
-    n_warn = sum(1 for x in issues if x["level"] == "WARN")
-    payload = {
-        "generated_at": now.isoformat(timespec="seconds"),
-        "status": "FAIL" if n_fail else ("WARN" if n_warn else "PASS"),
-        "summary": {
-            **summary,
-            "fail": n_fail,
-            "warn": n_warn,
-            "info": sum(1 for x in issues if x["level"] == "INFO"),
-        },
-        "issues": issues,
-    }
-    return payload
+    return _build_payload(now, summary, issues)
 
 
 def main() -> int:

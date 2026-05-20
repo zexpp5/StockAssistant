@@ -31,6 +31,13 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]  # repo root (was parent before
 sys.path.insert(0, str(_REPO_ROOT))
 sys.path.insert(0, str(_REPO_ROOT / "scripts" / "lib"))  # 2026-05-11 lib 迁移
 
+from stock_research import config
+
+
+def _duckdb_path() -> Path:
+    """统一 DuckDB 入口，支持用 STOCK_DB_PATH 切到干净 v2 库。"""
+    return Path(os.environ.get("STOCK_DB_PATH", str(config.DUCKDB_PATH)))
+
 
 # ─────────── 页面配置 ───────────
 
@@ -49,7 +56,7 @@ st.set_page_config(
 @st.cache_data(ttl=300)
 def load_latest_snapshot(name_prefix: str, dir_name: str = "audit") -> dict | None:
     """读最新快照——优先 DuckDB snapshots 表，失败/缺数据再 fallback 到本地文件。"""
-    db_path = _REPO_ROOT / "stock_history.duckdb"
+    db_path = _duckdb_path()
     if db_path.exists():
         try:
             import duckdb
@@ -168,7 +175,7 @@ def _load_json(rel: str) -> dict | None:
 @st.cache_data(ttl=300)
 def _load_a_share_picks() -> dict | None:
     """A 股优选 DB-first；JSON 只作为旧产物 fallback。"""
-    db_path = _REPO_ROOT / "stock_history.duckdb"
+    db_path = _duckdb_path()
     json_payload = _load_json("data/a_share_picks.json")
     if db_path.exists():
         try:
@@ -591,7 +598,7 @@ with tab_factors:
 
     # alphalens tear sheet 快照（优先 DuckDB，缺则本地文件）
     tearsheets = []
-    db_path = _REPO_ROOT / "stock_history.duckdb"
+    db_path = _duckdb_path()
     if db_path.exists():
         try:
             import duckdb

@@ -2,7 +2,7 @@
 yfinance 价格抓取器
 ─────────────────────────────────────────
 功能：
-1. 从飞书 watchlist 拉所有股票代码
+1. 从 DuckDB 手动 watchlist 或科技 universe 拉股票代码
 2. 用 yfinance 抓取实时价格、YTD 涨幅、一年涨幅、市值、PE
 3. 自动处理跨市场代码（美股/A股/港股/韩股）
 4. 写回飞书表，并保存 JSON 快照
@@ -21,7 +21,11 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
-from stock_db import upsert_prices, fetch_all_watchlist  # noqa: E402
+import duckdb  # noqa: E402
+from stock_db import DB_PATH, upsert_prices, fetch_all_watchlist  # noqa: E402
+from stock_research.core import akshare_client  # noqa: E402
+from stock_research.core.hk_universe import fetch_hk_tech_universe  # noqa: E402
+from stock_research.core.us_universe import fetch_us_ai_tech_universe  # noqa: E402
 
 import yfinance as yf  # noqa: E402
 import pandas as pd  # noqa: E402
@@ -29,6 +33,110 @@ import pandas as pd  # noqa: E402
 DATA_DIR = _REPO
 INFO_CACHE_FILE = os.path.join(DATA_DIR, "data", "latest", "yf_info_cache.json")
 DEFAULT_INFO_TTL_HOURS = 12
+SOURCE_HEALTH_FILE = os.path.join(DATA_DIR, "data", "latest", "source_health.json")
+
+
+def _tables_in_db(db_path: str) -> set[str]:
+    if not os.path.exists(db_path):
+        return set()
+    try:
+        con = duckdb.connect(db_path)
+        rows = con.execute("SHOW TABLES").fetchall()
+        con.close()
+        return {str(r[0]) for r in rows}
+    except Exception:
+        return set()
+
+
+def _is_v2_db(db_path: str) -> bool:
+    tables = _tables_in_db(db_path)
+    return "price_daily" in tables and "pool_membership" in tables
+
+
+def _market_code(code: str, market: str) -> str:
+    text = f"{code or ''} {market or ''}"
+    if "港股" in text or str(code).endswith(".HK"):
+        return "HK"
+    if "A股" in text or "上交所" in text or "深交所" in text or "北交所" in text:
+        return "CN"
+    return "US"
+
+
+def _upsert_v2_price_daily(results: list[dict], db_path: str, *, total_count: int, fail_count: int) -> int:
+    """Write freshly fetched prices into the clean v2 schema."""
+    con = duckdb.connect(db_path)
+    tables = {str(r[0]) for r in con.execute("SHOW TABLES").fetchall()}
+    if "price_daily" not in tables:
+        con.close()
+        raise RuntimeError("当前 DB 不是 v2 schema：缺少 price_daily")
+
+    now = datetime.now()
+    trade_date = now.date()
+    rows = []
+    for r in results:
+        code = str(r.get("code") or "").strip()
+        market = _market_code(code, str(r.get("market") or ""))
+        symbol = code.upper()
+        rows.append((
+            market,
+            symbol,
+            trade_date,
+            "1d",
+            r.get("price"),
+            r.get("prev_close"),
+            r.get("currency"),
+            r.get("market_cap"),
+            r.get("forward_pe"),
+            r.get("trailing_pe"),
+            r.get("peg_ratio"),
+            r.get("ytd_pct"),
+            r.get("one_week_pct"),
+            r.get("one_month_pct"),
+            r.get("one_year_pct"),
+            "yfinance",
+            now,
+            now,
+        ))
+
+    con.executemany(
+        "DELETE FROM price_daily WHERE market=? AND symbol=? AND trade_date=? AND interval=?",
+        [(r[0], r[1], r[2], r[3]) for r in rows],
+    )
+    con.executemany(
+        """
+        INSERT INTO price_daily (
+            market, symbol, trade_date, interval, close, prev_close, currency,
+            market_cap, forward_pe, trailing_pe, peg_ratio, ytd_pct,
+            one_week_pct, one_month_pct, one_year_pct, source,
+            source_updated_at, fetched_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+
+    if "source_fetch_log" in tables:
+        status = "source_degraded" if fail_count else "success"
+        status_code = "partial" if fail_count else "ok"
+        con.execute(
+            """
+            INSERT INTO source_fetch_log (
+                run_id, source, market, status, status_code, fallback_source,
+                fetched_at, message
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                f"price_daily_{now.strftime('%Y%m%d_%H%M%S')}",
+                "yfinance",
+                "ALL",
+                status,
+                status_code,
+                None,
+                now,
+                f"写入 price_daily {len(rows)}/{total_count} 行，失败 {fail_count} 行",
+            ],
+        )
+    con.close()
+    return len(rows)
 
 
 # ============================================================
@@ -78,6 +186,125 @@ def to_yfinance_ticker(code, market):
 # 拉飞书数据 + 写回飞书
 # ============================================================
 
+def _market_for_a_share(raw_ticker: str) -> str:
+    if raw_ticker.startswith(("00", "20", "30")):
+        return "A股·深交所"
+    if raw_ticker.startswith(("8", "9")):
+        return "A股·北交所"
+    return "A股·上交所"
+
+
+def _tech_universe_items() -> list[dict]:
+    """科技/AI 股票池。
+
+    优先直接读取当前 DuckDB 里的 system_universe，这样行情拉取和推荐都跟
+    产品定义的系统池保持同一口径；若系统池还没建好，再回退到代码定义的
+    universe 生成器。
+    """
+    items: list[dict] = []
+    db_path = DB_PATH
+    if os.path.exists(db_path):
+        try:
+            con = duckdb.connect(db_path, read_only=True)
+            tables = {str(r[0]) for r in con.execute("SHOW TABLES").fetchall()}
+            if "system_universe" in tables:
+                rows = con.execute(
+                    """
+                    SELECT pool_id, market, symbol, raw_symbol, name, theme, industry, source
+                    FROM system_universe
+                    WHERE active = TRUE
+                    ORDER BY market, symbol
+                    """
+                ).fetchall()
+                con.close()
+                for pool_id, market, symbol, raw_symbol, name, theme, industry, source in rows:
+                    items.append({
+                        "code": str(symbol),
+                        "name": name or symbol,
+                        "market": "港股" if str(market).upper() == "HK" else ("A股" if str(market).upper() == "CN" else "美股"),
+                        "industry": industry or theme or "",
+                        "source": str(source or pool_id or "system_tech_universe"),
+                    })
+                if items:
+                    return items
+        except Exception as e:
+            print(f"  ⚠️ system_universe 读取失败，回退到代码 universe: {e}")
+
+    try:
+        from scripts.tools.discover_candidates import build_universe as build_dynamic_universe
+        discovered = build_dynamic_universe(skip_codes=set())
+        if discovered:
+            for item in discovered:
+                items.append({
+                    "code": item["ticker"],
+                    "name": item["name"],
+                    "market": "港股" if str(item.get("location") or "").lower().startswith("hong kong") else (
+                        "A股" if "china" in str(item.get("location") or "").lower() else "美股"
+                    ),
+                    "industry": item.get("sector") or "",
+                    "source": f"discover:{','.join((item.get('etfs') or [])[:2]) or 'dynamic'}",
+                })
+            if items:
+                return items
+    except Exception as e:
+        print(f"  ⚠️ 动态 universe 发现失败: {e}")
+
+    from stock_research.core.a_share_universe import fetch_a_share_tech_universe
+    from stock_research.core.hk_universe import fetch_hk_tech_universe
+    from stock_research.core.us_universe import fetch_us_ai_tech_universe
+
+    for item in fetch_us_ai_tech_universe():
+        items.append({
+            "code": item["ticker"],
+            "name": item["name"],
+            "market": "美股",
+            "industry": item.get("sector") or "",
+            "source": f"fallback:{item.get('source') or 'us'}",
+        })
+    for item in fetch_hk_tech_universe():
+        items.append({
+            "code": item["ticker"],
+            "name": item["name"],
+            "market": "港股",
+            "industry": item.get("sector") or "",
+            "source": f"fallback:{item.get('source') or 'hk'}",
+        })
+    cn_items = fetch_a_share_tech_universe()
+    if not cn_items:
+        print("  ⚠️ A 股动态 universe 为空：不再使用静态种子补齐")
+    for item in cn_items:
+        raw = item.get("raw_ticker") or item["ticker"].split(".")[0]
+        items.append({
+            "code": item["ticker"],
+            "name": item["name"],
+            "market": _market_for_a_share(raw),
+            "industry": item.get("sector") or "",
+            "source": f"fallback:{item.get('source') or 'cn'}",
+        })
+    return items
+
+
+def _load_price_items(source: str) -> list[dict]:
+    rows: list[dict] = []
+    if source in {"watchlist", "both"}:
+        wl = fetch_all_watchlist()
+        print(f"  手动 watchlist: {len(wl)} 条")
+        rows.extend({**r, "_price_source": "watchlist"} for r in wl)
+    if source in {"tech-universe", "both"}:
+        tech = _tech_universe_items()
+        print(f"  科技/AI universe: {len(tech)} 条")
+        rows.extend({**r, "_price_source": "tech_universe"} for r in tech)
+
+    dedup: dict[str, dict] = {}
+    for row in rows:
+        code = (row.get("code") or "").strip()
+        if not code:
+            continue
+        # 手动 watchlist 优先，避免同代码时覆盖用户维护的名称/市场。
+        if code not in dedup or row.get("_price_source") == "watchlist":
+            dedup[code] = row
+    return list(dedup.values())
+
 # ============================================================
 # yfinance 抓取
 # ============================================================
@@ -101,6 +328,64 @@ def _save_info_cache(cache: dict) -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
     os.replace(tmp, INFO_CACHE_FILE)
+
+
+def _market_label(value: str) -> str:
+    text = str(value or "").upper()
+    if "HK" in text or "港股" in text:
+        return "HK"
+    if "CN" in text or "A股" in text or "SH" in text or "SZ" in text or "BJ" in text:
+        return "CN"
+    return "US"
+
+
+def _write_source_health(
+    *,
+    total_count: int,
+    success_count: int,
+    fail_count: int,
+    source: str,
+    market_summary: dict[str, dict[str, int]] | None = None,
+) -> None:
+    if total_count <= 0:
+        return
+    if success_count <= 0:
+        status = "source_down"
+        reason = "price source returned no usable rows"
+        operator_action = "检查 yfinance / DNS / 外部网络；当前不应把空结果当成功"
+    elif fail_count > 0:
+        status = "source_degraded"
+        reason = f"partial_success {success_count}/{total_count}"
+        operator_action = "补修失败市场或 ticker 映射，再重跑行情拉取"
+    else:
+        status = "ok"
+        reason = "all_rows_fetched"
+        operator_action = "无"
+    payload = {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "pipeline": "price_daily",
+        "source": source,
+        "markets": market_summary or {},
+        "sources": {
+            "yfinance": {
+                "status": status,
+                "reason": reason,
+                "affected_fields": ["price", "prev_close", "market_cap", "forward_pe", "trailing_pe", "peg_ratio", "history"],
+                "unaffected_fields": ["system_universe", "pool_membership", "strategy_versions"],
+                "impact": "行情不可用时，AI 推荐无法形成有效候选，运行状态应显示为降级而不是静默空白。",
+                "operator_action": operator_action,
+            }
+        },
+        "summary": {
+            "total_count": total_count,
+            "success_count": success_count,
+            "fail_count": fail_count,
+        },
+    }
+    out = SOURCE_HEALTH_FILE
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
 
 
 def _cache_entry_fresh(entry: dict | None, ttl_hours: float) -> bool:
@@ -282,6 +567,72 @@ def fetch_price_data(yf_ticker: str, *, hist: pd.DataFrame | None = None,
     }
 
 
+def _market_snapshot_fallback(code: str, market: str) -> dict | None:
+    """当 yfinance 失败时，尝试用市场原生快照补一个最小可写入结果。
+
+    目标不是补全所有估值，而是保证 price_daily 至少有真实价格落点，
+    让系统能把市场按实际覆盖情况拆开，而不是整体空白。
+    """
+    raw = str(code or "").split(".")[0]
+    market_text = str(market or "")
+    try:
+        if "A股" in market_text or raw.isdigit():
+            q = akshare_client.fetch_a_stock_quote(raw)
+            if not q:
+                return None
+            price = q.get("price")
+            change_pct = q.get("change_pct")
+            prev_close = None
+            if price is not None and change_pct not in (None, 0):
+                try:
+                    prev_close = float(price) / (1.0 + float(change_pct) / 100.0)
+                except Exception:
+                    prev_close = None
+            return {
+                "price": price,
+                "prev_close": prev_close,
+                "currency": "CNY",
+                "market_cap": q.get("market_cap_yuan"),
+                "forward_pe": q.get("pe_ttm"),
+                "trailing_pe": q.get("pe_ttm"),
+                "peg_ratio": None,
+                "ytd_pct": None,
+                "one_week_pct": None,
+                "one_month_pct": None,
+                "one_year_pct": None,
+                "fallback_source": q.get("source") or "akshare/stock_zh_a_spot_em",
+            }
+        if "港股" in market_text or raw.endswith(".HK"):
+            q = akshare_client.fetch_hk_stock_quote(raw)
+            if not q:
+                return None
+            price = q.get("price")
+            change_pct = q.get("change_pct")
+            prev_close = None
+            if price is not None and change_pct not in (None, 0):
+                try:
+                    prev_close = float(price) / (1.0 + float(change_pct) / 100.0)
+                except Exception:
+                    prev_close = None
+            return {
+                "price": price,
+                "prev_close": prev_close,
+                "currency": "HKD",
+                "market_cap": q.get("market_cap_hkd"),
+                "forward_pe": None,
+                "trailing_pe": None,
+                "peg_ratio": None,
+                "ytd_pct": None,
+                "one_week_pct": None,
+                "one_month_pct": None,
+                "one_year_pct": None,
+                "fallback_source": q.get("source") or "akshare/stock_hk_spot_em",
+            }
+    except Exception as e:
+        print(f"  ⚠️ 市场快照 fallback 失败 {code}: {e}")
+    return None
+
+
 def format_market_cap(mc, currency):
     if not mc:
         return ""
@@ -305,6 +656,12 @@ def format_market_cap(mc, currency):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--code", help="只更新某只股票")
+    parser.add_argument(
+        "--source",
+        choices=["watchlist", "tech-universe", "both"],
+        default="watchlist",
+        help="价格输入来源：手动 watchlist、科技/AI universe，或两者合并",
+    )
     parser.add_argument("--dry-run", action="store_true", help="只打印,不写 DuckDB")
     parser.add_argument("--workers", type=int, default=int(os.getenv("STOCK_ASSISTANT_PRICE_WORKERS", "8")),
                         help="并发拉 yfinance info 的线程数（默认 8）")
@@ -313,10 +670,16 @@ def main():
                         help="估值/基本面 info 缓存小时数（默认 12）")
     parser.add_argument("--refresh-fundamentals", action="store_true",
                         help="忽略 info 缓存，强制刷新 PE/PEG/市值/增长率")
+    parser.add_argument(
+        "--db-schema",
+        choices=["auto", "legacy", "v2"],
+        default="auto",
+        help="写库模式：auto 自动识别 v2/旧库，v2 写 price_daily，legacy 写 prices",
+    )
     args = parser.parse_args()
 
-    print("[1/3] 拉取 watchlist [DuckDB]...")
-    items = fetch_all_watchlist()
+    print(f"[1/3] 拉取价格输入池 [source={args.source}]...")
+    items = _load_price_items(args.source)
     print(f"  共 {len(items)} 条")
 
     jobs = []
@@ -371,10 +734,15 @@ def main():
 
     results = []
     success_count = 0
+    market_summary: dict[str, dict[str, int]] = {}
     for j in jobs:
         name = j["name"]
         code = j["code"]
         yf_code = j["yf_code"]
+        market = str(j["item"].get("market") or "")
+        market_key = _market_label(market)
+        bucket = market_summary.setdefault(market_key, {"total": 0, "success": 0, "fail": 0})
+        bucket["total"] += 1
 
         print(f"  抓取 {name} ({yf_code})...", end=" ")
         data = fetch_price_data(
@@ -382,12 +750,21 @@ def main():
             hist=history_by_ticker.get(yf_code),
             info_fields=info_by_ticker.get(yf_code),
         )
+        price_source = j["item"].get("_price_source") or args.source
+        if not data:
+            fallback = _market_snapshot_fallback(code, market)
+            if fallback:
+                data = fallback
+                price_source = fallback.get("fallback_source") or price_source
+                print(f"    ↳ 使用市场快照 fallback: {fallback.get('fallback_source')}")
         if not data:
             print("❌ 失败")
             fail_codes.append(code)
+            bucket["fail"] += 1
             continue
 
         success_count += 1
+        bucket["success"] += 1
         price_str = f"{data['price']} {data['currency']}"
         ytd_str = f"{data['ytd_pct']:+.1f}%" if data["ytd_pct"] is not None else "N/A"
         oy_str = f"{data['one_year_pct']:+.1f}%" if data["one_year_pct"] is not None else "N/A"
@@ -398,6 +775,8 @@ def main():
         results.append({
             "code": code,
             "name": name,
+            "market": j["item"].get("market") or "",
+            "price_source": price_source,
             "yf_ticker": yf_code,
             "fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
             **data,
@@ -406,6 +785,14 @@ def main():
     print(f"\n[3/3] 完成：成功 {success_count} / 总 {len(items)}")
     if fail_codes:
         print(f"  失败标的：{', '.join(fail_codes)}")
+    _write_source_health(
+        total_count=len(items),
+        success_count=success_count,
+        fail_count=len(fail_codes),
+        source=args.source,
+        market_summary=market_summary,
+    )
+    print(f"  来源健康已写入：{SOURCE_HEALTH_FILE}")
 
     # 保存 JSON 快照
     out_file = os.path.join(DATA_DIR, f"prices_{datetime.now().strftime('%Y-%m-%d_%H%M')}.json")
@@ -420,8 +807,13 @@ def main():
     # 落 DuckDB（按 fetched_at 的日期，同日多次抓取会覆盖）
     if results:
         try:
-            n = upsert_prices(results)
-            print(f"  DuckDB：已写入 {n} 行 (stock_history.duckdb · prices)")
+            use_v2 = args.db_schema == "v2" or (args.db_schema == "auto" and _is_v2_db(DB_PATH))
+            if use_v2:
+                n = _upsert_v2_price_daily(results, DB_PATH, total_count=len(items), fail_count=len(fail_codes))
+                print(f"  DuckDB：已写入 {n} 行 ({DB_PATH} · price_daily)")
+            else:
+                n = upsert_prices(results)
+                print(f"  DuckDB：已写入 {n} 行 ({DB_PATH} · prices)")
         except Exception as e:
             print(f"  DuckDB 写入失败（不阻塞主流程）：{e}")
 

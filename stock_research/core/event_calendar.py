@@ -195,10 +195,10 @@ def fetch_insider_change_events(start: date, end: date) -> list[StockEvent]:
         return out
 
     code_col = _pick_col(df, ["代码", "股票代码", "证券代码"])
-    date_col = _pick_col(df, ["变动日期", "变动截止日期", "公告日期"])
-    direction_col = _pick_col(df, ["变动方向", "变动类型", "增减持"])
-    qty_col = _pick_col(df, ["变动数量", "变动比例"])
-    value_col = _pick_col(df, ["变动金额", "成交均价"])
+    date_col = _pick_col(df, ["变动日期", "变动截止日期", "变动截止日", "公告日期", "公告日"])
+    direction_col = _pick_col(df, ["变动方向", "变动类型", "增减持", "持股变动信息-增减"])
+    qty_col = _pick_col(df, ["变动数量", "变动比例", "持股变动信息-变动数量", "持股变动信息-占总股本比例"])
+    value_col = _pick_col(df, ["变动金额", "成交均价", "最新价"])
     name_col = _pick_col(df, ["名称", "证券简称"])
 
     if not code_col or not date_col:

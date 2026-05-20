@@ -32,21 +32,16 @@ from datetime import datetime, timedelta
 
 import yfinance as yf
 
-# 用户当前手编方案 A（用于对比）
-CURRENT_PLAN_A = [
-    ("NVDA",       "NVDA",       0.12),
-    ("TSM",        "TSM",        0.10),
-    ("GOOGL",      "GOOGL",      0.10),
-    ("MSFT",       "MSFT",       0.10),
-    ("AMD",        "AMD",        0.08),
-    ("Vertiv",     "VRT",        0.10),
-    ("北方稀土",     "600111.SS",  0.08),
-    ("Cameco",     "CCJ",        0.07),
-    ("Datadog",    "DDOG",       0.05),
-    ("中际旭创",     "300308.SZ",  0.05),
-    ("阿里巴巴",     "9988.HK",    0.05),
-    ("海光信息",     "688041.SS",  0.05),
-]
+# 用户当前组合基线（用于和 v5 选股做差额对比）。
+# 2026-05-20：原来是手编 NVDA/TSM/... 列表，已迁到 V2 portfolio_plans（最新一次 AI 组合 run）。
+# V2 还没产 plan 时返回空 list — 差额对比就空跑，不再用 NVDA 等默认值兜底。
+try:
+    sys.path.insert(0, os.path.join(_REPO, "scripts", "lib"))
+    import stock_db as _stock_db  # noqa: E402
+    CURRENT_PLAN_A = _stock_db.fetch_latest_portfolio_plan_baseline()
+except Exception as _e:
+    print(f"  ⚠️ V2 portfolio_plans 读取失败 ({_e})，CURRENT_PLAN_A 为空")
+    CURRENT_PLAN_A = []
 CASH_PCT = 0.05
 try:
     import stock_db

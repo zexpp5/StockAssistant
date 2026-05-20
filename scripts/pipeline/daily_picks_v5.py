@@ -225,7 +225,13 @@ def main():
     us_records = wl_us_records
     print(f"  美股可用因子模型的: {len(us_records)} 只（仅来自手动 watchlist）")
     if not us_records:
-        print("  watchlist 为空或无美股标的；不生成自选股 AI 优选。")
+        # watchlist 空时也刷新 cache 为「今日 + 空」，避免旧 cache（如 NVDA-only 残留）误导下游
+        cache_file = os.path.join(_REPO, args.cache)
+        today = datetime.now().strftime("%Y-%m-%d")
+        with open(cache_file, "w", encoding="utf-8") as cf:
+            json.dump({"date": today, "factors": [], "signals": [], "fundamentals": []},
+                      cf, ensure_ascii=False, indent=2, default=str)
+        print(f"  watchlist 为空或无美股标的；写空 cache → {cache_file}（避免旧数据残留）。")
         return
 
     # ============================================================

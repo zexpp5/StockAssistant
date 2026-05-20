@@ -15,8 +15,31 @@ import html as html_lib
 from datetime import datetime
 
 # 2026-05-11 PM 第二轮:飞书 100% 退役 — 不再从 Bitable 拉数据
-# records / picks 全部来自 DuckDB(watchlist + reviews JOIN picks + prices)
+# 旧版 records / picks 口径已退场；v2 页面摘要优先读 DuckDB(system_universe + price_daily + recommendation_picks)
 OUTPUT = os.path.join(_REPO, "stock_dashboard.html")
+
+
+def _duckdb_path() -> str:
+    """Return configured DuckDB path, honoring STOCK_DB_PATH for v2 cutover."""
+    try:
+        from stock_db import DB_PATH
+        return DB_PATH
+    except Exception:
+        return os.environ.get("STOCK_DB_PATH") or os.path.join(_REPO, "stock_history" + ".duckdb")
+
+
+def _is_clean_v2_db() -> bool:
+    db_path = _duckdb_path()
+    if not os.path.exists(db_path):
+        return False
+    try:
+        import duckdb
+        con = duckdb.connect(db_path, read_only=True)
+        tables = {str(r[0]) for r in con.execute("SHOW TABLES").fetchall()}
+        con.close()
+        return "system_universe" in tables and "recommendation_picks" in tables
+    except Exception:
+        return False
 
 
 # ============================================================
@@ -305,50 +328,49 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 </head>
 <body class="bg-gradient-to-b from-slate-50 to-white" style="padding-left: 14rem;">
 
-<!-- ============ 左侧 sidebar 导航（4 主入口 + 子项展开 + 次级 + 工具） ============ -->
-<!-- 信息架构：why（投资框架）+ what（今天/发现/验证）两层 · 产业链地图取代原 主题分组 + 产业链全景 -->
+<!-- ============ 左侧 sidebar 导航（今日 + 我的池子 + AI 助手 + 深度研究 + 管理） ============ -->
 <aside id="tab-nav" class="fixed left-0 top-0 h-screen w-56 bg-white border-r border-slate-200 shadow-sm overflow-y-auto z-50">
   <div class="p-4">
     <div class="text-base font-bold text-slate-900 mb-6 flex items-center gap-2">
       <span>📊</span><span>AI 投资</span>
     </div>
 
-    <!-- 📚 投资框架（why · 方法论开屏第一眼 · 原"投资观点"）-->
+    <!-- 今日 = 默认决策入口，只汇总，不新增股票池 -->
     <div class="mb-4">
-      <a href="#overview" data-tab="overview" class="tab-link block px-2 py-1 text-base font-bold text-slate-800 hover:text-violet-600 hover:bg-violet-50 rounded transition">📚 投资框架</a>
+      <div class="text-base font-bold text-slate-800 mb-2 px-2">今日</div>
+      <a href="#today" data-tab="today" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">今日决策台</a>
     </div>
 
-    <!-- 🗂️ 我的池子 = 持仓 + 自选股 + 今日 Top -->
+    <!-- 我的池子 = 持仓 + 自选股配置 + 自选股 AI 优选 -->
     <div class="mb-4">
       <div class="text-base font-bold text-slate-800 mb-2 px-2">🗂️ 我的池子</div>
       <a href="#portfolio" data-tab="portfolio" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">💼 我的持仓</a>
-      <a href="#watchlist-edit" data-tab="init-config" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">⭐ 自选股</a>
+      <a href="#watchlist-edit" data-tab="init-config" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">⭐ 自选股配置</a>
       <a href="#picks" data-tab="picks" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🔝 自选股·AI 优选</a>
     </div>
 
-    <!-- 🧠 AI 助手 = AI 推荐(个股) + AI 组合方案(组合层 含模拟回测) -->
+    <!-- AI 助手 = 系统科技池 AI 推荐 + AI 组合方案 + 已拉取股票池 -->
     <div class="mb-4">
       <div class="text-base font-bold text-slate-800 mb-2 px-2">🧠 AI 助手</div>
       <a href="#discovery" data-tab="discovery" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🤖 AI 推荐</a>
       <a href="#backtest" data-tab="backtest" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🎼 AI 组合方案</a>
+      <a href="#db-explorer" data-tab="db-explorer" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🗄 已拉取股票池</a>
     </div>
 
-    <!-- 🔬 深度研究 = 估值 + 产业链 + 反向审查 + 专业分析 -->
+    <!-- 深度研究 = 买前解释和审查 -->
     <div class="mb-4">
       <div class="text-base font-bold text-slate-800 mb-2 px-2">🔬 深度研究</div>
-      <a href="#valuation" data-tab="valuation" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">📈 估值视角</a>
+      <a href="#valuation" data-tab="valuation" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">📈 个股研究</a>
       <a href="#chain" data-tab="chain" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🌳 产业链地图</a>
-      <a href="#audit" data-tab="audit" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🛡 反向审查</a>
-      <a href="#professional" data-tab="professional" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">📊 专业分析</a>
-      <a href="#db-explorer" data-tab="db-explorer" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🗄 DB 全库浏览</a>
+      <a href="#audit" data-tab="audit" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🛡 买前审查</a>
     </div>
 
     <hr class="my-4 border-slate-200">
 
-    <!-- ⚙️ 管理：自选股编辑入口（DuckDB 权威 · 飞书已废） -->
+    <!-- ⚙️ 管理：系统说明与升级建议 -->
     <div class="mb-4">
       <div class="text-base font-bold text-slate-800 mb-2 px-2">⚙️ 管理</div>
-      <a href="#init-config" data-tab="init-config" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🛠️ 初始化配置</a>
+      <a href="#runtime-status" data-tab="runtime-status" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-500 hover:text-violet-600 hover:bg-violet-50 rounded transition">🧪 运行状态</a>
       <a href="#upgrade" data-tab="upgrade" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-500 hover:text-violet-600 hover:bg-violet-50 rounded transition">💰 升级建议</a>
       <a href="#about" data-tab="about" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-500 hover:text-violet-600 hover:bg-violet-50 rounded transition">🧭 系统介绍</a>
     </div>
@@ -399,6 +421,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </div>
   </div>
 </header>
+
+<!-- ============ 今日决策台 ============ -->
+<section id="today-decision" class="max-w-7xl mx-auto px-6 py-10">
+  {TODAY_DECISION_PANEL}
+</section>
 
 <!-- ============ 💀 压力测试：崩盘期表现（诚实暴露）============ -->
 <section id="stress-test" class="max-w-7xl mx-auto px-6 py-10">
@@ -820,12 +847,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <section id="discovery" class="max-w-7xl mx-auto px-6 py-10 bg-gradient-to-br from-sky-50 to-indigo-50 rounded-2xl my-6">
   <div class="flex items-center gap-3 mb-2">
     <span class="text-3xl">🔍</span>
-    <h2 class="text-2xl font-bold text-slate-900">AI 推荐 — 全池综合排名</h2>
+    <h2 class="text-2xl font-bold text-slate-900">AI 推荐 — 科技/AI 股票池综合排名</h2>
   </div>
   <p class="text-slate-700 mb-3 max-w-3xl">
-    基于今天 DuckDB 已拉回的 <strong>全池数据</strong>（prices + latest picks），
+    基于系统已拉回的 <strong>科技/AI 股票池</strong>（美股 + A 股 + 港股；prices + latest picks），
     综合价格动量、增长、估值、AI 主题关联和已有 v6 因子打分来排序。
-    <strong class="text-violet-700">这里不排除 Watchlist</strong>：自选股和非自选股都进入同一张榜。
+    <strong class="text-violet-700">这条线独立于你的手动自选股</strong>：自选股只影响“我的池子”，不决定这里的扫描范围。
     <strong class="text-rose-600">用于确定研究优先级，不等于直接买入指令</strong>。
   </p>
   <div id="discovery-meta" class="text-xs text-slate-500 mb-4"></div>
@@ -876,7 +903,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       </table>
     </div>
     <p class="text-xs text-slate-500 mt-4">
-      💡 <strong>怎么用</strong>: 这是全池横向排名。未在自选的标的可去自选股管理页调研后加入；
+      💡 <strong>怎么用</strong>: 这是科技/AI 股票池横向排名。未在自选的标的可去自选股管理页调研后加入；
       已在自选的标的可回到详情页复核它为什么排在这里。
       <strong class="text-violet-700">α 列</strong>显示推荐后 5/20 交易日相对 SPY 的超额收益,
       数据来自 <code class="text-xs bg-slate-100 px-1 rounded">discovery_tracking</code> 表(每日刷新)。
@@ -1344,17 +1371,18 @@ function switchDiscoveryView(view) {
   </div>
 </section>
 
-<!-- ============ 🗄 DB 全库浏览（深度研究 → 数据库内全部股票，按市场分组）============ -->
+<!-- ============ 🗄 已拉取股票池（AI 助手 → 数据库内全部已拉取股票，按市场分组）============ -->
 <section id="db-explorer" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
   <div class="mb-6">
     <div class="flex items-center gap-3 mb-2">
       <span class="text-3xl">🗄</span>
-      <h2 class="text-2xl font-bold text-slate-900">DB 全库浏览</h2>
+      <h2 class="text-2xl font-bold text-slate-900">已拉取股票池</h2>
       <span id="db-explorer-as-of" class="ml-2 text-xs font-mono text-slate-500"></span>
     </div>
     <p class="text-sm text-slate-600">
-      列出 <code class="text-xs font-mono bg-slate-100 px-1.5 py-0.5 rounded">stock_history.duckdb</code> 里全部股票（按市场分组）。
-      合并三张表：<strong>watchlist</strong>（25 列元数据）+ 最新一行 <strong>prices</strong>（行情/估值/涨幅）+ 最新一行 <strong>picks</strong>（AI 评分）。
+      只列出系统自动拉回的 <strong>科技/AI 股票池</strong>（美股 + A 股 + 港股）。
+      这不是你的手动自选股列表；即使同一只股票也在“我的池子”里，这里仍按系统股票池独立展示。
+      合并两类数据：最新一行 <strong>prices</strong>（行情/估值/涨幅）+ 最新一行 <strong>picks</strong>（若系统或自选评分链路已有评级则展示）。
       点行展开看完整字段。
     </p>
   </div>
@@ -1365,7 +1393,7 @@ function switchDiscoveryView(view) {
     <code class="font-mono bg-slate-100 px-2 py-1 rounded">GET /api/db/all-stocks</code>
     <span id="db-explorer-status" class="px-2 py-0.5 rounded bg-slate-100 text-slate-500">检测中…</span>
     <button onclick="forceReloadDbExplorer()"
-            title="清前端缓存，重新调 /api/db/all-stocks 从 DuckDB 取最新数据。第一次进 tab 会拉一次然后缓存；如果在自选股那边新增/编辑了股票、或日终 refresh 跑过，点这个能看到最新。"
+            title="清前端缓存，重新调 /api/db/all-stocks 从 DuckDB 取最新数据。第一次进 tab 会拉一次然后缓存；如果新增/编辑了自选股、或日终 refresh 跑过，点这个能看到最新已拉取股票池。"
             class="ml-auto text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">🔄 从数据库重新拉取</button>
   </div>
 
@@ -1400,13 +1428,7 @@ function switchDiscoveryView(view) {
     <span class="text-slate-500">筛选：</span>
     <button onclick="setDbExplorerFilter('all')" id="db-filter-btn-all"
             class="db-filter-btn px-2.5 py-1 rounded-full border bg-violet-100 border-violet-300 text-violet-700 font-semibold"
-            title="所有出现在 DB 任意一张表里的股票（130 只）">🌍 全部 <span id="db-filter-cnt-all">-</span></button>
-    <button onclick="setDbExplorerFilter('watchlist')" id="db-filter-btn-watchlist"
-            class="db-filter-btn px-2.5 py-1 rounded-full border bg-white border-slate-300 text-slate-600 hover:bg-violet-50"
-            title="只看你主动加进自选股的标的（watchlist 表）">⭐ 我的自选 <span id="db-filter-cnt-watchlist">-</span></button>
-    <button onclick="setDbExplorerFilter('candidate')" id="db-filter-btn-candidate"
-            class="db-filter-btn px-2.5 py-1 rounded-full border bg-white border-slate-300 text-slate-600 hover:bg-violet-50"
-            title="候选池：DB 里有数据但 watchlist 没收录的（hk_picks 港股白名单 + discovery 美股 AI ETF 候选 + a_share_picks 额外评的）">💎 候选 <span id="db-filter-cnt-candidate">-</span></button>
+            title="所有已经拉回数据库的股票">🌍 全部 <span id="db-filter-cnt-all">-</span></button>
     <button onclick="setDbExplorerFilter('star3')" id="db-filter-btn-star3"
             class="db-filter-btn px-2.5 py-1 rounded-full border bg-white border-slate-300 text-slate-600 hover:bg-violet-50"
             title="只看 ⭐⭐⭐ 强烈推荐">🔥 ⭐⭐⭐ <span id="db-filter-cnt-star3">-</span></button>
@@ -1471,17 +1493,17 @@ function switchDiscoveryView(view) {
   <details class="mt-4 text-xs text-slate-500">
     <summary class="cursor-pointer hover:text-slate-700">📖 字段说明 / 数据来源</summary>
     <div class="mt-2 pl-4 space-y-1">
-      <p><strong>watchlist</strong>（25 列）：代码/名称/市场/业务/行业/AI 关联/AI 逻辑/主题/结论/风险/可比/节奏/状态/源/可信度/notes/链条/链层/角色/小白介绍/最新财报/双源校验/全信息分项</p>
+      <p><strong>system pool</strong>：系统科技/AI 股票池元数据，独立于你手动维护的 watchlist。</p>
       <p><strong>prices</strong>（最新一行）：价格/前收/币种/市值/Forward-PE/Trailing-PE/PEG/营收增长/EPS 增长/YTD/一年/一月/一周/抓取时间</p>
-      <p><strong>picks</strong>（最新一次入选）：pick_date/rating/total_score/ai_score/val_score/trend_score/cred_score/entry_price/peg_at_pick/fpe_at_pick</p>
+      <p><strong>picks</strong>（最新一次入选）：若该股票已有评分记录，则展示 pick_date/rating/total_score/ai_score/val_score/trend_score/cred_score/entry_price/peg_at_pick/fpe_at_pick。</p>
     </div>
   </details>
 </section>
 
-<!-- ============ 🗂 个股全历史中介页（从 DB 全库浏览 跳转过来）============ -->
+<!-- ============ 🗂 个股全历史中介页（从已拉取股票池跳转过来）============ -->
 <section id="stock-detail" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
   <div class="mb-6 flex items-center gap-3">
-    <button onclick="closeStockDetail()" class="text-sm px-3 py-1.5 rounded border border-slate-300 text-slate-700 hover:bg-slate-50">← 返回 DB 全库浏览</button>
+    <button onclick="closeStockDetail()" class="text-sm px-3 py-1.5 rounded border border-slate-300 text-slate-700 hover:bg-slate-50">← 返回已拉取股票池</button>
     <h2 class="text-2xl font-bold text-slate-900">🗂 个股全历史 · <span id="stock-detail-code" class="font-mono text-violet-700">—</span></h2>
     <span id="stock-detail-name" class="text-base text-slate-600"></span>
     <span id="stock-detail-meta" class="ml-auto text-xs font-mono text-slate-500"></span>
@@ -1524,14 +1546,14 @@ function switchDiscoveryView(view) {
   <div id="chain-cards-container" class="space-y-6"></div>
 </section>
 
-<!-- ============ ⚙️ 初始化配置（父 tab · 顶部二级切换 投资方案 / 关注股票）============ -->
+<!-- ============ ⚙️ 配置（父 tab · 顶部二级切换 投资方案 / 自选股配置）============ -->
 <section id="init-config" class="max-w-7xl mx-auto px-6 pt-10 pb-2" style="display:none">
   <div class="mb-4">
     <div class="flex items-center gap-3 mb-1">
       <span class="text-3xl">⚙️</span>
-      <h2 class="text-2xl font-bold text-slate-900">初始化配置</h2>
+      <h2 id="init-config-title" class="text-2xl font-bold text-slate-900">自选股配置</h2>
     </div>
-    <p class="text-sm text-slate-600">系统跑批和前端展示都依赖这两组用户输入：<strong>投资方案</strong>（有多少钱）和<strong>自选股</strong>（追踪哪些标的）。</p>
+    <p id="init-config-desc" class="text-sm text-slate-600">管理你手动维护的自选股池；这里只影响“我的池子”，不代表系统自动拉取股票池。</p>
   </div>
   <!-- 二级 tab 栏 -->
   <div class="border-b border-slate-200 flex gap-1">
@@ -1541,7 +1563,7 @@ function switchDiscoveryView(view) {
     </button>
     <button onclick="switchInitSub('watchlist')" id="init-sub-btn-watchlist"
             class="init-sub-btn px-4 py-2 text-sm font-medium border-b-2 transition">
-      ✨ 自选股
+      ✨ 自选股配置
     </button>
   </div>
 </section>
@@ -1801,6 +1823,20 @@ function switchDiscoveryView(view) {
       </div>
     </div>
   </div>
+</section>
+
+<!-- ============ 🧪 运行状态 Tab ============ -->
+<section id="runtime-status" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
+  <div class="mb-6">
+    <div class="flex items-center gap-3 mb-2">
+      <span class="text-3xl">🧪</span>
+      <h2 class="text-3xl font-bold text-slate-900">运行状态</h2>
+    </div>
+    <p class="text-sm text-slate-600">
+      按美股 / A 股 / 港股拆开看今天的数据拉取、分析、推荐、组合和验收状态。这里是系统健康页，不是买卖建议。
+    </p>
+  </div>
+  {RUNTIME_STATUS_PANEL}
 </section>
 
 <!-- ============ 💰 升级建议 Tab ============ -->
@@ -2320,6 +2356,7 @@ const _DYNAMIC     = {PLAN_DYNAMIC_JSON_DB};
 
 // ============ Watchlist CRUD（调本地 FastAPI · DuckDB 是权威）============
 const WATCHLIST_API_BASE = "http://127.0.0.1:8765";
+const DB_EXPLORER_EMBEDDED = {DB_EXPLORER_JSON};
 let _watchlistCache = [];
 let _watchlistEditCode = null;  // null = 新增模式；非空 = 编辑该 code
 // 2026-05-14: 自动评级状态
@@ -3049,32 +3086,26 @@ async function addDiscoveryToWatchlist(ticker, btnEl) {
 }
 
 
-// ============ 🗄 DB 全库浏览 ============
+// ============ 🗄 已拉取股票池 ============
 // 复用 _watchlistApiCall（同一 API base）拉 /api/db/all-stocks
-let _dbExplorerData = null;       // {as_of, counts, groups: {美股:[], A股:[], 港股:[], 其他:[]}}
+// 若本机 API 不可用，则直接回退到构建时嵌入的 DuckDB 快照。
+let _dbExplorerData = DB_EXPLORER_EMBEDDED && DB_EXPLORER_EMBEDDED.groups ? DB_EXPLORER_EMBEDDED : null;       // {as_of, counts, groups: {美股:[], A股:[], 港股:[], 其他:[]}}
 let _dbExplorerMarket = "美股";    // 当前选中的市场子 tab
 let _dbExplorerExpanded = new Set(); // 当前展开详情的 code 集合
-let _dbExplorerFilter = "all";    // all / watchlist / candidate / star3 / star_any / ai_strong
+let _dbExplorerFilter = "all";    // all / star3 / star_any / ai_strong
 
-// 来源 badge：watchlist / picks_only / discovery_only（七审 P2-2 补）
+// 来源 badge：system_pool（已拉取股票池专用）
 // API /api/db/all-stocks 已返回 _source_origin 字段，前端这里渲染对应小 badge
 function _originBadge(origin) {
-  const o = origin || "watchlist";
-  if (o === "picks_only") {
-    return `<span class="inline-flex ml-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-50 text-violet-700 ring-1 ring-violet-200" title="picks 表里有，但不在 watchlist 自选股 — 系统 AI 推荐产生">🤖 picks</span>`;
+  if ((origin || "") === "system_pool") {
+    return `<span class="inline-flex ml-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-sky-50 text-sky-700 ring-1 ring-sky-200" title="系统自动拉取的科技/AI 股票池，不代表你的手动自选股">系统池</span>`;
   }
-  if (o === "discovery_only") {
-    return `<span class="inline-flex ml-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700 ring-1 ring-amber-200" title="discovery 候选发现里有，但既不在自选股也不在 picks — 待人工 review">🔍 discover</span>`;
-  }
-  // watchlist 默认不显示 badge（避免视觉噪音）
   return "";
 }
 
 // 筛选 chip 判断：一只股票是否符合当前 filter
 function _dbPassesFilter(r, filter) {
   if (filter === "all") return true;
-  if (filter === "watchlist") return (r._source_origin || "watchlist") === "watchlist";
-  if (filter === "candidate") return (r._source_origin || "") !== "watchlist";
   if (filter === "star3") return String(r.pick_rating || "").includes("⭐⭐⭐");
   if (filter === "star_any") return String(r.pick_rating || "").includes("⭐");
   if (filter === "ai_strong") {
@@ -3105,7 +3136,7 @@ function setDbExplorerFilter(filter) {
 function _updateFilterChipCounts() {
   if (!_dbExplorerData) return;
   const allRows = ["美股","A股","港股","其他"].flatMap(m => _dbExplorerData.groups[m] || []);
-  const filters = ["all","watchlist","candidate","star3","star_any","ai_strong"];
+  const filters = ["all","star3","star_any","ai_strong"];
   filters.forEach(f => {
     const el = document.getElementById("db-filter-cnt-" + f);
     if (el) el.textContent = allRows.filter(r => _dbPassesFilter(r, f)).length;
@@ -3117,6 +3148,10 @@ async function loadDbExplorer() {
   const loading = document.getElementById("db-explorer-loading");
   const statusEl = document.getElementById("db-explorer-status");
   if (_dbExplorerData) {
+    if (statusEl) {
+      statusEl.textContent = "✅ 离线快照";
+      statusEl.className = "px-2 py-0.5 rounded bg-amber-100 text-amber-700";
+    }
     if (loading) loading.style.display = "none";
     renderDbExplorerTable();
     return;
@@ -3132,8 +3167,8 @@ async function loadDbExplorer() {
     }
     const asOfEl = document.getElementById("db-explorer-as-of");
     if (asOfEl && data.as_of) {
-      asOfEl.textContent = `全库最新行情: ${data.as_of.prices_date || "—"}  ·  AI 最新入选: ${data.as_of.picks_date || "—"}  ·  共 ${data.counts.total} 只`;
-      asOfEl.title = "全库最新行情 = prices 表最新一行日期（每只股票自己的抓取时间见主表「抓取时间」列）。AI 最新入选 = picks 表最新入选日（具体每只见详情面板 picks 卡 → 入选日期）。";
+      asOfEl.textContent = `已拉取股票最新行情: ${data.as_of.prices_date || "—"}  ·  自选 AI 最新入选: ${data.as_of.picks_date || "—"}  ·  共 ${data.counts.total} 只`;
+      asOfEl.title = "已拉取股票最新行情 = prices 表最新一行日期（每只股票自己的抓取时间见主表「抓取时间」列）。自选 AI 最新入选 = picks 表最新入选日（具体每只见详情面板 picks 卡 → 入选日期）。";
     }
     ["美股","A股","港股","其他"].forEach(m => {
       const cntEl = document.getElementById("db-mkt-cnt-" + m);
@@ -3142,6 +3177,16 @@ async function loadDbExplorer() {
     if (loading) loading.style.display = "none";
     renderDbExplorerTable();
   } catch (e) {
+    if (DB_EXPLORER_EMBEDDED && DB_EXPLORER_EMBEDDED.groups) {
+      _dbExplorerData = DB_EXPLORER_EMBEDDED;
+      if (statusEl) {
+        statusEl.textContent = "✅ 离线快照";
+        statusEl.className = "px-2 py-0.5 rounded bg-amber-100 text-amber-700";
+      }
+      if (loading) loading.style.display = "none";
+      renderDbExplorerTable();
+      return;
+    }
     if (statusEl) {
       statusEl.textContent = "✗ 失败: " + e.message;
       statusEl.className = "px-2 py-0.5 rounded bg-rose-100 text-rose-700";
@@ -3609,7 +3654,7 @@ function _dbExplorerDetailRow(r) {
   `;
 }
 
-// ============ 🗂 个股全历史中介页（从 DB 全库浏览 跳过来）============
+// ============ 🗂 个股全历史中介页（从已拉取股票池跳过来）============
 let _stockDetailReturnTab = "db-explorer";  // 关闭时回到哪个父 tab
 
 async function openStockDetail(code, name) {
@@ -4088,7 +4133,7 @@ function renderStockDetail(data) {
       <div class="font-semibold text-slate-700 mb-1">📦 数据来源 & 存储位置</div>
       <ul class="space-y-0.5 ml-1">
         <li>· yfinance 抓取的 quarterly_income_stmt 字段（Revenue / Net Income / Diluted EPS）— <strong>非原始 10-Q PDF</strong>，是 yfinance 解析后的结构化数字</li>
-        <li>· 存在本地 DuckDB：<code class="font-mono bg-white px-1 py-0.5 rounded">stock_history.duckdb → earnings_history 表</code>（按 <code>(code, fiscal_period)</code> upsert，不删历史）</li>
+        <li>· 存在当前配置 DuckDB：<code class="font-mono bg-white px-1 py-0.5 rounded">earnings_history 表</code>（按 <code>(code, fiscal_period)</code> upsert，不删历史）</li>
         <li>· 摘要文本存在 <code class="font-mono bg-white px-1 py-0.5 rounded">watchlist.earnings</code> 字段（每次覆盖，看板用）</li>
         <li>· <strong>要看完整原始报告（10-Q/年报 PDF）</strong>请点下方链接到法定披露平台</li>
       </ul>
@@ -4129,6 +4174,7 @@ function _yahooLink(code, market) {
 
 // ============ Tab 切换框架 ============
 const TAB_SECTIONS = {
+  today: ["today-decision"],
   about: ["about"],
   overview: ["hero", "stress-test", "thesis", "evolution", "scarce", "events", "hundred-x"],
   portfolio: ["portfolio"],
@@ -4144,6 +4190,7 @@ const TAB_SECTIONS = {
   // stock-detail 是 db-explorer 详情面板的「📊 看完整历史」按钮跳到的子页，
   // 不挂 sidebar，只能从 openStockDetail() 跳进、closeStockDetail() 跳回
   "stock-detail": ["stock-detail"],
+  "runtime-status": ["runtime-status"],
   upgrade: ["upgrade"],
   "init-config": ["init-config", "portfolio-config", "watchlist-edit"],
 };
@@ -4208,8 +4255,8 @@ function getTabFromHash() {
   if (h === "watchlist-edit")   { _initSubCurrent = "watchlist"; return "init-config"; }
   // 老 hash 兼容：themes / chain-overview / landscape → chain（2026-05-11 合并 + 改名后）
   if (h === "themes" || h === "chain-overview" || h === "landscape") return "chain";
-  // 默认首屏改为 portfolio（"📋 我的池子" 的核心）— 用户每天打开问"我现在赚还是亏"
-  return TAB_SECTIONS[h] ? h : "portfolio";
+  // 默认首屏是今日决策台：先判断今天链路是否可用，再进入推荐/组合/研究。
+  return TAB_SECTIONS[h] ? h : "today";
 }
 window.addEventListener("hashchange", () => switchTab(getTabFromHash()));
 window.addEventListener("DOMContentLoaded", () => switchTab(getTabFromHash()));
@@ -6281,7 +6328,9 @@ function _computeDiscoveryStats() {
     const _metaTs = _fmtTs(DISCOVERY.generated_at);
     const _ageColor = _metaTs.age.includes("⚠️") ? "text-rose-700 font-bold bg-rose-50 px-1.5 py-0.5 rounded" : "text-emerald-700 font-medium";
     const _scope = DISCOVERY.universe_scope || (DISCOVERY.exclude_watchlist ? "outside_watchlist" : null);
-    const _scopeText = (_scope === "all_pool" || _scope === "all_db_prices")
+    const _scopeText = (_scope === "tech_universe_db_prices")
+      ? "科技/AI 股票池扫描"
+      : (_scope === "all_pool" || _scope === "all_db_prices")
       ? "全池扫描，未排除自选股"
       : `已排除 watchlist ${DISCOVERY.watchlist_excluded || "?"} 只`;
     meta.innerHTML = `<span class="${_ageColor}" title="${_metaTs.full}">🕐 AI 算于 ${_metaTs.short} ${_metaTs.age}</span> · `
@@ -7207,6 +7256,26 @@ def source_health_panel_html(payload: dict | None) -> str:
     if not degraded:
         return ""
 
+    markets = payload.get("markets") or {}
+    market_rows = []
+    for market_key in ("US", "HK", "CN"):
+        info = markets.get(market_key) or {}
+        if not info:
+            continue
+        total = int(info.get("total") or 0)
+        success = int(info.get("success") or 0)
+        fail = int(info.get("fail") or 0)
+        status = "ok" if fail == 0 and success > 0 else ("source_down" if success <= 0 else "source_degraded")
+        market_rows.append(f"""
+      <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <div class="flex items-center justify-between gap-2">
+          <div class="font-semibold text-slate-800">{market_key}</div>
+          <span class="text-xs font-mono px-2 py-0.5 rounded bg-white border border-slate-200">{status}</span>
+        </div>
+        <div class="mt-1 text-xs text-slate-600">成功 {success} / 总 {total} · 失败 {fail}</div>
+      </div>
+""")
+
     cards = []
     for name, info in degraded:
         name_s = html_lib.escape(str(name))
@@ -7248,13 +7317,847 @@ def source_health_panel_html(payload: dict | None) -> str:
     <div class="space-y-3">
       {''.join(cards)}
     </div>
+    {('<div class="grid grid-cols-1 md:grid-cols-3 gap-2 mt-4">' + ''.join(market_rows) + '</div>') if market_rows else ''}
   </div>
+"""
+
+
+def _runtime_load_json(rel: str) -> dict:
+    path = os.path.join(_REPO, rel)
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            payload = json.load(f)
+        return payload if isinstance(payload, dict) else {"_payload": payload}
+    except Exception as e:
+        return {"_error": str(e)}
+
+
+def _runtime_artifact(rel: str) -> dict:
+    path = os.path.join(_REPO, rel)
+    if not os.path.exists(path):
+        return {"status": "FAIL", "text": "缺失", "detail": rel}
+    payload = _runtime_load_json(rel)
+    if payload.get("_error"):
+        return {"status": "FAIL", "text": "JSON 错误", "detail": payload["_error"]}
+    ts = payload.get("generated_at") or payload.get("as_of") or payload.get("date")
+    if not ts:
+        ts = datetime.fromtimestamp(os.path.getmtime(path)).isoformat(timespec="minutes")
+    return {"status": "OK", "text": "存在", "detail": str(ts)[:19]}
+
+
+def _runtime_pipeline_snapshot(name: str) -> dict:
+    db_path = _duckdb_path()
+    if not os.path.exists(db_path):
+        return {}
+    try:
+        import duckdb
+        con = duckdb.connect(db_path, read_only=True)
+        row = con.execute(
+            "SELECT payload FROM snapshots WHERE category='pipeline' AND name=? "
+            "ORDER BY taken_at DESC LIMIT 1",
+            [name],
+        ).fetchone()
+        con.close()
+        if not row:
+            return {}
+        payload = row[0]
+        return json.loads(payload) if isinstance(payload, str) else (payload or {})
+    except Exception:
+        return {}
+
+
+def _runtime_latest_log_failures(limit: int = 12) -> list[str]:
+    candidates = [
+        os.path.join(_REPO, "daily_refresh.log"),
+        os.path.join(_REPO, "logs", "daily_refresh.log"),
+    ]
+    paths = [p for p in candidates if os.path.exists(p)]
+    if not paths:
+        return []
+    path = max(paths, key=os.path.getmtime)
+    try:
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()[-500:]
+    except Exception:
+        return []
+
+    failures: list[str] = []
+    in_block = False
+    for line in lines:
+        s = line.strip()
+        if "失败步骤：" in s:
+            in_block = True
+            failures = []
+            continue
+        if in_block:
+            if s.startswith("- "):
+                failures.append(s[2:].strip())
+                continue
+            if s and not s.startswith(("HTML", "DuckDB", "📋")):
+                in_block = False
+        if s.startswith("❌ ["):
+            failures.append(s[2:].strip())
+
+    out: list[str] = []
+    seen = set()
+    for item in reversed(failures):
+        if item and item not in seen:
+            seen.add(item)
+            out.append(item)
+        if len(out) >= limit:
+            break
+    return list(reversed(out))
+
+
+def _runtime_db_stats() -> dict:
+    stats = {
+        "prices": {"us": 0, "cn": 0, "hk": 0, "latest_date": None},
+        "picks": {},
+        "v2": {},
+        "source_fetch_log": [],
+        "pipeline_steps": [],
+    }
+    db_path = _duckdb_path()
+    if not os.path.exists(db_path):
+        return stats
+    try:
+        import duckdb
+        con = duckdb.connect(db_path, read_only=True)
+        tables = {str(r[0]) for r in con.execute("SHOW TABLES").fetchall()}
+        if "price_daily" in tables:
+            price_rows = con.execute(
+                """
+                SELECT market, COUNT(DISTINCT symbol) AS n, MAX(trade_date) AS latest_date
+                FROM price_daily
+                GROUP BY market
+                """
+            ).fetchall()
+            for market, n, d in price_rows:
+                key = {"US": "us", "CN": "cn", "HK": "hk"}.get(str(market).upper())
+                if key:
+                    stats["prices"][key] = int(n or 0)
+                if d is not None:
+                    ds = str(d)[:10]
+                    cur = stats["prices"]["latest_date"]
+                    stats["prices"]["latest_date"] = ds if cur is None or ds > cur else cur
+            for table in (
+                "manual_watchlist", "holdings", "system_universe", "pool_membership",
+                "price_daily", "recommendation_runs", "recommendation_picks",
+                "portfolio_plans", "strategy_review_reports", "pipeline_runs",
+                "pipeline_steps", "source_fetch_log",
+            ):
+                if table in tables:
+                    stats["v2"][table] = int(con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            if "pool_membership" in tables:
+                active_pool = int(con.execute(
+                    "SELECT COUNT(*) FROM pool_membership WHERE active = TRUE AND pool_type = 'system_tech_universe'"
+                ).fetchone()[0])
+                priced = int(con.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM (
+                      SELECT DISTINCT p.market, p.symbol
+                      FROM price_daily p
+                      JOIN pool_membership m
+                        ON m.market = p.market AND m.symbol = p.symbol
+                       AND m.active = TRUE
+                       AND m.pool_type = 'system_tech_universe'
+                    )
+                    """
+                ).fetchone()[0])
+                stats["v2"]["price_coverage"] = {
+                    "priced": priced,
+                    "active_pool": active_pool,
+                    "pct": round(priced / active_pool * 100, 2) if active_pool else 0,
+                }
+            if "recommendation_picks" in tables and "recommendation_runs" in tables:
+                latest_run = con.execute(
+                    "SELECT run_id FROM recommendation_runs ORDER BY generated_at DESC LIMIT 1"
+                ).fetchone()
+                if latest_run:
+                    rows = con.execute(
+                        """
+                        SELECT signal, COUNT(*)
+                        FROM recommendation_picks
+                        WHERE run_id = ?
+                        GROUP BY signal
+                        """,
+                        [latest_run[0]],
+                    ).fetchall()
+                    stats["picks"]["system_tech_universe"] = {
+                        "latest_run_id": latest_run[0],
+                        "buy_n": sum(int(n or 0) for sig, n in rows if str(sig) == "buy"),
+                        "total_n": sum(int(n or 0) for _, n in rows),
+                        "signals": {str(sig): int(n or 0) for sig, n in rows},
+                    }
+            if "source_fetch_log" in tables:
+                rows = con.execute(
+                    """
+                    SELECT source, market, status, status_code, fetched_at, message
+                    FROM source_fetch_log
+                    ORDER BY fetched_at DESC
+                    LIMIT 5
+                    """
+                ).fetchall()
+                stats["source_fetch_log"] = [
+                    {
+                        "source": r[0], "market": r[1], "status": r[2],
+                        "status_code": r[3], "fetched_at": str(r[4]) if r[4] else None,
+                        "message": r[5],
+                    }
+                    for r in rows
+                ]
+            if "pipeline_steps" in tables:
+                rows = con.execute(
+                    """
+                    SELECT run_id, step_name, status, ended_at, sink, error_summary
+                    FROM pipeline_steps
+                    ORDER BY COALESCE(ended_at, started_at) DESC
+                    LIMIT 5
+                    """
+                ).fetchall()
+                stats["pipeline_steps"] = [
+                    {
+                        "run_id": r[0], "step_name": r[1], "status": r[2],
+                        "ended_at": str(r[3]) if r[3] else None, "sink": r[4],
+                        "error_summary": r[5],
+                    }
+                    for r in rows
+                ]
+
+        if "prices" not in tables:
+            con.close()
+            return stats
+        rows = con.execute(
+            """
+            SELECT code, MAX(date) AS latest_date
+            FROM prices
+            GROUP BY code
+            """
+        ).fetchall()
+        for code, d in rows:
+            c = str(code or "").upper()
+            if d is not None:
+                ds = str(d)[:10]
+                cur = stats["prices"]["latest_date"]
+                stats["prices"]["latest_date"] = ds if cur is None or ds > cur else cur
+            if c.endswith(".HK"):
+                stats["prices"]["hk"] += 1
+            elif c.endswith((".SS", ".SZ", ".BJ")) or (c.isdigit() and len(c) == 6):
+                stats["prices"]["cn"] += 1
+            elif c.replace("-", "").replace(".", "").isalpha():
+                stats["prices"]["us"] += 1
+
+        pick_rows = []
+        if "picks" in tables:
+            pick_rows = con.execute(
+                """
+                WITH latest AS (
+                  SELECT model_source, MAX(pick_date) AS pick_date
+                  FROM picks
+                  WHERE model_source IN ('v6_us', 'v6_hk', 'v6_cn')
+                  GROUP BY model_source
+                )
+                SELECT p.model_source, p.pick_date,
+                       SUM(CASE WHEN COALESCE(p.signal, 'buy') = 'buy' THEN 1 ELSE 0 END) AS buy_n,
+                       COUNT(*) AS total_n
+                FROM picks p
+                INNER JOIN latest l ON l.model_source = p.model_source AND l.pick_date = p.pick_date
+                GROUP BY p.model_source, p.pick_date
+                """
+            ).fetchall()
+        con.close()
+        for source, pick_date, buy_n, total_n in pick_rows:
+            stats["picks"][str(source)] = {
+                "latest_date": str(pick_date)[:10] if pick_date is not None else None,
+                "buy_n": int(buy_n or 0),
+                "total_n": int(total_n or 0),
+            }
+    except Exception as e:
+        stats["error"] = str(e)
+    return stats
+
+
+def _runtime_badge(status: str) -> str:
+    s = (status or "WARN").upper()
+    cls = {
+        "OK": "bg-emerald-100 text-emerald-700 border-emerald-200",
+        "PASS": "bg-emerald-100 text-emerald-700 border-emerald-200",
+        "WARN": "bg-amber-100 text-amber-800 border-amber-200",
+        "INFO": "bg-sky-100 text-sky-700 border-sky-200",
+        "FAIL": "bg-rose-100 text-rose-700 border-rose-200",
+    }.get(s, "bg-slate-100 text-slate-700 border-slate-200")
+    label = "OK" if s == "PASS" else s
+    return f'<span class="inline-flex px-2 py-0.5 rounded-full border text-[11px] font-mono {cls}">{html_lib.escape(label)}</span>'
+
+
+def _runtime_row(name: str, status: str, sink: str, detail: str, action: str) -> str:
+    return f"""
+      <tr class="border-b border-slate-100 last:border-0">
+        <td class="py-2 pr-3 text-sm font-medium text-slate-800">{html_lib.escape(name)}</td>
+        <td class="py-2 pr-3 whitespace-nowrap">{_runtime_badge(status)}</td>
+        <td class="py-2 pr-3 text-xs font-mono text-slate-700">{html_lib.escape(sink or "—")}</td>
+        <td class="py-2 pr-3 text-xs text-slate-600">{html_lib.escape(detail or "—")}</td>
+        <td class="py-2 text-xs text-slate-500">{html_lib.escape(action or "—")}</td>
+      </tr>
+"""
+
+
+def _runtime_v2_recommendations(limit: int = 20) -> list[dict]:
+    db_path = _duckdb_path()
+    if not os.path.exists(db_path):
+        return []
+    try:
+        import duckdb
+        con = duckdb.connect(db_path, read_only=True)
+        tables = {str(r[0]) for r in con.execute("SHOW TABLES").fetchall()}
+        if "recommendation_runs" not in tables or "recommendation_picks" not in tables:
+            con.close()
+            return []
+        latest = con.execute(
+            "SELECT run_id FROM recommendation_runs ORDER BY generated_at DESC LIMIT 1"
+        ).fetchone()
+        if not latest:
+            con.close()
+            return []
+        rows = con.execute(
+            """
+            SELECT market, symbol, name, rank, signal, total_score, factor_scores_json
+            FROM recommendation_picks
+            WHERE run_id = ?
+            ORDER BY rank NULLS LAST, total_score DESC NULLS LAST, market, symbol
+            LIMIT ?
+            """,
+            [latest[0], limit],
+        ).fetchall()
+        con.close()
+        out = []
+        for market, symbol, name, rank, signal, total_score, factor_json in rows:
+            detail = {}
+            try:
+                detail = json.loads(factor_json) if factor_json else {}
+            except Exception:
+                detail = {}
+            out.append({
+                "ticker": symbol,
+                "code": symbol,
+                "name": name or "",
+                "market": market,
+                "rank": rank,
+                "signal": signal,
+                "composite_z": total_score,
+                "detail": detail,
+                "source": "v2:recommendation_picks",
+            })
+        return out
+    except Exception:
+        return []
+
+
+def today_decision_panel_html() -> str:
+    clean_v2 = _is_clean_v2_db()
+    quality = _runtime_load_json("data/latest/recommendation_quality_gate.json")
+    acceptance = _runtime_load_json("data/latest/production_acceptance_check.json")
+    evidence = _runtime_load_json("data/latest/recommendation_evidence.json")
+    source_health = _runtime_load_json("data/latest/source_health.json")
+    discovery = {} if clean_v2 else _runtime_load_json("data/discovery_candidates.json")
+    v2_candidates = _runtime_v2_recommendations(limit=200)
+    if v2_candidates:
+        v2_stats = _runtime_db_stats().get("v2") or {}
+        discovery = {
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "source": "v2:recommendation_picks",
+            "universe_scope": "system_tech_universe",
+            "universe_size": v2_stats.get("system_universe") or len(v2_candidates),
+            "candidates": v2_candidates,
+        }
+    db = _runtime_db_stats()
+
+    quality_status = str(quality.get("status") or "UNKNOWN").upper()
+    acceptance_status = str(acceptance.get("status") or "UNKNOWN").upper()
+    evidence_grade = str(evidence.get("evidence_grade") or "—")
+    v2_candidates = _runtime_v2_recommendations(limit=20)
+    discovery_candidates = v2_candidates or (discovery.get("candidates") or [])
+    discovery_n = len(discovery_candidates)
+    discovery_source = "v2 recommendation_picks" if v2_candidates else ("none" if clean_v2 else "legacy discovery_candidates.json")
+
+    blocking = quality_status == "FAIL" or acceptance_status == "FAIL"
+    if blocking:
+        overall = "FAIL"
+        overall_text = "今天推荐只能只读观察，先看运行状态里的失败项。"
+    elif quality_status in {"PASS", "OK"} and acceptance_status in {"PASS", "OK"} and discovery_n:
+        overall = "OK"
+        overall_text = "今天链路可用，可以从 AI 推荐进入买前研究。"
+    else:
+        overall = "WARN"
+        overall_text = "今天有数据，但部分产物或证据不足，建议先核对运行状态。"
+
+    price_stats = db.get("prices") or {}
+    v2 = db.get("v2") or {}
+    coverage = v2.get("price_coverage") or {}
+    latest_price_date = price_stats.get("latest_date") or "—"
+    pool_total = int(v2.get("system_universe") or 0)
+    pool_membership = int(v2.get("pool_membership") or 0)
+    price_coverage_text = (
+        f"行情覆盖 {coverage.get('priced', 0)}/{coverage.get('active_pool', 0)} "
+        f"({coverage.get('pct', 0)}%) · 最新行情 {latest_price_date}"
+    )
+    market_line = (
+        f"系统池 {pool_total} 只 · 池成员 {pool_membership} 只 · "
+        f"{price_coverage_text}"
+    )
+
+    v2_counts = db.get("v2") or {}
+    plan_artifact = _runtime_artifact("data/latest/plan_a_v5.json")
+    trade_artifact = _runtime_artifact("data/latest/trade_delta.json")
+    plan = _runtime_load_json("data/latest/plan_a_v5.json") or _runtime_pipeline_snapshot("plan_a_v5")
+    trade_delta = _runtime_load_json("data/latest/trade_delta.json") or _runtime_pipeline_snapshot("trade_delta")
+    plan_status = "OK" if int(v2_counts.get("portfolio_plans") or 0) > 0 or plan else plan_artifact["status"]
+    trade_text = "存在" if trade_delta else trade_artifact["text"]
+    plan_rows = plan.get("plan_v5") or plan.get("portfolio") or []
+    plan_metrics = plan.get("portfolio_metrics") or {}
+    plan_detail = f"{int(v2_counts.get('portfolio_plans') or 0)} 只 v2 目标组合" if int(v2_counts.get("portfolio_plans") or 0) > 0 else (
+        f"{len(plan_rows)} 只目标组合" if plan_rows else "暂无目标组合产物"
+    )
+    if plan_metrics.get("annual_sharpe") is not None:
+        plan_detail += f" · Sharpe {plan_metrics.get('annual_sharpe')}"
+
+    def fmt_num(value, digits=2):
+        try:
+            return f"{float(value):.{digits}f}"
+        except Exception:
+            return "—"
+
+    top_rows = []
+    for c in discovery_candidates[:5]:
+        ticker = c.get("ticker") or c.get("code") or "?"
+        name = c.get("name") or ""
+        market = c.get("market") or c.get("location") or "—"
+        score = c.get("composite_z")
+        detail = c.get("detail") or {}
+        one_month = detail.get("one_month_pct")
+        top_rows.append(f"""
+          <tr class="border-b border-slate-100 last:border-0">
+            <td class="py-2 pr-3 font-mono font-bold text-slate-900">{html_lib.escape(str(ticker))}</td>
+            <td class="py-2 pr-3 text-slate-700">{html_lib.escape(str(name))}</td>
+            <td class="py-2 pr-3 text-xs text-slate-500">{html_lib.escape(str(market))}</td>
+            <td class="py-2 pr-3 text-right font-mono text-slate-800">{fmt_num(score)}</td>
+            <td class="py-2 text-right font-mono text-slate-600">{fmt_num(one_month)}%</td>
+          </tr>
+""")
+    if not top_rows:
+        top_rows.append("""
+          <tr>
+            <td colspan="5" class="py-6 text-center text-sm text-slate-500">暂无 AI 推荐候选；请先运行 AI 推荐生成链路。</td>
+          </tr>
+""")
+
+    card = lambda title, status, detail, href, action: f"""
+      <div class="bg-white rounded-xl border border-slate-200 p-4">
+        <div class="flex items-center justify-between gap-3 mb-2">
+          <div class="text-xs text-slate-500">{html_lib.escape(title)}</div>
+          {_runtime_badge(status)}
+        </div>
+        <div class="text-sm text-slate-700 min-h-[42px]">{html_lib.escape(detail)}</div>
+        <a href="{href}" class="inline-flex mt-3 text-xs font-medium text-violet-700 hover:text-violet-900">{html_lib.escape(action)} →</a>
+      </div>
+"""
+
+    cards_html = "".join([
+        card("系统可用性", overall, overall_text, "#runtime-status", "查看运行状态"),
+        card("AI 推荐", "OK" if discovery_n else "WARN", f"{discovery_n} 只系统池候选；来源不包含手动自选股池。", "#discovery", "打开 AI 推荐"),
+        card("AI 组合方案", plan_status, f"{plan_detail}；调仓清单：{trade_text}。", "#backtest", "查看组合方案"),
+        card("已拉取股票池", "OK" if pool_total else "WARN", market_line, "#db-explorer", "查看股票池"),
+    ])
+
+    empty_state_banner = ""
+    if blocking or not discovery_n or not pool_total:
+        banner_detail = (
+            f"系统池 {pool_total} 只 · 池成员 {pool_membership} 只 · "
+            f"行情覆盖 {coverage.get('priced', 0)}/{coverage.get('active_pool', 0)} ({coverage.get('pct', 0)}%)。"
+        )
+        replay_mode = bool(source_health.get("replay_mode")) or bool(
+            (source_health.get("sources") or {}).get("cache_replay")
+        )
+        banner_title = "当前是回放 / 降级态，不是页面异常" if replay_mode else "当前是空库 / 降级态，不是页面异常"
+        next_step = (
+            str((source_health.get("sources") or {}).get("yfinance", {}).get("operator_action") or "补修行情源后重跑价格拉取")
+        )
+        empty_state_banner = f"""
+  <div class="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+    <div class="font-semibold mb-1">{html_lib.escape(banner_title)}</div>
+    <div>{html_lib.escape(banner_detail)}{html_lib.escape(' 下一步：' + next_step)}</div>
+  </div>
+"""
+
+    generated_at = (
+        acceptance.get("generated_at")
+        or quality.get("generated_at")
+        or discovery.get("generated_at")
+        or datetime.now().isoformat(timespec="minutes")
+    )
+
+    return f"""
+  <div class="mb-6">
+    <div class="flex items-start justify-between gap-4 flex-wrap">
+      <div>
+        <div class="text-xs font-semibold text-violet-700 mb-2">每日入口 · 只汇总，不写库</div>
+        <h2 class="text-3xl font-bold text-slate-900">今日决策台</h2>
+        <p class="text-sm text-slate-600 mt-2 max-w-3xl">
+          先看系统今天是否可用，再决定去 AI 推荐、AI 组合方案、买前审查还是运行状态。这里不新增股票池，也不会自动写自选股或真实持仓。
+        </p>
+      </div>
+      <div class="text-right">
+        <div class="mb-1">{_runtime_badge(overall)}</div>
+        <div class="text-xs text-slate-500">最后生成 {html_lib.escape(str(generated_at)[:19])}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 md:grid-cols-4 gap-3 mb-6">
+    {cards_html}
+  </div>
+
+  {empty_state_banner}
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+    <div class="lg:col-span-2 bg-white rounded-xl border border-slate-200 overflow-hidden">
+      <div class="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3">
+        <div>
+          <h3 class="font-bold text-slate-900">今日 AI 推荐 Top 5</h3>
+          <p class="text-xs text-slate-500">来自系统科技/AI 股票池，不是你的手动自选股。来源：{html_lib.escape(discovery_source)}</p>
+        </div>
+        <a href="#discovery" class="text-xs text-violet-700 hover:text-violet-900">完整列表 →</a>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="text-xs text-slate-500 bg-white border-b border-slate-100">
+            <tr>
+              <th class="py-2 px-3 text-left">代码</th>
+              <th class="py-2 px-3 text-left">名称</th>
+              <th class="py-2 px-3 text-left">市场</th>
+              <th class="py-2 px-3 text-right">综合 z</th>
+              <th class="py-2 px-3 text-right">1 月涨幅</th>
+            </tr>
+          </thead>
+          <tbody>{''.join(top_rows)}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-xl border border-slate-200 p-4">
+      <h3 class="font-bold text-slate-900 mb-3">今天怎么读</h3>
+      <div class="space-y-3 text-sm text-slate-700">
+        <div class="border-l-4 border-violet-400 pl-3">
+          <div class="font-semibold text-slate-900">1. 先看能不能用</div>
+          <div class="text-xs text-slate-500">质量闸门和生产验收失败时，推荐只作观察。</div>
+        </div>
+        <div class="border-l-4 border-sky-400 pl-3">
+          <div class="font-semibold text-slate-900">2. 再看选谁</div>
+          <div class="text-xs text-slate-500">AI 推荐回答“哪些标的值得研究”。</div>
+        </div>
+        <div class="border-l-4 border-emerald-400 pl-3">
+          <div class="font-semibold text-slate-900">3. 最后看怎么买</div>
+          <div class="text-xs text-slate-500">AI 组合方案回答目标仓位和调仓差额。</div>
+        </div>
+      </div>
+    </div>
+  </div>
+"""
+
+
+def runtime_status_panel_html() -> str:
+    clean_v2 = _is_clean_v2_db()
+    quality = _runtime_load_json("data/latest/recommendation_quality_gate.json")
+    acceptance = _runtime_load_json("data/latest/production_acceptance_check.json")
+    evidence = _runtime_load_json("data/latest/recommendation_evidence.json")
+    source_health = _runtime_load_json("data/latest/source_health.json")
+    discovery = {} if clean_v2 else _runtime_load_json("data/discovery_candidates.json")
+    pipeline = _runtime_load_json("data/latest/pipeline_status.json")
+    db = _runtime_db_stats()
+    failures = _runtime_latest_log_failures()
+
+    quality_status = str(quality.get("status") or "UNKNOWN")
+    acceptance_status = str(acceptance.get("status") or "UNKNOWN")
+    quality_summary = quality.get("summary") or {}
+    acceptance_summary = acceptance.get("summary") or {}
+    generated_at = (
+        acceptance.get("generated_at")
+        or quality.get("generated_at")
+        or datetime.now().isoformat(timespec="minutes")
+    )
+
+    def pick_detail(source: str) -> tuple[str, str]:
+        row = (db.get("picks") or {}).get(source) or {}
+        if not row:
+            return "FAIL", "无最新 production picks"
+        status = "OK" if int(row.get("buy_n") or 0) > 0 else "WARN"
+        return status, f"{row.get('latest_date') or '—'} · buy {row.get('buy_n', 0)} / total {row.get('total_n', 0)}"
+
+    def artifact_row(name: str, rel: str, sink: str, ok_action: str, fail_action: str) -> str:
+        a = _runtime_artifact(rel)
+        return _runtime_row(name, a["status"], sink, f"{a['text']} · {a['detail']}", ok_action if a["status"] == "OK" else fail_action)
+
+    fmp = ((source_health.get("sources") or {}).get("FMP") or {})
+    fmp_status = "OK" if str(fmp.get("status") or "ok") in ("ok", "healthy") else "WARN"
+    fmp_detail = str(fmp.get("impact") or "FMP 当前未报告降级")
+
+    price_latest = db.get("prices", {}).get("latest_date") or "—"
+    us_price = db.get("prices", {}).get("us", 0)
+    cn_price = db.get("prices", {}).get("cn", 0)
+    hk_price = db.get("prices", {}).get("hk", 0)
+    v2 = db.get("v2") or {}
+    coverage = v2.get("price_coverage") or {}
+    v2_pick = (db.get("picks") or {}).get("system_tech_universe") or {}
+    market_health = source_health.get("markets") or {}
+
+    us_pick_status, us_pick_detail = pick_detail("v6_us")
+    cn_pick_status, cn_pick_detail = pick_detail("v6_cn")
+    hk_pick_status, hk_pick_detail = pick_detail("v6_hk")
+
+    def market_status(key: str) -> tuple[str, str]:
+        info = market_health.get(key) or {}
+        total = int(info.get("total") or 0)
+        success = int(info.get("success") or 0)
+        fail = int(info.get("fail") or 0)
+        if total <= 0:
+            return "WARN", "暂无市场统计"
+        status = "OK" if fail == 0 and success > 0 else ("FAIL" if success <= 0 else "WARN")
+        return status, f"成功 {success} / 总 {total} · 失败 {fail}"
+
+    us_rows = [
+        _runtime_row("US 市场健康", market_status("US")[0], "data/latest/source_health.json", market_status("US")[1], "先修复美股行情源或 ticker 映射"),
+        _runtime_row("HK 市场健康", market_status("HK")[0], "data/latest/source_health.json", market_status("HK")[1], "先修复港股行情源或 ticker 映射"),
+        _runtime_row("CN 市场健康", market_status("CN")[0], "data/latest/source_health.json", market_status("CN")[1], "先修复 A 股行情源或 ticker 映射"),
+        _runtime_row(
+            "v2 系统股票池",
+            "OK" if int(v2.get("system_universe") or 0) else "FAIL",
+            "DuckDB.system_universe + pool_membership",
+            f"system_universe={v2.get('system_universe', 0)} · pool_membership={v2.get('pool_membership', 0)}",
+            "应只包含系统科技/AI 池，不包含手动自选股",
+        ),
+        _runtime_row(
+            "v2 行情拉取",
+            "OK" if float(coverage.get("pct") or 0) >= 80 else ("WARN" if float(coverage.get("pct") or 0) >= 50 else "FAIL"),
+            "DuckDB.price_daily",
+            f"美股 {us_price} · A股 {cn_price} · 港股 {hk_price} · 覆盖 {coverage.get('priced', 0)}/{coverage.get('active_pool', 0)} ({coverage.get('pct', 0)}%) · 最新 {price_latest}",
+            "覆盖不足时先修复行情源 fallback",
+        ),
+        _runtime_row(
+            "v2 AI 推荐",
+            "OK" if int(v2_pick.get("buy_n") or 0) > 0 else "FAIL",
+            "DuckDB.recommendation_runs + recommendation_picks",
+            f"run={v2_pick.get('latest_run_id') or '—'} · buy {v2_pick.get('buy_n', 0)} / total {v2_pick.get('total_n', 0)}",
+            "只允许 universe_scope=system_tech_universe/source_origin=system_pool",
+        ),
+        _runtime_row(
+            "v2 AI 组合方案",
+            "OK" if int(v2.get("portfolio_plans") or 0) > 0 else "FAIL",
+            "DuckDB.portfolio_plans",
+            f"{v2.get('portfolio_plans', 0)} 行目标组合",
+            "方案不是真实持仓，真实持仓只由用户确认写入",
+        ),
+        _runtime_row("推荐质量闸门", quality_status, "data/latest/recommendation_quality_gate.json", f"fail={quality_summary.get('fail', '—')} warn={quality_summary.get('warn', '—')}", "FAIL 时只读观察，先修复 issues"),
+        _runtime_row("FMP/yfinance 深度数据", fmp_status, "data/latest/source_health.json", fmp_detail[:140], str(fmp.get("operator_action") or "FMP 降级不一定阻断主推荐")),
+    ]
+
+    cn_rows = [
+        _runtime_row("股票池/行情拉取", "OK" if cn_price else "FAIL", "DuckDB.prices", f"{cn_price} 只 · 最新行情 {price_latest}", "若为 0，检查 A 股 universe 与 Sina/akshare fallback"),
+        artifact_row("事件日历", "data/event_calendar.json", "data/event_calendar.json", "事件数据存在", "重跑 stock_research.jobs.event_calendar_daily"),
+        artifact_row("政策事件", "data/policy_events.json", "data/policy_events.json", "政策事件存在", "重跑 stock_research.jobs.policy_scan_daily"),
+        artifact_row("A 股权重校准", "data/calibrated_factor_weights.json", "data/calibrated_factor_weights.json", "校准权重存在", "重跑 stock_research.jobs.calibrate_a_share_factor_weights"),
+        _runtime_row("v6_cn 生产 picks", cn_pick_status, "DuckDB.picks + data/a_share_picks.json", cn_pick_detail, "若缺失，收盘后重跑 ./daily_refresh.sh --a-share-only"),
+        artifact_row("A 股调仓差额", "data/latest/trade_delta_cn.json", "data/latest/trade_delta_cn.json", "A 股调仓差额存在", "重跑 A 股闭环或 trade_delta_cn 相关步骤"),
+    ]
+
+    hk_rows = [
+        _runtime_row("股票池/行情拉取", "OK" if hk_price else "FAIL", "DuckDB.prices", f"{hk_price} 只 · 最新行情 {price_latest}", "若为 0，检查港股 universe/yfinance 后缀 .HK"),
+        _runtime_row("v6_hk / 港股 picks", hk_pick_status, "DuckDB.picks", hk_pick_detail, "若缺失，重跑 scripts/pipeline/hk_picks.py"),
+        artifact_row("港股 picks JSON", "data/latest/hk_picks.json", "data/latest/hk_picks.json", "港股 picks JSON 存在", "重跑 scripts/pipeline/hk_picks.py"),
+        artifact_row("港股调仓差额", "data/latest/trade_delta_hk.json", "data/latest/trade_delta_hk.json", "港股调仓差额存在", "检查 trade_blocked 原因或重跑 trade_delta_hk"),
+    ]
+
+    runtime_v2_candidates = _runtime_v2_recommendations(limit=20)
+    discovery_n = len(runtime_v2_candidates or (discovery.get("candidates") or []))
+    evidence_grade = evidence.get("evidence_grade") or "—"
+    overall = "FAIL" if acceptance_status == "FAIL" or quality_status == "FAIL" else ("WARN" if failures else "OK")
+    discovery_status = "OK" if discovery_n and evidence_grade not in {"BLOCKED", "FAIL"} else ("WARN" if discovery_n else "WARN")
+    pipeline_status = str(pipeline.get("status") or "UNKNOWN")
+    pipeline_run = pipeline.get("started_at") or "尚未记录"
+    cards = [
+        ("总状态", overall, "质量闸门和生产验收综合结果"),
+        ("质量闸门", quality_status, f"fail={quality_summary.get('fail', '—')} warn={quality_summary.get('warn', '—')}"),
+        ("生产验收", acceptance_status, f"fail={acceptance_summary.get('fail', '—')} warn={acceptance_summary.get('warn', '—')}"),
+        ("AI 推荐", discovery_status, f"{discovery_n} 只候选 · evidence={evidence_grade}"),
+        ("跑批状态", pipeline_status, f"{str(pipeline_run)[:19]} · mode={pipeline.get('mode') or '—'}"),
+    ]
+    cards_html = "".join(
+        f"""
+      <div class="bg-white rounded-lg border border-slate-200 p-4">
+        <div class="text-xs text-slate-500 mb-1">{html_lib.escape(title)}</div>
+        <div class="mb-1">{_runtime_badge(status)}</div>
+        <div class="text-xs text-slate-600">{html_lib.escape(detail)}</div>
+      </div>
+""" for title, status, detail in cards
+    )
+
+    def clock_row(item: dict) -> str:
+        name = str(item.get("name") or "—")
+        planned = str(item.get("planned_time") or "—")
+        scope = str(item.get("scope") or "—")
+        command = str(item.get("command") or "—")
+        mode = str(pipeline.get("mode") or "")
+        last_status = "待接入"
+        last_run = "尚未记录"
+        if name == "早盘主线" and mode == "full":
+            last_status = pipeline_status
+            last_run = str(pipeline.get("started_at") or "尚未记录")[:19]
+        elif name == "A/H 收盘线" and mode == "a_share_only":
+            last_status = pipeline_status
+            last_run = str(pipeline.get("started_at") or "尚未记录")[:19]
+        elif name == "周频策略验证":
+            weekly = next((s for s in pipeline.get("steps", []) if "walk-forward" in str(s.get("label", ""))), None)
+            if weekly:
+                last_status = str(weekly.get("status") or "UNKNOWN")
+                last_run = str(weekly.get("ended_at") or weekly.get("started_at") or "尚未记录")[:19]
+        return f"""
+          <tr class="border-b border-slate-100 align-top">
+            <td class="py-2 pr-3 font-medium text-slate-900">{html_lib.escape(name)}</td>
+            <td class="py-2 pr-3 whitespace-nowrap">{html_lib.escape(planned)}</td>
+            <td class="py-2 pr-3">{_runtime_badge(last_status)}</td>
+            <td class="py-2 pr-3 whitespace-nowrap text-xs text-slate-600">{html_lib.escape(last_run)}</td>
+            <td class="py-2 pr-3 text-xs text-slate-600">{html_lib.escape(scope)}</td>
+            <td class="py-2 text-xs font-mono text-slate-600">{html_lib.escape(command)}</td>
+          </tr>
+"""
+
+    schedule = pipeline.get("schedule") or [
+        {"name": "早盘主线", "planned_time": "08:30", "scope": "美股为主，补 A 股/港股最新可用行情", "command": "./daily_refresh.sh"},
+        {"name": "A/H 收盘线", "planned_time": "16:30", "scope": "A 股、港股收盘行情和 picks", "command": "./daily_refresh.sh --a-share-only"},
+        {"name": "增强研究线", "planned_time": "21:00", "scope": "财报、13F、OpenBB、历史行情、风险指标、深度研究材料", "command": "待拆分 research_refresh.sh"},
+        {"name": "周频策略验证", "planned_time": "每周一", "scope": "walk-forward、策略周报、组合表现复盘", "command": "daily_refresh.sh 周一自动执行"},
+    ]
+    data_clock_html = f"""
+  <div class="rounded-xl border border-indigo-200 bg-indigo-50 p-4 mb-6">
+    <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
+      <div>
+        <h3 class="font-bold text-indigo-950">数据时钟</h3>
+        <p class="text-xs text-indigo-800">这里显示计划什么时候拉、最近实际什么时候跑、跑到了哪里。系统不会再“默默拉数据”。</p>
+      </div>
+      <div class="text-xs text-indigo-800">状态文件：<span class="font-mono">data/latest/pipeline_status.json</span></div>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-sm">
+        <thead class="text-xs text-indigo-900 border-b border-indigo-200">
+          <tr><th class="pb-2 pr-3">任务线</th><th class="pb-2 pr-3">计划时间</th><th class="pb-2 pr-3">最近状态</th><th class="pb-2 pr-3">最近实际运行</th><th class="pb-2 pr-3">覆盖范围</th><th class="pb-2">命令</th></tr>
+        </thead>
+        <tbody>{''.join(clock_row(x) for x in schedule)}</tbody>
+      </table>
+    </div>
+  </div>
+"""
+
+    step_rows = []
+    for step in (pipeline.get("steps") or [])[-14:]:
+        step_rows.append(f"""
+          <tr class="border-b border-slate-100 align-top">
+            <td class="py-2 pr-3 text-xs font-medium text-slate-900">{html_lib.escape(str(step.get('label') or '—'))}</td>
+            <td class="py-2 pr-3">{_runtime_badge(str(step.get('status') or 'UNKNOWN'))}</td>
+            <td class="py-2 pr-3 text-xs text-slate-600 whitespace-nowrap">{html_lib.escape(str(step.get('duration_seconds') or 0))}s</td>
+            <td class="py-2 pr-3 text-xs text-slate-600">{html_lib.escape(str(step.get('sink') or '—'))}</td>
+            <td class="py-2 text-xs text-slate-500 whitespace-nowrap">{html_lib.escape(str(step.get('ended_at') or '—')[:19])}</td>
+          </tr>
+""")
+    pipeline_steps_html = ""
+    if step_rows:
+        pipeline_steps_html = f"""
+  <div class="rounded-xl border border-slate-200 bg-white p-4 mt-6">
+    <h3 class="font-bold text-slate-900 mb-3">最近运行步骤</h3>
+    <div class="overflow-x-auto">
+      <table class="w-full text-left">
+        <thead class="text-xs text-slate-500 border-b border-slate-200">
+          <tr><th class="pb-2 pr-3">步骤</th><th class="pb-2 pr-3">状态</th><th class="pb-2 pr-3">耗时</th><th class="pb-2 pr-3">数据落点</th><th class="pb-2">结束时间</th></tr>
+        </thead>
+        <tbody>{''.join(step_rows)}</tbody>
+      </table>
+    </div>
+  </div>
+"""
+
+    market_card = lambda title, rows: f"""
+    <div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
+      <div class="px-4 py-3 bg-slate-50 border-b border-slate-200">
+        <h3 class="font-bold text-slate-900">{html_lib.escape(title)}</h3>
+      </div>
+      <div class="p-4 overflow-x-auto">
+        <table class="w-full text-left">
+          <thead class="text-xs text-slate-500 border-b border-slate-200">
+            <tr><th class="pb-2 pr-3">步骤</th><th class="pb-2 pr-3">状态</th><th class="pb-2 pr-3">数据落点</th><th class="pb-2 pr-3">详情</th><th class="pb-2">下一步</th></tr>
+          </thead>
+          <tbody>{''.join(rows)}</tbody>
+        </table>
+      </div>
+    </div>
+"""
+
+    failure_html = ""
+    if failures:
+        items = "".join(f"<li>{html_lib.escape(x)}</li>" for x in failures)
+        failure_html = f"""
+  <div class="mt-6 rounded-xl border border-rose-200 bg-rose-50 p-4">
+    <h3 class="text-sm font-bold text-rose-900 mb-2">最近日志失败步骤</h3>
+    <ul class="list-disc list-inside text-xs text-rose-800 space-y-1">{items}</ul>
+  </div>
+"""
+
+    return f"""
+  <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 mb-6">
+    <div class="flex items-center justify-between gap-3 flex-wrap mb-4">
+      <div>
+        <h3 class="font-bold text-slate-900">今日运行总览</h3>
+        <p class="text-xs text-slate-500">最后生成：{html_lib.escape(str(generated_at)[:19])}</p>
+      </div>
+      <div class="text-xs text-slate-500">推荐是否可交易以“质量闸门 + 生产验收”为准</div>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">{cards_html}</div>
+  </div>
+  {data_clock_html}
+  <div class="rounded-xl border border-sky-200 bg-sky-50 p-4 mb-6">
+    <h3 class="font-bold text-sky-950 mb-3">数据落点怎么读</h3>
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+      <div class="bg-white rounded-lg border border-sky-100 p-3">
+        <div class="font-mono font-semibold text-slate-800 mb-1">DuckDB.prices</div>
+        <div class="text-slate-600">行情和估值快照。看到“股票池/行情拉取”成功，主要就是这里有最新价格、PE、PEG、涨幅、市值。</div>
+      </div>
+      <div class="bg-white rounded-lg border border-sky-100 p-3">
+        <div class="font-mono font-semibold text-slate-800 mb-1">DuckDB.picks</div>
+        <div class="text-slate-600">AI 评分和入选记录。美股是 <span class="font-mono">v6_us</span>，A 股是 <span class="font-mono">v6_cn</span>，港股是 <span class="font-mono">v6_hk</span>。</div>
+      </div>
+      <div class="bg-white rounded-lg border border-sky-100 p-3">
+        <div class="font-mono font-semibold text-slate-800 mb-1">DuckDB.reviews</div>
+        <div class="text-slate-600">推荐后的表现跟踪。用来算持有天数、收益、相对基准 alpha，不决定股票属于哪个池子。</div>
+      </div>
+      <div class="bg-white rounded-lg border border-sky-100 p-3">
+        <div class="font-mono font-semibold text-slate-800 mb-1">data/latest/*.json</div>
+        <div class="text-slate-600">给页面和早报读取的最新产物，比如组合方案、调仓清单、质量闸门、风险指标。</div>
+      </div>
+    </div>
+  </div>
+  <div class="grid grid-cols-1 gap-5">
+    {market_card("🇺🇸 美股链路", us_rows)}
+    {market_card("🇨🇳 A 股链路", cn_rows)}
+    {market_card("🇭🇰 港股链路", hk_rows)}
+  </div>
+  {failure_html}
+  {pipeline_steps_html}
 """
 
 
 def _find_plan_inception_date() -> str | None:
     """DuckDB 里最早的 v6 plan snapshot 日期（YYYY-MM-DD）—— 即 v6 方向定下来那天。"""
-    db_path = os.path.join(_REPO, "stock_history.duckdb")
+    db_path = _duckdb_path()
     if os.path.exists(db_path):
         try:
             import duckdb
@@ -7282,7 +8185,7 @@ def _load_inception_plan_from_duckdb() -> dict | None:
     避免 look-ahead bias：之前用今天最新 plan_a_v5.json 的 tickers + 5-08 锚定，
     会把后换入的股票回填到锁定日轨迹里（不可实操、用了未来信息）。
     """
-    db_path = os.path.join(_REPO, "stock_history.duckdb")
+    db_path = _duckdb_path()
     if not os.path.exists(db_path):
         return None
     try:
@@ -7307,7 +8210,7 @@ def _load_plan_v6_at_or_before(date_str: str) -> dict | None:
     用于 P1 动态 rebalance：每周一找"截至本周一最新的推荐方案"调仓。
     若当天没有快照（系统未跑日 / 节假日），自然 fallback 到上一次落库的方案。
     """
-    db_path = os.path.join(_REPO, "stock_history.duckdb")
+    db_path = _duckdb_path()
     if not os.path.exists(db_path):
         return None
     try:
@@ -7821,8 +8724,7 @@ def load_audit_snapshot():
 
 def load_audit_snapshot_from_db():
     """读最新一次 picks 反向审查快照（DuckDB snapshots 表）。"""
-    db_path = os.path.join(_REPO,
-                           "stock_history.duckdb")
+    db_path = _duckdb_path()
     if not os.path.exists(db_path):
         return None
     try:
@@ -8009,6 +8911,9 @@ def _pick_market_key(code: str | None, market: str | None) -> str | None:
     """Map a picks row to dashboard market buckets."""
     c = str(code or "").upper()
     m = str(market or "")
+    mu = m.upper()
+    if mu in {"US", "HK", "CN"}:
+        return {"US": "us", "HK": "hk", "CN": "cn"}[mu]
     if c.endswith(".HK") or "港股" in m:
         return "hk"
     if (
@@ -8032,21 +8937,43 @@ def _load_latest_pick_dates_by_market() -> dict[str, str | None]:
     """DB-first latest production pick_date per market.
 
     JSON artifacts may lag a market-specific pipeline. The dashboard should use
-    DuckDB picks as the source of truth, and only borrow JSON timestamps when
-    they are at least as fresh as the DB date.
+    DuckDB as the source of truth, and only borrow JSON timestamps when they are
+    at least as fresh as the DB date.
     """
-    production_sources = {
-        "us": {"v6_us"},
-        "hk": {"v6_hk"},
-        "cn": {"v6_cn"},
-    }
     out: dict[str, str | None] = {"us": None, "hk": None, "cn": None}
-    db_path = os.path.join(_REPO, "stock_history.duckdb")
+    db_path = _duckdb_path()
     if not os.path.exists(db_path):
         return out
     try:
         import duckdb
         con = duckdb.connect(db_path, read_only=True)
+        tables = {str(r[0]) for r in con.execute("SHOW TABLES").fetchall()}
+        clean_v2 = "recommendation_picks" in tables and "recommendation_runs" in tables and "picks" not in tables
+        if clean_v2:
+            latest_run = con.execute(
+                "SELECT run_id, generated_at FROM recommendation_runs ORDER BY generated_at DESC LIMIT 1"
+            ).fetchone()
+            if not latest_run:
+                con.close()
+                return out
+            rows = con.execute(
+                """
+                SELECT market, MAX(created_at) AS latest_date
+                FROM recommendation_picks
+                WHERE run_id = ?
+                GROUP BY market
+                """,
+                [latest_run[0]],
+            ).fetchall()
+            con.close()
+            for market, latest_date in rows:
+                key = _pick_market_key(None, market)
+                if key and latest_date is not None:
+                    out[key] = str(latest_date)[:10]
+            return out
+        if "picks" not in tables:
+            con.close()
+            return out
         rows = con.execute(
             "SELECT code, market, COALESCE(model_source, 'legacy') AS model_source, "
             "MAX(pick_date) AS latest_date "
@@ -8061,24 +8988,162 @@ def _load_latest_pick_dates_by_market() -> dict[str, str | None]:
         key = _pick_market_key(code, market)
         if not key or latest_date is None:
             continue
-        if str(model_source or "") not in production_sources.get(key, set()):
-            continue
         d = str(latest_date)[:10]
         if out[key] is None or d > str(out[key]):
             out[key] = d
     return out
 
 
+def _runtime_db_explorer_snapshot() -> dict:
+    """构造 /api/db/all-stocks 的构建时快照。
+
+    这个快照用于 HTML 离线展示，避免页面依赖本机 8765 API 才能看到
+    "已拉取股票池"。它只读当前 DuckDB，不写库。
+    """
+    db_path = _duckdb_path()
+    if not os.path.exists(db_path):
+        return {}
+    try:
+        import duckdb
+        con = duckdb.connect(db_path, read_only=True)
+        tables = {str(r[0]) for r in con.execute("SHOW TABLES").fetchall()}
+        if "system_universe" not in tables or "price_daily" not in tables:
+            con.close()
+            return {}
+
+        def _jsonify(v):
+            if v is None:
+                return None
+            if hasattr(v, "isoformat"):
+                if hasattr(v, "hour"):
+                    return v.isoformat(sep=" ", timespec="seconds")
+                return v.isoformat()
+            return v
+
+        latest_prices = con.execute(
+            """
+            SELECT market, symbol, trade_date, close, prev_close, currency, market_cap,
+                   forward_pe, trailing_pe, peg_ratio, ytd_pct, one_week_pct,
+                   one_month_pct, one_year_pct, source, fetched_at
+            FROM price_daily
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY market, symbol
+                ORDER BY trade_date DESC, fetched_at DESC
+            ) = 1
+            """
+        ).fetchall()
+        price_cols = [d[0] for d in con.description]
+        prices_by_code = {}
+        for row in latest_prices:
+            d = dict(zip(price_cols, row))
+            prices_by_code[str(d.get("symbol") or "")] = d
+
+        pick_rows = []
+        latest_run = con.execute(
+            "SELECT run_id, generated_at FROM recommendation_runs ORDER BY generated_at DESC LIMIT 1"
+        ).fetchone()
+        if latest_run:
+            pick_rows = con.execute(
+                """
+                SELECT market, symbol, name, signal, total_score, factor_scores_json,
+                       universe_scope, source_origin
+                FROM recommendation_picks
+                WHERE run_id = ?
+                """,
+                [latest_run[0]],
+            ).fetchall()
+        picks_by_code = {}
+        for row in pick_rows:
+            data = dict(zip(
+                ["market", "symbol", "name", "signal", "total_score", "factor_scores_json", "universe_scope", "source_origin"],
+                row,
+            ))
+            picks_by_code[str(data.get("symbol") or "")] = data
+
+        groups: dict[str, list[dict[str, Any]]] = {"美股": [], "A股": [], "港股": [], "其他": []}
+        market_map = {"US": "美股", "HK": "港股", "CN": "A股"}
+        rows = con.execute(
+            "SELECT pool_id, market, symbol, raw_symbol, name, theme, industry, source FROM system_universe WHERE active = TRUE"
+        ).fetchall()
+        con.close()
+        for pool_id, market, symbol, raw_symbol, name, theme, industry, source in rows:
+            market_label = market_map.get(str(market or "").upper(), str(market or ""))
+            if market_label not in groups:
+                market_label = "其他"
+            code = str(symbol or "").strip()
+            meta = {
+                "code": code,
+                "name": name or code,
+                "market": market_label,
+                "industry": industry or "",
+                "theme": theme or "",
+                "ai_relevance": "科技/AI universe",
+                "source": f"pool:{pool_id or 'system_tech_universe'}",
+                "_source_origin": "system_pool",
+                "earnings_fetched_at": None,
+            }
+            price_row = prices_by_code.get(code) or prices_by_code.get(str(raw_symbol or "").strip()) or {}
+            merged = {k: _jsonify(v) for k, v in meta.items()}
+            for k, v in price_row.items():
+                if k in ("market", "symbol", "name"):
+                    continue
+                merged[f"price_{k}"] = _jsonify(v)
+            pick_row = picks_by_code.get(code) or picks_by_code.get(str(raw_symbol or "").strip()) or {}
+            for k, v in pick_row.items():
+                if k in ("market", "symbol", "name"):
+                    continue
+                merged[f"pick_{k}"] = _jsonify(v)
+            groups[market_label].append(merged)
+
+        prices_date = None
+        if prices_by_code:
+            prices_date = max(str(v.get("trade_date") or "")[:10] for v in prices_by_code.values())
+        picks_date = latest_run[1] if latest_run else None
+        return {
+            "as_of": {
+                "prices_date": _jsonify(prices_date),
+                "picks_date": _jsonify(picks_date),
+            },
+            "counts": {k: len(v) for k, v in groups.items()} | {"total": sum(len(v) for v in groups.values())},
+            "groups": groups,
+        }
+    except Exception as e:
+        print(f"  ⚠️  构建时 DB explorer 快照失败: {e}")
+        return {}
+
+
 def build():
     print("[1/3] 拉取数据 [DuckDB]...")
-    from stock_db import fetch_records_view, fetch_picks_view
-    records = fetch_records_view()
+    clean_v2 = _is_clean_v2_db()
+    db_stats = _runtime_db_stats()
+    v2_stats = db_stats.get("v2") or {}
+    if clean_v2:
+        records = []
+        picks = []
+        pool_total = int(v2_stats.get("system_universe") or 0)
+        pool_membership = int(v2_stats.get("pool_membership") or 0)
+        price_daily = int(v2_stats.get("price_daily") or 0)
+        rec_runs = int(v2_stats.get("recommendation_runs") or 0)
+        rec_picks = int(v2_stats.get("recommendation_picks") or 0)
+        plan_n = int(v2_stats.get("portfolio_plans") or 0)
+        coverage = v2_stats.get("price_coverage") or {}
+        print(f"  v2 系统池      = {pool_total}（pool_membership={pool_membership}）")
+        print(f"  v2 行情/推荐   = price_daily={price_daily} · recommendation_runs={rec_runs} · recommendation_picks={rec_picks} · portfolio_plans={plan_n}")
+        print(
+            f"  v2 行情覆盖    = {coverage.get('priced', 0)}/{coverage.get('active_pool', 0)} "
+            f"({coverage.get('pct', 0)}%)"
+        )
+        print("  旧 watchlist / 自选 AI 优选 口径已退场，当前摘要只读 v2 系统池")
+    else:
+        from stock_db import fetch_records_view, fetch_picks_view
+        records = fetch_records_view()
+        picks = fetch_picks_view()
     # 兼容旧 schema: market_cap 字段(人工填写"$2.8T")现在格式化自 yf_market_cap
     for r in records:
         r["market_cap"] = _fmt_market_cap(r.get("yf_market_cap"))
-    print(f"  共 {len(records)} 条 watchlist (含 prices JOIN)")
-    picks = fetch_picks_view()
-    print(f"  共 {len(picks)} 条自选股·AI 优选 (来自 reviews + 最新 picks)")
+    if not clean_v2:
+        print(f"  共 {len(records)} 条 watchlist (含 prices JOIN)")
+        print(f"  共 {len(picks)} 条自选股·AI 优选 (来自 reviews + 最新 picks)")
 
     # 各市场 AI 计算时间 — DB picks 是事实源；JSON 仅在同日时补时分秒，不允许把
     # dashboard 日期拉回比 DB 更旧（防 A 股 JSON 滞后污染早盘看板）。
@@ -8116,7 +9181,7 @@ def build():
 
     def _load_pipeline_db(name_no_ext):
         """从 DuckDB snapshots 表读 category='pipeline' 最新快照。"""
-        db_path = os.path.join(_REPO, "stock_history.duckdb")
+        db_path = _duckdb_path()
         if not os.path.exists(db_path):
             return {}
         try:
@@ -8145,8 +9210,23 @@ def build():
     optimization = _load_json("data/latest/optimization_result.json")
     plan_a_v6 = _load_json("data/latest/plan_a_v5.json")
     history_data = _load_json("data/latest/history_data.json")
+    # 优先用 discovery_candidates.json（build_pool_recommendations 写出的富字段版本：
+    # 含 f_score / momentum_12_1 / analyst_score / market_cap_usd 等顶层列）。
+    # clean_v2 模式不再 gate 这个 JSON — 因为 build_pool_recommendations 已 V2-aware。
+    # 仅当 JSON 缺失或空时，才退到 _runtime_v2_recommendations 的 lean shape。
     discovery = _load_json("data/discovery_candidates.json")
     source_health = _load_json("data/latest/source_health.json")
+    if not (discovery and discovery.get("candidates")):
+        v2_candidates_main = _runtime_v2_recommendations(limit=200)
+        if v2_candidates_main:
+            v2_stats_main = _runtime_db_stats().get("v2") or {}
+            discovery = {
+                "generated_at": datetime.now().isoformat(timespec="seconds"),
+                "source": "v2:recommendation_picks",
+                "universe_scope": "system_tech_universe",
+                "universe_size": v2_stats_main.get("system_universe") or len(v2_candidates_main),
+                "candidates": v2_candidates_main,
+            }
 
     # DuckDB 源
     risk_metrics_db = _load_pipeline_db("risk_metrics")
@@ -8154,6 +9234,7 @@ def build():
     optimization_db = _load_pipeline_db("optimization_result")
     plan_a_v6_db = _load_pipeline_db("plan_a_v5")
     history_data_db = _load_pipeline_db("history_data")
+    db_explorer_snapshot = _runtime_db_explorer_snapshot()
 
     if risk_metrics:
         print(f"  风险指标已加载 (Sharpe={risk_metrics.get('sharpe', 'N/A')})")
@@ -8166,7 +9247,9 @@ def build():
     if history_data:
         print(f"  历史数据已加载 ({len(history_data.get('tickers', {}))} 只 × 2 年日K)")
     if discovery:
-        print(f"  AI 推荐已加载 ({len(discovery.get('candidates', []))} 只 · universe {discovery.get('universe_size', 0)})")
+        print(f"  AI 推荐已加载 [{discovery.get('source') or 'legacy'}] ({len(discovery.get('candidates', []))} 只 · universe {discovery.get('universe_size', 0)})")
+    elif clean_v2:
+        print("  AI 推荐已加载 [none] (clean v2，等待 v2 推荐生成)")
     if source_health:
         degraded = [
             k for k, v in (source_health.get("sources") or {}).items()
@@ -8228,6 +9311,8 @@ def build():
 '''
     html = html.replace("{AUDIT_PANEL}", audit_panel_combined)
     html = html.replace("{SOURCE_HEALTH_PANEL}", source_health_panel_html(source_health))
+    html = html.replace("{TODAY_DECISION_PANEL}", today_decision_panel_html())
+    html = html.replace("{RUNTIME_STATUS_PANEL}", runtime_status_panel_html())
 
     # 打分规则面板（动态读 factor_weights.json，缺失则 fallback 到「未实证」版本）
     calib_snap = load_calibration_snapshot()
@@ -8239,7 +9324,11 @@ def build():
     # RECORDS / PICKS / SIMULATION 来自飞书 watchlist 实时拉，其它走 DuckDB
     # 从 DuckDB 拉 watchlist 链条信息(chain/chain_tier/chain_role/layman_intro)
     # 用于 Stock Pill 组件 — 任何 tab 显示股票时都能查到链条上下文
-    try:
+    if clean_v2:
+        chain_info = {}
+        print("  Stock Pill 链条上下文跳过 [clean v2 无手动 watchlist legacy 表]")
+    else:
+      try:
         from stock_db import fetch_all_watchlist
         wl_rows = fetch_all_watchlist()
         chain_info = {
@@ -8270,13 +9359,15 @@ def build():
                   f"({n_wl} watchlist + {n_added} overrides = {len(chain_info)} 条)")
         else:
             print(f"  Stock Pill 链条上下文已加载 [DuckDB]({n_wl} 条)")
-    except Exception as e:
+      except Exception as e:
         print(f"  ⚠️ 链条上下文加载失败: {e}")
         chain_info = {}
     html = html.replace("{WATCHLIST_CHAIN_INFO_JSON}", json.dumps(chain_info, ensure_ascii=False))
 
     # AI 推荐的历史推荐 + 准确度跟踪(DuckDB discovery_history JOIN tracking)
     try:
+        if clean_v2:
+            raise RuntimeError("clean v2 不读取 legacy discovery_history")
         from stock_db import fetch_discovery_history
         disc_hist = fetch_discovery_history(days=90)  # 过去 90 天
         # date / datetime → ISO string,方便 JSON
@@ -8294,6 +9385,8 @@ def build():
     # AI 评级:自选股每只的当前评级(来自 picks 最新一日,daily_picks_v5 学术因子产出)
     watchlist_ratings = {}
     try:
+        if clean_v2:
+            raise RuntimeError("clean v2 不读取 legacy picks/watchlist")
         from stock_db import get_db as _get_db
         _conn = _get_db()
         # 自选股 AI 评级列：保留 buy/avoid/watch 全档（avoid 的"⛔"对自选股是有价值的信号 —
@@ -8332,6 +9425,7 @@ def build():
     html = html.replace("{OPTIMIZATION_JSON_DB}", json.dumps(optimization_db, ensure_ascii=False))
     html = html.replace("{PLAN_A_V6_JSON_DB}", json.dumps(plan_a_v6_db, ensure_ascii=False))
     html = html.replace("{DISCOVERY_JSON}", json.dumps(discovery, ensure_ascii=False))
+    html = html.replace("{DB_EXPLORER_JSON}", json.dumps(db_explorer_snapshot, ensure_ascii=False))
 
     # AI 组合方案 — Static (A 类: buy-and-hold from inception) — DuckDB 优先，fallback JSON
     plan_for_bt = plan_a_v6_db or plan_a_v6

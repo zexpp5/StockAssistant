@@ -230,13 +230,18 @@ def main():
         logger.warning("a_share_industry GICS 拉取失败: %s", e)
         gics_map = {}
 
+    # V2 路径：industry fallback 走 system_universe（AI 推荐池）。
+    # docs/V2/产品基线.md：AI 组合方案严禁依赖 watchlist；该字典用 raw_symbol (6 位数字) 索引。
+    wl_by_code: dict = {}
     try:
         sys.path.insert(0, str(REPO / "scripts" / "lib"))
-        from stock_db import fetch_all_watchlist  # type: ignore
-        wl_by_code = {r["code"]: r for r in fetch_all_watchlist()}
+        from stock_db import fetch_universe_for_ai_recommendations  # type: ignore
+        for u in fetch_universe_for_ai_recommendations():
+            raw = u.get("raw_symbol") or _strip_code(u.get("symbol") or "")
+            if raw:
+                wl_by_code[raw] = {"industry": u.get("industry") or u.get("theme") or ""}
     except Exception as e:
-        logger.warning("watchlist 拉取失败: %s", e)
-        wl_by_code = {}
+        logger.warning("V2 universe industry fallback 加载失败: %s", e)
 
     for a in adjusted:
         code = _strip_code(a["ticker"])

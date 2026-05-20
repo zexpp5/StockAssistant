@@ -9,6 +9,10 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+_A_SPOT_CACHE: dict[str, tuple[float, Any]] = {}
+_HK_SPOT_CACHE: dict[str, tuple[float, Any]] = {}
+_SPOT_CACHE_TTL_SEC = 300
+
 
 def _import_ak():
     try:
@@ -17,6 +21,22 @@ def _import_ak():
     except ImportError:
         logger.error("akshare not installed; pip install akshare")
         return None
+
+
+def _spot_df_cached(key: str, fetcher, cache: dict[str, tuple[float, Any]]) -> Any | None:
+    import time
+
+    cached = cache.get(key)
+    if cached and time.time() - cached[0] < _SPOT_CACHE_TTL_SEC:
+        return cached[1]
+    try:
+        df = fetcher()
+    except Exception:
+        return None
+    if df is None:
+        return None
+    cache[key] = (time.time(), df)
+    return df
 
 
 # ────────────────────────────────────────────────────────
@@ -52,7 +72,9 @@ def fetch_a_stock_quote(code: str) -> dict[str, Any] | None:
     if not ak:
         return None
     try:
-        df = ak.stock_zh_a_spot_em()
+        df = _spot_df_cached("a_spot", ak.stock_zh_a_spot_em, _A_SPOT_CACHE)
+        if df is None or getattr(df, "empty", True):
+            return None
         row = df[df["代码"] == code]
         if row.empty:
             return None
@@ -136,7 +158,9 @@ def fetch_hk_stock_quote(code: str) -> dict[str, Any] | None:
         return None
     try:
         sym = hk_pad(code)
-        df = ak.stock_hk_spot_em()
+        df = _spot_df_cached("hk_spot", ak.stock_hk_spot_em, _HK_SPOT_CACHE)
+        if df is None or getattr(df, "empty", True):
+            return None
         row = df[df["代码"] == sym]
         if row.empty:
             return None

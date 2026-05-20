@@ -37,6 +37,8 @@ import requests
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
+from stock_research import config
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -53,6 +55,10 @@ def _load_json(path: Path) -> dict | list | None:
     except Exception as e:
         logger.warning(f"读取 {path} 失败: {e}")
         return None
+
+
+def _a_share_enabled() -> bool:
+    return bool(config.A_SHARE_PRODUCTION_ENABLED)
 
 
 def _parse_ts(value: Any) -> datetime | None:
@@ -880,7 +886,12 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
         lines.append("**🇭🇰 港股** — _hk_picks.json 缺失，跑 `python3 -m scripts.pipeline.hk_picks`_")
 
     # 🇨🇳 A 股（a_share_picks · 6 因子）
-    if a_share_picks and a_share_picks.get("selected"):
+    if not _a_share_enabled():
+        lines.append(
+            "**🇨🇳 A 股** — _生产推荐未启用：缺少已验证的 A 股 IC 校准权重；"
+            "当前只保留研究观察，不进入调仓清单_"
+        )
+    elif a_share_picks and a_share_picks.get("selected"):
         sel = a_share_picks["selected"][:10]
         ts_cn = _fmt_ts(a_share_picks.get("generated_at"))
         lines.append(f"**🇨🇳 A 股 ({len(sel)} 只 · 6 因子 + 盘后龙虎榜+北向)** · {ts_cn}")
@@ -1721,6 +1732,7 @@ def _build_card_payload() -> dict:
     hk_picks = _load_json(REPO / "data" / "latest" / "hk_picks.json")
     defense = _latest_defense_snapshot()
     history = _load_history()
+    trade_blocked = _quality_gate_blocks_trade()
 
     today = date.today()
     weekday_cn = "一二三四五六日"[today.weekday()]
@@ -1864,7 +1876,13 @@ def _build_card_payload() -> dict:
                     "content": "\n\n".join(hk_blocks)}})
 
         # 🇨🇳 A 股 — 每只股聚合 ticker + reasons
-        if a_share_picks and a_share_picks.get("selected"):
+        if not _a_share_enabled():
+            section2.append({"tag": "div", "text": {"tag": "lark_md",
+                "content": (
+                    "**🇨🇳 A 股** — 生产推荐未启用：缺少已验证的 A 股 IC 校准权重；"
+                    "当前只保留研究观察，不进入调仓清单"
+                )}})
+        elif a_share_picks and a_share_picks.get("selected"):
             sel = a_share_picks["selected"][:10]
             a_blocks: list[str] = []
             for e in sel:

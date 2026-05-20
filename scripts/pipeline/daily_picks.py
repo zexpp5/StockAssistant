@@ -43,7 +43,7 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 
-from stock_db import upsert_picks, fetch_all_watchlist, get_db, latest_price  # noqa: E402
+from stock_db import DB_PATH, upsert_picks, fetch_all_watchlist, get_db, latest_price  # noqa: E402
 
 
 def fetch_watchlist(token=None):
@@ -430,7 +430,7 @@ def main():
                     "model_source": "legacy",
                 })
             n = upsert_picks(db_rows)
-            print(f"  DuckDB：已写入 {n} 行 (stock_history.duckdb · picks)")
+            print(f"  DuckDB：已写入 {n} 行 ({DB_PATH} · picks)")
         except Exception as e:
             print(f"  DuckDB 写入失败（不阻塞主流程）：{e}")
 

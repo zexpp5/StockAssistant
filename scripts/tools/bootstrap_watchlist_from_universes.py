@@ -141,18 +141,15 @@ def _hk_rows() -> list[dict]:
 
 
 def _cn_rows(a_share_mode: str, a_share_limit: int | None) -> list[dict]:
-    items = A_SHARE_STATIC_SEED
-    if a_share_mode in {"auto", "dynamic"}:
-        try:
-            from stock_research.core.a_share_universe import fetch_a_share_tech_universe
+    try:
+        from stock_research.core.a_share_universe import fetch_a_share_tech_universe
 
-            dynamic = fetch_a_share_tech_universe()
-            if dynamic:
-                items = dynamic
-        except Exception as e:
-            if a_share_mode == "dynamic":
-                raise
-            print(f"  A 股动态 universe 失败，使用静态种子: {e}")
+        items = fetch_a_share_tech_universe()
+    except Exception as e:
+        if a_share_mode == "dynamic":
+            raise
+        print(f"  A 股动态 universe 失败，保持为空: {e}")
+        items = []
 
     if a_share_limit is not None and a_share_limit > 0:
         items = items[:a_share_limit]

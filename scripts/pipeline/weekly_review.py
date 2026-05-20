@@ -24,7 +24,7 @@ import argparse
 from datetime import datetime, timedelta
 from collections import defaultdict
 
-from stock_db import upsert_reviews, get_db  # noqa: E402
+from stock_db import DB_PATH, upsert_reviews, get_db  # noqa: E402
 
 import yfinance as yf  # noqa: E402
 
@@ -362,7 +362,7 @@ def main():
             "is_success": r.get("is_success"),
         } for r in results]
         n = upsert_reviews(db_rows)
-        print(f"\n  DuckDB：已写入 {n} 行 (stock_history.duckdb · reviews)")
+        print(f"\n  DuckDB：已写入 {n} 行 ({DB_PATH} · reviews)")
     except Exception as e:
         print(f"\n  DuckDB 写入失败（不阻塞主流程）：{e}")
 
