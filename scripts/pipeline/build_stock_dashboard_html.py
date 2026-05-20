@@ -7861,7 +7861,8 @@ def today_decision_panel_html() -> str:
           <h3 class="font-bold text-slate-900">今日 AI 推荐 Top 5</h3>
           <p class="text-xs text-slate-500">来自系统科技/AI 股票池，不是你的手动自选股。来源：{html_lib.escape(discovery_source)}</p>
         </div>
-        <a href="#discovery" class="text-xs text-violet-700 hover:text-violet-900">完整列表 →</a>
+        <a href="#discovery" onclick="setTimeout(()=>switchDiscoveryView('today'),50)"
+           class="text-xs text-violet-700 hover:text-violet-900">完整列表 →</a>
       </div>
       <div class="overflow-x-auto">
         <table class="w-full text-sm">
