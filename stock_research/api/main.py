@@ -495,6 +495,35 @@ def create_app():
             reviews = _rows("SELECT * FROM reviews WHERE code = ? ORDER BY review_date DESC")
             discovery = _rows("SELECT * FROM discovery_history WHERE ticker = ? ORDER BY generated_date DESC")
             earnings_history = _rows("SELECT * FROM earnings_history WHERE code = ? ORDER BY fiscal_period DESC")
+            # V2 兜底：当 V1 表都空时（clean v2 后只有 system_universe / price_daily / recommendation_picks），
+            # 把 V2 数据按 V1 字段名映射回来，保持响应 shape 不变。
+            if not prices:
+                v2_prices = _rows(
+                    "SELECT market, symbol AS code, trade_date AS date, close AS price, "
+                    "prev_close, currency, market_cap, forward_pe, trailing_pe, peg_ratio, "
+                    "ytd_pct, one_week_pct, one_month_pct, one_year_pct, source, fetched_at "
+                    "FROM price_daily WHERE symbol = ? ORDER BY trade_date DESC, fetched_at DESC"
+                )
+                prices = v2_prices
+            if not picks:
+                v2_picks = _rows(
+                    "SELECT rp.symbol AS code, rp.name, rp.rank, rp.rating, rp.signal, "
+                    "rp.total_score, rp.factor_scores_json, rp.recommendation_reason, "
+                    "rp.entry_price, rp.entry_currency, rp.universe_scope, "
+                    "rr.run_date AS pick_date, rr.generated_at "
+                    "FROM recommendation_picks rp JOIN recommendation_runs rr ON rp.run_id = rr.run_id "
+                    "WHERE rp.symbol = ? ORDER BY rr.generated_at DESC"
+                )
+                picks = v2_picks
+            if not wl_row:
+                # V2: 用 system_universe 里这只股的元数据兜 V1 watchlist 形状
+                v2_wl = _rows(
+                    "SELECT symbol AS code, name, market, industry, theme, "
+                    "source, first_seen_at AS created_at, last_seen_at AS updated_at "
+                    "FROM system_universe WHERE symbol = ?"
+                )
+                if v2_wl:
+                    wl_row = v2_wl[0]
         finally:
             conn.close()
 

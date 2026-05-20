@@ -183,6 +183,15 @@ def _load_history_replay(current_symbols: set[str]) -> tuple[list[dict[str, Any]
 def _load_a_share_replay(cn_name_lookup: dict[str, str]) -> list[dict[str, Any]]:
     payload = _load_json(A_SHARE_CACHE_FILE) or {}
     items = payload.get("items") or {}
+    # 用 akshare 一次性把 5000+ A 股代码→名字拉回来作为权威源；
+    # cn_name_lookup（来自 history_data 缓存）仅在 akshare 失败时兜底。
+    ak_name_map: dict[str, str] = {}
+    try:
+        import akshare as ak  # noqa: F401
+        df = ak.stock_info_a_code_name()
+        ak_name_map = dict(zip(df["code"].astype(str), df["name"]))
+    except Exception:
+        ak_name_map = {}
     rows: list[dict[str, Any]] = []
     for raw_code, item in items.items():
         raw_code = str(raw_code).strip()
@@ -197,11 +206,12 @@ def _load_a_share_replay(cn_name_lookup: dict[str, str]) -> list[dict[str, Any]]
         snap = _snapshot_from_series(dates, closes)
         if not snap:
             continue
+        name = ak_name_map.get(raw_code) or cn_name_lookup.get(raw_code) or symbol
         rows.append({
             "market": "CN",
             "symbol": symbol,
             "raw_symbol": raw_code,
-            "name": cn_name_lookup.get(raw_code, symbol),
+            "name": name,
             "source": "cache_replay/a_share_price_history",
             "currency": "CNY",
             "snapshot": snap,
@@ -222,10 +232,30 @@ def _ensure_universe_rows(
         ).fetchall()
     }
     inserted = 0
+    updated = 0
     now = datetime.now()
     for row in rows:
         key = (pool_id, row["market"], row["symbol"])
         if key in existing:
+            # 已存在 — 但若 name=symbol(即灌库时没拿到名字)，补一次真名
+            name = row.get("name")
+            if name and name != row["symbol"]:
+                changed = conn.execute(
+                    """
+                    UPDATE system_universe
+                    SET name = ?, last_seen_at = ?
+                    WHERE pool_id = ? AND market = ? AND symbol = ?
+                      AND (name IS NULL OR name = symbol)
+                    """,
+                    [name, now, pool_id, row["market"], row["symbol"]],
+                ).fetchall()
+                # DuckDB UPDATE 不返回 rowcount, 用一个 sentinel check
+                affected = conn.execute(
+                    "SELECT 1 FROM system_universe WHERE pool_id=? AND market=? AND symbol=? AND name=?",
+                    [pool_id, row["market"], row["symbol"], name],
+                ).fetchone()
+                if affected:
+                    updated += 1
             continue
         conn.execute(
             """
@@ -264,7 +294,7 @@ def _ensure_universe_rows(
             ],
         )
         inserted += 1
-    return inserted
+    return inserted, updated
 
 
 def _upsert_price_daily(conn: duckdb.DuckDBPyConnection, rows: list[dict[str, Any]]) -> int:
@@ -379,7 +409,7 @@ def main() -> int:
             }, ensure_ascii=False, indent=2))
             return 0
 
-        universe_seeded = _ensure_universe_rows(conn, [r for r in final_rows if r["market"] == "CN"])
+        universe_seeded, names_updated = _ensure_universe_rows(conn, [r for r in final_rows if r["market"] == "CN"])
         price_written = _upsert_price_daily(conn, final_rows)
         conn.close()
         conn = None
@@ -389,7 +419,7 @@ def main() -> int:
 
         _write_source_health(len(final_rows), price_written, 0, markets)
         print(
-            f"cache replay complete: universe_seeded={universe_seeded} "
+            f"cache replay complete: universe_seeded={universe_seeded} names_updated={names_updated} "
             f"price_daily={price_written} db={db_path}"
         )
         print(f"source health written: {SOURCE_HEALTH_FILE}")

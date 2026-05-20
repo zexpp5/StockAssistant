@@ -83,11 +83,226 @@ def _issue(level: str, code: str, message: str, details: Any = None) -> dict:
     return item
 
 
+def _table_names(conn) -> set[str]:
+    try:
+        return {str(r[0]) for r in conn.execute("SHOW TABLES").fetchall()}
+    except Exception:
+        return set()
+
+
+def _run_v2_checks(conn, now: datetime) -> dict:
+    """Validate the clean v2 production line.
+
+    v2 recommendations live in recommendation_runs/recommendation_picks and are
+    independent of legacy v6_us/v6_hk/v6_cn picks.  The quality gate should
+    answer whether today's AI Assistant production path is usable, not whether
+    legacy self-watchlist artifacts exist.
+    """
+    issues: list[dict] = []
+    tables = _table_names(conn)
+
+    required = {
+        "manual_watchlist", "holdings", "system_universe", "pool_membership",
+        "price_daily", "recommendation_runs", "recommendation_picks",
+        "portfolio_plans",
+    }
+    missing = sorted(required - tables)
+    if missing:
+        issues.append(_issue("FAIL", "v2_schema_missing_tables", "v2 推荐链路缺少核心表", missing))
+
+    def count(table: str) -> int:
+        if table not in tables:
+            return 0
+        return int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+
+    summary: dict[str, Any] = {
+        "schema_mode": "v2",
+        "manual_watchlist_count": count("manual_watchlist"),
+        "holdings_count": count("holdings"),
+        "system_universe_count": count("system_universe"),
+        "pool_membership_count": count("pool_membership"),
+        "price_daily_count": count("price_daily"),
+        "recommendation_runs_count": count("recommendation_runs"),
+        "recommendation_picks_count": count("recommendation_picks"),
+        "portfolio_plans_count": count("portfolio_plans"),
+    }
+
+    if summary["manual_watchlist_count"] == 0:
+        issues.append(_issue(
+            "INFO",
+            "manual_watchlist_empty",
+            "manual_watchlist 为空：用户尚未重新添加自选股，这是合法状态",
+        ))
+    if summary["holdings_count"] == 0:
+        issues.append(_issue(
+            "INFO",
+            "holdings_empty",
+            "holdings 为空：用户尚未确认真实持仓，这是合法状态",
+        ))
+
+    if "system_universe" in tables and summary["system_universe_count"] <= 0:
+        issues.append(_issue("FAIL", "v2_system_universe_empty", "v2 system_universe 为空"))
+    if "pool_membership" in tables and summary["pool_membership_count"] <= 0:
+        issues.append(_issue("FAIL", "v2_pool_membership_empty", "v2 pool_membership 为空"))
+    if "price_daily" in tables and summary["price_daily_count"] <= 0:
+        issues.append(_issue("FAIL", "v2_price_daily_empty", "v2 price_daily 为空，AI 推荐没有行情输入"))
+
+    if {"price_daily", "pool_membership"}.issubset(tables):
+        active_pool_count = int(conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM pool_membership
+            WHERE active = TRUE AND pool_type = 'system_tech_universe'
+            """
+        ).fetchone()[0])
+        priced_count = int(conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM (
+                SELECT DISTINCT p.market, p.symbol
+                FROM price_daily p
+                JOIN pool_membership m
+                  ON m.market = p.market
+                 AND m.symbol = p.symbol
+                 AND m.active = TRUE
+                 AND m.pool_type = 'system_tech_universe'
+            )
+            """
+        ).fetchone()[0])
+        coverage = (priced_count / active_pool_count) if active_pool_count else 0.0
+        summary["v2_price_coverage"] = {
+            "priced_count": priced_count,
+            "active_pool_count": active_pool_count,
+            "coverage_pct": round(coverage * 100, 2),
+        }
+        if active_pool_count <= 0:
+            issues.append(_issue("FAIL", "v2_no_active_system_pool", "v2 没有 active system_tech_universe 池成员"))
+        elif coverage < 0.50:
+            issues.append(_issue("FAIL", "v2_price_coverage_too_low", f"v2 行情覆盖率过低：{priced_count}/{active_pool_count}"))
+        elif coverage < 0.80:
+            issues.append(_issue("WARN", "v2_price_coverage_low", f"v2 行情覆盖率偏低：{priced_count}/{active_pool_count}"))
+
+    latest: dict[str, Any] = {"run_id": None, "generated_at": None}
+    signal_counts: dict[str, int] = {}
+    if {"recommendation_runs", "recommendation_picks"}.issubset(tables):
+        latest_row = conn.execute(
+            """
+            SELECT run_id, generated_at, strategy_version, model_version, universe_scope
+            FROM recommendation_runs
+            ORDER BY generated_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if not latest_row:
+            issues.append(_issue("FAIL", "v2_no_recommendation_runs", "v2 没有 recommendation_runs"))
+        else:
+            latest = {
+                "run_id": latest_row[0],
+                "generated_at": str(latest_row[1]) if latest_row[1] is not None else None,
+                "strategy_version": latest_row[2],
+                "model_version": latest_row[3],
+                "universe_scope": latest_row[4],
+            }
+            if latest_row[4] != "system_tech_universe":
+                issues.append(_issue("FAIL", "v2_latest_run_scope_invalid", "v2 最新推荐 run 不是 system_tech_universe", latest))
+            rows = conn.execute(
+                """
+                SELECT signal, COUNT(*)
+                FROM recommendation_picks
+                WHERE run_id = ?
+                GROUP BY signal
+                """,
+                [latest_row[0]],
+            ).fetchall()
+            signal_counts = {str(signal): int(n) for signal, n in rows}
+            if signal_counts.get("buy", 0) <= 0:
+                issues.append(_issue("FAIL", "v2_latest_run_no_buy", "v2 最新推荐批次没有 buy 推荐"))
+
+        bad_scope = conn.execute(
+            """
+            SELECT market, symbol, universe_scope, source_origin
+            FROM recommendation_picks
+            WHERE COALESCE(universe_scope, '') <> 'system_tech_universe'
+               OR COALESCE(source_origin, '') <> 'system_pool'
+            LIMIT 30
+            """
+        ).fetchall()
+        if bad_scope:
+            issues.append(_issue(
+                "FAIL",
+                "v2_pick_scope_origin_invalid",
+                "v2 系统池推荐必须标记 system_tech_universe/system_pool",
+                [{"market": r[0], "symbol": r[1], "universe_scope": r[2], "source_origin": r[3]} for r in bad_scope],
+            ))
+
+        if "pool_membership" in tables:
+            orphan = conn.execute(
+                """
+                SELECT p.market, p.symbol
+                FROM recommendation_picks p
+                LEFT JOIN pool_membership m
+                  ON m.market = p.market
+                 AND m.symbol = p.symbol
+                 AND m.active = TRUE
+                 AND m.pool_type = 'system_tech_universe'
+                WHERE m.symbol IS NULL
+                LIMIT 30
+                """
+            ).fetchall()
+            if orphan:
+                issues.append(_issue(
+                    "FAIL",
+                    "v2_pick_not_in_system_pool",
+                    "v2 系统推荐出现未属于 pool_membership/system_tech_universe 的股票",
+                    [{"market": r[0], "symbol": r[1]} for r in orphan],
+                ))
+
+    if "portfolio_plans" in tables and summary["portfolio_plans_count"] <= 0:
+        issues.append(_issue("FAIL", "v2_no_portfolio_plans", "v2 还没有生成 AI 组合方案"))
+
+    if {"pick_outcomes", "strategy_review_reports"}.intersection(tables):
+        outcomes = count("pick_outcomes")
+        reports = count("strategy_review_reports")
+        summary["pick_outcomes_count"] = outcomes
+        summary["strategy_review_reports_count"] = reports
+        if outcomes <= 0 and reports <= 0:
+            issues.append(_issue(
+                "INFO",
+                "v2_strategy_evidence_not_mature",
+                "策略验证样本仍在积累；这不阻断今日推荐生成，但不能证明长期有效",
+            ))
+
+    n_fail = sum(1 for x in issues if x["level"] == "FAIL")
+    n_warn = sum(1 for x in issues if x["level"] == "WARN")
+    return {
+        "generated_at": now.isoformat(),
+        "status": "FAIL" if n_fail else ("WARN" if n_warn else "PASS"),
+        "summary": {
+            "fail": n_fail,
+            "warn": n_warn,
+            "info": sum(1 for x in issues if x["level"] == "INFO"),
+            **summary,
+            "latest_recommendation_run": latest,
+            "latest_signal_counts": {"system_tech_universe": signal_counts},
+            "required_production_sources": ["system_tech_universe"],
+        },
+        "issues": issues,
+    }
+
+
 def _run_checks() -> dict:
     now = datetime.now()
     today = now.date()
     conn = get_db()
     issues: list[dict] = []
+    tables = _table_names(conn)
+    if {"system_universe", "recommendation_runs", "recommendation_picks"}.issubset(tables):
+        try:
+            payload = _run_v2_checks(conn, now)
+        finally:
+            conn.close()
+        return payload
+
     production_sources = _watchlist_required_sources(conn)
     if not production_sources:
         production_sources = ("v6_cn",) if A_SHARE_ENABLED else tuple()
@@ -308,7 +523,11 @@ def main() -> int:
     print(f"Recommendation quality gate: {payload['status']}")
     summary = payload["summary"]
     print(f"  fail={summary['fail']} warn={summary['warn']} info={summary['info']}")
-    print(f"  latest={summary['latest_pick_dates']}")
+    if summary.get("schema_mode") == "v2":
+        print(f"  latest_run={summary.get('latest_recommendation_run')}")
+        print(f"  signals={summary.get('latest_signal_counts')}")
+    else:
+        print(f"  latest={summary.get('latest_pick_dates')}")
     if payload["issues"]:
         for item in payload["issues"][:12]:
             print(f"  [{item['level']}] {item['code']}: {item['message']}")

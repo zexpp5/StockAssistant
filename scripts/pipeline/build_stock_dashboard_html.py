@@ -7587,9 +7587,19 @@ def _runtime_badge(status: str) -> str:
         "PASS": "bg-emerald-100 text-emerald-700 border-emerald-200",
         "WARN": "bg-amber-100 text-amber-800 border-amber-200",
         "INFO": "bg-sky-100 text-sky-700 border-sky-200",
+        "WAIT": "bg-sky-100 text-sky-700 border-sky-200",
+        "DATA_NOT_EXPECTED": "bg-slate-100 text-slate-700 border-slate-200",
+        "MARKET_CLOSED": "bg-slate-100 text-slate-700 border-slate-200",
+        "SKIP": "bg-slate-100 text-slate-700 border-slate-200",
         "FAIL": "bg-rose-100 text-rose-700 border-rose-200",
     }.get(s, "bg-slate-100 text-slate-700 border-slate-200")
-    label = "OK" if s == "PASS" else s
+    label = {
+        "PASS": "OK",
+        "WAIT": "待计划",
+        "DATA_NOT_EXPECTED": "未到时间",
+        "MARKET_CLOSED": "休市",
+        "SKIP": "跳过",
+    }.get(s, s)
     return f'<span class="inline-flex px-2 py-0.5 rounded-full border text-[11px] font-mono {cls}">{html_lib.escape(label)}</span>'
 
 
@@ -7877,10 +7887,22 @@ def runtime_status_panel_html() -> str:
     discovery = {} if clean_v2 else _runtime_load_json("data/discovery_candidates.json")
     pipeline = _runtime_load_json("data/latest/pipeline_status.json")
     db = _runtime_db_stats()
-    failures = _runtime_latest_log_failures()
+    log_failures = _runtime_latest_log_failures()
 
     quality_status = str(quality.get("status") or "UNKNOWN")
     acceptance_status = str(acceptance.get("status") or "UNKNOWN")
+    pipeline_status = str(pipeline.get("status") or "UNKNOWN")
+    pipeline_failed_steps = pipeline.get("failed_steps") or []
+    if pipeline_status in {"OK", "PASS"} and not pipeline_failed_steps:
+        failures = []
+    elif pipeline_failed_steps:
+        failures = [
+            f"{str(x.get('label') or x.get('step') or x.get('script') or '未知步骤')}/{str(x.get('script') or '')}".rstrip("/")
+            if isinstance(x, dict) else str(x)
+            for x in pipeline_failed_steps
+        ]
+    else:
+        failures = log_failures
     quality_summary = quality.get("summary") or {}
     acceptance_summary = acceptance.get("summary") or {}
     generated_at = (
@@ -7984,7 +8006,6 @@ def runtime_status_panel_html() -> str:
     evidence_grade = evidence.get("evidence_grade") or "—"
     overall = "FAIL" if acceptance_status == "FAIL" or quality_status == "FAIL" else ("WARN" if failures else "OK")
     discovery_status = "OK" if discovery_n and evidence_grade not in {"BLOCKED", "FAIL"} else ("WARN" if discovery_n else "WARN")
-    pipeline_status = str(pipeline.get("status") or "UNKNOWN")
     pipeline_run = pipeline.get("started_at") or "尚未记录"
     cards = [
         ("总状态", overall, "质量闸门和生产验收综合结果"),
@@ -8009,7 +8030,16 @@ def runtime_status_panel_html() -> str:
         scope = str(item.get("scope") or "—")
         command = str(item.get("command") or "—")
         mode = str(pipeline.get("mode") or "")
-        last_status = "待接入"
+        now_local = datetime.now()
+
+        def before_clock(text: str) -> bool:
+            try:
+                hour, minute = [int(x) for x in text.split(":", 1)]
+                return (now_local.hour, now_local.minute) < (hour, minute)
+            except Exception:
+                return False
+
+        last_status = "INFO"
         last_run = "尚未记录"
         if name == "早盘主线" and mode == "full":
             last_status = pipeline_status
@@ -8017,11 +8047,31 @@ def runtime_status_panel_html() -> str:
         elif name == "A/H 收盘线" and mode == "a_share_only":
             last_status = pipeline_status
             last_run = str(pipeline.get("started_at") or "尚未记录")[:19]
+        elif name == "A/H 收盘线":
+            if before_clock("16:30"):
+                last_status = "DATA_NOT_EXPECTED"
+                last_run = "未到 16:30"
+            else:
+                last_status = "WARN"
+                last_run = "今日未运行"
+        elif name == "增强研究线":
+            if before_clock("21:00"):
+                last_status = "DATA_NOT_EXPECTED"
+                last_run = "未到 21:00"
+            else:
+                last_status = "WAIT"
+                last_run = "待拆分 research_refresh"
         elif name == "周频策略验证":
             weekly = next((s for s in pipeline.get("steps", []) if "walk-forward" in str(s.get("label", ""))), None)
             if weekly:
                 last_status = str(weekly.get("status") or "UNKNOWN")
                 last_run = str(weekly.get("ended_at") or weekly.get("started_at") or "尚未记录")[:19]
+            elif now_local.isoweekday() != 1:
+                last_status = "SKIP"
+                last_run = "今天非周一"
+            else:
+                last_status = "WARN"
+                last_run = "周频任务未记录"
         return f"""
           <tr class="border-b border-slate-100 align-top">
             <td class="py-2 pr-3 font-medium text-slate-900">{html_lib.escape(name)}</td>
@@ -9088,11 +9138,29 @@ def _runtime_db_explorer_snapshot() -> dict:
                 if k in ("market", "symbol", "name"):
                     continue
                 merged[f"price_{k}"] = _jsonify(v)
+            # V1 dashboard JS 兼容别名：把 V2 列名映射到 V1 字段
+            if "price_trade_date" in merged:
+                merged["price_date"] = merged["price_trade_date"]
+            if "price_close" in merged:
+                merged["price_price"] = merged["price_close"]
             pick_row = picks_by_code.get(code) or picks_by_code.get(str(raw_symbol or "").strip()) or {}
             for k, v in pick_row.items():
                 if k in ("market", "symbol", "name"):
                     continue
                 merged[f"pick_{k}"] = _jsonify(v)
+            # V2 picks 兼容：把 factor_scores_json 拆出 val/trend/cred 子分 + 补 pick_date alias
+            fs_json = pick_row.get("factor_scores_json") if pick_row else None
+            if fs_json:
+                try:
+                    fs = json.loads(fs_json) if isinstance(fs_json, str) else fs_json
+                    merged["pick_val_score"] = fs.get("valuation")
+                    merged["pick_trend_score"] = fs.get("momentum")
+                    merged["pick_cred_score"] = fs.get("data_quality")
+                    merged["pick_coverage_score"] = fs.get("coverage")
+                except Exception:
+                    pass
+            if latest_run:
+                merged["pick_pick_date"] = _jsonify(latest_run[1])
             groups[market_label].append(merged)
 
         prices_date = None
