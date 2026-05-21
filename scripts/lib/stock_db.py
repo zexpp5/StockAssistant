@@ -307,6 +307,15 @@ def fetch_research_records_v2(*, conn: duckdb.DuckDBPyConnection | None = None) 
     except Exception:
         pass
 
+    # 美股 name 英文 → 中文短名（持仓页 / AI 推荐 / 产业链地图通用）
+    try:
+        from us_company_zh import get_us_company_zh
+        for row in out:
+            if row.get("market") == "US":
+                row["name"] = get_us_company_zh(row.get("name"))
+    except Exception:
+        pass
+
     if own:
         conn.close()
     return out
