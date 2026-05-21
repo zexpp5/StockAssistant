@@ -4635,10 +4635,17 @@ async function saveHolding() {
   await refreshHoldingsAndRender();
 }
 
-function renderPortfolio() {
+async function renderPortfolio() {
+  // 防御 race condition：每次 render 都重新 fetch，不依赖任何 cache
+  // 之前多次切 tab / DOMContentLoaded 并发触发，cache 可能 stale
+  try {
+    const r = await fetch(WATCHLIST_API_BASE + "/api/holdings");
+    if (r.ok) _holdingsCache = await r.json();
+  } catch (e) { /* keep cache */ }
   const holdings = loadHoldings();
   const tbody = document.getElementById("holdings-table");
   if (!tbody) return;
+  console.log(`[renderPortfolio] holdings=${holdings.length}`, holdings.slice(0, 3));  // debug
 
   if (holdings.length === 0) {
     tbody.innerHTML = '<tr><td colspan="10" class="text-center text-slate-500 py-8">暂无持仓 · 点击「+ 添加持仓」开始记录</td></tr>';
