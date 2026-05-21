@@ -1529,25 +1529,19 @@ function switchDiscoveryView(view) {
       <span class="text-3xl">🌳</span>
       <h2 class="text-2xl font-bold text-slate-900">产业链全景</h2>
     </div>
-    <p class="text-sm text-slate-600">先按市场分块，再按一级 / 二级 / 三级 / 未分层列出标的，避免不同市场混在一起。</p>
+    <p class="text-sm text-slate-600">展示系统池（system_universe）全部标的，按市场分块，每个市场内按主题 / 行业分组。</p>
   </div>
 
   <div class="flex items-center gap-3 mb-4 flex-wrap text-xs">
-    <span id="chain-api-status" class="px-2 py-0.5 rounded bg-slate-100 text-slate-500">检测中…</span>
+    <span id="chain-api-status" class="px-2 py-0.5 rounded bg-slate-100 text-slate-500">…</span>
     <button onclick="forceReloadChainOverview()" class="px-3 py-1 bg-slate-600 hover:bg-slate-700 text-white rounded">🔄 刷新</button>
     <span id="chain-count" class="ml-auto text-slate-500"></span>
   </div>
 
   <div class="flex flex-col md:flex-row md:items-center gap-3 mb-4">
     <input id="chain-search" oninput="loadChainOverview()" type="text"
-           placeholder="搜索市场 / 代码 / 名称 / 角色…"
+           placeholder="搜索市场 / 代码 / 名称 / 主题 / 行业…"
            class="w-full md:w-80 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-violet-400">
-    <div class="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-      <span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-violet-500"></span>一级：核心/一线</span>
-      <span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>二级</span>
-      <span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-amber-500"></span>三级：三线</span>
-      <span class="inline-flex items-center gap-1"><span class="w-2.5 h-2.5 rounded-full bg-slate-400"></span>未分层</span>
-    </div>
   </div>
 
   <div id="chain-summary" class="mb-4 flex flex-wrap gap-2"></div>
@@ -2698,58 +2692,42 @@ function _chainAnchor(chain) {
   return "chain-row-" + String(chain || "unknown").replace(/[^a-zA-Z0-9\u4e00-\u9fff]+/g, "_");
 }
 
-function _chainFallbackRows() {
-  const src = (typeof WATCHLIST_CHAIN_INFO !== "undefined") ? WATCHLIST_CHAIN_INFO : {};
-  return Object.entries(src).map(([code, meta]) => ({
-    code,
-    name: meta.name || code,
-    market: meta.market || "",
-    industry: meta.industry || "",
-    chain: meta.chain || "",
-    chain_tier: meta.chain_tier || "N/A",
-    chain_role: meta.chain_role || "",
-    layman_intro: meta.layman_intro || "",
-    status: meta.status || "",
-  }));
-}
-
-function _chainStockPill(r, apiOk) {
-  const level = _chainLevelKey(r);
-  const tone = {
-    l1: "bg-violet-50 text-violet-800 border-violet-200",
-    l2: "bg-emerald-50 text-emerald-800 border-emerald-200",
-    l3: "bg-amber-50 text-amber-800 border-amber-200",
-    un: "bg-slate-50 text-slate-600 border-slate-200",
-  }[level];
-  const title = [r.name || r.code, r.chain_role, r.chain_tier, r.layman_intro].filter(Boolean).join(" · ");
+function _chainStockPill(r) {
+  // 2026-05-21：产业链地图改读 RECORDS (system_universe 319 条)，
+  // 用 theme / industry 替代已废 V1 chain_role / layman_intro
+  const sub = String(r.theme || r.industry || "");
+  const title = [r.name || r.code, r.theme, r.industry, r.ai_relevance].filter(Boolean).join(" · ");
   const inner = `
     <div class="flex items-center gap-1 min-w-0">
       <span class="font-mono font-bold text-[11px]">${_esc(r.code || "—")}</span>
       <span class="truncate text-xs">${_esc(r.name || "")}</span>
     </div>
-    <div class="mt-0.5 text-[10px] text-slate-500 truncate">${_esc(r.chain_role || r.industry || "")}</div>
+    <div class="mt-0.5 text-[10px] text-slate-500 truncate">${_esc(sub)}</div>
   `;
-  const cls = `block w-full px-2 py-1.5 rounded border ${tone} text-left hover:ring-1 hover:ring-violet-300`;
-  if (!apiOk) {
-    return `<div class="${cls} cursor-help" title="${_esc(title || "内置快照，启动 API 后可编辑")}">${inner}</div>`;
-  }
-  return `<button type="button" onclick="openWatchlistEditor('${_esc(r.code || "")}')" class="${cls} text-left" title="${_esc(title || "点击编辑链条标注")}">${inner}</button>`;
+  return `<div class="block w-full px-2 py-1.5 rounded border bg-white border-slate-200 hover:ring-1 hover:ring-violet-300 cursor-default" title="${_esc(title)}">${inner}</div>`;
 }
 
 function _chainMarketKey(r) {
-  const s = [r.market, r.chain, r.code].map(x => String(x || "")).join(" ");
+  const mk = String(r.market || "").toUpperCase();
+  if (mk === "CN" || mk === "A" || mk === "A股") return "cn";
+  if (mk === "HK" || mk === "港股") return "hk";
+  if (mk === "US" || mk === "美股") return "us";
+  const s = [r.market, r.code].map(x => String(x || "")).join(" ");
   if (/A股|沪|深|北|A-share/i.test(s)) return "cn";
-  if (/港股|HK|Hong Kong|\\.HK/i.test(s)) return "hk";
+  if (/港股|Hong Kong|\.HK/i.test(s)) return "hk";
   return "us";
 }
 
-function _chainLevelKey(r) {
-  const t = String(r.chain_tier || "");
-  if (t === "核心" || t === "一线") return "l1";
-  if (t === "二线") return "l2";
-  if (t === "三线") return "l3";
-  return "un";
-}
+const _CHAIN_THEME_PALETTE = [
+  "bg-violet-50 text-violet-800 border-violet-200",
+  "bg-emerald-50 text-emerald-800 border-emerald-200",
+  "bg-amber-50 text-amber-800 border-amber-200",
+  "bg-cyan-50 text-cyan-800 border-cyan-200",
+  "bg-rose-50 text-rose-800 border-rose-200",
+  "bg-indigo-50 text-indigo-800 border-indigo-200",
+  "bg-fuchsia-50 text-fuchsia-800 border-fuchsia-200",
+  "bg-teal-50 text-teal-800 border-teal-200",
+];
 
 async function loadChainOverview() {
   const statusEl = document.getElementById("chain-api-status");
@@ -2758,109 +2736,89 @@ async function loadChainOverview() {
   const container = document.getElementById("chain-cards-container");
   if (!container) return;
 
-  const ok = await _checkApiStatus();
   try {
-    if (ok && _watchlistCache.length === 0) {
-      const payload = await _watchlistApiCall("GET", "/api/watchlist");
-      _watchlistCache = Array.isArray(payload)
-        ? payload
-        : (Array.isArray(payload?.rows) ? payload.rows : (Array.isArray(payload?.items) ? payload.items : []));
+    const sourceRows = Array.isArray(RECORDS) ? RECORDS : [];
+    if (statusEl) {
+      statusEl.className = "px-2 py-0.5 rounded bg-emerald-100 text-emerald-700";
+      statusEl.textContent = `✓ 系统池 · ${sourceRows.length} 条`;
     }
-    const fallbackRows = _chainFallbackRows();
-    const useApiRows = ok && Array.isArray(_watchlistCache) && _watchlistCache.length > 0;
-    const sourceRows = useApiRows ? _watchlistCache : fallbackRows;
-    if (statusEl) statusEl.className = useApiRows
-      ? "px-2 py-0.5 rounded bg-emerald-100 text-emerald-700"
-      : "px-2 py-0.5 rounded bg-slate-100 text-slate-600";
-    if (statusEl) statusEl.textContent = useApiRows
-      ? "✓ API 已连接 · 可编辑"
-      : (ok ? "API 空 · 使用内置快照" : "内置快照 · 只读");
+
     const kw = (document.getElementById("chain-search")?.value || "").trim().toLowerCase();
     const markets = {
-      us: { label: "US", hint: "美股 / 全球 ADR", icon: "🇺🇸", rows: [], levels: { l1: [], l2: [], l3: [], un: [] } },
-      hk: { label: "Hong Kong", hint: "港股", icon: "🇭🇰", rows: [], levels: { l1: [], l2: [], l3: [], un: [] } },
-      cn: { label: "A 股", hint: "沪深北", icon: "🇨🇳", rows: [], levels: { l1: [], l2: [], l3: [], un: [] } },
+      us: { label: "US", hint: "美股 / 全球 ADR", icon: "🇺🇸", rows: [], themes: new Map() },
+      hk: { label: "Hong Kong", hint: "港股", icon: "🇭🇰", rows: [], themes: new Map() },
+      cn: { label: "A 股", hint: "沪深北", icon: "🇨🇳", rows: [], themes: new Map() },
     };
     sourceRows.forEach(raw => {
-      const r = {...raw};
       if (kw) {
-        const hay = [r.market, r.chain, r.code, r.name, r.chain_role, r.layman_intro, r.industry]
+        const hay = [raw.market, raw.code, raw.name, raw.theme, raw.industry, raw.ai_relevance]
           .map(x => String(x || "").toLowerCase()).join(" ");
         if (!hay.includes(kw)) return;
       }
-      const m = markets[_chainMarketKey(r)] || markets.us;
-      const level = _chainLevelKey(r);
-      m.rows.push(r);
-      m.levels[level].push(r);
+      const m = markets[_chainMarketKey(raw)] || markets.us;
+      m.rows.push(raw);
+      const themeKey = String(raw.theme || raw.industry || "未分类");
+      if (!m.themes.has(themeKey)) m.themes.set(themeKey, []);
+      m.themes.get(themeKey).push(raw);
     });
     Object.values(markets).forEach(m => {
-      ["l1", "l2", "l3", "un"].forEach(level => {
-        m.levels[level].sort((a, b) => {
-          const roleCmp = String(a.chain_role || "").localeCompare(String(b.chain_role || ""));
-          if (roleCmp !== 0) return roleCmp;
-          return String(a.code || "").localeCompare(String(b.code || ""));
-        });
-      });
+      m.themes.forEach(arr => arr.sort((a, b) =>
+        String(a.code || "").localeCompare(String(b.code || ""))));
     });
 
     const marketList = [markets.us, markets.hk, markets.cn];
     const total = marketList.reduce((sum, m) => sum + m.rows.length, 0);
-    countEl.textContent = `${total} 个标的${kw ? " · 已筛选" : ""}`;
-    summaryEl.innerHTML = marketList.map(m => `
-      <a href="#chain-market-${m.label.replace(/\s+/g, "-").toLowerCase()}"
-         onclick="document.getElementById('chain-market-${m.label.replace(/\s+/g, "-").toLowerCase()}')?.scrollIntoView({behavior:'smooth',block:'start'});return false;"
-         class="inline-flex items-center gap-2 px-3 py-1 bg-white border border-slate-200 hover:border-violet-400 hover:bg-violet-50 rounded-full text-xs text-slate-700 transition">
-        <span>${m.icon}</span><span class="font-medium">${m.label}</span><span class="text-violet-600 font-semibold">${m.rows.length}</span>
-      </a>
-    `).join("");
+    if (countEl) countEl.textContent = `${total} 个标的${kw ? " · 已筛选" : ""}`;
+    if (summaryEl) {
+      summaryEl.innerHTML = marketList.map(m => `
+        <a href="#chain-market-${m.label.replace(/\s+/g, "-").toLowerCase()}"
+           onclick="document.getElementById('chain-market-${m.label.replace(/\s+/g, "-").toLowerCase()}')?.scrollIntoView({behavior:'smooth',block:'start'});return false;"
+           class="inline-flex items-center gap-2 px-3 py-1 bg-white border border-slate-200 hover:border-violet-400 hover:bg-violet-50 rounded-full text-xs text-slate-700 transition">
+          <span>${m.icon}</span><span class="font-medium">${m.label}</span><span class="text-violet-600 font-semibold">${m.rows.length}</span>
+        </a>
+      `).join("");
+    }
 
     if (total === 0) {
       container.innerHTML = `<div class="bg-white border border-slate-200 rounded-lg p-8 text-center text-sm text-slate-500">没有匹配的市场或标的</div>`;
       return;
     }
 
-    const column = (title, subtitle, rows, tone) => `
+    const themeColumn = (theme, rows, paletteIdx) => `
       <div class="min-w-0 bg-white border border-slate-200 rounded-lg overflow-hidden">
-        <div class="px-3 py-2 border-b border-slate-100 ${tone}">
+        <div class="px-3 py-2 border-b border-slate-100 ${_CHAIN_THEME_PALETTE[paletteIdx % _CHAIN_THEME_PALETTE.length]}">
           <div class="flex items-baseline justify-between gap-2">
-            <h4 class="text-sm font-bold">${title}</h4>
+            <h4 class="text-sm font-bold truncate" title="${_esc(theme)}">${_esc(theme)}</h4>
             <span class="text-xs font-mono">${rows.length}</span>
           </div>
-          <div class="text-[11px] opacity-75">${subtitle}</div>
         </div>
-        <div class="p-2 space-y-1.5 max-h-[520px] overflow-y-auto">
-          ${rows.length ? rows.map(r => _chainStockPill(r, useApiRows)).join("") : '<div class="text-xs text-slate-300 px-2 py-3">—</div>'}
+        <div class="p-2 space-y-1.5 max-h-[420px] overflow-y-auto">
+          ${rows.map(r => _chainStockPill(r)).join("")}
         </div>
       </div>`;
 
-    container.innerHTML = marketList.map(m => `
-      <section id="chain-market-${m.label.replace(/\s+/g, "-").toLowerCase()}" class="bg-slate-50 border border-slate-200 rounded-xl p-4">
-        <div class="flex items-center justify-between gap-3 mb-3">
-          <div>
-            <h3 class="text-lg font-bold text-slate-900">${m.icon} ${m.label}</h3>
-            <p class="text-xs text-slate-500">${m.hint} · ${m.rows.length} 个标的</p>
+    container.innerHTML = marketList.map(m => {
+      const themeEntries = Array.from(m.themes.entries()).sort((a, b) => b[1].length - a[1].length);
+      return `
+        <section id="chain-market-${m.label.replace(/\s+/g, "-").toLowerCase()}" class="bg-slate-50 border border-slate-200 rounded-xl p-4">
+          <div class="flex items-center justify-between gap-3 mb-3">
+            <div>
+              <h3 class="text-lg font-bold text-slate-900">${m.icon} ${m.label}</h3>
+              <p class="text-xs text-slate-500">${m.hint} · ${m.rows.length} 个标的 · ${themeEntries.length} 个主题</p>
+            </div>
           </div>
-          <div class="flex gap-2 text-xs text-slate-500">
-            <span>一级 ${m.levels.l1.length}</span>
-            <span>二级 ${m.levels.l2.length}</span>
-            <span>三级 ${m.levels.l3.length}</span>
-            <span>未分层 ${m.levels.un.length}</span>
-          </div>
-        </div>
-        <div class="grid grid-cols-1 lg:grid-cols-4 gap-3">
-          ${column("一级", "核心 / 一线", m.levels.l1, "bg-violet-50 text-violet-800")}
-          ${column("二级", "二线", m.levels.l2, "bg-emerald-50 text-emerald-800")}
-          ${column("三级", "三线", m.levels.l3, "bg-amber-50 text-amber-800")}
-          ${column("未分层", "N/A / 未标", m.levels.un, "bg-slate-50 text-slate-600")}
-        </div>
-      </section>
-    `).join("") + `
-    ${useApiRows ? "" : `<p class="mt-3 text-xs text-slate-500">当前使用 HTML 内置快照展示；启动本地 API 后，点击股票标签可直接编辑链条标注。</p>`}`;
+          ${themeEntries.length === 0
+            ? `<p class="text-xs text-slate-400 px-2 py-3">—</p>`
+            : `<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">${
+                themeEntries.map(([t, rows], i) => themeColumn(t, rows, i)).join("")
+              }</div>`}
+        </section>`;
+    }).join("");
   } catch (e) {
     container.innerHTML = `<div class="bg-rose-50 border border-rose-200 rounded p-4 text-sm text-rose-700">加载失败：${_esc(e.message)}</div>`;
   }
 }
-async function forceReloadChainOverview() { _watchlistCache = []; await loadChainOverview(); }
+async function forceReloadChainOverview() { await loadChainOverview(); }
 
 function openWatchlistEditor(code) {
   _watchlistEditCode = code || null;

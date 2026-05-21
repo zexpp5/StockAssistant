@@ -328,7 +328,7 @@ if [ "$MODE" = "a_share_only" ]; then
     run_step "24/25 DuckDB pipeline 同步" "scripts/migrate/migrate_pipeline_to_duckdb.py"
     # 2026-05-21 删 step 24b (classify_watchlist_chains 写 V1 watchlist.chain，已废)
     run_step "25/25 重建 HTML" "scripts/pipeline/build_stock_dashboard_html.py"
-    run_step "26 早安简报（主入口 · 本地生成，验收后再推送）" "-m stock_research.jobs.morning_brief --no-push"
+    run_step "26 早安简报（今日决策台的飞书镜像 · 本地生成，验收后再推送）" "-m stock_research.jobs.morning_brief --no-push"
     A_SHARE_ENABLED_NOW=$($PYTHON -c "from stock_research import config; print('1' if config.A_SHARE_PRODUCTION_ENABLED else '0')" 2>/dev/null || echo "0")
     if [ "$A_SHARE_ENABLED_NOW" = "1" ]; then
         run_step "27 生产闭环验收" "scripts/tools/production_acceptance_check.py"
@@ -359,6 +359,9 @@ if [ "$MODE" = "a_share_only" ]; then
 fi
 
 # ────── M = morning 必跑（今日决策路径）；R = research 单独跑（慢任务夜班）──────
+# M — V1 表 DROP 守卫（V2 cutover 常态化：防止 legacy CREATE TABLE 把 V1 表偷偷带回）
+is_morning_step && run_step "0a/25 V1 表 DROP 守卫（V2 schema 完整性）" \
+    "scripts/tools/drop_v1_tables_v2.py"
 # M
 run_step "0b/25 V2 系统池刷新（live universe → system_universe/pool_membership）" \
     "scripts/tools/refresh_system_universe_v2.py"
@@ -421,6 +424,8 @@ run_step "23a2/25 V2 策略验证汇总" "scripts/tools/build_strategy_validatio
 # M
 run_step "23c/25 推荐质量闸门（收盘后复核）" "scripts/tools/recommendation_quality_gate.py"
 run_step "23d/25 推荐有效性证据报告" "scripts/tools/recommendation_evidence_report.py"
+# 2026-05-21 V2 cutover 补洞：替代被删的 V1 audit_picks，喂 dashboard「买前审查」tab
+run_step "23e/25 picks 反向审查（V2 · Risk Parity + 估值 + Markowitz）" "-m stock_research.jobs.audit_picks_v2 --fast"
 
 # M — DuckDB pipeline 同步 + HTML 重建 + brief + 验收
 # （这几步在 morning 必跑，research mode 不重做避免覆盖 morning 已落地的 dashboard）
@@ -443,7 +448,7 @@ elif is_research_step; then
 fi
 
 # M — 早安简报 + 生产验收
-is_morning_step && run_step "26 早安简报（主入口 · 本地生成，验收后再推送）" "-m stock_research.jobs.morning_brief --no-push"
+is_morning_step && run_step "26 早安简报（今日决策台的飞书镜像 · 本地生成，验收后再推送）" "-m stock_research.jobs.morning_brief --no-push"
 A_SHARE_ENABLED_NOW=$($PYTHON -c "from stock_research import config; print('1' if config.A_SHARE_PRODUCTION_ENABLED else '0')" 2>/dev/null || echo "0")
 if is_morning_step; then
     if [ "$A_SHARE_ENABLED_NOW" = "1" ]; then
@@ -465,8 +470,9 @@ else
         echo "     - $s"
     done
 fi
-echo "  📋 主入口 — 早安简报：$DIR/morning_brief.md"
-echo "  HTML（调试）：$DIR/stock_dashboard.html"
+echo "  📋 产品主入口：dashboard 默认首页「今日决策台」（HTML 见下）"
+echo "  📨 飞书镜像：$DIR/morning_brief.md（每天 08:30 推群）"
+echo "  HTML：$DIR/stock_dashboard.html"
 echo "  DuckDB（数据落地）：$DIR/stock_history.duckdb"
 if [ ${#FAILED_STEPS[@]} -eq 0 ]; then
     write_pipeline_status "OK" "$DONE_TS"

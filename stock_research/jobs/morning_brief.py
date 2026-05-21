@@ -344,6 +344,63 @@ def _quality_gate_blocks_trade() -> bool:
     return _quality_gate_status() == "FAIL"
 
 
+def _acceptance_payload() -> dict:
+    accept = _load_json(REPO / "data" / "latest" / "production_acceptance_check.json")
+    return accept if isinstance(accept, dict) else {}
+
+
+def _acceptance_status() -> str:
+    return str((_acceptance_payload() or {}).get("status") or "UNKNOWN")
+
+
+# severity 档位排序：NONE < LOW < HIGH < CRITICAL，与 defense_signals.py:201 对齐
+_SEVERITY_RANK = {"NONE": 0, "LOW": 1, "HIGH": 2, "CRITICAL": 3}
+_RANK_TO_SEVERITY = {0: "NONE", 1: "LOW", 2: "HIGH", 3: "CRITICAL"}
+
+
+def _combined_severity(defense: dict | None,
+                       qgate: dict | None,
+                       acceptance: dict | None) -> tuple[str, str, str, list[str]]:
+    """三道闸门取最严：defense / 质量闸门 / 生产验收 → 统一灯色 + 升档理由。
+
+    升档规则：
+      - 起点 = defense.severity（NONE/LOW/HIGH/CRITICAL）
+      - 质量闸门或生产验收 == WARN → 至少升到 LOW
+      - 质量闸门或生产验收 == FAIL → 至少升到 HIGH
+      - defense CRITICAL 始终最高
+    返回 (severity, icon, header_template, reasons[])。
+    """
+    defense_sev = (defense or {}).get("severity") or "NONE"
+    rank = _SEVERITY_RANK.get(defense_sev, 0)
+    reasons: list[str] = []
+
+    def _collect(payload: dict | None, label: str) -> None:
+        for it in (payload or {}).get("issues", []) or []:
+            if it.get("level") in ("WARN", "FAIL"):
+                reasons.append(f"[{label} {it.get('level')}] {it.get('message','')}")
+
+    qgate_status = str((qgate or {}).get("status") or "").upper()
+    if qgate_status == "WARN":
+        rank = max(rank, 1)
+        _collect(qgate, "质量闸门")
+    elif qgate_status == "FAIL":
+        rank = max(rank, 2)
+        _collect(qgate, "质量闸门")
+
+    accept_status = str((acceptance or {}).get("status") or "").upper()
+    if accept_status == "WARN":
+        rank = max(rank, 1)
+        _collect(acceptance, "生产验收")
+    elif accept_status == "FAIL":
+        rank = max(rank, 2)
+        _collect(acceptance, "生产验收")
+
+    severity = _RANK_TO_SEVERITY.get(rank, defense_sev)
+    icon = {"NONE": "🟢", "LOW": "🟡", "HIGH": "🟠", "CRITICAL": "🔴"}.get(severity, "⚪")
+    header_template = {"NONE": "blue", "LOW": "yellow", "HIGH": "orange", "CRITICAL": "red"}.get(severity, "grey")
+    return severity, icon, header_template, reasons[:6]
+
+
 def _quality_gate_lines(max_items: int = 4) -> list[str]:
     gate = _quality_gate_payload()
     if not gate or gate.get("status") == "PASS":
@@ -776,13 +833,15 @@ def section_holdings_stoploss(history: dict | None = None,
     return "\n".join(lines) + "\n"
 
 
-def section_regime(defense: dict | None) -> str:
-    """读 realtime_defense 输出，告诉用户 regime 状态。
+def section_regime(defense: dict | None,
+                   qgate: dict | None = None,
+                   acceptance: dict | None = None) -> str:
+    """读 defense + 质量闸门 + 生产验收，三道闸门取最严，告诉用户今天能不能动手。
 
-    realtime_defense 输出 schema:
-      severity: NONE / LOW / MEDIUM / HIGH
-      summary:  人类可读摘要（"🟢 无警报" 等）
-      alerts:   告警列表
+    数据源 schema:
+      defense:    realtime_defense_*.json → severity (NONE/LOW/HIGH/CRITICAL) + summary + alerts
+      qgate:      recommendation_quality_gate.json → status (PASS/WARN/FAIL) + issues
+      acceptance: production_acceptance_check.json → status (PASS/WARN/FAIL) + issues
     """
     if not defense:
         return (
@@ -790,36 +849,49 @@ def section_regime(defense: dict | None) -> str:
             "⚠️ 未找到 realtime_defense 输出 — **保守起见今天按已有计划执行，不要加仓**。\n"
         )
 
-    severity = defense.get("severity", "UNKNOWN")
-    summary = defense.get("summary", "")
-    alerts = defense.get("alerts", []) or []
+    if qgate is None:
+        qgate = _quality_gate_payload()
+    if acceptance is None:
+        acceptance = _acceptance_payload()
 
-    # severity 档位与 stock_research/core/defense_signals.py:201 对齐
-    # （NONE / LOW / HIGH / CRITICAL 4 档，CRITICAL 最严重）
-    icon_map = {"NONE": "🟢", "LOW": "🟡", "HIGH": "🟠", "CRITICAL": "🔴"}
-    icon = icon_map.get(severity, "⚪")
+    severity, icon, _tpl, reasons = _combined_severity(defense, qgate, acceptance)
+    defense_sev = defense.get("severity", "UNKNOWN")
+    defense_summary = defense.get("summary", "")
+    alerts = defense.get("alerts", []) or []
+    qgate_status = str((qgate or {}).get("status") or "—").upper()
+    accept_status = str((acceptance or {}).get("status") or "—").upper()
+
+    def _badge(status: str) -> str:
+        return {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌"}.get(status, "·") + " " + status
 
     advice = {
-        "NONE": "👉 **今天可以正常调仓**（v7 三道闸门都没亮灯）。",
-        "LOW": "👉 **留意但别加仓**，单笔不超 5% 仓位。",
-        "HIGH": "👉 **减仓 30-50%，停止买入**，可换防御标的（KO / MCD 等）。",
-        "CRITICAL": "👉 **清仓 sit out** — 崩盘期历史 alpha = -9.77%，等信号转回 LOW 再回来。",
+        "NONE": "👉 **今天可以正常调仓**（三道闸门都没亮灯）。",
+        "LOW": "👉 **留意别加仓**，单笔不超 5% 仓位；先看升档理由。",
+        "HIGH": "👉 **只读不交易 / 减仓 30-50%**，先修验收或闸门里的 FAIL 项。",
+        "CRITICAL": "👉 **清仓 sit out** — 崩盘期历史 alpha = -9.77%，等灯转回 LOW 再回来。",
     }.get(severity, "👉 保守按已有计划执行。")
 
     lines = [
-        "#### 1. 今天能不能动手？（v7 防御层信号）",
-        f"{icon} **{severity}** — {summary}",
+        "#### 1. 今天能不能动手？（防御 + 质量闸门 + 生产验收 · 取最严）",
+        f"{icon} **{severity}** — 防御 {defense_sev} · 质量闸门 {_badge(qgate_status)} · 生产验收 {_badge(accept_status)}",
         advice,
         "",
-        "📖 灯色对照：🟢 NONE 正常 ｜ 🟡 LOW 留意别加仓 ｜ 🟠 HIGH 减仓 30-50% ｜ 🔴 CRITICAL 清仓 sit out",
-        "🛡️ v7 三道闸门：VIX 飙高 / 跌破 200 日均线 / 单股 -15% 止损 — 任意一道触发就升级灯色。",
+        "📖 灯色规则（取最严）：🟢 三道全绿 ｜ 🟡 任一 WARN ｜ 🟠 任一 FAIL 或防御 HIGH ｜ 🔴 防御 CRITICAL",
+        "🛡️ 防御：VIX / 200MA / 单股止损 ｜ 质量闸门：picks/factor 完整性 ｜ 生产验收：今日 pipeline 是否真跑通",
     ]
+    if reasons:
+        lines.append("")
+        lines.append(f"**为什么不是 🟢**（{len(reasons)} 条升档理由）:")
+        for r in reasons:
+            lines.append(f"• {r}")
+    if defense_summary:
+        lines.append("")
+        lines.append(f"**防御原文**：{defense_summary}")
     if alerts:
         lines.append("")
-        lines.append("**具体告警：**")
+        lines.append("**防御告警**：")
         for a in alerts[:5]:
             kind = a.get("kind") or a.get("type") or "alert"
-            # fallback 顺序：人类可读 message/detail > suggested_action > trigger > 最后才 json
             msg = (a.get("message") or a.get("detail") or a.get("suggested_action")
                    or a.get("trigger") or json.dumps(a, ensure_ascii=False))
             lines.append(f"• {kind} · {msg}")
@@ -1655,17 +1727,18 @@ def build_brief(share_mode: bool = False) -> str:
     hk_picks = _load_hk_picks()
     defense = _latest_defense_snapshot()
     history = _load_history()
-    qgate_status = _quality_gate_status()
+    qgate_payload = _quality_gate_payload()
+    acceptance_payload = _acceptance_payload()
+    qgate_status = str((qgate_payload or {}).get("status") or "UNKNOWN")
     trade_blocked = qgate_status == "FAIL"
-    qgate_status = _quality_gate_status()
-    read_only = qgate_status == "FAIL"
+    read_only = trade_blocked
 
     parts: list[str] = []
     cal = section_calendar(plan)
     if cal:
         parts.extend([cal, "\n"])
     parts.extend([
-        section_regime(defense),
+        section_regime(defense, qgate_payload, acceptance_payload),
         "\n",
     ])
     qgate = section_quality_gate()
@@ -1908,14 +1981,19 @@ def _build_card_payload() -> dict:
     hk_picks = _load_json(REPO / "data" / "latest" / "hk_picks.json")
     defense = _latest_defense_snapshot()
     history = _load_history()
-    trade_blocked = _quality_gate_blocks_trade()
+    qgate_payload = _quality_gate_payload()
+    acceptance_payload = _acceptance_payload()
+    trade_blocked = str((qgate_payload or {}).get("status") or "").upper() == "FAIL"
 
     today = date.today()
     weekday_cn = "一二三四五六日"[today.weekday()]
-    severity = (defense or {}).get("severity", "UNKNOWN")
-    # 4 档与 stock_research/core/defense_signals.py:201 对齐 (NONE/LOW/HIGH/CRITICAL)
-    severity_icon = {"NONE": "🟢", "LOW": "🟡", "HIGH": "🟠", "CRITICAL": "🔴"}.get(severity, "⚪")
-    header_template = {"NONE": "blue", "LOW": "yellow", "HIGH": "orange", "CRITICAL": "red"}.get(severity, "grey")
+    # 三道闸门取最严：defense + 质量闸门 + 生产验收
+    severity, severity_icon, header_template, regime_reasons = _combined_severity(
+        defense, qgate_payload, acceptance_payload)
+    defense_sev = (defense or {}).get("severity", "UNKNOWN")
+    qgate_status = str((qgate_payload or {}).get("status") or "—").upper()
+    accept_status = str((acceptance_payload or {}).get("status") or "—").upper()
+    _status_badge = lambda s: {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌"}.get(s, "·") + " " + s
 
     blocks: list[dict] = []
 
@@ -1962,25 +2040,32 @@ def _build_card_payload() -> dict:
         blocks.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(sec0_lines)}})
         blocks.append({"tag": "hr"})
 
-    # ─── Section 1: regime（白底；自带新人能看懂的灯色对照 + 三道闸门解释）───
+    # ─── Section 1: regime（白底；三道闸门真实状态 + 升档理由）───
     advice = {
-        "NONE": "👉 **今天可以正常调仓**（v7 三道闸门都没亮灯）",
-        "LOW": "👉 **留意但别加仓**，单笔不超 5% 仓位",
-        "HIGH": "👉 **减仓 30-50%，停止买入**，可换防御标的（KO / MCD 等）",
+        "NONE": "👉 **今天可以正常调仓**（三道闸门都没亮灯）",
+        "LOW": "👉 **留意别加仓**，单笔不超 5% 仓位；先看升档理由",
+        "HIGH": "👉 **只读不交易 / 减仓 30-50%**，先修验收或闸门里的 FAIL 项",
         "CRITICAL": "👉 **清仓 sit out** — 崩盘期 alpha = -9.77%，等灯转回 LOW 再回来",
     }.get(severity, "👉 保守按已有计划执行")
-    blocks.append({
-        "tag": "div",
-        "text": {"tag": "lark_md", "content": (
-            f"{severity_icon} **regime = {severity}** — {advice}\n\n"
-            "📖 **灯色对照**：🟢 NONE 正常 ｜ 🟡 LOW 留意别加仓 ｜ 🟠 HIGH 减仓 30-50% ｜ 🔴 CRITICAL 清仓 sit out\n"
-            "🛡️ **v7 三道闸门**（什么时候升级灯色）：VIX 恐慌指数飙高 / 大盘跌破 200 日均线 / 单股亏 -15% 自动止损"
-        )}
-    })
+    sec1_lines = [
+        f"{severity_icon} **regime = {severity}** — {advice}",
+        "",
+        f"**三道闸门状态**：防御 {defense_sev} · 质量闸门 {_status_badge(qgate_status)} · 生产验收 {_status_badge(accept_status)}",
+        "",
+        "📖 **灯色规则（取最严）**：🟢 三道全绿 ｜ 🟡 任一 WARN ｜ 🟠 任一 FAIL 或防御 HIGH ｜ 🔴 防御 CRITICAL",
+        "🛡️ **三道闸门含义**：防御=VIX/200MA/单股止损 ｜ 质量闸门=picks/factor 完整性 ｜ 生产验收=今日 pipeline 是否真跑通",
+    ]
+    if regime_reasons:
+        sec1_lines.append("")
+        sec1_lines.append(f"**为什么不是 🟢**（{len(regime_reasons)} 条升档理由）：")
+        for r in regime_reasons:
+            sec1_lines.append(f"• {r}")
+    blocks.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(sec1_lines)}})
     blocks.append({"tag": "hr"})
 
+    # 质量闸门完整 issues（reasons 已在上面摘要，这里只在 FAIL 时再单列建议）
     qgate_lines = _quality_gate_lines()
-    if qgate_lines:
+    if qgate_lines and qgate_status == "FAIL":
         blocks.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(qgate_lines)}})
         blocks.append({"tag": "hr"})
     source_health_md = section_source_health()

@@ -2,7 +2,30 @@
   "permissions": {
     "allow": [
       "Bash(sed -n '316,316p;524,524p' scripts/tools/recommendation_quality_gate.py)",
-      "Bash(sed -n '316,524p' scripts/tools/recommendation_quality_gate.py)"
+      "Bash(sed -n '316,524p' scripts/tools/recommendation_quality_gate.py)",
+      "Bash(curl -s --max-time 5 http://127.0.0.1:8765/api/watchlist)",
+      "Bash(curl -s --max-time 5 http://127.0.0.1:8765/health)",
+      "Bash(awk '/^def section_weekly_hitrate/,/^def _section_weekly_hitrate_v1_DELETED/' stock_research/jobs/morning_brief.py)",
+      "Bash(/opt/homebrew/bin/python3 -c ' *)",
+      "Bash(awk 'NR>=1321 && /^def [a-z]/ {print NR}' stock_research/jobs/morning_brief.py)",
+      "Bash(awk -F: '$2 ~ /^def section_/ || $2 ~ /^def _v2/')",
+      "Bash(awk 'NR>=848 && NR<=1080 && /^    [a-zA-Z]/ {print NR\": \"$0}' scripts/tools/production_acceptance_check.py)",
+      "Bash(python -c \"import duckdb; conn=duckdb.connect\\('stock_history_v2.duckdb', read_only=True\\); tables = conn.execute\\('SHOW TABLES'\\).fetchall\\(\\); print\\('TABLES:', [t[0] for t in tables]\\)\")",
+      "Bash(/opt/homebrew/bin/python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('status:', d.get\\('status'\\)\\); print\\('issues:'\\); [print\\(' ',i\\) for i in d.get\\('issues',[]\\)[:10]]\")",
+      "Bash(/opt/anaconda3/bin/python -c \"import duckdb; conn=duckdb.connect\\('stock_history_v2.duckdb', read_only=True\\); tables = conn.execute\\('SHOW TABLES'\\).fetchall\\(\\); print\\('TABLES:', [t[0] for t in tables]\\)\")",
+      "Bash(python -c \"import duckdb; conn=duckdb.connect\\('stock_history_v2.duckdb', read_only=True\\); tables = conn.execute\\('SHOW TABLES'\\).fetchall\\(\\); print\\('TABLES:', sorted\\([t[0] for t in tables]\\)\\)\")",
+      "Bash(/opt/homebrew/bin/python3 -c \"import duckdb; conn=duckdb.connect\\('stock_history_v2.duckdb', read_only=True\\); tables = conn.execute\\('SHOW TABLES'\\).fetchall\\(\\); print\\('TABLES:', sorted\\([t[0] for t in tables]\\)\\)\")",
+      "Bash(/opt/homebrew/bin/python3 scripts/tools/production_acceptance_check.py)",
+      "Bash(/opt/homebrew/bin/python3 -m stock_research.jobs.morning_brief --no-push)",
+      "Bash(ps -p 53280 -o command=)",
+      "Bash(/opt/homebrew/bin/python3 -m json.tool)",
+      "Bash(curl -s http://127.0.0.1:8765/api/db/tables-overview)",
+      "Bash(curl -s \"http://127.0.0.1:8765/api/system_universe?limit=5\" --max-time 5)",
+      "Bash(chmod +x scripts/tools/drop_v1_tables_v2.py)",
+      "Bash(/opt/homebrew/bin/python3 scripts/tools/drop_v1_tables_v2.py)",
+      "Bash(ps -p 53280 -o pid,etime,command)",
+      "Bash(launchctl kickstart *)",
+      "Bash(grep -nA10 \"def fetch_manual_watchlist\" scripts/lib/stock_db.py)"
     ]
   }
 }
