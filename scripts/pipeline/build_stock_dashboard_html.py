@@ -4502,8 +4502,13 @@ RECORDS.forEach(r => {
 
 // 解析价格字符串「215.2 USD」→ {price, currency}
 function parsePrice(s) {
-  if (!s) return null;
-  const m = s.match(/([\d,]+\.?\d*)\s*([A-Z]{3})?/);
+  if (s == null) return null;
+  // V2 schema: price_daily.close 是 DOUBLE（number）；V1 旧字符串带 "$" / "HK$" / "¥" 等
+  // 2026-05-21 兼容修复：number 类型直接取值（缺 currency 后面用 ticker 后缀推断兜底）
+  if (typeof s === "number") {
+    return isFinite(s) && s > 0 ? { price: s, currency: "" } : null;
+  }
+  const m = String(s).match(/([\d,]+\.?\d*)\s*([A-Z]{3})?/);
   if (!m) return null;
   return { price: parseFloat(m[1].replace(/,/g, "")), currency: m[2] || "USD" };
 }
@@ -4513,11 +4518,24 @@ const FX_TO_RMB = { USD: 7.1, HKD: 0.91, KRW: 0.0052, JPY: 0.046, AUD: 4.6, CNY:
 
 function getCurrentPriceRMB(code) {
   const r = RECORDS.find(x => x.code === code);
-  if (!r || !r.latest_price) return null;
+  if (!r || r.latest_price == null) return null;
   const p = parsePrice(r.latest_price);
   if (!p) return null;
-  const fx = FX_TO_RMB[p.currency] || 1;
-  return { rmb_price: p.price * fx, raw_price: p.price, currency: p.currency, fx };
+  // V2 schema: parsePrice 返回的 currency 可能是空（DOUBLE 列没货币标签）
+  // 走 ticker 后缀推断兜底（与 _currencyForTicker / optimize_portfolio.py 一致）
+  let currency = p.currency;
+  if (!currency) {
+    const t = String(code || "").toUpperCase();
+    if (/\.(SS|SZ|BJ)$/.test(t)) currency = "CNY";
+    else if (/\.HK$/.test(t)) currency = "HKD";
+    else if (/\.T$/.test(t)) currency = "JPY";
+    else if (/\.KS$/.test(t)) currency = "KRW";
+    else if (/\.AX$/.test(t)) currency = "AUD";
+    else if (/\.IL$/.test(t)) currency = "GBP";
+    else currency = "USD";  // 裸 ticker 默认美股
+  }
+  const fx = FX_TO_RMB[currency] || 1;
+  return { rmb_price: p.price * fx, raw_price: p.price, currency: currency, fx };
 }
 
 let _holdingsCache = [];          // 同步快照,供 renderPortfolio 用
