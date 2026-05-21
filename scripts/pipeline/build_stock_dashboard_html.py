@@ -1163,11 +1163,12 @@ function switchDiscoveryView(view) {
           <th class="px-3 py-2 text-right">盈亏 RMB</th>
           <th class="px-3 py-2 text-right">盈亏%</th>
           <th class="px-3 py-2 text-right">仓位%</th>
+          <th class="px-3 py-2 text-left" title="加入持仓的日期（holdings.entry_date）">加入时间</th>
           <th class="px-3 py-2 text-center">操作</th>
         </tr>
       </thead>
       <tbody id="holdings-table">
-        <tr><td colspan="10" class="text-center text-slate-500 py-8">暂无持仓 · 点击「+ 添加持仓」开始记录</td></tr>
+        <tr><td colspan="11" class="text-center text-slate-500 py-8">暂无持仓 · 点击「+ 添加持仓」开始记录</td></tr>
       </tbody>
     </table>
   </div>
@@ -4683,8 +4684,10 @@ async function renderPortfolio() {
   const rows = holdings.map((h, idx) => {
     const r = RECORDS.find(x => x.code === h.code);
     const name = r ? r.name : h.code;
-    const industry = r ? (r.industry || "-") : "-";
+    // 行业列优先用 r.theme（中文 emoji，如"💾 AI 算力"），fallback 到 r.industry（V2 universe 英文短语）
+    const industry = r ? (r.theme || r.industry || "-") : "-";
     const cur = getCurrentPriceRMB(h.code);
+    const addedAt = _fmtAddedAt(h.entry_date || h.created_at);
     if (!cur) {
       return `<tr class="border-t border-slate-100">
         <td class="px-3 py-2">${stockPill(h.code, {nameOverride: name})}</td>
@@ -4692,7 +4695,8 @@ async function renderPortfolio() {
         <td class="px-3 py-2 text-right">${h.entry_price}</td>
         <td class="px-3 py-2 text-right">${h.shares}</td>
         <td class="px-3 py-2 text-right">-</td>
-        <td class="px-3 py-2 text-right text-slate-400" colspan="5">无价格数据</td>
+        <td class="px-3 py-2 text-right text-slate-400" colspan="4">无价格数据</td>
+        <td class="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">${addedAt}</td>
         <td class="px-3 py-2 text-center">
           <button onclick="editHolding(${h.id})" class="text-violet-600 text-xs">编辑</button>
           <button onclick="deleteHolding(${h.id})" class="text-rose-500 text-xs ml-2">删除</button>
@@ -4711,7 +4715,9 @@ async function renderPortfolio() {
     totalCost += cost_rmb;
     totalValue += value_rmb;
 
-    const theme = THEME_OF[h.code] || "📱 其他";
+    // 主题分布饼图：优先用 RECORDS.theme（中文 emoji，"💾 AI 算力" 等），
+    // fallback 到静态 THEME_OF 映射，最后兜底"📱 其他"
+    const theme = (r && r.theme) ? r.theme : (THEME_OF[h.code] || "📱 其他");
     themeAlloc[theme] = (themeAlloc[theme] || 0) + value_rmb;
     stockAlloc.push({ name, value: value_rmb });
 
@@ -4727,6 +4733,7 @@ async function renderPortfolio() {
       <td class="px-3 py-2 text-right font-mono ${pnlColor}">${pnl_rmb >= 0 ? '+' : ''}${pnl_rmb.toFixed(0)}</td>
       <td class="px-3 py-2 text-right font-mono ${pnlColor}">${pnl_pct >= 0 ? '+' : ''}${pnl_pct.toFixed(2)}%</td>
       <td class="px-3 py-2 text-right font-mono">${(value_rmb / TOTAL_CAPITAL * 100).toFixed(1)}%</td>
+      <td class="px-3 py-2 text-xs text-slate-500 whitespace-nowrap" title="${_esc(h.entry_date || h.created_at || '')}">${addedAt}</td>
       <td class="px-3 py-2 text-center">
         <button onclick="editHolding(${h.id})" class="text-violet-600 text-xs">编辑</button>
         <button onclick="deleteHolding(${h.id})" class="text-rose-500 text-xs ml-2">删除</button>
@@ -4774,25 +4781,53 @@ async function renderPortfolio() {
     </div>
   `;
 
-  // 警戒线
-  const distance_to_stop = portfolio_value - STOPLOSS_LINE;
-  const distance_to_warn = portfolio_value - WARNING_LINE;
-  const distance_to_target = TARGET_LINE - portfolio_value;
-  const stopColor = portfolio_value > WARNING_LINE ? "bg-emerald-500" : (portfolio_value > STOPLOSS_LINE ? "bg-amber-500" : "bg-rose-500");
+  // 风险警戒线 — 2026-05-21 重设计：3 张卡片清楚说明组合健康度，去掉新人看不懂的横条
+  const dist_to_stop = portfolio_value - STOPLOSS_LINE;          // 正=还有缓冲，负=已破线
+  const dist_to_target = TARGET_LINE - portfolio_value;          // 正=未到止盈，负=已超
+  const drawdown_pct = (TOTAL_CAPITAL - portfolio_value) / TOTAL_CAPITAL * 100;  // 正=亏损，负=盈利
+
+  let statusBadge, statusText, statusTip;
+  if (portfolio_value <= STOPLOSS_LINE) {
+    statusBadge = "bg-rose-100 text-rose-700 ring-2 ring-rose-400";
+    statusText = "🔴 已破止损线";
+    statusTip = "组合市值跌破 30 万止损线，按规则应该清仓 sit out";
+  } else if (portfolio_value <= WARNING_LINE) {
+    statusBadge = "bg-amber-100 text-amber-700 ring-2 ring-amber-400";
+    statusText = "⚠️ 进入预警区";
+    statusTip = `组合市值跌到 40 万预警线以下，离 30 万止损还有 ${dist_to_stop.toLocaleString()}，建议减仓观望`;
+  } else if (portfolio_value >= TARGET_LINE) {
+    statusBadge = "bg-violet-100 text-violet-700 ring-2 ring-violet-400";
+    statusText = "🎯 触及止盈参考";
+    statusTip = "已达 55 万止盈参考线，可考虑部分获利了结";
+  } else {
+    statusBadge = "bg-emerald-100 text-emerald-700 ring-2 ring-emerald-400";
+    statusText = "✅ 安全区";
+    statusTip = `组合在 40 万预警线与 55 万止盈线之间，正常运转`;
+  }
+
+  const lossClr = dist_to_stop > 0 ? "text-emerald-600" : "text-rose-600";
+  const targetClr = dist_to_target > 0 ? "text-slate-600" : "text-violet-600";
+  const ddSign = drawdown_pct > 0 ? "-" : "+";
+  const ddAbs = Math.abs(drawdown_pct).toFixed(2);
+  const ddClr = drawdown_pct > 0 ? "text-rose-600" : "text-emerald-600";
 
   document.getElementById("alert-line").innerHTML = `
-    <div class="flex items-center justify-between text-xs">
-      <span>30 万止损线</span><span>50 万本金</span><span>55 万止盈参考</span>
-    </div>
-    <div class="relative h-8 bg-slate-100 rounded overflow-hidden">
-      <div class="absolute inset-y-0 left-0 ${stopColor} transition-all" style="width: ${Math.min(100, Math.max(0, (portfolio_value - STOPLOSS_LINE) / (TARGET_LINE - STOPLOSS_LINE) * 100)).toFixed(1)}%"></div>
-      <div class="absolute top-0 bottom-0 left-[40%] w-px bg-amber-600"></div>
-      <div class="absolute inset-0 flex items-center justify-center text-sm font-bold text-slate-800">${portfolio_value.toLocaleString(undefined, {maximumFractionDigits:0})} RMB</div>
-    </div>
-    <div class="grid grid-cols-3 gap-2 text-xs mt-2">
-      <div>距止损线：<strong class="${distance_to_stop > 0 ? 'text-emerald-600' : 'text-rose-600'}">${distance_to_stop >= 0 ? '+' : ''}${distance_to_stop.toLocaleString(undefined, {maximumFractionDigits:0})}</strong></div>
-      <div>距预警线：<strong class="${distance_to_warn > 0 ? 'text-emerald-600' : 'text-rose-600'}">${distance_to_warn >= 0 ? '+' : ''}${distance_to_warn.toLocaleString(undefined, {maximumFractionDigits:0})}</strong></div>
-      <div>距止盈线：<strong>${distance_to_target.toLocaleString(undefined, {maximumFractionDigits:0})}</strong></div>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+      <div class="rounded-lg p-3 ${statusBadge}" title="${_esc(statusTip)}">
+        <div class="text-xs opacity-75 mb-1">组合状态</div>
+        <div class="text-lg font-bold">${statusText}</div>
+        <div class="text-[11px] opacity-75 mt-1">vs 本金 <strong class="${ddClr}">${ddSign}${ddAbs}%</strong></div>
+      </div>
+      <div class="rounded-lg p-3 bg-rose-50 border border-rose-200" title="组合市值 - 30 万止损线 = 还能跌多少才碰线">
+        <div class="text-xs text-rose-600 mb-1">距 30 万止损线还有</div>
+        <div class="text-lg font-bold ${lossClr}">${dist_to_stop >= 0 ? '+' : ''}${dist_to_stop.toLocaleString(undefined, {maximumFractionDigits:0})} <span class="text-xs font-normal">RMB</span></div>
+        <div class="text-[11px] text-rose-500 mt-1">${dist_to_stop > 0 ? `约可再亏 ${(dist_to_stop/portfolio_value*100).toFixed(1)}%` : '已跌破止损线'}</div>
+      </div>
+      <div class="rounded-lg p-3 bg-violet-50 border border-violet-200" title="55 万止盈参考线 - 组合市值 = 还差多少触及止盈">
+        <div class="text-xs text-violet-600 mb-1">距 55 万止盈线还差</div>
+        <div class="text-lg font-bold ${targetClr}">${dist_to_target >= 0 ? '' : '+'}${Math.abs(dist_to_target).toLocaleString(undefined, {maximumFractionDigits:0})} <span class="text-xs font-normal">RMB</span></div>
+        <div class="text-[11px] text-violet-500 mt-1">${dist_to_target > 0 ? `约还要涨 ${(dist_to_target/portfolio_value*100).toFixed(1)}%` : '已超止盈线'}</div>
+      </div>
     </div>
   `;
 
