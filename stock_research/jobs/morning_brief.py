@@ -1,7 +1,10 @@
-"""每日早安简报（主入口）。
+"""每日早安简报（飞书推送：今日决策台的镜像）。
 
-把已有 7 个数据源拼成一份 5 section 的 markdown，让用户每天 8:30 看完
-一份就知道："今天能不能动手、买什么、AI 说对了么、有什么红旗、要做什么"。
+⚠️ 定位：本脚本不是产品主入口 —— 产品主入口是 dashboard 的"今日决策台"
+（[scripts/pipeline/build_stock_dashboard_html.py](../../scripts/pipeline/build_stock_dashboard_html.py) 默认首页）。
+本脚本只把"今日决策台"涉及的 7 个数据源拼成飞书 card + 一份 markdown 镜像，
+方便用户在手机端 / 群里看到当天结论。任何"今日能不能动手"的判定逻辑应与
+今日决策台一致，灯色取最严（防御 + 质量闸门 + 生产验收）。
 
 数据源（全部已经在跑，本脚本只做拼装，不产生新数据）：
   - plan_a_v5_constrained.json | plan_a_v5.json     -> 当前建议组合（兼容文件名，内容为 v6 risk-aware）
