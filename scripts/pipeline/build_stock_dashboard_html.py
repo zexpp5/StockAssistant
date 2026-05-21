@@ -527,7 +527,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <span class="font-bold text-slate-800">先选谁进组合（选股层）</span>
       </div>
       <p class="text-sm text-slate-700 leading-relaxed">
-        系统先用 <strong>F-Score 因子打分</strong>，从几百只候选里挑出 <code class="text-xs bg-slate-100 px-1.5 py-0.5 rounded font-mono">TOP_N = 12</code> 只股票。这一步<strong>不分钱</strong>，只是把 12 个名字交给下一步。
+        系统先用 <strong>V2 lite 4 因子</strong>（估值 / 12-1 动量 / 数据质量 / 覆盖度）+ <strong>Piotroski F-Score</strong>（P5-Lite · 仅美/港股已接入，A 股待 akshare 财报源激活）打分，从科技/AI 股票池（319 只）里挑出 Top 30 个 buy 信号，再由 risk-aware 优化器从中剪到 <code class="text-xs bg-slate-100 px-1.5 py-0.5 rounded font-mono">TOP_N ≈ 12</code> 只。这一步<strong>不分钱</strong>，只是把名字交给下一步。
+      </p>
+      <p class="text-xs text-slate-500 mt-2">
+        待接入：龙虎榜机构净买入 / 北向资金信号 / PEAD 真实公告日 / 分析师上修（A 股 6 因子方案；V2 cutover 后等数据源对齐）
       </p>
     </div>
 
@@ -538,7 +541,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <span class="font-bold text-slate-800">在 12 只里"切蛋糕"（仓位层 · 核心）</span>
       </div>
       <p class="text-sm text-slate-700 leading-relaxed mb-3">
-        采用 <strong>risk-aware 组合优化</strong>（Ledoit-Wolf 协方差、相关性剪枝、风险闸门），并叠加几条工程上的硬约束：
+        采用 <strong>PyPortfolioOpt risk_aware_optimize</strong>（Markowitz 数值解 + Ledoit-Wolf 协方差收缩 + 相关性 ρ&lt;0.7 自动剪枝 + IC 闸门），叠加几条工程硬约束：
       </p>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mb-3 text-sm">
         <div class="bg-slate-50 rounded px-3 py-2"><strong>现金底线 5%</strong> · 留 <span data-cfg-pct="0.05">¥25,000</span> 应急/加仓</div>
@@ -553,7 +556,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     组合波动率
       </div>
       <p class="text-sm text-slate-700 leading-relaxed mt-3">
-        翻译成人话：<strong>每承担 1 单位风险，能换来多少超额收益</strong>。系统跑 <strong>20,000 次蒙特卡洛模拟</strong>（用 Dirichlet 分布随机生成 20000 套权重组合），挑出夏普比最高的那一套就是最终分配。
+        翻译成人话：<strong>每承担 1 单位风险，能换来多少超额收益</strong>。PyPortfolioOpt 用闭式数值解直接求最大夏普权重（max_sharpe with Ledoit-Wolf），比传统蒙特卡洛随机搜索快几个数量级。当 PyPortfolioOpt 不可用（极少数 stage 失败）时，<strong>legacy_monte_carlo fallback</strong> 接管（20,000 次 Dirichlet 采样），早报会在仓位卡片标注 <code class="text-xs bg-slate-100 px-1 rounded">仓位来源=legacy_monte_carlo fallback</code>。
       </p>
     </div>
 
@@ -588,7 +591,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           <tr><td class="py-2.5 pr-4 font-medium">Markowitz 均值-方差优化</td><td class="py-2.5 pr-4 text-slate-700">同样的收益，怎么把风险压到最低</td><td class="py-2.5 text-slate-500 text-xs">Markowitz 1952（诺奖）</td></tr>
           <tr><td class="py-2.5 pr-4 font-medium">最大夏普比</td><td class="py-2.5 pr-4 text-slate-700">风险调整后收益最大化</td><td class="py-2.5 text-slate-500 text-xs">Sharpe 1966</td></tr>
           <tr><td class="py-2.5 pr-4 font-medium">Ledoit-Wolf 协方差收缩</td><td class="py-2.5 pr-4 text-slate-700">历史数据少时，避免相关性估计跑偏</td><td class="py-2.5 text-slate-500 text-xs">Ledoit & Wolf 2003</td></tr>
-          <tr><td class="py-2.5 pr-4 font-medium">蒙特卡洛随机搜索</td><td class="py-2.5 pr-4 text-slate-700">解上面这个带约束的非凸优化</td><td class="py-2.5 text-slate-500 text-xs">工程惯例</td></tr>
+          <tr><td class="py-2.5 pr-4 font-medium">PyPortfolioOpt 数值求解</td><td class="py-2.5 pr-4 text-slate-700">闭式解最大夏普权重（主路径），失败时蒙特卡洛 Dirichlet 兜底</td><td class="py-2.5 text-slate-500 text-xs">pypfopt 1.6 · 2024 重写</td></tr>
           <tr><td class="py-2.5 pr-4 font-medium">15% 单票硬顶</td><td class="py-2.5 pr-4 text-slate-700">不用 Kelly 公式那种激进满仓</td><td class="py-2.5 text-slate-500 text-xs">风控经验值</td></tr>
         </tbody>
       </table>
@@ -679,14 +682,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-100">
-            <tr><td class="py-2 pr-4 font-medium">基本面</td><td class="py-2 text-slate-700">财报深度 / 远期 PE / PEG / 三档 DCF / 同业对比 / F-Score 9 项</td></tr>
+            <tr><td class="py-2 pr-4 font-medium">基本面</td><td class="py-2 text-slate-700">财报深度 / 远期 PE / PEG / 三档 DCF / 同业对比 / <strong>Piotroski F-Score P5-Lite</strong>（美/港股 yfinance 拉财报已接入，A 股待激活）</td></tr>
             <tr><td class="py-2 pr-4 font-medium">技术/价格</td><td class="py-2 text-slate-700">历史 K 线（274 天）/ MA20-60-200 / 最大回撤 / 趋势 emoji 7 档</td></tr>
             <tr><td class="py-2 pr-4 font-medium">资金流</td><td class="py-2 text-slate-700">13F 季度持仓 / A 股北向 / 龙虎榜 / 美股内部人</td></tr>
-            <tr><td class="py-2 pr-4 font-medium">量化打分</td><td class="py-2 text-slate-700">美股 5 因子（Value/Quality/Momentum/Size/残差波动）+ A 股因子 + IC 校准 + 行业中性化</td></tr>
+            <tr><td class="py-2 pr-4 font-medium">量化打分</td><td class="py-2 text-slate-700"><strong>V2 lite 4 因子</strong>（估值 / 12-1 动量 / 数据质量 / 覆盖度）+ Piotroski F-Score 透传 + IC 闸门 + 行业中性化（A 股 6 因子方案待 lhb/north_flow/pead/analyst 接入）</td></tr>
+            <tr><td class="py-2 pr-4 font-medium">产业链分级</td><td class="py-2 text-slate-700"><strong>chain_metadata 表</strong>（2026-05-21 新增 · 68 条关键词规则 + 24 条人工 override → 9 大主链：AI 算力/互联网云/创新药/...）</td></tr>
             <tr><td class="py-2 pr-4 font-medium">防御 regime</td><td class="py-2 text-slate-700">VIX / 200MA / 宏观 / PCR 四闸门 → NONE/LOW/HIGH/CRITICAL，每 15 分钟巡检</td></tr>
             <tr><td class="py-2 pr-4 font-medium">事件日历</td><td class="py-2 text-slate-700">earnings / 政策 / IPO 打新 / 电话会议</td></tr>
-            <tr><td class="py-2 pr-4 font-medium">组合优化</td><td class="py-2 text-slate-700">Ledoit-Wolf 协方差收缩 + 相关性闸门 + A 股涨跌停/ST/停牌约束 + NAV 跟踪</td></tr>
-            <tr><td class="py-2 pr-4 font-medium">数据审计</td><td class="py-2 text-slate-700">跨源 cross-check（yfinance vs akshare vs SEC）+ CONFLICT 比例闸门 + 因子 IC 闸门</td></tr>
+            <tr><td class="py-2 pr-4 font-medium">组合优化</td><td class="py-2 text-slate-700">PyPortfolioOpt risk_aware_optimize（Ledoit-Wolf 协方差 + max_sharpe 闭式解）+ 相关性 ρ&lt;0.7 剪枝 + A 股涨跌停/ST/停牌约束 + NAV 跟踪 + cash 闸门（&gt;50% WARN）</td></tr>
+            <tr><td class="py-2 pr-4 font-medium">数据审计</td><td class="py-2 text-slate-700">跨源 cross-check（yfinance vs akshare vs baostock vs SEC）+ CONFLICT 比例闸门 + 因子 IC 闸门 + V1 残留扫除（2026-05-21 完成）</td></tr>
           </tbody>
         </table>
       </div>
@@ -1086,22 +1090,9 @@ function switchDiscoveryView(view) {
     </div>
   </div>
 
-  <!-- ⚠️ 方法学小字说明 -->
-  <div class="bg-amber-50 border-l-4 border-amber-400 p-3 mb-4 rounded-r-md">
-    <p class="text-xs text-amber-900 mb-1">
-      <strong>📅 数据窗口</strong>：方案 A v6 与蒙特卡洛模拟均基于过去 <strong>252 个交易日</strong>（约过去 1 年，~ 2025-05 至今）的 yfinance 真实日 K 数据。
-    </p>
-    <p class="text-xs text-amber-900 mb-1">
-      <strong>⚠️ 怎么读"年化 95% / 夏普 2.95"</strong>：这是<strong class="text-rose-700">历史外推</strong>（"如果未来 1 年表现完全跟过去 1 年一样"），<strong class="text-rose-700">不是未来预测</strong>。要分两层看：
-    </p>
-    <ul class="text-xs text-amber-900 ml-4 list-disc space-y-0.5 mb-1">
-      <li><strong>股价层面</strong>：过去 1 年 AI 标的涨幅极大（NVDA +330% / 中际旭创 +870% / AMD +240%），单纯数字层面很难复现。夏普 2.95 vs 巴菲特长期 0.76，是机构传奇水平 — 样本仅 1 年不可外推。</li>
-      <li><strong>技术层面</strong>：AI 在企业渗透率 &lt;10% / 数据中心电力占比 ~3-4% / Robotaxi 渗透 &lt;1%，仍处<strong>早期</strong>。参考"百倍股 5 条件"中"认知反转"才刚发生 2 年。长期空间巨大。</li>
-    </ul>
-    <p class="text-xs text-amber-800">
-      <strong>正确用法</strong>：把这些数字当作<strong>不同组合方案的相对优劣对比</strong>（哪个方案夏普更高、波动更小），而<strong>不是绝对收益预测</strong>。
-    </p>
-  </div>
+  <!-- 2026-05-21: "数据窗口/年化 95%/夏普 2.95/NVDA +330%" 黄底说明块已删除：
+       1) 数字过时（V2 当前 Sharpe 2.55 而非 2.95）2) 内容是策略层 disclaimer，
+       已合并到「AI 助手 → AI 组合方案」tab 顶部 v6 模型卡的 disclaimer 行 -->
 
   <!-- 📅 5 天蒙特卡洛模拟（仅有 simulation 数据时显示） -->
   <div id="simulation-section" class="bg-gradient-to-br from-cyan-50 to-blue-50 rounded-xl border border-cyan-200 p-5 mb-4" style="display:none">
@@ -4867,23 +4858,36 @@ async function renderPortfolio() {
   `;
 
   // 仓位分布饼图
+  // 2026-05-21: 饼图改横向柱状图（按 value 从大到小，从上到下排）
+  const _allocSorted = [...stockAlloc].sort((a, b) => a.value - b.value);  // echarts y 轴从下到上，所以升序
+  const _allocTotal = _allocSorted.reduce((s, x) => s + x.value, 0);
   echarts.init(document.getElementById("chart-allocation")).setOption({
-    tooltip: { trigger: "item", formatter: "{b}<br/>{c} RMB ({d}%)" },
-    legend: { type: "scroll", orient: "vertical", right: 0, top: "center", textStyle: { fontSize: 11 } },
+    tooltip: { trigger: "axis", axisPointer: { type: "shadow" },
+      formatter: p => `${p[0].name}<br/>${p[0].value.toLocaleString()} RMB (${(p[0].value / _allocTotal * 100).toFixed(1)}%)` },
+    grid: { left: 100, right: 50, top: 10, bottom: 20 },
+    xAxis: { type: "value", axisLabel: { formatter: v => (v / 1000).toFixed(0) + "k" } },
+    yAxis: { type: "category", data: _allocSorted.map(x => x.name), axisLabel: { fontSize: 11 } },
     series: [{
-      name: "持仓", type: "pie", radius: ["40%","65%"], center:["35%","50%"],
-      data: stockAlloc.sort((a,b) => b.value - a.value),
-      label: { show: false },
+      name: "持仓", type: "bar",
+      data: _allocSorted.map(x => x.value),
+      itemStyle: { color: "#8b5cf6" },
+      label: { show: true, position: "right", formatter: p => (p.value / _allocTotal * 100).toFixed(1) + "%", fontSize: 11 },
     }]
   });
 
+  const _themeArr = Object.entries(themeAlloc).map(([k, v]) => ({ name: k, value: v })).sort((a, b) => a.value - b.value);
+  const _themeTotal = _themeArr.reduce((s, x) => s + x.value, 0);
   echarts.init(document.getElementById("chart-theme")).setOption({
-    tooltip: { trigger: "item", formatter: "{b}<br/>{c} RMB ({d}%)" },
-    legend: { type: "scroll", orient: "vertical", right: 0, top: "center", textStyle: { fontSize: 11 } },
+    tooltip: { trigger: "axis", axisPointer: { type: "shadow" },
+      formatter: p => `${p[0].name}<br/>${p[0].value.toLocaleString()} RMB (${(p[0].value / _themeTotal * 100).toFixed(1)}%)` },
+    grid: { left: 120, right: 50, top: 10, bottom: 20 },
+    xAxis: { type: "value", axisLabel: { formatter: v => (v / 1000).toFixed(0) + "k" } },
+    yAxis: { type: "category", data: _themeArr.map(x => x.name), axisLabel: { fontSize: 11 } },
     series: [{
-      name: "主题", type: "pie", radius: ["40%","65%"], center:["35%","50%"],
-      data: Object.entries(themeAlloc).map(([k,v])=>({ name: k, value: v })),
-      label: { show: false },
+      name: "主题", type: "bar",
+      data: _themeArr.map(x => x.value),
+      itemStyle: { color: "#10b981" },
+      label: { show: true, position: "right", formatter: p => (p.value / _themeTotal * 100).toFixed(1) + "%", fontSize: 11 },
     }]
   });
 }
