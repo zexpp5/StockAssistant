@@ -1173,7 +1173,7 @@ function switchDiscoveryView(view) {
         </tr>
       </thead>
       <tbody id="holdings-table">
-        <tr><td colspan="11" class="text-center text-slate-500 py-8">暂无持仓 · 点击「+ 添加持仓」开始记录</td></tr>
+        <tr><td colspan="10" class="text-center text-slate-500 py-8">暂无持仓 · 点击「+ 添加持仓」开始记录</td></tr>
       </tbody>
     </table>
   </div>
@@ -1689,8 +1689,7 @@ function switchDiscoveryView(view) {
           <th class="px-3 py-2 text-left">角色</th>
           <th class="px-3 py-2 text-left">一句话解释(新手向)</th>
           <th class="px-3 py-2 text-left">市场</th>
-          <th class="px-3 py-2 text-left" title="基于学术因子 (F-Score + 12-1 动量 + PEAD + 分析师) 综合评分">AI 评级</th>
-          <th class="px-3 py-2 text-left">状态</th>
+          <th class="px-3 py-2 text-left" title="V2 学术因子综合评分：strong_buy ≥75 · buy 60-75 · watch 50-60 · avoid <50">AI 评级</th>
           <th class="px-3 py-2 text-left" title="加入自选股的时间（manual_watchlist.created_at）">加入时间</th>
           <th class="px-3 py-2 text-right">操作</th>
         </tr>
@@ -2440,38 +2439,51 @@ function _heldBadge(code) {
   if (lots.length === 0) return "";
   const totalShares = lots.reduce((a, b) => a + (b.shares || 0), 0);
   const lotInfo = lots.length > 1 ? `（${lots.length} 笔）` : "";
-  return ` <span class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-700 align-middle" title="你已持仓 ${totalShares} 股${lotInfo}">💼 持</span>`;
+  return ` <span class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-700 align-middle" title="你已持仓 ${totalShares} 股${lotInfo}（来自 holdings 表）">💼 持仓</span>`;
 }
 
-// 自选股 AI 评级 badge — 数据来自 picks 表最新一日（daily_picks_v5 学术因子）
-//   ⭐⭐⭐ 强烈推荐(z≥1) → ✅ 推荐
-//   ⭐⭐ 推荐(z≥0.5) / ⭐ 关注 → ⚠️ 观察
-//   ⛔ 不建议(z≤-0.5) → ❌ 不建议（浅灰，比未评级稍深一点）
-//   不在 picks → 评级中（后台 daily_picks_v5 跑着）/ 未评级（无 job 在跑）
+// 自选股 AI 评级 badge — V2 路径 (recommendation_picks.rating)
+//   strong_buy → ✅ 强买  · 推荐分 ≥ 75
+//   buy        → 👍 买入  · 推荐分 60-75
+//   watch      → ⚠️ 观察  · 推荐分 50-60
+//   avoid      → ❌ 不建议 · 推荐分 < 50
+//   不在 picks → 评级中（后台跑着）/ 未评级（无 job 在跑）
+// 兼容 V1 文本（"⭐⭐⭐ 强烈推荐" / "⛔ 不建议"）以备 V1 旧数据残留
 function _wlRatingBadge(code) {
   const info = WATCHLIST_RATINGS[code];
   if (!info || !info.rating) {
     if (__pickJobRunning) {
       return '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs bg-sky-100 text-sky-700" title="后台 daily_picks_v5 正在跑评级"><span class="animate-pulse">🔄</span>&nbsp;评级中</span>';
     }
-    return '<span class="text-slate-400 text-xs" title="picks 表里没这只股 — 点'+'刷新 / 或加一只新股自动触发评级">— 未评级</span>';
+    return '<span class="text-slate-400 text-xs" title="picks 表里没这只股 — 点刷新 / 或加一只新股自动触发评级">— 未评级</span>';
   }
   const r = String(info.rating);
-  const score = info.total_score != null ? ` · ${info.total_score}` : "";
-  const hasFlag = r.includes("🚨");
-  const flagBadge = hasFlag
-    ? `<span class="inline-flex ml-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-700 ring-1 ring-rose-300" title="${_esc(r)}">🚨 风险</span>`
-    : "";
+  const score = info.total_score != null ? ` · ${Number(info.total_score).toFixed(1)}` : "";
+  const tip = `${_esc(r)}${score}`;
+  // V2 rating 枚举值优先
+  if (r === "strong_buy") {
+    return `<span class="inline-flex px-2 py-0.5 rounded text-xs font-bold bg-emerald-100 text-emerald-700" title="${tip}">✅ 强买${score}</span>`;
+  }
+  if (r === "buy") {
+    return `<span class="inline-flex px-2 py-0.5 rounded text-xs font-bold bg-green-100 text-green-700" title="${tip}">👍 买入${score}</span>`;
+  }
+  if (r === "watch") {
+    return `<span class="inline-flex px-2 py-0.5 rounded text-xs bg-amber-100 text-amber-700" title="${tip}">⚠️ 观察${score}</span>`;
+  }
+  if (r === "avoid") {
+    return `<span class="inline-flex px-2 py-0.5 rounded text-xs bg-slate-100 text-slate-500" title="${tip}">❌ 不建议${score}</span>`;
+  }
+  // V1 旧文本兼容
   if (r.includes("⛔")) {
-    return `<span class="inline-flex items-center"><span class="inline-flex px-2 py-0.5 rounded text-xs bg-slate-100 text-slate-500" title="${_esc(r)}${score}">❌ 不建议</span>${flagBadge}</span>`;
+    return `<span class="inline-flex px-2 py-0.5 rounded text-xs bg-slate-100 text-slate-500" title="${tip}">❌ 不建议</span>`;
   }
   if (r.includes("⭐⭐⭐")) {
-    return `<span class="inline-flex items-center"><span class="inline-flex px-2 py-0.5 rounded text-xs font-bold bg-emerald-100 text-emerald-700" title="${_esc(r)}${score}">✅ 推荐</span>${flagBadge}</span>`;
+    return `<span class="inline-flex px-2 py-0.5 rounded text-xs font-bold bg-emerald-100 text-emerald-700" title="${tip}">✅ 推荐</span>`;
   }
   if (r.includes("⭐⭐") || r.includes("⭐")) {
-    return `<span class="inline-flex items-center"><span class="inline-flex px-2 py-0.5 rounded text-xs font-bold bg-amber-100 text-amber-700" title="${_esc(r)}${score}">⚠️ 观察</span>${flagBadge}</span>`;
+    return `<span class="inline-flex px-2 py-0.5 rounded text-xs font-bold bg-amber-100 text-amber-700" title="${tip}">⚠️ 观察</span>`;
   }
-  return '<span class="text-slate-400 text-xs">— 未评级</span>';
+  return `<span class="text-slate-400 text-xs" title="${tip}">— 未识别 (${_esc(r)})</span>`;
 }
 
 // 链条层级 → 颜色 / 序号(用于排序)
@@ -2653,7 +2665,7 @@ async function loadWatchlistTable() {
     });
     countEl.textContent = `${filtered.length} / ${_watchlistCache.length} 条`;
     if (filtered.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="11" class="px-3 py-8 text-center text-slate-500 text-sm">没有匹配的记录</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="10" class="px-3 py-8 text-center text-slate-500 text-sm">没有匹配的记录</td></tr>`;
       return;
     }
     tbody.innerHTML = filtered.map(r => `
@@ -2666,7 +2678,6 @@ async function loadWatchlistTable() {
         <td class="px-3 py-2 text-xs text-slate-700 max-w-md">${_esc(r.layman_intro) || '<span class="text-slate-400">—</span>'}</td>
         <td class="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">${_esc(r.market)}</td>
         <td class="px-3 py-2 whitespace-nowrap">${_wlRatingBadge(r.code)}</td>
-        <td class="px-3 py-2 text-xs whitespace-nowrap">${_esc(r.status)}</td>
         <td class="px-3 py-2 text-xs text-slate-500 whitespace-nowrap" title="${_esc(r.created_at || '')}">${_fmtAddedAt(r.created_at)}</td>
         <td class="px-3 py-2 text-right space-x-1 whitespace-nowrap">
           <button onclick="openWatchlistEditor('${_esc(r.code)}')" class="text-xs px-2 py-1 bg-slate-100 hover:bg-violet-100 text-slate-700 rounded">✏️</button>
@@ -2675,7 +2686,7 @@ async function loadWatchlistTable() {
       </tr>
     `).join("");
   } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="11" class="px-3 py-8 text-center text-rose-700 text-sm">加载失败：${_esc(e.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="10" class="px-3 py-8 text-center text-rose-700 text-sm">加载失败：${_esc(e.message)}</td></tr>`;
   }
 }
 async function forceReloadWatchlist() { _watchlistCache = []; await loadWatchlistTable(); }
@@ -4648,7 +4659,7 @@ function renderPortfolio() {
   if (!tbody) return;
 
   if (holdings.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="11" class="text-center text-slate-500 py-8">暂无持仓 · 点击「+ 添加持仓」开始记录</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" class="text-center text-slate-500 py-8">暂无持仓 · 点击「+ 添加持仓」开始记录</td></tr>';
     document.getElementById("portfolio-summary").innerHTML = "";
     document.getElementById("alert-line").innerHTML = '<div class="text-sm text-slate-500">添加持仓后会显示警戒线</div>';
     return;
