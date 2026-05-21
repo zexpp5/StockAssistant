@@ -2432,14 +2432,28 @@ function _fmtAddedAt(iso) {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 }
 
-// 持仓「持」标记 — 数据来自 _holdingsCache（DB holdings 表）。同 code 多笔自动聚合显示总股数
+// 持仓「持仓 / 方案」标记 — 区分 source：
+//   manual  → 蓝色"💼 持仓"   = 用户手填真实持仓
+//   ai_plan → 紫色"📋 方案"    = 从 AI 组合方案模拟写入（不是真买）
+// 同一 code 多笔聚合显示总股数；两种 source 都有时分别展示
 function _heldBadge(code) {
   if (!_holdingsCache || _holdingsCache.length === 0) return "";
   const lots = _holdingsCache.filter(h => h.code === code);
   if (lots.length === 0) return "";
-  const totalShares = lots.reduce((a, b) => a + (b.shares || 0), 0);
-  const lotInfo = lots.length > 1 ? `（${lots.length} 笔）` : "";
-  return ` <span class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-700 align-middle" title="你已持仓 ${totalShares} 股${lotInfo}（来自 holdings 表）">💼 持仓</span>`;
+  const manual = lots.filter(h => (h.source || "manual") === "manual");
+  const aiPlan = lots.filter(h => h.source === "ai_plan");
+  const badges = [];
+  if (manual.length > 0) {
+    const n = manual.reduce((a, b) => a + (b.shares || 0), 0);
+    const li = manual.length > 1 ? `（${manual.length} 笔）` : "";
+    badges.push(`<span class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-700 align-middle" title="你已持仓 ${n} 股${li}（来自 holdings 表 source=manual）">💼 持仓</span>`);
+  }
+  if (aiPlan.length > 0) {
+    const n = aiPlan.reduce((a, b) => a + (b.shares || 0), 0);
+    const li = aiPlan.length > 1 ? `（${aiPlan.length} 笔）` : "";
+    badges.push(`<span class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold bg-violet-50 text-violet-600 ring-1 ring-violet-200 align-middle" title="AI 方案模拟持仓 ${n} 股${li} — 不是你真买的（source=ai_plan，可在持仓页清理）">📋 方案</span>`);
+  }
+  return badges.length ? " " + badges.join(" ") : "";
 }
 
 // 自选股 AI 评级 badge — V2 路径 (recommendation_picks.rating)
