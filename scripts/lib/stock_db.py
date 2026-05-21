@@ -306,6 +306,15 @@ def fetch_research_records_v2(*, conn: duckdb.DuckDBPyConnection | None = None) 
     except Exception:
         pass
 
+    # 美股 theme 英文 → 中文（产业链地图 / AI 助手 tab 用）
+    try:
+        from us_theme_zh import get_us_theme_zh
+        for row in out:
+            if row.get("market") == "US":
+                row["theme"] = get_us_theme_zh(row.get("theme"))
+    except Exception:
+        pass
+
     if own:
         conn.close()
     return out
