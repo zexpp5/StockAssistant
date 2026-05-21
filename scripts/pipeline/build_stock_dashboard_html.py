@@ -1150,21 +1150,21 @@ function switchDiscoveryView(view) {
 
   <!-- 持仓列表（横向滚动 · 第一列 sticky 不随滑动） -->
   <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
-    <table class="w-full text-sm">
+    <table class="min-w-max text-sm">
       <thead class="bg-slate-100">
         <tr>
-          <th class="px-3 py-2 text-left sticky left-0 bg-slate-100 z-10 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.15)]">股票</th>
-          <th class="px-3 py-2 text-left">行业</th>
-          <th class="px-3 py-2 text-right">买入价</th>
-          <th class="px-3 py-2 text-right">数量</th>
-          <th class="px-3 py-2 text-right">成本</th>
-          <th class="px-3 py-2 text-right">现价</th>
-          <th class="px-3 py-2 text-right">市值</th>
-          <th class="px-3 py-2 text-right">盈亏 RMB</th>
-          <th class="px-3 py-2 text-right">盈亏%</th>
-          <th class="px-3 py-2 text-right">仓位%</th>
-          <th class="px-3 py-2 text-left" title="加入持仓的日期（holdings.entry_date）">加入时间</th>
-          <th class="px-3 py-2 text-center">操作</th>
+          <th class="px-3 py-2 text-left sticky left-0 bg-slate-100 z-10 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.15)] whitespace-nowrap">股票</th>
+          <th class="px-3 py-2 text-left whitespace-nowrap">行业</th>
+          <th class="px-3 py-2 text-right whitespace-nowrap">买入价</th>
+          <th class="px-3 py-2 text-right whitespace-nowrap">数量</th>
+          <th class="px-3 py-2 text-right whitespace-nowrap">成本</th>
+          <th class="px-3 py-2 text-right whitespace-nowrap">现价</th>
+          <th class="px-3 py-2 text-right whitespace-nowrap">市值</th>
+          <th class="px-3 py-2 text-right whitespace-nowrap">盈亏 RMB</th>
+          <th class="px-3 py-2 text-right whitespace-nowrap">盈亏%</th>
+          <th class="px-3 py-2 text-right whitespace-nowrap">仓位%</th>
+          <th class="px-3 py-2 text-left whitespace-nowrap" title="加入持仓的日期（holdings.entry_date）">加入时间</th>
+          <th class="px-3 py-2 text-center whitespace-nowrap">操作</th>
         </tr>
       </thead>
       <tbody id="holdings-table">
