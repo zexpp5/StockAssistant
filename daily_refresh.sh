@@ -2,7 +2,7 @@
 # AI 股票看板每日自动刷新
 #
 # 🏛️ 2026-05-11 PM 第二轮:飞书 Bitable 100% 退役 — DuckDB 是 single source of truth
-#   ▸ 所有数据读写都走 stock_history.duckdb,飞书 Bitable 不再被读也不再被写
+#   ▸ 所有数据读写都走 stock_history_v2.duckdb（V2 库；V1 stock_history.duckdb 已退役），飞书 Bitable 不再被读也不再被写
 #   ▸ 飞书剩余角色:morning_brief / defense_watcher 通过 webhook 推送群机器人卡片
 #   ▸ Dashboard 数据全部来自 DuckDB (records + picks + prices JOIN)
 #   ▸ Watchlist 编辑入口:dashboard 内联 CRUD modal (写 DuckDB)
@@ -96,15 +96,15 @@ mkdir -p "$PIPELINE_STATUS_DIR"
 pipeline_sink_for_label() {
     local label="$1"
     case "$label" in
-        *"抓价格"*) echo "DuckDB.prices + data/prices_*.json" ;;
+        *"抓价格"*) echo "DuckDB.price_daily + data/prices_*.json" ;;
         *"13F → track_13f"*) echo "data/latest/track_13f.json + DuckDB.snapshots" ;;
         *"SEC 13F"*) echo "data/sec_13f/* + data/latest/track_13f.json" ;;
-        *"多源 enrichment"*) echo "DuckDB.watchlist enrichment fields" ;;
+        *"多源 enrichment"*) echo "DuckDB.source_raw_snapshots(v2_system_enrichment)" ;;
         *"V2 系统池 enrichment"*) echo "DuckDB.source_raw_snapshots(v2_system_enrichment) + financial_statements" ;;
         *"跨源审计"*) echo "data/snapshots/audit/*" ;;
-        *"每日优选"*|*"v6 学术因子"*|*"港股 picks"*|*"A 股优选"*) echo "DuckDB.picks + data/latest/factor caches" ;;
+        *"每日优选"*|*"v6 学术因子"*|*"港股 picks"*|*"A 股优选"*) echo "DuckDB.recommendation_picks + data/latest/factor caches" ;;
         *"picks 反向审查"*) echo "DuckDB.snapshots(category='picks_audit')" ;;
-        *"历史回顾"*) echo "DuckDB.reviews" ;;
+        *"历史回顾"*) echo "DuckDB.pick_outcomes" ;;
         *"每日新闻"*) echo "Feishu/news sync output" ;;
         *"仓位优化"*|*"plan_a 后处理"*) echo "data/latest/plan_a_v5*.json + data/latest/optimization_result.json" ;;
         *"推荐质量闸门"*) echo "data/latest/recommendation_quality_gate.json" ;;
@@ -116,11 +116,11 @@ pipeline_sink_for_label() {
         *"IPO"*) echo "data/ipo_calendar.json + data/reports/ipo_daily_*.md" ;;
         *"事件日历"*) echo "data/event_calendar.json" ;;
         *"政策"*) echo "data/policy_events.json" ;;
-        *"全池 AI 推荐"*) echo "data/discovery_candidates.json + DuckDB.discovery_history" ;;
-        *"推荐准确度"*) echo "DuckDB.discovery_tracking" ;;
+        *"全池 AI 推荐"*) echo "data/discovery_candidates.json + DuckDB.recommendation_runs/picks" ;;
+        *"推荐准确度"*) echo "DuckDB.pick_outcomes" ;;
         *"推荐有效性"*) echo "data/latest/recommendation_evidence.json + data/reports/recommendation_evidence.md" ;;
         *"DuckDB pipeline"*) echo "DuckDB.snapshots(category='pipeline')" ;;
-        *"产业链分级"*) echo "DuckDB.watchlist chain fields" ;;
+        *"产业链分级"*) echo "DuckDB.system_universe(theme/industry → chain 推断)" ;;
         *"重建 HTML"*) echo "stock_dashboard.html" ;;
         *"walk-forward"*) echo "data/latest/walk_forward*.json + strategy validation artifacts" ;;
         *"早安简报"*) echo "morning_brief.md + data/reports/morning_brief_*.md" ;;
@@ -456,6 +456,8 @@ if is_morning_step; then
     else
         run_step "27 生产闭环验收" "scripts/tools/production_acceptance_check.py --allow-a-share-disabled"
     fi
+    # 2026-05-21 DB 出仓后，用户状态由 state_backup/*.json 持久化（DuckDB 是衍生物）
+    run_step "28 用户状态备份 → state_backup/state_YYYY-MM-DD.json" "scripts/tools/backup_state_to_json.py"
 fi
 
 DONE_TS=$(date '+%Y-%m-%d %H:%M:%S')
@@ -473,7 +475,7 @@ fi
 echo "  📋 产品主入口：dashboard 默认首页「今日决策台」（HTML 见下）"
 echo "  📨 飞书镜像：$DIR/morning_brief.md（每天 08:30 推群）"
 echo "  HTML：$DIR/stock_dashboard.html"
-echo "  DuckDB（数据落地）：$DIR/stock_history.duckdb"
+echo "  DuckDB（数据落地）：${STOCK_DB_PATH:-$DIR/stock_history_v2.duckdb}"
 if [ ${#FAILED_STEPS[@]} -eq 0 ]; then
     write_pipeline_status "OK" "$DONE_TS"
     if is_morning_step; then

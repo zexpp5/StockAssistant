@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -166,8 +167,32 @@ def _watchlist_market_flags(conn: duckdb.DuckDBPyConnection | None) -> dict[str,
     return flags
 
 
+def _connect_with_retry(path: str, *, read_only: bool = True,
+                        retries: int = 10, delay: float = 3.0) -> duckdb.DuckDBPyConnection:
+    """重试连库 — 与 scripts/tools/drop_v1_tables_v2.py:_connect_with_retry 对齐。
+
+    DuckDB 同进程间互斥，API server (launchd 常驻) + daily_refresh 并行跑时偶尔
+    撞锁；验收脚本是 daily_refresh step 27，撞锁直接 raise 会让整条 pipeline FAIL，
+    所以这里做 retry，最坏情况退到调用端做 read-only fallback。
+    """
+    last_err: Exception | None = None
+    for i in range(retries):
+        try:
+            return duckdb.connect(path, read_only=read_only)
+        except duckdb.IOException as e:
+            last_err = e
+            if i < retries - 1:
+                time.sleep(delay)
+    assert last_err is not None
+    raise last_err
+
+
 def _check_v1_tables_gone(conn: duckdb.DuckDBPyConnection) -> list[str]:
-    """V1 表存在 → 报 FAIL（V1 cutover 后这些表必须不在）。"""
+    """V1 表存在 → 报 FAIL（V1 cutover 后这些表必须不在）。
+
+    清单与 scripts/tools/drop_v1_tables_v2.py:V1_TABLES_TO_DROP 同步——
+    一个负责检测并 FAIL，一个负责每日 pipeline 开头 DROP；保持两边一致。
+    """
     v1_tables = {"prices", "picks", "reviews", "watchlist",
                  "discovery_history", "discovery_tracking", "earnings_history"}
     try:
@@ -296,15 +321,25 @@ def _surface_artifact_checks(
                 (pipeline_status.get("failed_steps") or [])[:10],
             ))
         updated = _parse_dt(pipeline_status.get("updated_at"))
-        if pstatus in {"RUNNING", "FAIL", "FAILED", "ERROR"}:
+        if pstatus in {"FAIL", "FAILED", "ERROR"}:
             age = (now - updated) if updated else None
-            level = "FAIL" if pstatus in {"FAIL", "FAILED", "ERROR"} else "WARN"
             issues.append(_issue(
-                level,
+                "FAIL",
                 "pipeline_not_completed",
                 f"pipeline_status 当前为 {pstatus}，报告可能混用半成品/跨轮次产物",
                 {"updated_at": pipeline_status.get("updated_at"), "age_minutes": int(age.total_seconds() / 60) if age else None},
             ))
+        elif pstatus == "RUNNING":
+            # daily_refresh 内部 step 跑 acceptance 时 pipeline 必然 RUNNING；只在 updated_at 长时间未推进时报 WARN（疑似卡死）。
+            age = (now - updated) if updated else None
+            stale_minutes = 30
+            if age is not None and age.total_seconds() > stale_minutes * 60:
+                issues.append(_issue(
+                    "WARN",
+                    "pipeline_running_stale",
+                    f"pipeline_status 已 {int(age.total_seconds()/60)} 分钟未推进（>{stale_minutes} 分钟），可能卡死",
+                    {"updated_at": pipeline_status.get("updated_at"), "age_minutes": int(age.total_seconds() / 60)},
+                ))
 
     brief = REPO / "morning_brief.md"
     if plan_a and "_error" not in plan_a:
@@ -419,7 +454,17 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
         issues.append(_issue("FAIL", "missing_duckdb", f"{DB_PATH} 不存在"))
         conn = None
     else:
-        conn = duckdb.connect(str(DB_PATH), read_only=True)
+        try:
+            conn = _connect_with_retry(str(DB_PATH))
+        except duckdb.IOException as e:
+            # 锁拿不到 → 不让验收脚本 crash 整条 pipeline；写 WARN 由调用者决定后续动作
+            conn = None
+            issues.append(_issue(
+                "WARN", "duckdb_lock_unavailable",
+                f"无法获取 DuckDB 连接（retry 后仍冲突）；本轮 DB 维度的检查跳过，"
+                f"只能基于 data/latest/*.json 给结论",
+                str(e),
+            ))
 
     db_tables: set[str] = set()
     if conn is not None:
@@ -893,15 +938,25 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
                 (pipeline_status.get("failed_steps") or [])[:10],
             ))
         updated = _parse_dt(pipeline_status.get("updated_at"))
-        if pstatus in {"RUNNING", "FAIL", "FAILED", "ERROR"}:
+        if pstatus in {"FAIL", "FAILED", "ERROR"}:
             age = (now - updated) if updated else None
-            level = "FAIL" if pstatus in {"FAIL", "FAILED", "ERROR"} else "WARN"
             issues.append(_issue(
-                level,
+                "FAIL",
                 "pipeline_not_completed",
                 f"pipeline_status 当前为 {pstatus}，报告可能混用半成品/跨轮次产物",
                 {"updated_at": pipeline_status.get("updated_at"), "age_minutes": int(age.total_seconds() / 60) if age else None},
             ))
+        elif pstatus == "RUNNING":
+            # daily_refresh 内部 step 跑 acceptance 时 pipeline 必然 RUNNING；只在 updated_at 长时间未推进时报 WARN（疑似卡死）。
+            age = (now - updated) if updated else None
+            stale_minutes = 30
+            if age is not None and age.total_seconds() > stale_minutes * 60:
+                issues.append(_issue(
+                    "WARN",
+                    "pipeline_running_stale",
+                    f"pipeline_status 已 {int(age.total_seconds()/60)} 分钟未推进（>{stale_minutes} 分钟），可能卡死",
+                    {"updated_at": pipeline_status.get("updated_at"), "age_minutes": int(age.total_seconds() / 60)},
+                ))
     if plan_a and "_error" not in plan_a:
         method = str(plan_a.get("method") or "")
         engine = str((plan_a.get("risk_aware") or {}).get("engine") or "")
