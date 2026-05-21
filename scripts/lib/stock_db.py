@@ -275,6 +275,30 @@ def fetch_research_records_v2(*, conn: duckdb.DuckDBPyConnection | None = None) 
         "pick_rating", "pick_signal", "pick_total_score", "pick_factor_scores_json",
     ]
     out = [dict(zip(cols, r)) for r in rows]
+    # 用 industry/theme 推断 chain / chain_role（来自 system_universe；不再依赖已删除的 watchlist 字段）
+    try:
+        from stock_research.core.watchlist_enrich import _infer_chain
+        for row in out:
+            chain, chain_tier, chain_role = _infer_chain(row.get("industry") or "", row.get("theme") or "")
+            if chain:
+                row["chain"] = chain
+            if chain_role:
+                row["chain_role"] = chain_role
+            if chain_tier:
+                row["chain_tier"] = chain_tier
+    except Exception:
+        pass  # 推断失败保持 None，前端兼容
+
+    # A 股 theme 友好化（产业链地图专用）：证监会代码 → 业务子主题
+    # 不在白名单的 A 股 theme=None，前端不渲染（医药/化工/食品/家电/工程机械 等）
+    try:
+        from a_share_theme_map import get_a_share_theme
+        for row in out:
+            if row.get("market") == "CN":
+                row["theme"] = get_a_share_theme(row["code"], row.get("industry"))
+    except Exception:
+        pass
+
     if own:
         conn.close()
     return out

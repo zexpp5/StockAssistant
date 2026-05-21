@@ -422,6 +422,77 @@ def _surface_artifact_checks(
             issues.append(_issue("WARN", "dashboard_older_than_plan", "dashboard 比最新 plan 更旧，需要重建 HTML"))
 
 
+def _check_api_freshness(now: datetime, summary: dict[str, Any], issues: list[dict[str, Any]]) -> None:
+    """API 进程启动时间必须晚于 stock_research/api/main.py 修改时间。
+
+    否则即使代码已修，跑批后端服务仍跑陈旧版本，前端看到的字段会与 DuckDB 不一致。
+    判定方式：launchctl list 拿 PID，ps -o lstart 拿启动时间，与 main.py mtime 比较。
+    无法判定时（launchctl 不存在 / 服务未运行 / 进程读不到）不报错，只记 INFO。
+    """
+    import subprocess
+    main_py = REPO / "stock_research" / "api" / "main.py"
+    if not main_py.exists():
+        return
+    main_mtime = datetime.fromtimestamp(main_py.stat().st_mtime)
+    summary["api_main_mtime"] = main_mtime.isoformat(timespec="seconds")
+    try:
+        out = subprocess.run(
+            ["launchctl", "list", "com.linearview.stockassistant.api"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        summary["api_process"] = {"status": "launchctl_unavailable"}
+        return
+    if out.returncode != 0:
+        summary["api_process"] = {"status": "service_not_loaded"}
+        return
+    pid = None
+    for line in out.stdout.splitlines():
+        line = line.strip()
+        if line.startswith('"PID"'):
+            try:
+                pid = int(line.split("=", 1)[1].strip().rstrip(";").strip())
+            except Exception:
+                pid = None
+            break
+    if not pid:
+        summary["api_process"] = {"status": "service_not_running"}
+        return
+    try:
+        ps_out = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=5,
+        )
+    except Exception:
+        summary["api_process"] = {"status": "ps_failed", "pid": pid}
+        return
+    lstart_text = (ps_out.stdout or "").strip()
+    if not lstart_text:
+        summary["api_process"] = {"status": "pid_dead", "pid": pid}
+        return
+    # ps lstart 格式: "Wed May 21 10:53:05 2026"
+    try:
+        started_at = datetime.strptime(lstart_text, "%a %b %d %H:%M:%S %Y")
+    except ValueError:
+        summary["api_process"] = {"status": "lstart_parse_failed", "pid": pid, "raw": lstart_text}
+        return
+    summary["api_process"] = {
+        "pid": pid,
+        "started_at": started_at.isoformat(timespec="seconds"),
+        "main_mtime": main_mtime.isoformat(timespec="seconds"),
+    }
+    if main_mtime > started_at:
+        age_h = round((main_mtime - started_at).total_seconds() / 3600, 1)
+        issues.append(_issue(
+            "WARN",
+            "api_stale_deployment",
+            f"API 进程启动于 {started_at.isoformat(timespec='minutes')}，但 main.py 已在 {age_h} 小时后被修改；"
+            f"服务仍跑旧版本代码。修：launchctl kickstart -k gui/$(id -u)/com.linearview.stockassistant.api",
+            {"pid": pid, "started_at": started_at.isoformat(), "main_mtime": main_mtime.isoformat(),
+             "delta_hours": age_h},
+        ))
+
+
 def _build_payload(now: datetime, summary: dict[str, Any], issues: list[dict[str, Any]]) -> dict[str, Any]:
     n_fail = sum(1 for x in issues if x["level"] == "FAIL")
     n_warn = sum(1 for x in issues if x["level"] == "WARN")
@@ -828,6 +899,7 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
             now=now,
             max_age_days=max_age_days,
         )
+        _check_api_freshness(now, summary, issues)
         return _build_payload(now, summary, issues)
 
     watchlist_markets = _watchlist_market_flags(conn)
@@ -1038,6 +1110,7 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
         if dashboard.stat().st_mtime + 1 < plan_path.stat().st_mtime:
             issues.append(_issue("WARN", "dashboard_older_than_plan", "dashboard 比最新 plan 更旧，需要重建 HTML"))
 
+    _check_api_freshness(now, summary, issues)
     return _build_payload(now, summary, issues)
 
 

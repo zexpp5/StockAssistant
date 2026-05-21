@@ -2750,12 +2750,15 @@ async function loadChainOverview() {
       cn: { label: "A 股", hint: "沪深北", icon: "🇨🇳", rows: [], themes: new Map() },
     };
     sourceRows.forEach(raw => {
+      // A 股 theme=null → 后端已主动排除（医药/化工/食品/家电/工程机械 等非科技/电子）
+      const marketKey = _chainMarketKey(raw);
+      if (marketKey === "cn" && !raw.theme) return;
       if (kw) {
         const hay = [raw.market, raw.code, raw.name, raw.theme, raw.industry, raw.ai_relevance]
           .map(x => String(x || "").toLowerCase()).join(" ");
         if (!hay.includes(kw)) return;
       }
-      const m = markets[_chainMarketKey(raw)] || markets.us;
+      const m = markets[marketKey] || markets.us;
       m.rows.push(raw);
       const themeKey = String(raw.theme || raw.industry || "未分类");
       if (!m.themes.has(themeKey)) m.themes.set(themeKey, []);
@@ -8801,8 +8804,10 @@ def compute_dynamic_rebalance_track(history: dict, benchmark: str = "SPY",
 
     n_tracked = max(0, len(tracked) - 1)
     daily_rets = _daily_rets(tracked) if tracked else []
-    cumret = (tracked[-1] - 1.0) if len(tracked) >= 1 else 0.0
-    bench_cumret = (bench_tracked[-1] - 1.0) if len(bench_tracked) >= 1 else 0.0
+    # 锚到 tracked[0] / bench_tracked[0]：当 inception plan 中部分 ticker 缺 history 时
+    # 初始 NAV ≠ 1.0；硬减 1.0 会把"缺数据"渲染成虚假亏损。
+    cumret = (tracked[-1] / tracked[0] - 1.0) if len(tracked) >= 1 and tracked[0] else 0.0
+    bench_cumret = (bench_tracked[-1] / bench_tracked[0] - 1.0) if len(bench_tracked) >= 1 and bench_tracked[0] else 0.0
     if n_tracked > 0:
         r_avg = sum(daily_rets[1:]) / n_tracked
         r_var = sum((r - r_avg) ** 2 for r in daily_rets[1:]) / max(1, n_tracked - 1) if n_tracked >= 2 else 0
@@ -8999,8 +9004,9 @@ def compute_plan_forward_track(plan: dict, history: dict, benchmark: str = "SPY"
 
     n_tracked = max(0, len(tracked_dates) - 1)  # 锁定日不算 1 天，从锁定日次日起算
     days_per_year = 252
-    cumret = (tracked_nav[-1] - 1.0) if len(tracked_nav) > 1 else 0.0
-    bench_cumret = (tracked_bench[-1] - 1.0) if len(tracked_bench) > 1 else 0.0
+    # 锚到 tracked[0] / bench_tracked[0]：与 dynamic 版本同一理由（避免缺数据 ticker 渲染成假亏损）。
+    cumret = (tracked_nav[-1] / tracked_nav[0] - 1.0) if len(tracked_nav) > 1 and tracked_nav[0] else 0.0
+    bench_cumret = (tracked_bench[-1] / tracked_bench[0] - 1.0) if len(tracked_bench) > 1 and tracked_bench[0] else 0.0
     import math
     if n_tracked > 0:
         r_avg = sum(daily_rets_tracked[1:]) / n_tracked

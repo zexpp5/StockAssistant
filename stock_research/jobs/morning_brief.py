@@ -1089,8 +1089,10 @@ def _humanize_picks(plan: list[dict], a_share: bool, history: dict | None = None
         z = entry.get("composite_z", entry.get("composite", 0))
         spark, pct60 = _ticker_sparkline(history or {}, ticker)
         spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
+        # F-Score 缺失时不在主行展示「F-Score 缺失」噪声；section header 已说明基本面未覆盖
+        f_str = f" · F-Score {f_score}" if f_score != "缺失" else ""
         out.append(
-            f"• **{ticker}** {weight*100:.1f}% · F-Score {f_score} · 综合 {z:+.2f}{spark_str}"
+            f"• **{ticker}** {weight*100:.1f}%{f_str} · 综合 {z:+.2f}{spark_str}"
         )
         if not a_share:
             pros, cons = _build_us_reasons(ticker, factors_map, signals_map)
@@ -1114,7 +1116,9 @@ def _humanize_picks_grouped(plan: list[dict], a_share: bool, history: dict | Non
         z = entry.get("composite_z", entry.get("composite", 0))
         spark, pct60 = _ticker_sparkline(history or {}, ticker)
         spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
-        head = f"• **{ticker}** {weight*100:.1f}% · F-Score {f_score} · 综合 {z:+.2f}{spark_str}"
+        # F-Score 缺失时不在主行展示「F-Score 缺失」噪声；section header 已说明基本面未覆盖
+        f_str = f" · F-Score {f_score}" if f_score != "缺失" else ""
+        head = f"• **{ticker}** {weight*100:.1f}%{f_str} · 综合 {z:+.2f}{spark_str}"
         if not a_share:
             pros, cons = _build_us_reasons(ticker, factors_map, signals_map)
             reason_lines = _format_reason_lines(pros, cons)
@@ -1162,7 +1166,10 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
             n_us = sum(1 for l in us_lines if l.startswith("•"))
             ts_us = _fmt_ts(plan.get("generated_at"))
             weight_src = _plan_weight_source(plan)
-            factor_label = "因子打分（F-Score 缺失则显式标注）"
+            # 检测本批次 F-Score 是否全部缺失，用以调整 section header 文案
+            us_plan_v5 = plan.get("plan_v5") or []
+            us_f_present = any(_entry_f_score(e) is not None for e in us_plan_v5)
+            factor_label = "动量 + 估值 + 数据覆盖" + ("" if us_f_present else "（基本面 Piotroski 暂未覆盖）")
             lines.append(f"**🇺🇸 美股 ({n_us} 只 · {factor_label} · {weight_src['label']})** · {ts_us}")
             if weight_src.get("is_fallback"):
                 lines.append(f"⚠️ {weight_src['detail']}。这些百分比不是新鲜 risk-aware optimizer 输出。")
@@ -1182,7 +1189,8 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
             name = entry.get("name", "")
             score = entry.get("composite", 0)
             f_score = _entry_f_score(entry)
-            f_str = f" · F-Score {_format_f_score(f_score)}"
+            f_fmt = _format_f_score(f_score)
+            f_str = f" · F-Score {f_fmt}" if f_fmt != "缺失" else ""
             spark, pct60 = _ticker_sparkline(history or {}, ticker)
             spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
             lines.append(f"• **{ticker}** {name} · 综合 {score:.3f}{f_str}{spark_str}")
@@ -1206,7 +1214,8 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
             name = entry.get("name", "")
             score = entry.get("composite", 0)
             f_score = _entry_f_score(entry)
-            f_str = f" · F-Score {_format_f_score(f_score)}"
+            f_fmt = _format_f_score(f_score)
+            f_str = f" · F-Score {f_fmt}" if f_fmt != "缺失" else ""
             spark, pct60 = _ticker_sparkline(history or {}, ticker)
             spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
             lines.append(f"• **{ticker}** {name} · 综合 {score:.3f}{f_str}{spark_str}")

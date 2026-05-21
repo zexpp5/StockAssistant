@@ -554,6 +554,32 @@ def create_app():
                 "FROM recommendation_picks rp JOIN recommendation_runs rr ON rp.run_id = rr.run_id "
                 "WHERE rp.symbol = ? ORDER BY rr.generated_at DESC"
             )
+            # 验收文档 §8: 明确要求 recommendation_runs / recommendation_picks / pick_outcomes 三段 V2 追溯
+            recommendation_runs = _rows(
+                "SELECT DISTINCT rr.run_id, rr.run_date, rr.strategy_version, rr.model_version, "
+                "rr.universe_scope, rr.data_cutoff_at, rr.generated_at, rr.status "
+                "FROM recommendation_runs rr "
+                "JOIN recommendation_picks rp ON rp.run_id = rr.run_id "
+                "WHERE rp.symbol = ? ORDER BY rr.generated_at DESC"
+            )
+            recommendation_picks = _rows(
+                "SELECT rp.run_id, rp.symbol, rp.name, rp.market, rp.rank, rp.rating, rp.signal, "
+                "rp.total_score, rp.factor_scores_json, rp.recommendation_reason, rp.risk_flags_json, "
+                "rp.entry_price, rp.entry_currency, rp.universe_scope, rp.source_origin, "
+                "rr.run_date, rr.strategy_version, rr.model_version, rr.generated_at "
+                "FROM recommendation_picks rp JOIN recommendation_runs rr ON rp.run_id = rr.run_id "
+                "WHERE rp.symbol = ? ORDER BY rr.generated_at DESC"
+            )
+            pick_outcomes: list[dict[str, Any]] = []
+            if "pick_outcomes" in tables:
+                pick_outcomes = _rows(
+                    "SELECT po.run_id, po.market, po.symbol, po.horizon, po.outcome_date, "
+                    "po.return_pct, po.benchmark_symbol, po.benchmark_pct, po.alpha_pct, "
+                    "po.is_success, po.updated_at, "
+                    "rr.run_date, rr.strategy_version, rr.universe_scope "
+                    "FROM pick_outcomes po LEFT JOIN recommendation_runs rr ON rr.run_id = po.run_id "
+                    "WHERE po.symbol = ? ORDER BY po.outcome_date DESC, po.horizon ASC"
+                )
             reviews: list[dict[str, Any]] = []  # V2 评估在 pick_outcomes 已有
             discovery: list[dict[str, Any]] = []  # V2 历史走 recommendation_runs
             earnings_history: list[dict[str, Any]] = []  # V2 财报数据在 source_raw_snapshots
@@ -620,7 +646,8 @@ def create_app():
                 return {k: _walk(v) for k, v in obj.items()}
             return _jsonify(obj)
 
-        if not wl_row and not prices and not picks and not reviews and not discovery and not earnings_history:
+        if (not wl_row and not prices and not picks and not reviews and not discovery
+                and not earnings_history and not recommendation_runs and not pick_outcomes):
             raise HTTPException(404, f"code not found in any table: {code}")
 
         return {
@@ -631,6 +658,10 @@ def create_app():
             "reviews": _walk(reviews),
             "discovery": _walk(discovery),
             "earnings_history": _walk(earnings_history),
+            # V2 追溯三段（验收文档 §8）
+            "recommendation_runs": _walk(recommendation_runs),
+            "recommendation_picks": _walk(recommendation_picks),
+            "pick_outcomes": _walk(pick_outcomes),
         }
 
     @app.post("/api/watchlist/auto-enrich")
