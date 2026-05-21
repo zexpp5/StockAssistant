@@ -1138,15 +1138,9 @@ function switchDiscoveryView(view) {
   <!-- 总览数字 -->
   <div id="portfolio-summary" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 mb-4"></div>
 
-  <!-- 📚 v6 Markowitz 模型预期（加载方案 A v6 后显示）-->
-  <div id="v6-metrics-card" class="bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-300 rounded-xl p-4 mb-4" style="display:none">
-    <div class="flex items-center justify-between mb-3">
-      <h3 class="text-sm font-bold text-emerald-900">📚 v6 Markowitz 模型预期（每日 rebalance 假设 · 基于过去 252 天均值）</h3>
-      <span class="text-xs text-emerald-700 bg-emerald-100 px-2 py-1 rounded">⚠️ 模型期望，非未来预测</span>
-    </div>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3" id="v6-metrics-content"></div>
-    <p class="text-xs text-emerald-800 mt-3"><strong>⚠️ 注意</strong>：这是 Markowitz 优化器的"<strong>每日 rebalance 模型期望</strong>"（mean × 252，arithmetic）。「专业分析 → 风险指标」tab 用 <strong>buy-and-hold 复利</strong>口径会得到不同（通常更高）的数字 —— 两个都对，<strong>假设不同</strong>。仅用于<strong>不同方案的相对优劣对比</strong>，不是未来收益预测。</p>
-  </div>
+  <!-- 2026-05-21: v6-metrics-card 已挪到 AI 助手 → AI 组合方案 tab 顶部
+       (它是 plan_v6 策略的回测期望指标，跟"真实持仓"语义不同；放这里容易让新人
+        误以为是自己持仓的预期回报) -->
 
   <!-- 三层警戒线进度条 -->
   <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
@@ -1234,6 +1228,16 @@ function switchDiscoveryView(view) {
   <div class="mb-6">
     <h2 class="text-2xl font-bold text-slate-900">🆚 系统在跑两个方案 · 看 AI 到底有没有用</h2>
     <p class="text-sm text-slate-600 mt-1">每周一同时跑两套策略，让数据自然分胜负。<strong class="text-emerald-700">差距 C − A = AI 加的 alpha</strong>。基准 SPY · daily_refresh 自动累加。⚠️ <strong>这不是你的真实账户</strong>。</p>
+  </div>
+
+  <!-- 🧪 v6 模型回测期望（2026-05-21 从"我的持仓"挪过来）-->
+  <div id="v6-metrics-card" class="bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-300 rounded-xl p-4 mb-6" style="display:none">
+    <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+      <h3 class="text-sm font-bold text-emerald-900">🧪 v6 模型回测期望（<strong>不是你真实持仓的预期回报</strong> · 每日 rebalance 假设 · 基于过去 252 天均值）</h3>
+      <span class="text-xs text-emerald-700 bg-emerald-100 px-2 py-1 rounded">⚠️ 模型期望，非未来预测</span>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3" id="v6-metrics-content"></div>
+    <p class="text-xs text-emerald-800 mt-3"><strong>⚠️ 注意</strong>：这是 Markowitz 优化器的"<strong>每日 rebalance 模型期望</strong>"（mean × 252，arithmetic）。下面 NAV 曲线用 <strong>buy-and-hold 复利</strong>口径会得到不同（通常更高）的数字 —— 两个都对，<strong>假设不同</strong>。仅用于<strong>不同方案的相对优劣对比</strong>，不是未来收益预测，更不是你点不点"📋 抄进持仓"按钮后的回报。</p>
   </div>
 
   <!-- 🆚 两个方案对比卡（让新人一眼看懂 "两个方案 + 比什么"）-->
@@ -4949,10 +4953,10 @@ function renderV6Metrics(metrics) {
   document.getElementById("v6-metrics-card").style.display = "";
 }
 
-// 加载时如果已有方案 A v6 数据 + ai_plan 来源持仓，就显示指标
-window.addEventListener("DOMContentLoaded", async () => {
-  await _ensureHoldingsLoaded();
-  if (PLAN_A_V6 && PLAN_A_V6.portfolio_metrics && _holdingsCache.some(h => h.source === "ai_plan")) {
+// 2026-05-21: v6 指标卡挪到 AI 组合方案 tab 后，触发条件只看 PLAN_A_V6 有没有数据
+// （之前依赖 _holdingsCache.some(ai_plan)，但这是策略层指标，跟用户持没持仓无关）
+window.addEventListener("DOMContentLoaded", () => {
+  if (PLAN_A_V6 && PLAN_A_V6.portfolio_metrics) {
     renderV6Metrics(PLAN_A_V6.portfolio_metrics);
   }
 });
