@@ -1,0 +1,31 @@
+{
+  "_about": "手工 chain override — 覆盖规则分类器没识别准的核心 ticker。rule_classify 命中后此处会被覆盖。每行 key=symbol（保留 .HK/.SS/.SZ 后缀），value=部分或全部字段（缺省字段保留 rule 结果）。",
+  "_format": {"chain": "AI 算力", "chain_tier": "上游/中游/下游", "chain_role": "具体角色", "layman_intro": "新手 1 句话"},
+
+  "NVDA": {"chain": "AI 算力", "chain_tier": "上游", "chain_role": "AI GPU", "layman_intro": "全球 AI 训练用 GPU 唯一霸主，80%+ 市占率"},
+  "AVGO": {"chain": "AI 算力", "chain_tier": "上游", "chain_role": "AI ASIC", "layman_intro": "为 Google/Meta 定制 AI 芯片，TPU 制造方"},
+  "AMD":  {"chain": "AI 算力", "chain_tier": "上游", "chain_role": "AI GPU 二号位", "layman_intro": "MI300 系列对标 NVDA H100，第二选项"},
+  "TSM":  {"chain": "AI 算力", "chain_tier": "上游", "chain_role": "晶圆代工", "layman_intro": "AI 芯片 90% 由它代工，台积电"},
+  "MU":   {"chain": "AI 算力", "chain_tier": "上游", "chain_role": "HBM 内存", "layman_intro": "AI 服务器最贵的内存芯片三巨头之一（美光）"},
+  "ASML": {"chain": "AI 算力", "chain_tier": "上游", "chain_role": "光刻机", "layman_intro": "全球唯一造 EUV 光刻机的厂，造芯片的源头设备"},
+  "DELL": {"chain": "AI 算力", "chain_tier": "下游", "chain_role": "AI 服务器组装", "layman_intro": "把 NVDA GPU 组装成机柜卖给云厂"},
+  "MRVL": {"chain": "AI 算力", "chain_tier": "中游", "chain_role": "光模块/网络", "layman_intro": "AI 服务器互联的高速网络芯片"},
+  "VRT":  {"chain": "AI 算力", "chain_tier": "下游", "chain_role": "数据中心散热/电力", "layman_intro": "Vertiv 维谛，AI 数据中心冷却+UPS 龙头"},
+  "PLTR": {"chain": "互联网/云", "chain_tier": "中游", "chain_role": "企业 AI 应用", "layman_intro": "把企业数据 + LLM 接成业务系统"},
+
+  "0700.HK": {"chain": "互联网/云", "chain_tier": "下游", "chain_role": "中概互联网龙头", "layman_intro": "腾讯 — 微信+游戏+广告+云"},
+  "9988.HK": {"chain": "互联网/云", "chain_tier": "下游", "chain_role": "电商+云", "layman_intro": "阿里巴巴 — 淘宝/天猫+阿里云"},
+  "3690.HK": {"chain": "互联网/云", "chain_tier": "下游", "chain_role": "本地生活", "layman_intro": "美团 — 外卖+酒旅+到店"},
+  "1810.HK": {"chain": "AI 算力", "chain_tier": "下游", "chain_role": "AIoT/手机", "layman_intro": "小米 — 手机+汽车+IoT 生态"},
+
+  "300308.SZ": {"chain": "AI 算力", "chain_tier": "中游", "chain_role": "光模块龙头", "layman_intro": "中际旭创 — AI 数据中心 800G/1.6T 光模块全球第一"},
+  "300502.SZ": {"chain": "AI 算力", "chain_tier": "中游", "chain_role": "光模块", "layman_intro": "新易盛 — 全球前三的 AI 光模块供应商"},
+  "688008.SS": {"chain": "AI 算力", "chain_tier": "中游", "chain_role": "内存接口", "layman_intro": "澜起科技 — DDR5 内存接口芯片国内唯一"},
+  "603986.SS": {"chain": "AI 算力", "chain_tier": "上游", "chain_role": "存储芯片", "layman_intro": "兆易创新 — NOR Flash 国产替代龙头"},
+  "688256.SS": {"chain": "AI 算力", "chain_tier": "上游", "chain_role": "AI 芯片", "layman_intro": "寒武纪 — 国产 AI 训练芯片代表"},
+  "002475.SZ": {"chain": "AI 算力", "chain_tier": "下游", "chain_role": "AI 服务器组装", "layman_intro": "立讯精密 — 苹果链+AI 服务器代工"},
+  "601138.SS": {"chain": "AI 算力", "chain_tier": "下游", "chain_role": "AI 服务器组装", "layman_intro": "工业富联 — 鸿海 A 股版，AI 服务器 ODM 第一"},
+  "002463.SZ": {"chain": "AI 算力", "chain_tier": "中游", "chain_role": "AI PCB", "layman_intro": "沪电股份 — AI 服务器高速 PCB 主力"},
+  "600584.SS": {"chain": "AI 算力", "chain_tier": "中游", "chain_role": "封装测试", "layman_intro": "长电科技 — 国内最大封测厂"},
+  "688012.SS": {"chain": "AI 算力", "chain_tier": "上游", "chain_role": "半导体设备", "layman_intro": "中微公司 — 国产蚀刻设备代表"}
+}

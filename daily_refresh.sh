@@ -326,7 +326,9 @@ if [ "$MODE" = "a_share_only" ]; then
     # a_share_picks 跑完后重跑约束器 — A 股 holdings 可能变化，需要刷新美股 plan_constrained
     run_step "10b/25 plan_a 后处理（美股仓位约束）" "-m stock_research.jobs.apply_a_share_constraints"
     run_step "24/25 DuckDB pipeline 同步" "scripts/migrate/migrate_pipeline_to_duckdb.py"
-    # 2026-05-21 删 step 24b (classify_watchlist_chains 写 V1 watchlist.chain，已废)
+    # 24b: V2 产业链分类（rule_classify + manual_override → chain_metadata 表 → dashboard 链条 pill）
+    run_step "24b/25 V2 产业链分类入库" "scripts/tools/classify_chain_v2.py"
+    # 注：F-Score 计算已挪到 step 1c（必须在 build_v2_recommendations 之前，让 picks 当日带 f_score）
     run_step "25/25 重建 HTML" "scripts/pipeline/build_stock_dashboard_html.py"
     run_step "26 早安简报（今日决策台的飞书镜像 · 本地生成，验收后再推送）" "-m stock_research.jobs.morning_brief --no-push"
     A_SHARE_ENABLED_NOW=$($PYTHON -c "from stock_research import config; print('1' if config.A_SHARE_PRODUCTION_ENABLED else '0')" 2>/dev/null || echo "0")
@@ -366,6 +368,10 @@ is_morning_step && run_step "0a/25 V1 表 DROP 守卫（V2 schema 完整性）" 
 run_step "0b/25 V2 系统池刷新（live universe → system_universe/pool_membership）" \
     "scripts/tools/refresh_system_universe_v2.py"
 run_step "1/25 抓价格（手动 watchlist + 科技/AI universe）" "scripts/pipeline/fetch_stock_prices.py --source both"
+# M — V2 Piotroski P5-Lite（必须早于 build_v2_recommendations，让 picks 当日带上 f_score）
+# yfinance 99 只财报 ~ 4 分钟；A 股暂未实现（akshare 财报接口结构差异较大）
+run_step "1c/25 V2 F-Score 计算（P5-Lite · 美/港股 → factor_metadata）" \
+    "scripts/tools/compute_piotroski_v2.py --markets US,HK"
 # M — V2 推荐 run（必须在 step 10/23 之前跑，让两者拿到今日 picks 而不是昨日）
 run_step "1b/25 V2 推荐 run（system_universe → recommendation_picks/portfolio_plans）" \
     "scripts/tools/build_v2_recommendations.py"
@@ -430,7 +436,8 @@ run_step "23e/25 picks 反向审查（V2 · Risk Parity + 估值 + Markowitz）"
 # M — DuckDB pipeline 同步 + HTML 重建 + brief + 验收
 # （这几步在 morning 必跑，research mode 不重做避免覆盖 morning 已落地的 dashboard）
 is_morning_step && run_step "24/25 DuckDB pipeline 同步" "scripts/migrate/migrate_pipeline_to_duckdb.py"
-# 2026-05-21 删 step 24b (classify_watchlist_chains 写 V1 watchlist.chain，已废)
+is_morning_step && run_step "24b/25 V2 产业链分类入库" "scripts/tools/classify_chain_v2.py"
+# 注：F-Score 计算已挪到 step 1c（必须在 build_v2_recommendations 之前，让 picks 当日带 f_score）
 is_morning_step && run_step "25/25 重建 HTML" "scripts/pipeline/build_stock_dashboard_html.py"
 
 # R — 周一专属 walk-forward OOS 校验（每周一夜班 21:00 跑；morning 不跑）

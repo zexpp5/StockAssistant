@@ -1300,6 +1300,9 @@ function switchDiscoveryView(view) {
     <div id="backtest-daily-chart" style="height:280px"></div>
   </div>
 
+  <!-- 公司名解析率异常告警（hit_rate < 50% 时显示） -->
+  <div id="backtest-name-warning" class="hidden bg-rose-50 border border-rose-300 rounded-lg p-3 text-xs text-rose-800 mb-4"></div>
+
   <!-- 持仓贡献表 -->
   <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
     <h3 class="text-sm font-semibold text-slate-700 mb-3">💼 单股贡献度（按贡献排序）</h3>
@@ -1444,10 +1447,10 @@ function switchDiscoveryView(view) {
             title="强烈推荐（V2: strong_buy / V1: ⭐⭐⭐）">🔥 强买 <span id="db-filter-cnt-star3">-</span></button>
     <button onclick="setDbExplorerFilter('star_any')" id="db-filter-btn-star_any"
             class="db-filter-btn px-2.5 py-1 rounded-full border bg-white border-slate-300 text-slate-600 hover:bg-violet-50"
-            title="任何评级（⭐ ⭐⭐ ⭐⭐⭐ 都算，排除无评级的）">⭐ 任意评级 <span id="db-filter-cnt-star_any">-</span></button>
+            title="有评级（V2: strong_buy/buy / V1: 任何含 ⭐），排除无评级">⭐ 有评级 <span id="db-filter-cnt-star_any">-</span></button>
     <button onclick="setDbExplorerFilter('ai_strong')" id="db-filter-btn-ai_strong"
             class="db-filter-btn px-2.5 py-1 rounded-full border bg-white border-slate-300 text-slate-600 hover:bg-violet-50"
-            title="AI 关联强度 = 极强（核心标的）/ 强（直接受益）">🤖 AI 强关联 <span id="db-filter-cnt-ai_strong">-</span></button>
+            title="高分推荐（V2: pick_total_score ≥ 80 / V1: AI 关联=强/极强）">💎 高分 ≥80 <span id="db-filter-cnt-ai_strong">-</span></button>
     <span class="text-slate-400 ml-2 text-[11px]">筛选作用于当前市场 tab；与搜索框组合生效</span>
   </div>
 
@@ -5542,6 +5545,18 @@ function renderPlanBacktest() {
     if (!window._BACKTEST_DAILY_RESIZE_HOOKED) {
       window._BACKTEST_DAILY_RESIZE_HOOKED = true;
       window.addEventListener('resize', () => dailyChart.resize());
+    }
+  }
+
+  // 公司名解析率异常告警：hit_rate < 50% 时显示红条，提示上游 prices/audit 快照可能挂了
+  const nameWarnEl = document.getElementById('backtest-name-warning');
+  if (nameWarnEl) {
+    const nr = data.name_resolution || {};
+    if (nr.total && nr.hit_rate != null && nr.hit_rate < 0.5) {
+      nameWarnEl.innerHTML = `⚠️ <strong>公司名解析率异常：${nr.hits}/${nr.total} (${(nr.hit_rate*100).toFixed(0)}%)</strong>。请检查 <code>data/snapshots/prices/</code> 最新一份是否正常写入（应包含 code+name 全集）。`;
+      nameWarnEl.classList.remove('hidden');
+    } else {
+      nameWarnEl.classList.add('hidden');
     }
   }
 
@@ -9950,20 +9965,42 @@ def build():
         n_picks_db = audit_snap_db.get("picks_today_count", 0)
         print(f"  反向审查快照已加载 [DuckDB]（{n_picks_db} 只 picks @ {ts_db}）")
 
-    # Stock Pill 链条上下文：V2 路径只读 data/stock_chain_overrides.json（V1 watchlist 链条字段已删）
+    # Stock Pill 链条上下文：V2 chain_metadata 表优先（rule_classify + manual_override），
+    # data/stock_chain_overrides.json 仅做未入库前的本地兜底
     chain_info: dict = {}
-    overrides_path = os.path.join(_REPO, "data", "stock_chain_overrides.json")
-    if os.path.exists(overrides_path):
-        try:
-            with open(overrides_path, encoding="utf-8") as f:
-                overrides = json.load(f)
-            for code, meta in overrides.items():
-                if code.startswith("_"):
-                    continue
-                chain_info[code] = meta
-            print(f"  Stock Pill 链条上下文已加载 [overrides]({len(chain_info)} 条)")
-        except Exception as e:
-            print(f"  ⚠️ 链条上下文加载失败: {e}")
+    try:
+        import duckdb as _duckdb
+        _chain_conn = _duckdb.connect(os.path.join(_REPO, "stock_history_v2.duckdb"), read_only=True)
+        _chain_tables = {str(r[0]) for r in _chain_conn.execute("SHOW TABLES").fetchall()}
+        if "chain_metadata" in _chain_tables:
+            for market, symbol, chain, tier, role, intro, source in _chain_conn.execute("""
+                SELECT market, symbol, chain, chain_tier, chain_role, layman_intro, source
+                FROM chain_metadata WHERE chain IS NOT NULL
+            """).fetchall():
+                chain_info[symbol] = {
+                    "chain": chain,
+                    "chain_tier": tier,
+                    "chain_role": role,
+                    "layman_intro": intro,
+                    "source": source,
+                }
+            print(f"  Stock Pill 链条上下文已加载 [chain_metadata]({len(chain_info)} 条)")
+        _chain_conn.close()
+    except Exception as e:
+        print(f"  ⚠️ 链条上下文 DB 加载失败，回退 overrides.json: {e}")
+    if not chain_info:
+        overrides_path = os.path.join(_REPO, "data", "stock_chain_overrides.json")
+        if os.path.exists(overrides_path):
+            try:
+                with open(overrides_path, encoding="utf-8") as f:
+                    overrides = json.load(f)
+                for code, meta in overrides.items():
+                    if code.startswith("_"):
+                        continue
+                    chain_info[code] = meta
+                print(f"  Stock Pill 链条上下文已加载 [overrides 兜底]({len(chain_info)} 条)")
+            except Exception as e:
+                print(f"  ⚠️ 链条上下文 overrides 加载失败: {e}")
     html = html.replace("{WATCHLIST_CHAIN_INFO_JSON}", json.dumps(chain_info, ensure_ascii=False))
 
     # 2026-05-21 V1 cutover：V1 discovery_history 表已删；V2 历史在 pick_outcomes 已覆盖

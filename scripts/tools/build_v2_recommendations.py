@@ -77,13 +77,22 @@ def _factor_scores(row: dict[str, Any]) -> dict[str, float]:
     coverage = sum(1 for key in coverage_fields if row.get(key) is not None) / len(coverage_fields)
     data_quality = coverage * 100.0
     total = 0.42 * momentum + 0.38 * valuation + 0.20 * data_quality
-    return {
+    scores: dict[str, Any] = {
         "valuation": round(valuation, 2),
         "momentum": round(momentum, 2),
         "data_quality": round(data_quality, 2),
         "coverage": round(coverage, 4),
         "total": round(total, 2),
     }
+    # F-Score / Piotroski 已计算入 factor_metadata 时透传（compute_piotroski_v2.py 写入）
+    # 当前数据接入：A 股 akshare 财报、美/港股 待 FMP/yfinance 财报源激活
+    f_score = row.get("_factor_meta_f_score")
+    if f_score is not None:
+        scores["f_score"] = round(float(f_score) / 9.0 * 100.0, 2)  # 标准化到 0-100
+    quality_score = row.get("_factor_meta_quality_score")
+    if quality_score is not None:
+        scores["quality"] = round(float(quality_score), 2)
+    return scores
 
 
 def _rating(total: float) -> str:
@@ -222,7 +231,9 @@ def _load_candidates(conn: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
             mo.trade_date AS momentum_trade_date,
             mo.source AS momentum_source,
             f.trade_date AS fundamentals_trade_date,
-            f.source AS fundamentals_source
+            f.source AS fundamentals_source,
+            fm.f_score AS _factor_meta_f_score,
+            fm.quality_score AS _factor_meta_quality_score
         FROM pool_membership m
         JOIN latest_price p
           ON p.market = m.market AND p.symbol = m.symbol
@@ -232,6 +243,8 @@ def _load_candidates(conn: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
           ON f.market = m.market AND f.symbol = m.symbol
         LEFT JOIN system_universe u
           ON u.pool_id = m.pool_id AND u.market = m.market AND u.symbol = m.symbol
+        LEFT JOIN factor_metadata fm
+          ON fm.market = m.market AND fm.symbol = m.symbol
         WHERE m.active = TRUE
           AND m.pool_type = 'system_tech_universe'
         """
@@ -243,6 +256,7 @@ def _load_candidates(conn: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
         "one_week_pct", "one_month_pct", "one_year_pct", "source",
         "fetched_at", "momentum_trade_date", "momentum_source",
         "fundamentals_trade_date", "fundamentals_source",
+        "_factor_meta_f_score", "_factor_meta_quality_score",
     ]
     return [dict(zip(cols, row)) for row in rows]
 

@@ -314,6 +314,50 @@ CREATE TABLE IF NOT EXISTS snapshots (
 
 CREATE INDEX IF NOT EXISTS idx_snap_lookup ON snapshots(category, name, taken_at);
 
+-- 产业链元数据（V2 新增 · 2026-05-21）
+-- 把 system_universe 里的 theme/industry 进一步细化成"产业链/上中下游/具体角色"
+-- chain        : 一级链条标签，如 "AI 算力" / "创新药" / "新能源车"
+-- chain_tier   : 上中下游分级，如 "上游" / "中游" / "下游"（也可为空）
+-- chain_role   : 具体角色，如 "HBM 内存" / "光模块" / "CDMO"
+-- layman_intro : 新手能看懂的一句话，供 dashboard 解释 pill
+-- source       : "rule_classify"（基于规则自动分类）/ "manual_override"（人工 overrides）
+CREATE TABLE IF NOT EXISTS chain_metadata (
+    market       VARCHAR NOT NULL,
+    symbol       VARCHAR NOT NULL,
+    chain        VARCHAR,
+    chain_tier   VARCHAR,
+    chain_role   VARCHAR,
+    layman_intro VARCHAR,
+    source       VARCHAR DEFAULT 'rule_classify',
+    classified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (market, symbol)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chain_meta_chain ON chain_metadata(chain);
+
+-- 因子元数据（V2 新增 · 2026-05-21）
+-- 承载 V2 pipeline 之外算出来的基本面/事件型因子（F-Score、PEAD、北向、龙虎榜 等）
+-- 设计为"宽表 + JSON details"，方便新增因子不改 schema
+--   f_score          : Piotroski F-Score 0..9（A 股 akshare / 美港股 待付费源）
+--   value_score      : 估值复合分（v6 美股 GR 残差，与 V2 pipeline 自己算的 valuation 互补）
+--   quality_score    : 质量分（ROIC/经营现金流稳定性等）
+--   composite_details: JSON dict，存子项明细（流动比率、净利率趋势 等）
+--   source           : 计算来源（'akshare_a_share' / 'yfinance_us' / 'fmp' / 'manual'）
+--   computed_at      : 计算时间，> 30 天视为 stale
+CREATE TABLE IF NOT EXISTS factor_metadata (
+    market            VARCHAR NOT NULL,
+    symbol            VARCHAR NOT NULL,
+    f_score           DOUBLE,
+    value_score       DOUBLE,
+    quality_score     DOUBLE,
+    composite_details JSON,
+    source            VARCHAR,
+    computed_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (market, symbol)
+);
+
+CREATE INDEX IF NOT EXISTS idx_factor_meta_lookup ON factor_metadata(market, symbol);
+
 
 INSERT INTO schema_meta (key, value, updated_at)
 VALUES
