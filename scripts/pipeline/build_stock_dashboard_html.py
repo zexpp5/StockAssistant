@@ -1148,12 +1148,12 @@ function switchDiscoveryView(view) {
     <div id="alert-line" class="space-y-2"></div>
   </div>
 
-  <!-- 持仓列表 -->
-  <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+  <!-- 持仓列表（横向滚动 · 第一列 sticky 不随滑动） -->
+  <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
     <table class="w-full text-sm">
       <thead class="bg-slate-100">
         <tr>
-          <th class="px-3 py-2 text-left">股票</th>
+          <th class="px-3 py-2 text-left sticky left-0 bg-slate-100 z-10 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.15)]">股票</th>
           <th class="px-3 py-2 text-left">行业</th>
           <th class="px-3 py-2 text-right">买入价</th>
           <th class="px-3 py-2 text-right">数量</th>
@@ -1168,8 +1168,21 @@ function switchDiscoveryView(view) {
         </tr>
       </thead>
       <tbody id="holdings-table">
-        <tr><td colspan="11" class="text-center text-slate-500 py-8">暂无持仓 · 点击「+ 添加持仓」开始记录</td></tr>
+        <tr><td colspan="12" class="text-center text-slate-500 py-8">暂无持仓 · 点击「+ 添加持仓」开始记录</td></tr>
       </tbody>
+      <tfoot id="holdings-footer" class="bg-slate-50 font-semibold text-slate-800" style="display:none">
+        <tr>
+          <td class="px-3 py-2 sticky left-0 bg-slate-50 z-10 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.15)]" colspan="4">合计 · <span id="footer-count">0</span> 只</td>
+          <td class="px-3 py-2 text-right font-mono" id="footer-cost">0</td>
+          <td class="px-3 py-2"></td>
+          <td class="px-3 py-2 text-right font-mono" id="footer-value">0</td>
+          <td class="px-3 py-2 text-right font-mono" id="footer-pnl">0</td>
+          <td class="px-3 py-2 text-right font-mono" id="footer-pnl-pct">0%</td>
+          <td class="px-3 py-2 text-right font-mono" id="footer-weight">0%</td>
+          <td class="px-3 py-2"></td>
+          <td class="px-3 py-2"></td>
+        </tr>
+      </tfoot>
     </table>
   </div>
 
@@ -4689,13 +4702,13 @@ async function renderPortfolio() {
     const cur = getCurrentPriceRMB(h.code);
     const addedAt = _fmtAddedAt(h.entry_date || h.created_at);
     if (!cur) {
-      return `<tr class="border-t border-slate-100">
-        <td class="px-3 py-2">${stockPill(h.code, {nameOverride: name})}</td>
+      return `<tr class="border-t border-slate-100 group">
+        <td class="px-3 py-2 sticky left-0 bg-white group-hover:bg-slate-50 z-10 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.15)]">${stockPill(h.code, {nameOverride: name})}</td>
         <td class="px-3 py-2 text-xs text-slate-600">${industry}</td>
         <td class="px-3 py-2 text-right">${h.entry_price}</td>
         <td class="px-3 py-2 text-right">${h.shares}</td>
         <td class="px-3 py-2 text-right">-</td>
-        <td class="px-3 py-2 text-right text-slate-400" colspan="4">无价格数据</td>
+        <td class="px-3 py-2 text-right text-slate-400" colspan="5">无价格数据</td>
         <td class="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">${addedAt}</td>
         <td class="px-3 py-2 text-center">
           <button onclick="editHolding(${h.id})" class="text-violet-600 text-xs">编辑</button>
@@ -4722,8 +4735,8 @@ async function renderPortfolio() {
     stockAlloc.push({ name, value: value_rmb });
 
     const pnlColor = pnl_rmb >= 0 ? "text-emerald-600" : "text-rose-600";
-    return `<tr class="border-t border-slate-100 hover:bg-slate-50">
-      <td class="px-3 py-2 font-medium">${stockPill(h.code, {nameOverride: name})}</td>
+    return `<tr class="border-t border-slate-100 hover:bg-slate-50 group">
+      <td class="px-3 py-2 font-medium sticky left-0 bg-white group-hover:bg-slate-50 z-10 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.15)]">${stockPill(h.code, {nameOverride: name})}</td>
       <td class="px-3 py-2 text-xs text-slate-700 max-w-[140px]">${industry}</td>
       <td class="px-3 py-2 text-right font-mono">${h.entry_price.toFixed(2)} ${cur.currency}</td>
       <td class="px-3 py-2 text-right font-mono">${h.shares}</td>
@@ -4742,6 +4755,28 @@ async function renderPortfolio() {
   }).join("");
 
   tbody.innerHTML = rows;
+
+  // 表格底部"合计"汇总行（累计成本 / 累计市值 / 累计盈亏 RMB / 累计盈亏% / 累计仓位%）
+  const footer = document.getElementById("holdings-footer");
+  if (footer && holdings.length > 0) {
+    const footerPnl = totalValue - totalCost;
+    const footerPnlPct = totalCost > 0 ? (footerPnl / totalCost * 100) : 0;
+    const footerWeight = totalValue / TOTAL_CAPITAL * 100;
+    const fc = footerPnl >= 0 ? "text-emerald-700" : "text-rose-700";
+    document.getElementById("footer-count").textContent = holdings.length;
+    document.getElementById("footer-cost").textContent = totalCost.toLocaleString(undefined, {maximumFractionDigits: 0});
+    document.getElementById("footer-value").textContent = totalValue.toLocaleString(undefined, {maximumFractionDigits: 0});
+    const pnlEl = document.getElementById("footer-pnl");
+    pnlEl.textContent = (footerPnl >= 0 ? "+" : "") + footerPnl.toLocaleString(undefined, {maximumFractionDigits: 0});
+    pnlEl.className = `px-3 py-2 text-right font-mono ${fc}`;
+    const pctEl = document.getElementById("footer-pnl-pct");
+    pctEl.textContent = (footerPnlPct >= 0 ? "+" : "") + footerPnlPct.toFixed(2) + "%";
+    pctEl.className = `px-3 py-2 text-right font-mono ${fc}`;
+    document.getElementById("footer-weight").textContent = footerWeight.toFixed(1) + "%";
+    footer.style.display = "";
+  } else if (footer) {
+    footer.style.display = "none";
+  }
 
   // 总览数字
   const total_pnl = totalValue - totalCost;
