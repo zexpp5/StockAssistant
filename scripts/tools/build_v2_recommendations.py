@@ -389,14 +389,18 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
                 run_id, plan_version, strategy_scope, market, symbol,
                 target_weight, action, risk_limit_json, transaction_cost_bps,
                 benchmark_symbol, created_at
-            ) VALUES (?, 'v2_equal_weight_baseline', 'system_tech_universe', ?, ?, ?, 'target_weight', ?, 10, ?, ?)
+            ) VALUES (?, 'v2_pre_optimizer_equal_weight', 'system_tech_universe', ?, ?, ?, 'pre_optimizer_placeholder', ?, 10, ?, ?)
             """,
             [
                 run_id,
                 row["market"],
                 row["symbol"],
                 target_weight,
-                json.dumps({"max_single_weight": 0.12, "min_sample_note": "baseline"}, ensure_ascii=False),
+                json.dumps({
+                    "max_single_weight": 0.12,
+                    "min_sample_note": "pre_optimizer_placeholder",
+                    "replaced_by": "stock_research.jobs.optimize_portfolio -> v6_risk_aware",
+                }, ensure_ascii=False),
                 "SPY" if row["market"] == "US" else ("2800.HK" if row["market"] == "HK" else "000300.SH"),
                 now,
             ],
@@ -437,7 +441,8 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build v2 recommendations from system tech universe.")
     parser.add_argument("--db", default=os.environ.get("STOCK_DB_PATH") or str(config.DUCKDB_PATH))
-    parser.add_argument("--top-per-market", type=int, default=10)
+    parser.add_argument("--top-per-market", type=int, default=20,
+                        help="每个市场写入 recommendation_picks 的候选数；需足够大，供风险优化器选满目标持仓")
     parser.add_argument("--portfolio-size", type=int, default=10)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true")

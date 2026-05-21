@@ -500,10 +500,8 @@ def main():
             "market": s["market"] or "美股",
             "rating": grade_label,
             "total_score": round(z * 100, 2),
-            "ai_score": ai_score * 10,
-            "val_score": (s["f_score"] or 0) * 3,
-            "trend_score": min(int(abs(s["momentum_12_1"])), 25) if s["momentum_12_1"] else 0,
-            "cred_score": s["analyst_score"],
+            # V1 子分字段 (ai_score/val_score/trend_score/cred_score) 已删
+            # 2026-05-21 V1 cutover：V2 recommendation_picks 不存这些列，且 db_rows 无消费方
             "ai_relevance": ai_label,
             "theme": theme,
             "entry_price": (entry_prices.get(s["code"]) or {}).get("price"),

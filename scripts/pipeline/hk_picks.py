@@ -476,10 +476,8 @@ def run_hk_picks(top_k: int = 12, mode: str = "tertile", dry_run: bool = False,
             "market": "港股",
             "rating": grade_label,
             "total_score": round(e.composite * 100, 2),
-            "ai_score": (e.f_score or 0) * 10,
-            "val_score": (e.f_score or 0) * 3,
-            "trend_score": min(int(abs(e.momentum_12_1 or 0)), 25),
-            "cred_score": 0,
+            # V1 子分字段 (ai_score/val_score/trend_score/cred_score) 已删
+            # 2026-05-21 V1 cutover：V2 recommendation_picks 不存这些列，且 db_rows 无消费方
             "ai_relevance": e.sector or "—",
             "theme": e.sector or "港股科技",
             "entry_price": price_map.get(e.code),

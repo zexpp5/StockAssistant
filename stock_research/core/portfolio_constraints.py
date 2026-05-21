@@ -155,9 +155,17 @@ def volatility_proxy_atr(closes: list[float], lookback: int = 14) -> float | Non
     morning_brief 的 history_data.json 仅含 close，故用此 proxy；
     后续若 history 补 high/low 可升级到真 ATR（见 true_atr 函数）。
     """
-    if not closes or len(closes) < lookback + 1:
+    clean_closes: list[float] = []
+    for v in closes or []:
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        if fv > 0:
+            clean_closes.append(fv)
+    if len(clean_closes) < lookback + 1:
         return None
-    recent = closes[-(lookback + 1):]
+    recent = clean_closes[-(lookback + 1):]
     abs_returns = [abs(recent[i] / recent[i - 1] - 1)
                    for i in range(1, len(recent))
                    if recent[i - 1] > 0]
@@ -184,17 +192,26 @@ def true_atr(highs: list[float] | None, lows: list[float] | None,
     h, l, c = highs[-n:], lows[-n:], closes[-n:]
     trs: list[float] = []
     for i in range(1, n):
-        if h[i] is None or l[i] is None or c[i - 1] is None:
+        try:
+            hi = float(h[i])
+            lo = float(l[i])
+            prev_close = float(c[i - 1])
+        except (TypeError, ValueError):
             continue
-        trs.append(max(h[i] - l[i], abs(h[i] - c[i - 1]), abs(l[i] - c[i - 1])))
+        if hi <= 0 or lo <= 0 or prev_close <= 0:
+            continue
+        trs.append(max(hi - lo, abs(hi - prev_close), abs(lo - prev_close)))
     if len(trs) < period:
         return None
     # Wilder smoothing：前 period 个 TR 做 SMA 做种子，之后递归
     atr = sum(trs[:period]) / period
     for tr in trs[period:]:
         atr = (atr * (period - 1) + tr) / period
-    last_close = c[-1]
-    if not last_close or last_close <= 0:
+    try:
+        last_close = float(c[-1])
+    except (TypeError, ValueError):
+        return None
+    if last_close <= 0:
         return None
     return atr / last_close
 

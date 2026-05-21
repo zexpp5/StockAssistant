@@ -142,22 +142,9 @@ def _to_ts(v) -> datetime | None:
 # Upsert helpers
 # ============================================================
 
-PRICE_COLS = [
-    "date", "code", "name", "yf_ticker", "price", "prev_close", "currency",
-    "market_cap", "forward_pe", "trailing_pe", "peg_ratio",
-    "earnings_growth_pct", "revenue_growth_pct",
-    "ytd_pct", "one_year_pct", "one_month_pct", "one_week_pct", "fetched_at",
-]
-
-
-PICK_COLS = [
-    "pick_date", "code", "name", "market", "rating",
-    "total_score", "ai_score", "val_score", "trend_score", "cred_score",
-    "ai_relevance", "theme", "entry_price", "entry_currency",
-    "peg_at_pick", "fpe_at_pick", "ytd_at_pick", "one_week_at_pick", "one_year_at_pick",
-    "model_source", "signal", "coverage_score", "missing_factors", "factor_weights_used",
-    "universe_scope", "source_origin",
-]
+# 2026-05-21 V1 cutover：PRICE_COLS / PICK_COLS / REVIEW_COLS 三个列名常量已删
+# (V1 prices / picks / reviews 表已 DROP，无任何 INSERT 站点引用这些常量)
+# V2 列名定义在 init_stock_db_v2.py 的 CREATE TABLE 语句里，是 single source of truth。
 
 
 def _infer_signal_from_rating(rating: str | None) -> str:
@@ -178,15 +165,6 @@ def _infer_signal_from_rating(rating: str | None) -> str:
     if "观察" in text:
         return "watch"
     return "buy"
-
-
-REVIEW_COLS = [
-    "review_date", "pick_date", "code", "name",
-    "entry_price", "current_price", "pct", "days_held",
-    "grade", "rating", "theme",
-    "entry_spy_price", "current_spy_price", "alpha_pct",
-    "model_source", "signal", "benchmark_code", "benchmark_pct", "is_success",
-]
 
 
 def fetch_research_records_v2(*, conn: duckdb.DuckDBPyConnection | None = None) -> list[dict]:
@@ -245,9 +223,9 @@ def fetch_research_records_v2(*, conn: duckdb.DuckDBPyConnection | None = None) 
             COALESCE(ls.ai_logic, ls.source_text) AS ai_logic,
             ls.conclusion,
             ls.risks,
-            NULL AS peers, NULL AS rhythm, NULL AS status, u.source, ls.credibility,
+            NULL AS peers, NULL AS rhythm, u.source, ls.credibility,
             ls.earnings, ls.verification, ls.info_breakdown,
-            NULL AS chain, NULL AS chain_tier, NULL AS chain_role, NULL AS layman_intro,
+            cm.chain, cm.chain_tier, cm.chain_role, cm.layman_intro,
             u.theme,
             lp.close          AS latest_price,
             lp.market_cap     AS yf_market_cap,
@@ -269,13 +247,14 @@ def fetch_research_records_v2(*, conn: duckdb.DuckDBPyConnection | None = None) 
         LEFT JOIN latest_price lp ON lp.market = u.market AND lp.symbol = u.symbol
         LEFT JOIN latest_picks lpk ON lpk.market = u.market AND lpk.symbol = u.symbol
         LEFT JOIN latest_snap ls ON ls.market = u.market AND ls.symbol = u.symbol
+        LEFT JOIN chain_metadata cm ON cm.market = u.market AND cm.symbol = u.symbol
         WHERE u.active = TRUE
         ORDER BY u.market, u.symbol
     """).fetchall()
     cols = [
         "code", "name", "market", "business", "industry",
         "ai_relevance", "ai_logic", "conclusion", "risks", "peers",
-        "rhythm", "status", "source", "credibility",
+        "rhythm", "source", "credibility",
         "earnings", "verification", "info_breakdown",
         "chain", "chain_tier", "chain_role", "layman_intro",
         "theme",
@@ -286,19 +265,28 @@ def fetch_research_records_v2(*, conn: duckdb.DuckDBPyConnection | None = None) 
         "pick_rating", "pick_signal", "pick_total_score", "pick_factor_scores_json",
     ]
     out = [dict(zip(cols, r)) for r in rows]
-    # 用 industry/theme 推断 chain / chain_role（来自 system_universe；不再依赖已删除的 watchlist 字段）
-    try:
-        from stock_research.core.watchlist_enrich import _infer_chain
-        for row in out:
-            chain, chain_tier, chain_role = _infer_chain(row.get("industry") or "", row.get("theme") or "")
-            if chain:
-                row["chain"] = chain
-            if chain_role:
-                row["chain_role"] = chain_role
-            if chain_tier:
-                row["chain_tier"] = chain_tier
-    except Exception:
-        pass  # 推断失败保持 None，前端兼容
+    # chain/chain_tier/chain_role/layman_intro 已在 SQL 里 JOIN chain_metadata 拿到（2026-05-21 V2 表）
+    # 若 chain_metadata 没记录则用 watchlist_enrich._infer_chain 兜底
+    import logging as _lg
+    _logger = _lg.getLogger(__name__)
+    missing_chain = [r for r in out if not r.get("chain")]
+    if missing_chain:
+        try:
+            from stock_research.core.watchlist_enrich import _infer_chain
+            inferred = 0
+            for row in missing_chain:
+                chain, chain_tier, chain_role = _infer_chain(row.get("industry") or "", row.get("theme") or "")
+                if chain:
+                    row["chain"] = chain
+                    inferred += 1
+                if chain_role:
+                    row["chain_role"] = chain_role
+                if chain_tier:
+                    row["chain_tier"] = chain_tier
+            if inferred:
+                _logger.info(f"_infer_chain 兜底命中 {inferred}/{len(missing_chain)} 只（chain_metadata 未覆盖）")
+        except ImportError as e:
+            _logger.warning(f"_infer_chain 兜底失败（{len(missing_chain)} 只无 chain）：{e}")
 
     # A 股 theme 友好化（产业链地图专用）：证监会代码 → 业务子主题
     # 不在白名单的 A 股 theme=None，前端不渲染（医药/化工/食品/家电/工程机械 等）
@@ -500,10 +488,18 @@ def fetch_manual_watchlist_enriched(
     """manual_watchlist JOIN system_universe + price_daily 拿出富字段，
     供「自选股·AI 优选」三个 jobs（daily_picks_v5 / hk_picks / a_share_picks）使用。
 
-    返回 dict 字段（与 V1 fetch_watchlist 兼容）：
-      code, name, market, industry, theme, ai_relevance, ai_logic, conclusion,
-      risks, credibility, latest_price, ytd_pct, one_year_pct, one_month_pct,
-      one_week_pct, forward_pe, peg, earnings_growth_pct
+    返回 dict 字段：
+      code, name, market, industry, theme,
+      latest_price, ytd_pct, one_year_pct, one_month_pct, one_week_pct,
+      forward_pe, peg, earnings_growth_pct, currency, market_cap
+
+    2026-05-21 V1 cutover：
+    - 删 5 个永空字段 (ai_relevance / ai_logic / conclusion / risks / credibility) ——
+      V2 manual_watchlist 不存这些；3 个消费 jobs 自己重新填 ai_relevance/ai_logic
+      或忽略；保留 NULL 字段只会让 schema 看着有用却没数据。
+    - JOIN 只按 symbol（manual_watchlist.market="A股·沪交所"/"美股" 与
+      system_universe.market="CN"/"US" 值不同，按 market JOIN 永远 false，导致
+      industry/theme 也空。symbol 带后缀已全局唯一）。
     """
     own = conn is None
     if own:
@@ -514,17 +510,15 @@ def fetch_manual_watchlist_enriched(
             QUALIFY ROW_NUMBER() OVER (PARTITION BY market, symbol ORDER BY trade_date DESC, fetched_at DESC) = 1
         )
         SELECT
-            w.symbol AS code, COALESCE(w.name, u.name, w.symbol) AS name,
+            w.symbol AS code, COALESCE(NULLIF(u.name, w.symbol), w.name, w.symbol) AS name,
             w.market, u.industry, u.theme,
-            NULL AS ai_relevance, NULL AS ai_logic, NULL AS conclusion,
-            NULL AS risks, NULL AS credibility,
             lp.close AS latest_price,
             lp.ytd_pct, lp.one_year_pct, lp.one_month_pct, lp.one_week_pct,
             lp.forward_pe, lp.peg_ratio AS peg, NULL AS earnings_growth_pct,
             lp.currency, lp.market_cap
         FROM manual_watchlist w
-        LEFT JOIN system_universe u ON u.market = w.market AND u.symbol = w.symbol
-        LEFT JOIN latest_price lp ON lp.market = w.market AND lp.symbol = w.symbol
+        LEFT JOIN system_universe u ON u.symbol = w.symbol
+        LEFT JOIN latest_price lp ON lp.symbol = w.symbol
     """
     params: list = []
     if market:
@@ -533,7 +527,6 @@ def fetch_manual_watchlist_enriched(
     sql += " ORDER BY w.market, w.symbol"
     rows = conn.execute(sql, params).fetchall()
     cols = ["code", "name", "market", "industry", "theme",
-            "ai_relevance", "ai_logic", "conclusion", "risks", "credibility",
             "latest_price", "ytd_pct", "one_year_pct", "one_month_pct", "one_week_pct",
             "forward_pe", "peg", "earnings_growth_pct", "currency", "market_cap"]
     out = [dict(zip(cols, r)) for r in rows]

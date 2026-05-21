@@ -412,10 +412,13 @@ def create_app():
             if fs_json:
                 try:
                     fs = json.loads(fs_json) if isinstance(fs_json, str) else fs_json
+                    # V1 命名兼容层：把 V2 factor_scores keys 暴露成 V1 字段名供前端表格用
                     merged["pick_val_score"] = fs.get("valuation")
                     merged["pick_trend_score"] = fs.get("momentum")
                     merged["pick_cred_score"] = fs.get("data_quality")
                     merged["pick_coverage_score"] = fs.get("coverage")
+                    merged["pick_f_score"] = fs.get("f_score")  # 2026-05-21 新增（Piotroski P5-Lite）
+                    # ai_relevance 不在 V2 factor_scores keys 里，永远 None；保留旧字段是兼容前端
                     merged["pick_ai_score"] = fs.get("ai_relevance")
                 except Exception:
                     pass

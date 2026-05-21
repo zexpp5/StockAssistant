@@ -307,9 +307,9 @@ run_a_share_steps() {
     A_SHARE_ENABLED_NOW=$($PYTHON -c "from stock_research import config; print('1' if config.A_SHARE_PRODUCTION_ENABLED else '0')" 2>/dev/null || echo "0")
     # require-after-close：python 层再做一次防御，万一 cron 配错也不会跑出脏数据
     if [ "$A_SHARE_ENABLED_NOW" = "1" ]; then
-        run_step "21/25 A 股优选（校准权重，写 DuckDB）" "-m stock_research.jobs.a_share_picks --require-after-close --universe ${A_SHARE_UNIVERSE:-auto} --universe-limit ${A_SHARE_UNIVERSE_LIMIT:-80}"
+        run_step "21/25 A 股优选（校准权重，写 DuckDB）" "-m stock_research.jobs.a_share_picks --require-after-close --universe ${A_SHARE_UNIVERSE:-auto} --universe-limit ${A_SHARE_UNIVERSE_LIMIT:-80} --workers ${A_SHARE_WORKERS:-1}"
     else
-        run_step "21/25 A 股优选（研究模式，不写 DuckDB）" "-m stock_research.jobs.a_share_picks --require-after-close --dry-run --universe ${A_SHARE_UNIVERSE:-auto} --universe-limit ${A_SHARE_UNIVERSE_LIMIT:-80}"
+        run_step "21/25 A 股优选（研究模式，不写 DuckDB）" "-m stock_research.jobs.a_share_picks --require-after-close --dry-run --universe ${A_SHARE_UNIVERSE:-auto} --universe-limit ${A_SHARE_UNIVERSE_LIMIT:-80} --workers ${A_SHARE_WORKERS:-1}"
     fi
 }
 

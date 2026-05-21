@@ -332,7 +332,7 @@ def _load_hk_picks() -> dict | None:
             sys.path.insert(0, lib_path)
         from stock_db import get_db
 
-        conn = get_db()
+        conn = get_db(read_only=True)
         v2_run = conn.execute(
             """
             SELECT run_id, run_date, generated_at FROM recommendation_runs
@@ -391,7 +391,7 @@ def _load_a_share_picks() -> dict | None:
             sys.path.insert(0, lib_path)
         from stock_db import get_db
 
-        conn = get_db()
+        conn = get_db(read_only=True)
         # ── V2 优先 ──
         v2_run = conn.execute(
             """
@@ -887,10 +887,20 @@ def section_holdings_stoploss(history: dict | None = None,
         ts_list = ticker_hist.get("ts") or []
         if not closes:
             continue
-        current = closes[-1]
+        clean_closes = []
+        for v in closes:
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                continue
+            if fv > 0:
+                clean_closes.append(fv)
+        if not clean_closes:
+            continue
+        current = clean_closes[-1]
         # 动态止损：优先真 ATR（含 high/low），fallback 到 close-only proxy
         dyn_stop, atr_source = volatility_adaptive_stop_pct(
-            closes, highs=highs, lows=lows, fallback=stop_pct,
+            clean_closes, highs=highs, lows=lows, fallback=stop_pct,
         )
         dyn_watch = max(0.05, dyn_stop - 0.05)
         triggered, dd = check_stop_loss_breach(entry, current, stop_pct=dyn_stop)
@@ -1493,7 +1503,7 @@ def section_weekly_hitrate(today: date | None = None) -> str:
     except Exception:
         return ""
     try:
-        conn = stock_db.get_db()
+        conn = stock_db.get_db(read_only=True)
     except Exception:
         return ""
     lines = ["#### 🧪 上周回顾 · AI 准不准（周一专属 · V2 pick_outcomes）"]
@@ -2064,7 +2074,7 @@ def _hitrate_card_lines(today: date) -> list[str]:
         _repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         sys.path.insert(0, os.path.join(_repo, "scripts", "lib"))
         import stock_db
-        conn = stock_db.get_db()
+        conn = stock_db.get_db(read_only=True)
     except Exception:
         return []
     lines: list[str] = []

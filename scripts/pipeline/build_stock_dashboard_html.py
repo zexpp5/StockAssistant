@@ -1488,7 +1488,6 @@ function switchDiscoveryView(view) {
           <th class="px-3 py-2 text-left">AI 强度</th>
           <th class="px-3 py-2 text-left">评级</th>
           <th class="px-3 py-2 text-right">总分</th>
-          <th class="px-3 py-2 text-left">状态</th>
           <th class="px-3 py-2 text-left" title="prices.fetched_at — 行情/估值数据抓取时间">抓取时间</th>
           <th class="px-3 py-2 text-left" title="watchlist.updated_at — AI 分析/元数据最近一次刷新时间">分析时间</th>
           <th class="px-2 py-2 text-center" title="📊 看完整历史数据（prices/picks/reviews/discovery/earnings_history 全表）">📊 历史</th>
@@ -1782,10 +1781,6 @@ function switchDiscoveryView(view) {
         <div class="md:col-span-2">
           <label class="text-xs text-slate-500 block mb-1">AI 关联逻辑</label>
           <textarea id="wl-ai-logic" rows="2" class="w-full px-3 py-2 border border-slate-300 rounded text-sm"></textarea>
-        </div>
-        <div>
-          <label class="text-xs text-slate-500 block mb-1">研究状态</label>
-          <input id="wl-status" type="text" class="w-full px-3 py-2 border border-slate-300 rounded text-sm" placeholder="持仓 / 关注 / 待研究 …">
         </div>
         <div>
           <label class="text-xs text-slate-500 block mb-1">数据可信度</label>
@@ -2921,7 +2916,6 @@ function openWatchlistEditor(code) {
     document.getElementById("wl-business").value = row.business || "";
     document.getElementById("wl-ai-relevance").value = row.ai_relevance || "";
     document.getElementById("wl-ai-logic").value = row.ai_logic || "";
-    document.getElementById("wl-status").value = row.status || "";
     document.getElementById("wl-credibility").value = row.credibility || "";
     document.getElementById("wl-conclusion").value = row.conclusion || "";
     document.getElementById("wl-risks").value = row.risks || "";
@@ -2960,7 +2954,6 @@ async function saveWatchlistItem() {
     business: document.getElementById("wl-business").value.trim() || null,
     ai_relevance: document.getElementById("wl-ai-relevance").value.trim() || null,
     ai_logic: document.getElementById("wl-ai-logic").value.trim() || null,
-    status: document.getElementById("wl-status").value.trim() || null,
     credibility: document.getElementById("wl-credibility").value.trim() || null,
     conclusion: document.getElementById("wl-conclusion").value.trim() || null,
     risks: document.getElementById("wl-risks").value.trim() || null,
@@ -3379,7 +3372,7 @@ function _dbMatchesQuery(r, q) {
   const isShortAscii = q.length <= 2 && /^[\x00-\x7f]+$/.test(q);
   const fields = isShortAscii
     ? [r.code, r.name]
-    : [r.code, r.name, r.industry, r.chain, r.chain_tier, r.chain_role, r.business, r.theme, r.ai_relevance, r.layman_intro, r.pick_rating, r.status];
+    : [r.code, r.name, r.industry, r.chain, r.chain_tier, r.chain_role, r.business, r.theme, r.ai_relevance, r.layman_intro, r.pick_rating];
   const hay = fields.filter(Boolean).join(" ").toLowerCase();
   return hay.includes(q);
 }
@@ -3471,7 +3464,6 @@ function renderDbExplorerTable() {
         <td class="px-3 py-2 text-xs ${aiCls}">${_esc(r.ai_relevance || "—")}</td>
         <td class="px-3 py-2 text-xs ${ratingCls}">${_esc(ratingTxt)}</td>
         <td class="px-3 py-2 text-right font-mono text-xs">${_dbFmtNum(r.pick_total_score, 1)}</td>
-        <td class="px-3 py-2 text-xs text-slate-500">${_esc(r.status || "—")}</td>
         <td class="px-3 py-2 text-[11px] font-mono text-slate-500" title="行情/估值数据抓取时间">${_esc(r.price_fetched_at || "—")}</td>
         <td class="px-3 py-2 text-[11px] font-mono text-slate-500" title="AI 元数据最近一次刷新时间">${_esc(r.updated_at || "—")}</td>
         <td class="px-2 py-2 text-center" onclick="event.stopPropagation()">
@@ -3520,7 +3512,6 @@ function _dbExplorerDetailRow(r) {
     ["AI 逻辑", r.ai_logic],
     ["可比标的", r.peers],
     ["节奏", r.rhythm],
-    ["状态", r.status],
     ["可信度", r.credibility],
     ["源", r.source],
     ["双源校验", r.verification],

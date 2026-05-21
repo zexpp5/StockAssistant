@@ -92,28 +92,303 @@ def _write_latest_plan(result: dict) -> None:
         print(f"✅ 生产 plan 已写入: {out}")
 
 
+def _infer_market(symbol: str) -> str:
+    s = str(symbol or "").upper()
+    if s.endswith((".SS", ".SZ", ".SH")):
+        return "CN"
+    if s.endswith(".HK"):
+        return "HK"
+    return "US"
+
+
+def _benchmark_for_market(market: str) -> str:
+    return {"US": "SPY", "HK": "2800.HK", "CN": "000300.SH"}.get(str(market).upper(), "SPY")
+
+
+def _latest_v2_run_id(conn) -> str | None:
+    row = conn.execute(
+        """
+        SELECT run_id
+        FROM recommendation_runs
+        WHERE universe_scope = 'system_tech_universe' AND status = 'generated'
+        ORDER BY generated_at DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    return str(row[0]) if row else None
+
+
+def _sync_risk_aware_plan_to_duckdb(result: dict, run_id: str | None) -> dict:
+    """Make DuckDB portfolio_plans reflect the actionable risk-aware plan.
+
+    build_v2_recommendations can create a short-lived equal-weight placeholder so
+    a fresh v2 rebuild has a portfolio artifact. Production, however, must use
+    the optimizer's constrained weights. This function replaces all current-run
+    system_tech_universe plan rows with v6_risk_aware weights.
+    """
+    try:
+        import duckdb
+    except Exception as e:  # pragma: no cover - production dependency
+        raise RuntimeError(f"DuckDB unavailable for portfolio_plans sync: {e}") from e
+
+    plan_rows = result.get("plan") or result.get("plan_v6") or []
+    if not isinstance(plan_rows, list):
+        plan_rows = []
+    actionable = []
+    for row in plan_rows:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("ticker") or row.get("symbol") or row.get("code") or "").upper()
+        weight = _safe_float(row.get("capped_weight"), _safe_float(row.get("target_weight"), 0.0))
+        if not symbol or weight is None or weight <= 1e-9:
+            continue
+        actionable.append((symbol, float(weight), row))
+    if not actionable:
+        raise RuntimeError("risk-aware plan has no positive target weights to sync")
+
+    db_path = Path(config.DUCKDB_PATH)
+    conn = duckdb.connect(str(db_path))
+    try:
+        tables = {str(r[0]) for r in conn.execute("SHOW TABLES").fetchall()}
+        required = {"recommendation_runs", "recommendation_picks", "portfolio_plans"}
+        missing = sorted(required - tables)
+        if missing:
+            raise RuntimeError(f"DuckDB missing required tables for plan sync: {missing}")
+        run_id = run_id or _latest_v2_run_id(conn)
+        if not run_id:
+            raise RuntimeError("No latest V2 recommendation run found for portfolio_plans sync")
+
+        meta_rows = conn.execute(
+            """
+            SELECT symbol, market
+            FROM recommendation_picks
+            WHERE run_id = ?
+            """,
+            [run_id],
+        ).fetchall()
+        market_by_symbol = {str(symbol).upper(): str(market).upper() for symbol, market in meta_rows}
+
+        conn.execute(
+            """
+            DELETE FROM portfolio_plans
+            WHERE run_id = ? AND strategy_scope = 'system_tech_universe'
+            """,
+            [run_id],
+        )
+
+        now = datetime.now()
+        constraints = result.get("constraints") if isinstance(result.get("constraints"), dict) else {}
+        risk_limit = {
+            "source": "data/latest/plan_a_v5.json",
+            "plan_source": "risk_aware_optimize",
+            "engine": (result.get("risk_aware") or {}).get("engine") if isinstance(result.get("risk_aware"), dict) else None,
+            "method": result.get("method"),
+            "cash_pct_effective": constraints.get("cash_pct_effective"),
+            "gross_exposure_effective": constraints.get("gross_exposure_effective"),
+            "max_weight": constraints.get("max_weight"),
+            "min_weight": constraints.get("min_weight"),
+            "max_corr": constraints.get("max_corr"),
+            "max_adv_pct": constraints.get("max_adv_pct"),
+        }
+        for symbol, weight, _row in actionable:
+            market = market_by_symbol.get(symbol) or _infer_market(symbol)
+            conn.execute(
+                """
+                INSERT INTO portfolio_plans (
+                    run_id, plan_version, strategy_scope, market, symbol,
+                    target_weight, action, risk_limit_json, transaction_cost_bps,
+                    benchmark_symbol, created_at
+                ) VALUES (?, 'v6_risk_aware', 'system_tech_universe', ?, ?, ?, 'target_weight', ?, ?, ?, ?)
+                """,
+                [
+                    run_id,
+                    market,
+                    symbol,
+                    weight,
+                    json.dumps(risk_limit, ensure_ascii=False),
+                    _safe_float(constraints.get("cost_bps"), 5.0),
+                    _benchmark_for_market(market),
+                    now,
+                ],
+            )
+    finally:
+        conn.close()
+
+    gross = sum(weight for _, weight, _ in actionable)
+    summary = {
+        "db_path": str(db_path),
+        "run_id": run_id,
+        "plan_version": "v6_risk_aware",
+        "rows": len(actionable),
+        "gross_exposure": round(gross, 6),
+        "cash_pct": round(max(0.0, 1.0 - gross), 6),
+    }
+    print(
+        "✅ DuckDB portfolio_plans 已同步为 risk-aware: "
+        f"run_id={run_id} rows={summary['rows']} gross={summary['gross_exposure']:.1%}"
+    )
+    return summary
+
+
+def _limit_positions_by_optimizer_weight(
+    weights: dict[str, float],
+    ranked_tickers: list[str],
+    max_positions: int | None,
+) -> tuple[dict[str, float], list[str]]:
+    if not max_positions or max_positions <= 0:
+        return dict(weights), []
+    positive = {t: float(w) for t, w in weights.items() if float(w) > 1e-9}
+    if len(positive) <= max_positions:
+        return positive, []
+    rank = {t: i for i, t in enumerate(ranked_tickers)}
+    keep = {
+        t for t, _w in sorted(
+            positive.items(),
+            key=lambda item: (-item[1], rank.get(item[0], 10_000)),
+        )[:max_positions]
+    }
+    limited = {t: w for t, w in positive.items() if t in keep}
+    dropped = [t for t in ranked_tickers if t in positive and t not in keep]
+    return limited, dropped
+
+
+def _redistribute_to_target_gross(
+    weights: dict[str, float],
+    ranked_tickers: list[str],
+    industries: dict[str, str],
+    adv_dollars: dict[str, float],
+    *,
+    portfolio_value: float,
+    target_gross: float,
+    max_single_pct: float,
+    max_industry_pct: float,
+    max_adv_pct: float,
+    max_rounds: int = 8,
+) -> tuple[dict[str, float], dict[str, float | int]]:
+    """Reallocate cap overflow to eligible names before letting it become cash."""
+    out = {t: max(0.0, float(w)) for t, w in weights.items()}
+    target_gross = max(0.0, min(1.0, target_gross))
+    if not out or target_gross <= 0:
+        return out, {"before_gross": sum(out.values()), "after_gross": sum(out.values()), "redistributed": 0.0}
+
+    before = sum(out.values())
+    rank = {t: i for i, t in enumerate(ranked_tickers)}
+
+    def industry_totals() -> dict[str, float]:
+        totals: dict[str, float] = {}
+        for t, w in out.items():
+            ind = industries.get(t, "Unknown") or "Unknown"
+            totals[ind] = totals.get(ind, 0.0) + w
+        return totals
+
+    for _ in range(max_rounds):
+        gross = sum(out.values())
+        remaining = target_gross - gross
+        if remaining <= 1e-6:
+            break
+        ind_totals = industry_totals()
+        capacities: dict[str, float] = {}
+        for t in out:
+            single_room = max_single_pct - out[t]
+            ind = industries.get(t, "Unknown") or "Unknown"
+            industry_room = max_industry_pct - ind_totals.get(ind, 0.0)
+            adv = float(adv_dollars.get(t) or 0.0)
+            adv_room = (adv * max_adv_pct / portfolio_value - out[t]) if adv > 0 and portfolio_value > 0 else 0.0
+            cap = min(single_room, industry_room, adv_room)
+            if cap > 1e-6:
+                # Tilt toward higher-ranked names while still using capacity.
+                score_tilt = max(1.0, len(rank) - rank.get(t, len(rank)) + 1.0)
+                capacities[t] = cap * score_tilt
+        if not capacities:
+            break
+        raw_total = sum(capacities.values())
+        added_total = 0.0
+        for t, weighted_cap in sorted(capacities.items(), key=lambda item: rank.get(item[0], 10_000)):
+            # Convert tilted capacity back to real cap for the hard limit.
+            score_tilt = max(1.0, len(rank) - rank.get(t, len(rank)) + 1.0)
+            real_cap = weighted_cap / score_tilt
+            add = min(real_cap, remaining * weighted_cap / raw_total)
+            if add > 0:
+                out[t] += add
+                added_total += add
+        if added_total <= 1e-8:
+            break
+
+    after = sum(out.values())
+    return out, {
+        "before_gross": round(before, 6),
+        "after_gross": round(after, 6),
+        "target_gross": round(target_gross, 6),
+        "redistributed": round(max(0.0, after - before), 6),
+        "residual_cash": round(max(0.0, 1.0 - after), 6),
+        "rounds": max_rounds,
+    }
+
+
+def _portfolio_stats_for_weights(
+    weights: dict[str, float],
+    mean_ret_map: dict[str, float],
+    cov_df: pd.DataFrame,
+    *,
+    risk_free_annual: float = 0.045,
+) -> tuple[float, float, float]:
+    tickers = [t for t, w in weights.items() if w > 1e-9 and t in mean_ret_map and t in cov_df.index]
+    if not tickers:
+        return 0.0, 0.0, 0.0
+    w = np.array([weights[t] for t in tickers], dtype=float)
+    mu = np.array([mean_ret_map[t] for t in tickers], dtype=float)
+    sub_cov = cov_df.loc[tickers, tickers].to_numpy(dtype=float)
+    gross = float(w.sum())
+    cash = max(0.0, 1.0 - gross)
+    annual_ret = float(mu @ w) * 252 + risk_free_annual * cash
+    annual_vol = float(np.sqrt(max(0.0, w @ sub_cov @ w)) * np.sqrt(252))
+    annual_sharpe = (annual_ret - risk_free_annual) / annual_vol if annual_vol > 0 else 0.0
+    return annual_ret, annual_vol, annual_sharpe
+
+
 # ─────────── 数据获取 ───────────
 
-def _load_factor_scores() -> dict | None:
+def _load_factor_scores(market_scope: str = "US") -> dict | None:
     """读 daily_picks_v5 / build_plan_a_v5 共享的 factor_scores_today.json 缓存。
 
     fallback：当缓存缺失（v5 因 watchlist 空未产 cache）时，从 V2 recommendation_picks
     构造一个轻量版 factors 列表，仅用于驱动 risk-aware 组合优化，跳过 combine_factors。
     V2 design 要求 AI 组合方案 candidate 池来自系统 AI 推荐池，而不是 watchlist。
     """
+    market_scope = str(market_scope or "US").upper()
+
+    def _in_scope(ticker: str, explicit_market: str | None = None) -> bool:
+        if market_scope in {"ALL", "*"}:
+            return True
+        market = (explicit_market or _infer_market(ticker)).upper()
+        return market == market_scope
+
     cache = _REPO_ROOT / "data" / "latest" / "factor_scores_today.json"
     if cache.exists():
         with open(cache, encoding="utf-8") as f:
             data = json.load(f)
         today_str = datetime.now().strftime("%Y-%m-%d")
         cache_date = (data.get("date") or "")[:10]
-        factors_n = len(data.get("factors") or [])
+        raw_factors = data.get("factors") or []
+        raw_signals = data.get("signals") or []
+        factors = [
+            f for f in raw_factors
+            if _in_scope(str(f.get("ticker") or f.get("symbol") or ""))
+        ]
+        signals = [
+            s for s in raw_signals
+            if _in_scope(str(s.get("ticker") or s.get("symbol") or ""))
+        ]
+        factors_n = len(factors)
         # cache 当天 + 覆盖足够（≥5 只）才使用；否则走 V2 fallback
         if cache_date == today_str and factors_n >= 5:
+            data["factors"] = factors
+            data["signals"] = signals
+            data["market_scope"] = market_scope
             return data
         logger.info(
-            "factor_scores cache 已过期或覆盖不足（date=%s, factors=%d）→ V2 fallback",
-            cache_date or "?", factors_n,
+            "factor_scores cache 已过期或 %s 覆盖不足（date=%s, factors=%d）→ V2 fallback",
+            market_scope, cache_date or "?", factors_n,
         )
 
     # V2 fallback：用最新 recommendation_picks 作为候选池
@@ -124,9 +399,12 @@ def _load_factor_scores() -> dict | None:
     except Exception as e:
         logger.error("fallback 加载 stock_db 失败: %s", e)
         return None
-    picks = fetch_latest_recommendation_picks()
+    picks = [
+        p for p in fetch_latest_recommendation_picks()
+        if _in_scope(str(p.get("symbol") or ""), str(p.get("market") or ""))
+    ]
     if not picks:
-        logger.error("缓存 %s 不存在 且 recommendation_picks 无最新 run", cache)
+        logger.error("缓存 %s 不存在 且 recommendation_picks 无 %s 最新 run", cache, market_scope)
         return None
     factors = []
     signals = []
@@ -151,6 +429,7 @@ def _load_factor_scores() -> dict | None:
         "fallback_v2": True,
         "fallback_run_id": picks[0].get("run_id"),
         "fallback_run_date": str(picks[0].get("run_date")),
+        "market_scope": market_scope,
     }
 
 
@@ -337,7 +616,9 @@ def markowitz_constrained(mean_rets: np.ndarray, cov: np.ndarray,
 # ─────────── 主流水线 ───────────
 
 def run(capital: float = DEFAULT_CAPITAL,
-        top_n: int = 12,
+        top_n: int = 24,
+        max_positions: int = 15,
+        market_scope: str = "US",
         max_weight: float = 0.15,
         min_weight: float = 0.02,
         cash_pct: float = 0.05,
@@ -355,9 +636,10 @@ def run(capital: float = DEFAULT_CAPITAL,
     print("=" * 92)
 
     # ────── 1. 读因子缓存 ──────
-    cached = _load_factor_scores()
+    market_scope = str(market_scope or "US").upper()
+    cached = _load_factor_scores(market_scope=market_scope)
     if not cached:
-        return {"error": "factor_scores_today.json 不存在；先跑 daily_picks_v5.py"}
+        return {"error": f"{market_scope} factor scores 不存在；先跑对应推荐生成"}
 
     factors = cached["factors"]
     sig_map = {s["ticker"]: s for s in cached.get("signals", [])}
@@ -462,7 +744,7 @@ def run(capital: float = DEFAULT_CAPITAL,
 
     top = df.head(top_n)
     tickers = top["ticker"].tolist()
-    print(f"\n  Top {top_n}: {tickers}")
+    print(f"\n  候选 Top {top_n}: {tickers}")
 
     # ────── 4. 拉历史收益 + ADV ──────
     print(f"\n[3/5] 拉 {len(tickers)} 只标的历史收益 + ADV...")
@@ -487,8 +769,11 @@ def run(capital: float = DEFAULT_CAPITAL,
     matrix = np.array([aligned[t] for t in final_tickers])
     mean_rets = matrix.mean(axis=1)
     cov = np.cov(matrix)
+    mean_ret_map = {final_tickers[i]: float(mean_rets[i]) for i in range(len(final_tickers))}
+    cov_df = pd.DataFrame(cov, index=final_tickers, columns=final_tickers)
 
     # ────── 5. 核心组合优化 ──────
+    desired_cash_pct = cash_pct
     if use_legacy_mc:
         print(f"\n[4/5] Markowitz 蒙特卡洛 20000 次（legacy）...")
         weights, sharpe = markowitz_constrained(mean_rets, cov,
@@ -531,8 +816,18 @@ def run(capital: float = DEFAULT_CAPITAL,
             # 调用方按 stage 实际建议的 cash 缩股票权重，结果 sum = 1 - effective_cash，
             # 与 legacy MC 路径（markowitz_constrained 内部已缩）保持一致。
             effective_cash = float(out.get("cash_pct", cash_pct))
+            desired_cash_pct = effective_cash
             deployed = max(0.0, 1.0 - effective_cash)
             target_w = {t: float(w) * deployed for t, w in out["weights"].items()}
+            target_w, optimizer_dropped = _limit_positions_by_optimizer_weight(
+                target_w,
+                ranked,
+                max_positions,
+            )
+            if optimizer_dropped:
+                print(f"  最终组合限 {max_positions} 只，按优化权重剔除 {len(optimizer_dropped)} 只：")
+                for tk in optimizer_dropped[:8]:
+                    print(f"    · {tk}")
             # stage_metrics 是 100% 投资基线；下游显示用，乘 deployed 才是实盘组合的年化数字
             # （cash 部分按 rf=4.5% 计入收益；vol 假设 cash 零方差）
             stage_metrics = out["stages"][out["risk_aware_stage"]].get("metrics") or {}
@@ -548,6 +843,8 @@ def run(capital: float = DEFAULT_CAPITAL,
                 "effective_cash_pct": effective_cash,
                 "pruned_dropped": out.get("pruned_dropped", []),
                 "selected_tickers": out.get("selected_tickers", []),
+                "max_positions": max_positions,
+                "position_dropped": optimizer_dropped,
                 "warning": out.get("warning"),
             }
             if out.get("pruned_dropped"):
@@ -611,7 +908,7 @@ def run(capital: float = DEFAULT_CAPITAL,
         target_w = kelly_capped  # 进入组合层 cap
 
     # ────── 6a. 行业敞口约束（≤ 25% / 行业）──────
-    industries_map = {tk: _industry_for(tk, wl_lookup) for tk in final_tickers}
+    industries_map = {tk: _industry_for(tk, wl_lookup) for tk in target_w}
     industry_capped, industry_summary = pc.cap_by_industry(
         target_w, industries_map, max_industry_pct=0.25,
     )
@@ -625,6 +922,30 @@ def run(capital: float = DEFAULT_CAPITAL,
     else:
         print(f"\n[5a/6] 🟢 行业敞口检查通过（最高 {max(s['original'] for s in industry_summary.values()):.1%}）")
     target_w = industry_capped  # 用约束后的权重继续下一步
+
+    # ────── 6a2. 约束后现金再分配 ──────
+    target_gross = max(0.0, 1.0 - desired_cash_pct)
+    single_cap_after_kelly = max_weight * kelly_fraction if kelly_fraction > 0 else max_weight
+    redistributed, redistribution_summary = _redistribute_to_target_gross(
+        target_w,
+        ranked if not use_legacy_mc else final_tickers,
+        industries_map,
+        adv_dict,
+        portfolio_value=capital,
+        target_gross=target_gross,
+        max_single_pct=single_cap_after_kelly,
+        max_industry_pct=0.25,
+        max_adv_pct=max_adv_pct,
+    )
+    if redistribution_summary.get("redistributed", 0) > 0:
+        print(
+            f"\n[5a2/6] 🟢 约束后现金再分配："
+            f"{float(redistribution_summary['before_gross']):.1%} → "
+            f"{float(redistribution_summary['after_gross']):.1%}"
+        )
+    else:
+        print(f"\n[5a2/6] 约束后无可再分配额度（gross={sum(target_w.values()):.1%}）")
+    target_w = redistributed
 
     # ────── 6b. ADV 限流 + 交易成本 ──────
     print(f"\n[5b/6] 应用 ADV 限流（≤ {max_adv_pct:.0%} ADV/单日）+ 成本扣减...")
@@ -640,6 +961,11 @@ def run(capital: float = DEFAULT_CAPITAL,
                                      adv_dollars=adv_dict,
                                      cost_bps=cost_bps,
                                      impact_bps_per_pct_adv=impact_bps_per_pct_adv)
+    annual_ret, annual_vol, annual_sharpe = _portfolio_stats_for_weights(
+        capped,
+        mean_ret_map,
+        cov_df,
+    )
     print(f"\n  组合层成本: ${cost['total_cost_dollars']:,.2f} "
           f"({cost['total_cost_bps_of_portfolio']:.1f} bps)")
     print(f"  单边换手率: {cost['turnover']:.1%}")
@@ -653,9 +979,13 @@ def run(capital: float = DEFAULT_CAPITAL,
     plan = []
     plan_v5 = []
     df_lookup = {str(r.get("ticker")): r for r in df.to_dict("records")}
-    for tk in final_tickers:
+    output_tickers = [t for t in (ranked if not use_legacy_mc else final_tickers) if t in target_w]
+    output_tickers.extend([t for t in target_w if t not in set(output_tickers)])
+    for tk in output_tickers:
         v_target = target_w.get(tk, 0)
         v_capped = capped.get(tk, 0)
+        if abs(v_target) <= 1e-9 and abs(v_capped) <= 1e-9:
+            continue
         amount = v_capped * capital
         adv_m = adv_dict.get(tk, 0) / 1e6
         flag = " ⚠️" if abs(v_target - v_capped) > 1e-6 else ""
@@ -694,6 +1024,7 @@ def run(capital: float = DEFAULT_CAPITAL,
                    "v6: factor neutralization + Markowitz MC + ADV cap + cost"),
         "capital": capital,
         "constraints": {
+            "market_scope": market_scope,
             "max_weight": max_weight, "min_weight": min_weight,
             "cash_pct": cash_pct, "max_adv_pct": max_adv_pct,
             "cash_pct_effective": round(actual_cash / capital, 6) if capital else cash_pct,
@@ -703,6 +1034,7 @@ def run(capital: float = DEFAULT_CAPITAL,
             "max_corr": max_corr,
             "kelly_fraction": kelly_fraction,
             "vol_target_annual": vol_target_annual,
+            "max_positions": max_positions,
             "use_legacy_mc": use_legacy_mc,
             "factor_weights_used": factor_weights,
         },
@@ -721,6 +1053,7 @@ def run(capital: float = DEFAULT_CAPITAL,
             }
         ),
         "kelly_clipped": kelly_clipped,
+        "cash_redistribution": redistribution_summary,
         "vol_target": vol_target_info,
         "portfolio_metrics": {
             "annual_sharpe": round(annual_sharpe, 2),
@@ -738,6 +1071,10 @@ def run(capital: float = DEFAULT_CAPITAL,
         "adv_warnings": warns,
     }
     store.save_json(result, config.AUDIT_DIR.parent / "optimize", "plan_v6")
+    result["portfolio_plan_sync"] = _sync_risk_aware_plan_to_duckdb(
+        result,
+        cached.get("fallback_run_id"),
+    )
     _write_latest_plan(result)
     print(f"\n✅ 快照已保存")
     return result
@@ -748,7 +1085,10 @@ def main() -> int:
     p = argparse.ArgumentParser(description="组合优化 v6: 中性化 + Markowitz + ADV + 成本")
     p.add_argument("--capital", type=float, default=DEFAULT_CAPITAL,
                    help=f"组合规模（默认读 DuckDB total_capital={DEFAULT_CAPITAL:,.0f}）")
-    p.add_argument("--top-n", type=int, default=12, help="选股数")
+    p.add_argument("--top-n", type=int, default=24, help="优化候选数")
+    p.add_argument("--max-positions", type=int, default=15, help="最终组合最多持仓数")
+    p.add_argument("--market", default="US",
+                   help="组合优化市场范围；plan_a_v5 生产默认 US，避免美股调仓单混入 A/H")
     p.add_argument("--max-weight", type=float, default=0.15)
     p.add_argument("--min-weight", type=float, default=0.02)
     p.add_argument("--max-adv-pct", type=float, default=0.05, help="单日交易上限占 ADV 的比例")
@@ -764,6 +1104,8 @@ def main() -> int:
                    help="目标年化波动率（Moreira-Muir 2017，如 0.20 = 20%%；默认关闭）")
     args = p.parse_args()
     r = run(capital=args.capital, top_n=args.top_n,
+            max_positions=args.max_positions,
+            market_scope=args.market,
             max_weight=args.max_weight, min_weight=args.min_weight,
             max_adv_pct=args.max_adv_pct, cost_bps=args.cost_bps,
             skip_neutralize=args.no_neutralize,

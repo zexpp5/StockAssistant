@@ -972,8 +972,8 @@ def main():
                         help="⚠️ 强行跳过因子 IC 闸门（需自担风险）")
     parser.add_argument("--bypass-audit-gate", action="store_true",
                         help="⚠️ 强行跳过跨源 audit CONFLICT 闸门（需自担风险）")
-    parser.add_argument("--workers", type=int, default=int(os.getenv("STOCK_ASSISTANT_A_WORKERS", "3")),
-                        help="缓存未命中时并发拉 A 股因子的线程数（默认 3）")
+    parser.add_argument("--workers", type=int, default=int(os.getenv("STOCK_ASSISTANT_A_WORKERS", "1")),
+                        help="缓存未命中时并发拉 A 股因子的线程数（默认 1；akshare/py_mini_racer 多线程易崩）")
     parser.add_argument("--universe", choices=["auto", "static", "dynamic", "watchlist"],
                         default=os.getenv("A_SHARE_UNIVERSE", "auto"),
                         help="A 股候选池：auto=动态失败回退静态；watchlist=仅用户自选")

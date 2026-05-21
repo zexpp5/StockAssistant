@@ -242,8 +242,33 @@ def _extract_tickers(plan_payload: dict[str, Any]) -> set[str]:
         for row in rows:
             if isinstance(row, dict):
                 ticker = row.get("ticker") or row.get("code")
-                if ticker:
+                weight = row.get("capped_weight", row.get("target_weight", row.get("v5_weight", 0)))
+                try:
+                    active = float(weight or 0) > 1e-9
+                except Exception:
+                    active = True
+                if ticker and active:
                     out.add(str(ticker).upper())
+    return out
+
+
+def _extract_plan_weights(plan_payload: dict[str, Any]) -> dict[str, float]:
+    rows = plan_payload.get("plan_v5") or plan_payload.get("plan_v6") or plan_payload.get("plan") or []
+    out: dict[str, float] = {}
+    if isinstance(rows, list):
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            ticker = row.get("ticker") or row.get("code") or row.get("symbol")
+            if not ticker:
+                continue
+            weight = row.get("capped_weight", row.get("target_weight", row.get("v5_weight", 0)))
+            try:
+                w = float(weight or 0)
+            except Exception:
+                continue
+            if w > 1e-9:
+                out[str(ticker).upper()] = w
     return out
 
 
@@ -276,6 +301,108 @@ def _has_f_score(factor_scores_json: Any) -> bool:
         (payload.get("piotroski") or {}).get("f_score") if isinstance(payload.get("piotroski"), dict) else None,
     )
     return any(v is not None for v in candidates)
+
+
+def _check_portfolio_plan_alignment(
+    *,
+    issues: list[dict[str, Any]],
+    summary: dict[str, Any],
+    plan_payload: dict[str, Any] | None,
+) -> None:
+    """Verify the production DB plan is the same risk-aware plan as latest JSON."""
+    if not plan_payload or "_error" in plan_payload:
+        return
+    try:
+        conn = duckdb.connect(str(DB_PATH), read_only=True)
+    except Exception as e:
+        issues.append(_issue(
+            "WARN",
+            "portfolio_plan_alignment_unchecked",
+            "无法只读打开 DuckDB 检查组合方案口径一致性",
+            str(e),
+        ))
+        return
+    try:
+        tables = {str(r[0]) for r in conn.execute("SHOW TABLES").fetchall()}
+        required = {"recommendation_runs", "portfolio_plans"}
+        missing = sorted(required - tables)
+        if missing:
+            issues.append(_issue("FAIL", "portfolio_plan_tables_missing",
+                                 "无法验收 AI 组合方案口径，DuckDB 缺少表", missing))
+            return
+        latest = conn.execute(
+            """
+            SELECT run_id
+            FROM recommendation_runs
+            WHERE universe_scope = 'system_tech_universe' AND status = 'generated'
+            ORDER BY generated_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if not latest:
+            return
+        latest_run_id = str(latest[0])
+        db_rows = conn.execute(
+            """
+            SELECT plan_version, symbol, target_weight
+            FROM portfolio_plans
+            WHERE run_id = ? AND strategy_scope = 'system_tech_universe'
+            ORDER BY symbol
+            """,
+            [latest_run_id],
+        ).fetchall()
+    finally:
+        conn.close()
+
+    plan_versions = sorted({str(r[0]) for r in db_rows})
+    db_weights = {
+        str(symbol).upper(): float(weight)
+        for _version, symbol, weight in db_rows
+        if weight is not None and float(weight) > 1e-9
+    }
+    json_weights = _extract_plan_weights(plan_payload)
+    source_summary = {
+        "run_id": latest_run_id,
+        "plan_versions": plan_versions,
+        "db_rows": len(db_weights),
+        "json_rows": len(json_weights),
+        "db_gross_exposure": round(sum(db_weights.values()), 6),
+        "json_gross_exposure": round(sum(json_weights.values()), 6),
+    }
+    summary["portfolio_plan_source"] = source_summary
+    if not db_weights:
+        issues.append(_issue("FAIL", "portfolio_plan_missing_for_latest_run",
+                             "最新 V2 run 没有可执行 portfolio_plans 权重"))
+    elif plan_versions != ["v6_risk_aware"]:
+        issues.append(_issue(
+            "FAIL",
+            "portfolio_plan_not_risk_aware_source",
+            "最新 V2 run 的 portfolio_plans 不是唯一 v6_risk_aware 来源，存在等权/旧口径混用风险",
+            source_summary,
+        ))
+    elif set(db_weights) != set(json_weights):
+        issues.append(_issue(
+            "FAIL",
+            "portfolio_plan_symbols_diverge",
+            "DuckDB portfolio_plans 与 data/latest/plan_a_v5.json 标的集合不一致",
+            {
+                "db_only": sorted(set(db_weights) - set(json_weights)),
+                "json_only": sorted(set(json_weights) - set(db_weights)),
+            },
+        ))
+    else:
+        mismatched = [
+            {"symbol": s, "db": round(db_weights[s], 6), "json": round(json_weights[s], 6)}
+            for s in sorted(db_weights)
+            if abs(db_weights[s] - json_weights[s]) > 1e-5
+        ]
+        if mismatched:
+            issues.append(_issue(
+                "FAIL",
+                "portfolio_plan_weights_diverge",
+                "DuckDB portfolio_plans 与 data/latest/plan_a_v5.json 权重不一致",
+                mismatched[:10],
+            ))
 
 
 def _surface_artifact_checks(
@@ -369,6 +496,8 @@ def _surface_artifact_checks(
         if _extract_tickers(plan_a) != _extract_tickers(plan_v6):
             issues.append(_issue("FAIL", "plan_a_v5_plan_v6_diverge", "plan_a_v5.json 与 plan_v6.json 标的集合不一致"))
 
+    _check_portfolio_plan_alignment(issues=issues, summary=summary, plan_payload=plan_a)
+
     if plan_a and "_error" not in plan_a:
         cons = plan_a.get("constraints") if isinstance(plan_a.get("constraints"), dict) else {}
         cash_eff = cons.get("cash_pct_effective")
@@ -393,8 +522,8 @@ def _surface_artifact_checks(
                 issues.append(_issue("WARN", "plan_cash_unexplained",
                     f"组合现金 {float(cash_eff)*100:.1f}% > 30% 但 morning_brief 未给约束器解释", details))
             elif float(cash_eff) > 0.30:
-                issues.append(_issue("INFO", "plan_cash_disclosed",
-                    f"组合现金 {float(cash_eff)*100:.1f}% > 30%，已在 morning_brief 标注约束器原因", details))
+                issues.append(_issue("WARN", "plan_cash_high_disclosed",
+                    f"组合现金 {float(cash_eff)*100:.1f}% > 30%；虽已披露原因，但仍不应视为满额可执行组合", details))
 
     rec_evidence, _ = _json_load("data/latest/recommendation_evidence.json")
     evidence_dt = _payload_dt(rec_evidence, REPO / "data/latest/recommendation_evidence.json") if rec_evidence else None
@@ -1101,8 +1230,8 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
                 issues.append(_issue("WARN", "plan_cash_unexplained",
                     f"组合现金 {float(cash_eff2)*100:.1f}% > 30% 但 morning_brief 未给约束器解释", details2))
             elif float(cash_eff2) > 0.30:
-                issues.append(_issue("INFO", "plan_cash_disclosed",
-                    f"组合现金 {float(cash_eff2)*100:.1f}% > 30%，已在 morning_brief 标注约束器原因", details2))
+                issues.append(_issue("WARN", "plan_cash_high_disclosed",
+                    f"组合现金 {float(cash_eff2)*100:.1f}% > 30%；虽已披露原因，但仍不应视为满额可执行组合", details2))
 
     for rel in ("data/latest/trade_delta.json", "data/latest/trade_delta_hk.json", "data/latest/trade_delta_cn.json"):
         if rel == "data/latest/trade_delta_hk.json" and not watchlist_markets["hk"]:
