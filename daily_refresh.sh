@@ -328,7 +328,7 @@ if [ "$MODE" = "a_share_only" ]; then
     run_step "24/25 DuckDB pipeline 同步" "scripts/migrate/migrate_pipeline_to_duckdb.py"
     # 2026-05-21 删 step 24b (classify_watchlist_chains 写 V1 watchlist.chain，已废)
     run_step "25/25 重建 HTML" "scripts/pipeline/build_stock_dashboard_html.py"
-    run_step "26 早安简报（主入口 · 每天打开看这一份）" "-m stock_research.jobs.morning_brief"
+    run_step "26 早安简报（主入口 · 本地生成，验收后再推送）" "-m stock_research.jobs.morning_brief --no-push"
     A_SHARE_ENABLED_NOW=$($PYTHON -c "from stock_research import config; print('1' if config.A_SHARE_PRODUCTION_ENABLED else '0')" 2>/dev/null || echo "0")
     if [ "$A_SHARE_ENABLED_NOW" = "1" ]; then
         run_step "27 生产闭环验收" "scripts/tools/production_acceptance_check.py"
@@ -346,6 +346,11 @@ if [ "$MODE" = "a_share_only" ]; then
     fi
     if [ ${#FAILED_STEPS[@]} -eq 0 ]; then
         write_pipeline_status "OK" "$DONE_TS"
+        echo ""
+        echo "[28 早安简报推送] pipeline_status=OK 后重新生成并推送..."
+        if ! $PYTHON -m stock_research.jobs.morning_brief; then
+            echo "⚠️  早安简报最终推送失败（pipeline 已 OK，本地数据不回滚）"
+        fi
     else
         write_pipeline_status "FAIL" "$DONE_TS"
     fi
@@ -438,7 +443,7 @@ elif is_research_step; then
 fi
 
 # M — 早安简报 + 生产验收
-is_morning_step && run_step "26 早安简报（主入口 · 每天打开看这一份）" "-m stock_research.jobs.morning_brief"
+is_morning_step && run_step "26 早安简报（主入口 · 本地生成，验收后再推送）" "-m stock_research.jobs.morning_brief --no-push"
 A_SHARE_ENABLED_NOW=$($PYTHON -c "from stock_research import config; print('1' if config.A_SHARE_PRODUCTION_ENABLED else '0')" 2>/dev/null || echo "0")
 if is_morning_step; then
     if [ "$A_SHARE_ENABLED_NOW" = "1" ]; then
@@ -465,6 +470,13 @@ echo "  HTML（调试）：$DIR/stock_dashboard.html"
 echo "  DuckDB（数据落地）：$DIR/stock_history.duckdb"
 if [ ${#FAILED_STEPS[@]} -eq 0 ]; then
     write_pipeline_status "OK" "$DONE_TS"
+    if is_morning_step; then
+        echo ""
+        echo "[28 早安简报推送] pipeline_status=OK 后重新生成并推送..."
+        if ! $PYTHON -m stock_research.jobs.morning_brief; then
+            echo "⚠️  早安简报最终推送失败（pipeline 已 OK，本地数据不回滚）"
+        fi
+    fi
 else
     write_pipeline_status "FAIL" "$DONE_TS"
 fi

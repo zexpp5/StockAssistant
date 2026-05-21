@@ -25,7 +25,9 @@ from stock_research import config  # noqa: E402
 DB_PATH = Path(config.DUCKDB_PATH)
 OUT_PATH = REPO / "data" / "latest" / "production_acceptance_check.json"
 
-PRODUCTION_SOURCES = ("v6_us", "v6_hk", "v6_cn")
+# 2026-05-21 V1 cutover：旧 PRODUCTION_SOURCES = ("v6_us","v6_hk","v6_cn") 已删；
+# V2 通过 universe_scope='system_tech_universe' 标识生产推荐
+V2_UNIVERSE_SCOPE = "system_tech_universe"
 REQUIRED_PICK_COLUMNS = {
     "signal",
     "coverage_score",
@@ -144,21 +146,35 @@ def _calibrated_a_share_weights_status() -> tuple[bool, str]:
 
 
 def _watchlist_market_flags(conn: duckdb.DuckDBPyConnection | None) -> dict[str, bool]:
-    flags = {"us": False, "hk": False}
+    """V2: manual_watchlist 含哪些市场（用户手动加的自选股按市场分桶）。"""
+    flags = {"us": False, "hk": False, "cn": False}
     if conn is None:
         return flags
     try:
-        rows = conn.execute("SELECT code, COALESCE(market, '') FROM watchlist").fetchall()
+        rows = conn.execute(
+            "SELECT UPPER(market) FROM manual_watchlist"
+        ).fetchall()
     except Exception:
         return flags
-    for code, market in rows:
-        c = str(code or "").upper()
-        m = str(market or "")
-        if c.endswith(".HK") or "港股" in m:
-            flags["hk"] = True
-        elif c.replace("-", "").replace(".", "").isalpha() or "美股" in m:
+    for (market,) in rows:
+        if market == "US":
             flags["us"] = True
+        elif market == "HK":
+            flags["hk"] = True
+        elif market == "CN":
+            flags["cn"] = True
     return flags
+
+
+def _check_v1_tables_gone(conn: duckdb.DuckDBPyConnection) -> list[str]:
+    """V1 表存在 → 报 FAIL（V1 cutover 后这些表必须不在）。"""
+    v1_tables = {"prices", "picks", "reviews", "watchlist",
+                 "discovery_history", "discovery_tracking", "earnings_history"}
+    try:
+        existing = {str(r[0]) for r in conn.execute("SHOW TABLES").fetchall()}
+    except Exception:
+        return []
+    return sorted(v1_tables & existing)
 
 
 def _latest_json_checks(
@@ -217,6 +233,24 @@ def _is_fallback_plan(plan_payload: dict[str, Any]) -> bool:
         or "legacy_monte_carlo" in engine
         or ("markowitz mc" in method and "risk_aware_optimize" not in method)
     )
+
+
+def _has_f_score(factor_scores_json: Any) -> bool:
+    if isinstance(factor_scores_json, str):
+        try:
+            payload = json.loads(factor_scores_json)
+        except Exception:
+            return False
+    elif isinstance(factor_scores_json, dict):
+        payload = factor_scores_json
+    else:
+        return False
+    candidates = (
+        payload.get("f_score"),
+        payload.get("piotroski_f_score"),
+        (payload.get("piotroski") or {}).get("f_score") if isinstance(payload.get("piotroski"), dict) else None,
+    )
+    return any(v is not None for v in candidates)
 
 
 def _surface_artifact_checks(
@@ -393,6 +427,14 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
             db_tables = {str(r[0]) for r in conn.execute("SHOW TABLES").fetchall()}
         except Exception as e:
             issues.append(_issue("FAIL", "duckdb_table_list_failed", "无法读取 DuckDB 表清单", str(e)))
+        # 2026-05-21 V1 cutover：V1 表存在 → FAIL（保护已切到 V2 的库不再被回写 V1 数据）
+        v1_present = _check_v1_tables_gone(conn)
+        if v1_present:
+            issues.append(_issue(
+                "FAIL", "v1_tables_present",
+                "V1 表不该再存在于库里；某处代码可能在重建（运行 init_stock_db_v2.py 重建库或单独 DROP）",
+                v1_present,
+            ))
     v2_required_tables = {
         "manual_watchlist", "holdings", "system_universe", "pool_membership",
         "price_daily", "recommendation_runs", "recommendation_picks",
@@ -497,6 +539,50 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
                     buy_count = signal_counts["system_tech_universe"].get("buy", 0)
                     if buy_count <= 0:
                         issues.append(_issue("FAIL", "v2_latest_run_no_buy", "v2 最新推荐批次没有 buy 推荐"))
+                    factor_rows = conn.execute(
+                        """
+                        SELECT market, symbol, factor_scores_json
+                        FROM recommendation_picks
+                        WHERE run_id=?
+                        """,
+                        [latest_run_id],
+                    ).fetchall()
+                    f_score_rows = [
+                        {"market": str(market), "symbol": str(symbol)}
+                        for market, symbol, factor_json in factor_rows
+                        if _has_f_score(factor_json)
+                    ]
+                    f_score_coverage = (len(f_score_rows) / len(factor_rows)) if factor_rows else 0.0
+                    summary["v2_f_score_coverage"] = {
+                        "with_f_score": len(f_score_rows),
+                        "latest_pick_count": len(factor_rows),
+                        "coverage_pct": round(f_score_coverage * 100, 2),
+                    }
+                    if f_score_coverage < 0.50:
+                        statement_types: dict[str, int] = {}
+                        if "financial_statements" in db_tables:
+                            statement_types = {
+                                str(k): int(v)
+                                for k, v in conn.execute(
+                                    """
+                                    SELECT statement_type, COUNT(*)
+                                    FROM financial_statements
+                                    GROUP BY statement_type
+                                    """
+                                ).fetchall()
+                            }
+                        issues.append(_issue(
+                            "WARN",
+                            "v2_f_score_coverage_low",
+                            (
+                                "v2 最新推荐批次 F-Score 覆盖不足；Piotroski 9 项需要 income/balance/cashflow "
+                                "三表，当前不能把基本面维度当作已覆盖"
+                            ),
+                            {
+                                **summary["v2_f_score_coverage"],
+                                "financial_statement_types": statement_types,
+                            },
+                        ))
                 if latest_run_id:
                     bad_scope = conn.execute(
                         """
@@ -700,17 +786,10 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
         return _build_payload(now, summary, issues)
 
     watchlist_markets = _watchlist_market_flags(conn)
+    summary["manual_watchlist_market_flags"] = watchlist_markets
+    # 2026-05-21 V1 cutover：required_sources (v6_us/v6_hk/v6_cn) 已废；
+    # 自选股·AI 优选是 manual_watchlist 空就该空的设计，不再作为生产硬要求。
     required_sources: list[str] = []
-    # V2 spec：watchlist 空时 v6_us/v6_hk/v6_cn 都是"自选股·AI 优选"路径，
-    # 用户没维护自选股就该空，不应作为生产 FAIL 标准（由 V2 检查替代）。
-    # 只在 watchlist 有用户主动添加的股票时才把 v6_X 列为必需。
-    if watchlist_markets["us"]:
-        required_sources.append("v6_us")
-    if watchlist_markets["hk"]:
-        required_sources.append("v6_hk")
-    if config.A_SHARE_PRODUCTION_ENABLED and watchlist_markets.get("cn"):
-        required_sources.append("v6_cn")
-    summary["watchlist_market_flags"] = watchlist_markets
     summary["required_production_sources"] = required_sources
 
     # V2 acceptance：检查 recommendation_runs / recommendation_picks / portfolio_plans
@@ -761,126 +840,9 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
                 issues.append(_issue("FAIL", "v2_portfolio_plans_empty", "portfolio_plans 表为空；build_v2_recommendations 没写"))
     summary["v2"] = v2_summary
 
-    latest_by_source: dict[str, str | None] = {}
-    latest_buy_sets: dict[str, set[str]] = {}
-    if conn is not None and "picks" in db_tables:
-        try:
-            try:
-                summary["watchlist_count"] = int(conn.execute("SELECT COUNT(*) FROM watchlist").fetchone()[0])
-            except Exception:
-                summary["watchlist_count"] = None
-            cols = {r[1] for r in conn.execute("PRAGMA table_info('picks')").fetchall()}
-            missing_cols = sorted(REQUIRED_PICK_COLUMNS - cols)
-            summary["picks_schema_columns"] = sorted(cols)
-            if missing_cols:
-                issues.append(_issue("FAIL", "picks_schema_missing_columns", "picks 表缺少生产分流字段", missing_cols))
-            signal_expr = (
-                "COALESCE(signal, "
-                "CASE "
-                "WHEN rating LIKE '%⛔%' OR rating LIKE '%不建议%' THEN 'avoid' "
-                "WHEN rating LIKE '%观察%' THEN 'watch' "
-                "WHEN rating IS NULL OR TRIM(rating) = '' THEN 'watch' "
-                "ELSE 'buy' END)"
-                if "signal" in cols
-                else
-                "CASE "
-                "WHEN rating LIKE '%⛔%' OR rating LIKE '%不建议%' THEN 'avoid' "
-                "WHEN rating LIKE '%观察%' THEN 'watch' "
-                "WHEN rating IS NULL OR TRIM(rating) = '' THEN 'watch' "
-                "ELSE 'buy' END"
-            )
+    # 2026-05-21 V1 cutover：原 V1 picks/watchlist 检查段(118 行) 已删除
+    summary["latest_signal_counts"] = {}
 
-            if "signal" in cols:
-                bad_signals = conn.execute(
-                    """
-                    SELECT signal, COUNT(*)
-                    FROM picks
-                    WHERE signal IS NOT NULL AND lower(signal) NOT IN ('buy', 'avoid', 'watch')
-                    GROUP BY signal
-                    """
-                ).fetchall()
-                if bad_signals:
-                    issues.append(_issue("FAIL", "invalid_pick_signal", "picks.signal 存在非法值", dict(bad_signals)))
-
-            latest_rows = conn.execute(
-                """
-                SELECT model_source, MAX(pick_date) AS latest_date
-                FROM picks
-                WHERE model_source IN ('v6_us', 'v6_hk', 'v6_cn')
-                GROUP BY model_source
-                """
-            ).fetchall()
-            latest_by_source = {src: str(d)[:10] if d else None for src, d in latest_rows}
-            summary["latest_pick_dates"] = latest_by_source
-
-            for src in required_sources:
-                latest = latest_by_source.get(src)
-                if not latest:
-                    if src == "v6_cn" and (not _a_share_ready(now) or allow_a_share_disabled):
-                        issues.append(_issue("WARN", "v6_cn_missing_not_blocking", "A 股暂无 v6_cn picks；当前验收允许 A 股未启用"))
-                    else:
-                        issues.append(_issue("FAIL", f"{src}_missing", f"{src} 没有最新生产 picks"))
-                    signal_counts[src] = {}
-                    latest_buy_sets[src] = set()
-                    continue
-
-                rows = conn.execute(
-                    f"""
-                    SELECT
-                      {signal_expr} AS sig,
-                      COUNT(*) AS n
-                    FROM picks
-                    WHERE model_source = ? AND pick_date = ?
-                    GROUP BY sig
-                    """,
-                    [src, latest],
-                ).fetchall()
-                signal_counts[src] = {str(sig): int(n) for sig, n in rows}
-                buy_rows = conn.execute(
-                    f"""
-                    SELECT code
-                    FROM picks
-                    WHERE model_source = ? AND pick_date = ?
-                      AND {signal_expr} = 'buy'
-                    """,
-                    [src, latest],
-                ).fetchall()
-                latest_buy_sets[src] = {str(r[0]).upper() for r in buy_rows}
-                if signal_counts[src].get("buy", 0) <= 0 and (src != "v6_cn" or _a_share_ready(now)):
-                    level = "WARN" if src == "v6_cn" and allow_a_share_disabled else "FAIL"
-                    issues.append(_issue(level, f"{src}_no_buy_picks", f"{src} 最新批次没有 signal='buy' 推荐"))
-
-                if "coverage_score" in cols:
-                    low_coverage = conn.execute(
-                        f"""
-                        SELECT code, coverage_score, missing_factors
-                        FROM picks
-                        WHERE model_source = ? AND pick_date = ?
-                          AND {signal_expr} = 'buy'
-                          AND (coverage_score IS NULL OR coverage_score < 0.50)
-                        ORDER BY code
-                        LIMIT 30
-                        """,
-                        [src, latest],
-                    ).fetchall()
-                    if low_coverage:
-                        issues.append(_issue(
-                            "FAIL",
-                            f"{src}_buy_low_coverage",
-                            f"{src} 最新 buy picks 存在 coverage_score 缺失或低于 50%",
-                            [{"code": r[0], "coverage_score": r[1], "missing_factors": r[2]} for r in low_coverage],
-                        ))
-        finally:
-            conn.close()
-            conn = None
-    elif conn is not None and not is_v2_schema:
-        issues.append(_issue("FAIL", "missing_picks_table", "DuckDB 缺少 legacy picks 表"))
-        conn.close()
-        conn = None
-    elif conn is not None:
-        conn.close()
-        conn = None
-    summary["latest_signal_counts"] = signal_counts
 
     a_weights_ok, a_weights_status = _calibrated_a_share_weights_status()
     summary["a_share_calibration"] = {"ok": a_weights_ok, "status": a_weights_status}
@@ -954,10 +916,7 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
                 "plan_a_v5.json 标记为 fallback/legacy 优化输出；客户可见报告必须标注仓位来源",
                 {"engine": engine, "method": method},
             ))
-        plan_tickers = _extract_tickers(plan_a)
-        non_buy = sorted(plan_tickers - latest_buy_sets.get("v6_us", set()))
-        if non_buy and latest_buy_sets.get("v6_us"):
-            issues.append(_issue("FAIL", "us_plan_contains_non_buy", "美股 plan 含非最新 buy picks 标的", non_buy[:30]))
+        # 2026-05-21 V1 cutover：原 V1 picks v6_us buy_set 校验已删；V2 buy 在 v2_summary 已覆盖
     if plan_a and plan_v6 and "_error" not in plan_a and "_error" not in plan_v6:
         if _extract_tickers(plan_a) != _extract_tickers(plan_v6):
             issues.append(_issue("FAIL", "plan_a_v5_plan_v6_diverge", "plan_a_v5.json 与 plan_v6.json 标的集合不一致"))

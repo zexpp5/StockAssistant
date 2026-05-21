@@ -223,9 +223,10 @@ def create_app():
         conn = duckdb.connect(stock_db.DB_PATH, read_only=True)
         try:
             tables = {str(r[0]) for r in conn.execute("SHOW TABLES").fetchall()}
-            is_v2 = "system_universe" in tables and "price_daily" in tables
+            if "system_universe" not in tables or "price_daily" not in tables:
+                raise HTTPException(503, "V2 tables missing — run init_stock_db_v2.py first")
             enrichment_by_code: dict[str, dict[str, Any]] = {}
-            if is_v2:
+            if True:  # V2-only path (V1 fallback removed 2026-05-21)
                 pool_meta = {}
                 market_label_map = {"US": "美股", "HK": "港股", "CN": "A股"}
 
@@ -347,40 +348,6 @@ def create_app():
                 earnings_fetched = {}
                 prices_date = conn.execute("SELECT MAX(trade_date) FROM price_daily").fetchone()[0]
                 picks_date = conn.execute("SELECT MAX(generated_at) FROM recommendation_runs").fetchone()[0]
-            else:
-                pool_meta = _tech_pool_meta()
-                latest_prices_q = conn.execute(
-                    """
-                    SELECT * FROM prices
-                    WHERE (code, date) IN (SELECT code, MAX(date) FROM prices GROUP BY code)
-                    """
-                ).fetchall()
-                price_cols = [d[0] for d in conn.description]
-                prices_by_code = {r[price_cols.index("code")]: dict(zip(price_cols, r)) for r in latest_prices_q}
-
-                latest_picks_q = conn.execute(
-                    """
-                    SELECT * FROM picks
-                    WHERE (code, pick_date) IN (SELECT code, MAX(pick_date) FROM picks GROUP BY code)
-                    """
-                ).fetchall()
-                pick_cols = [d[0] for d in conn.description]
-                picks_by_code = {}
-                for r in latest_picks_q:
-                    row = dict(zip(pick_cols, r))
-                    code = str(row.get("code") or "")
-                    if code:
-                        picks_by_code[code] = row
-                        picks_by_code.setdefault(code.split(".")[0], row)
-
-                earnings_fetched = {
-                    code: dt for code, dt in conn.execute(
-                        "SELECT code, MAX(fetched_at) FROM earnings_history GROUP BY code"
-                    ).fetchall()
-                }
-
-                prices_date = conn.execute("SELECT MAX(date) FROM prices").fetchone()[0]
-                picks_date = conn.execute("SELECT MAX(pick_date) FROM picks").fetchone()[0]
         finally:
             conn.close()
 
@@ -572,31 +539,24 @@ def create_app():
                 cols = [d[0] for d in cur.description]
                 return [dict(zip(cols, r)) for r in cur.fetchall()]
 
-            prices = _rows("SELECT * FROM prices WHERE code = ? ORDER BY date DESC, fetched_at DESC")
-            picks = _rows("SELECT * FROM picks WHERE code = ? ORDER BY pick_date DESC")
-            reviews = _rows("SELECT * FROM reviews WHERE code = ? ORDER BY review_date DESC")
-            discovery = _rows("SELECT * FROM discovery_history WHERE ticker = ? ORDER BY generated_date DESC")
-            earnings_history = _rows("SELECT * FROM earnings_history WHERE code = ? ORDER BY fiscal_period DESC")
-            # V2 兜底：当 V1 表都空时（clean v2 后只有 system_universe / price_daily / recommendation_picks），
-            # 把 V2 数据按 V1 字段名映射回来，保持响应 shape 不变。
-            if not prices:
-                v2_prices = _rows(
-                    "SELECT market, symbol AS code, trade_date AS date, close AS price, "
-                    "prev_close, currency, market_cap, forward_pe, trailing_pe, peg_ratio, "
-                    "ytd_pct, one_week_pct, one_month_pct, one_year_pct, source, fetched_at "
-                    "FROM price_daily WHERE symbol = ? ORDER BY trade_date DESC, fetched_at DESC"
-                )
-                prices = v2_prices
-            if not picks:
-                v2_picks = _rows(
-                    "SELECT rp.symbol AS code, rp.name, rp.rank, rp.rating, rp.signal, "
-                    "rp.total_score, rp.factor_scores_json, rp.recommendation_reason, "
-                    "rp.entry_price, rp.entry_currency, rp.universe_scope, "
-                    "rr.run_date AS pick_date, rr.generated_at "
-                    "FROM recommendation_picks rp JOIN recommendation_runs rr ON rp.run_id = rr.run_id "
-                    "WHERE rp.symbol = ? ORDER BY rr.generated_at DESC"
-                )
-                picks = v2_picks
+            # 2026-05-21 V1 cutover：纯 V2 查询（V1 表已 DROP）
+            prices = _rows(
+                "SELECT market, symbol AS code, trade_date AS date, close AS price, "
+                "prev_close, currency, market_cap, forward_pe, trailing_pe, peg_ratio, "
+                "ytd_pct, one_week_pct, one_month_pct, one_year_pct, source, fetched_at "
+                "FROM price_daily WHERE symbol = ? ORDER BY trade_date DESC, fetched_at DESC"
+            )
+            picks = _rows(
+                "SELECT rp.symbol AS code, rp.name, rp.rank, rp.rating, rp.signal, "
+                "rp.total_score, rp.factor_scores_json, rp.recommendation_reason, "
+                "rp.entry_price, rp.entry_currency, rp.universe_scope, "
+                "rr.run_date AS pick_date, rr.generated_at "
+                "FROM recommendation_picks rp JOIN recommendation_runs rr ON rp.run_id = rr.run_id "
+                "WHERE rp.symbol = ? ORDER BY rr.generated_at DESC"
+            )
+            reviews: list[dict[str, Any]] = []  # V2 评估在 pick_outcomes 已有
+            discovery: list[dict[str, Any]] = []  # V2 历史走 recommendation_runs
+            earnings_history: list[dict[str, Any]] = []  # V2 财报数据在 source_raw_snapshots
             if not wl_row:
                 # V2: 用 system_universe 里这只股的元数据兜 V1 watchlist 形状
                 v2_wl = _rows(
@@ -858,8 +818,7 @@ _sys.exit(rc)
 
     @app.get("/api/picks/latest-summary")
     def picks_latest_summary() -> dict[str, Any]:
-        """返回 {code: {pick_date, rating, total_score, ai_score, theme}}，
-        每只股取它**自己**最新 pick_date 的一行（不是全表最新 pick_date）。
+        """V2: 每只标的取最新 recommendation_runs 里的 pick。
 
         前端用这个实时刷新 AI 评级列。
         """
@@ -868,15 +827,15 @@ _sys.exit(rc)
         try:
             rows = conn.execute(
                 """
-                WITH ranked AS (
-                    SELECT
-                        code, pick_date, rating, total_score, ai_score, theme,
-                        ROW_NUMBER() OVER (PARTITION BY code ORDER BY pick_date DESC) AS rn
-                    FROM picks
+                WITH latest_run AS (
+                    SELECT run_id, run_date, generated_at
+                    FROM recommendation_runs
+                    WHERE universe_scope = 'system_tech_universe' AND status = 'generated'
+                    ORDER BY generated_at DESC LIMIT 1
                 )
-                SELECT code, pick_date, rating, total_score, ai_score, theme
-                FROM ranked
-                WHERE rn = 1
+                SELECT rp.symbol AS code, lr.run_date AS pick_date, rp.rating,
+                       rp.total_score, NULL AS ai_score, NULL AS theme
+                FROM recommendation_picks rp JOIN latest_run lr USING(run_id)
                 """,
             ).fetchall()
         finally:
@@ -894,17 +853,16 @@ _sys.exit(rc)
 
     @app.get("/api/picks/by-code/{code}")
     def picks_by_code(code: str) -> dict[str, Any]:
-        """查这只股的最新评级（最大 pick_date）。返回 {found, pick_date, rating, total_score} 或 {found: false}。"""
+        """V2: 单只标的最新 recommendation_picks 评级。"""
         import stock_db
         conn = stock_db.get_db()
         try:
             row = conn.execute(
                 """
-                SELECT pick_date, rating, total_score, ai_score, theme, model_source
-                FROM picks
-                WHERE code = ?
-                ORDER BY pick_date DESC
-                LIMIT 1
+                SELECT rr.run_date, rp.rating, rp.total_score, NULL, NULL, rp.universe_scope
+                FROM recommendation_picks rp JOIN recommendation_runs rr ON rp.run_id = rr.run_id
+                WHERE rp.symbol = ?
+                ORDER BY rr.generated_at DESC LIMIT 1
                 """,
                 [code],
             ).fetchone()

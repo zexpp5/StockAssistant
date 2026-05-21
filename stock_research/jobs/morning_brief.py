@@ -323,51 +323,11 @@ def _load_a_share_picks() -> dict | None:
                     "all_entries": selected,
                 }
 
-        # ── V1 兜底 ──
-        latest = conn.execute(
-            "SELECT MAX(pick_date) FROM picks WHERE model_source = 'v6_cn'"
-        ).fetchone()[0]
-        if latest is None:
-            conn.close()
-            return json_payload if isinstance(json_payload, dict) else None
-
-        json_date = ""
-        if isinstance(json_payload, dict):
-            json_date = str(json_payload.get("generated_at") or "")[:10]
-        db_date = str(latest)[:10]
-        if isinstance(json_payload, dict) and json_date >= db_date:
-            conn.close()
-            return json_payload
-
-        rows = conn.execute("""
-            SELECT code, name, market, rating, total_score, ai_relevance, theme
-            FROM picks
-            WHERE model_source = 'v6_cn' AND pick_date = ?
-              AND signal = 'buy'
-            ORDER BY total_score DESC NULLS LAST, code
-        """, [latest]).fetchall()
+        # 2026-05-21 V1 cutover：删 V1 picks v6_cn 兜底
         conn.close()
-        selected = []
-        for code, name, market, rating, total_score, ai_relevance, theme in rows:
-            selected.append({
-                "code": code,
-                "ticker": code,
-                "name": name,
-                "market": market,
-                "rating": rating,
-                "composite": (float(total_score) / 100) if total_score is not None else 0,
-                "industry": theme or ai_relevance,
-                "theme": theme,
-            })
-        return {
-            "generated_at": f"{db_date}T00:00:00",
-            "source": "duckdb:picks.v6_cn",
-            "n_recommended": len(selected),
-            "selected": selected,
-            "all_entries": selected,
-        }
+        return json_payload if isinstance(json_payload, dict) else None
     except Exception as e:
-        logger.warning(f"读取 DuckDB A 股 picks 失败，回退 JSON: {e}")
+        logger.warning(f"读取 V2 A 股 picks 失败，回退 JSON: {e}")
         return json_payload if isinstance(json_payload, dict) else None
 
 
@@ -1312,7 +1272,7 @@ def section_walk_forward_oos(today: date | None = None) -> str:
 
 
 def section_weekly_hitrate(today: date | None = None) -> str:
-    """只在周一(weekday=0)输出；汇总 reviews 表近 7 天 + discovery_tracking 近 7 天。"""
+    """V2: 周一回顾 — 由 pick_outcomes alpha 数据驱动（V1 reviews/discovery_tracking 已删）。"""
     today = today or date.today()
     if today.weekday() != 0:
         return ""
@@ -1328,71 +1288,35 @@ def section_weekly_hitrate(today: date | None = None) -> str:
         conn = stock_db.get_db()
     except Exception:
         return ""
-    lines = ["#### 🧪 上周回顾 · AI 准不准（周一专属）"]
-    # ── 自选股评级 · 按 ⭐ 分档统计近 7 天
+    lines = ["#### 🧪 上周回顾 · AI 准不准（周一专属 · V2 pick_outcomes）"]
     try:
-        rows = conn.execute("""
-          SELECT rating,
-                 COUNT(*) as n,
-                 ROUND(AVG(pct), 2) as avg_pct,
-                 ROUND(AVG(alpha_pct), 2) as avg_alpha,
-                 ROUND(SUM(CASE WHEN COALESCE(
-                     is_success,
-                     CASE
-                       WHEN COALESCE(signal, 'buy') = 'avoid' THEN alpha_pct < 0
-                       ELSE alpha_pct > 0
-                     END
-                 ) THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 0) as hit_rate
-          FROM reviews
-          WHERE review_date >= ? AND pct IS NOT NULL
-            AND COALESCE(model_source, '') IN ('v6_us', 'v6_hk', 'v6_cn')
-          GROUP BY rating
-          ORDER BY avg_alpha DESC NULLS LAST, avg_pct DESC
-        """, [today - timedelta(days=7)]).fetchall()
+        rows = conn.execute(
+            """
+            SELECT horizon, COUNT(*) n,
+                   ROUND(AVG(return_pct), 2) avg_ret,
+                   ROUND(AVG(alpha_pct), 2) avg_alpha,
+                   ROUND(SUM(CASE WHEN is_success THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 0) win_rate
+            FROM pick_outcomes
+            WHERE outcome_date >= ? AND alpha_pct IS NOT NULL
+            GROUP BY horizon ORDER BY horizon
+            """,
+            [today - timedelta(days=30)],
+        ).fetchall()
         if rows:
-            lines.append("**自选股评级 · 按 ⭐ 分档（近 7 天 · v6 生产线）**")
-            lines.append(f"| 评级 | 样本 | 平均涨幅 | 平均 alpha | 信号命中 |")
-            lines.append(f"|---|---:|---:|---:|---:|")
-            for rating, n, avg_pct, avg_alpha, hit_rate in rows:
-                sign = "+" if (avg_pct or 0) >= 0 else ""
-                alpha_sign = "+" if (avg_alpha or 0) >= 0 else ""
-                alpha_txt = "—" if avg_alpha is None else f"{alpha_sign}{avg_alpha}%"
-                lines.append(f"| {rating} | {n} | {sign}{avg_pct}% | {alpha_txt} | {int(hit_rate or 0)}% |")
+            lines.append("**V2 推荐 alpha（近 30 天成熟样本）**")
+            lines.append("| Horizon | 样本 | 平均涨幅 | 平均 alpha | 胜率 |")
+            lines.append("|---|---:|---:|---:|---:|")
+            for h, n, ret, alpha, win in rows:
+                sign_r = "+" if (ret or 0) >= 0 else ""
+                sign_a = "+" if (alpha or 0) >= 0 else ""
+                lines.append(f"| {h} | {n} | {sign_r}{ret}% | {sign_a}{alpha}% | {int(win or 0)}% |")
         else:
-            lines.append("_自选股评级：近 7 天暂无回顾数据（reviews 表为空或评级缺失）_")
+            lines.append("_pick_outcomes 近 30 天暂无成熟样本（evaluate_v2_picks 每天累积）_")
     except Exception as e:
-        lines.append(f"_自选股评级查询失败: {e}_")
-    # ── AI 推荐(discovery)准确度 · 5d/20d alpha
-    try:
-        rows = conn.execute("""
-          SELECT COUNT(alpha_5d) as n5,
-                 COUNT(alpha_20d) as n20,
-                 ROUND(AVG(alpha_5d), 2) as avg_5d,
-                 ROUND(AVG(alpha_20d), 2) as avg_20d,
-                 ROUND(SUM(CASE WHEN alpha_20d > 0 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(alpha_20d), 0), 0) as win_20d
-          FROM discovery_tracking
-          WHERE generated_date >= ?
-        """, [today - timedelta(days=30)]).fetchall()
-        n5, n20, a5, a20, w20 = rows[0] if rows else (0, 0, None, None, None)
-        if (n5 or n20) and (a5 is not None or a20 is not None):
-            lines.append("")
-            lines.append("**🤖 AI 推荐 · vs benchmark alpha（近 30 天推荐）**")
-            sign5 = "+" if (a5 or 0) >= 0 else ""
-            sign20 = "+" if (a20 or 0) >= 0 else ""
-            lines.append(f"- 5d alpha：{sign5}{a5}% · 样本 {n5}")
-            lines.append(f"- 20d alpha：{sign20}{a20}% · 20d 胜率：{int(w20 or 0)}% · 样本 {n20}")
-        else:
-            lines.append("")
-            lines.append("_AI 推荐 alpha：近 30 天暂无有效数据（discovery_tracking 待 evaluate_discovery 跑后填充）_")
-    except Exception as e:
-        lines.append(f"_AI 推荐查询失败: {e}_")
+        lines.append(f"_pick_outcomes 查询失败: {e}_")
     conn.close()
     return "\n".join(lines) + "\n"
 
-
-# ────────────────────────────────────────────────────────
-# Section 3: AI alpha 跟踪
-# ────────────────────────────────────────────────────────
 
 def section_ai_alpha(risk_metrics: dict | None) -> str:
     """系统同时跑两个方案（A 静态 vs C 动态），让用户一眼看懂"AI 到底有没有用"。
@@ -1935,53 +1859,31 @@ def _hitrate_card_lines(today: date) -> list[str]:
     except Exception:
         return []
     lines: list[str] = []
+    # 2026-05-21 V1 cutover：V1 reviews / discovery_tracking 表已删
+    # V2 替代：pick_outcomes 按 horizon 聚合
     try:
-        rows = conn.execute("""
-          SELECT rating, COUNT(*) as n, ROUND(AVG(pct), 2) as avg_pct,
-                 ROUND(AVG(alpha_pct), 2) as avg_alpha,
-                 ROUND(SUM(CASE WHEN COALESCE(
-                     is_success,
-                     CASE
-                       WHEN COALESCE(signal, 'buy') = 'avoid' THEN alpha_pct < 0
-                       ELSE alpha_pct > 0
-                     END
-                 ) THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 0) as hit_rate
-          FROM reviews
-          WHERE review_date >= ? AND pct IS NOT NULL
-            AND COALESCE(model_source, '') IN ('v6_us', 'v6_hk', 'v6_cn')
-          GROUP BY rating ORDER BY avg_alpha DESC NULLS LAST, avg_pct DESC
-        """, [today - timedelta(days=7)]).fetchall()
+        rows = conn.execute(
+            """
+            SELECT horizon, COUNT(*) n,
+                   ROUND(AVG(return_pct), 2) avg_ret,
+                   ROUND(AVG(alpha_pct), 2) avg_alpha,
+                   ROUND(SUM(CASE WHEN is_success THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 0) win
+            FROM pick_outcomes
+            WHERE outcome_date >= ? AND alpha_pct IS NOT NULL
+            GROUP BY horizon ORDER BY horizon
+            """,
+            [today - timedelta(days=30)],
+        ).fetchall()
         if rows:
-            lines.append("**自选股评级 · 近 7 天 v6**")
-            for rating, n, avg_pct, avg_alpha, hit_rate in rows:
-                sign = "+" if (avg_pct or 0) >= 0 else ""
-                alpha_sign = "+" if (avg_alpha or 0) >= 0 else ""
-                alpha_txt = "—" if avg_alpha is None else f"{alpha_sign}{avg_alpha}%"
-                rating_short = (rating or "—")[:18]
-                lines.append(f"• {rating_short} ｜ n={n} ｜ {sign}{avg_pct}% ｜ alpha {alpha_txt} ｜ 命中 {int(hit_rate or 0)}%")
+            lines.append("**V2 推荐 alpha（近 30 天成熟样本）**")
+            for h, n, ret, alpha, win in rows:
+                sr = "+" if (ret or 0) >= 0 else ""
+                sa = "+" if (alpha or 0) >= 0 else ""
+                lines.append(f"• {h} ｜ n={n} ｜ 涨幅 {sr}{ret}% ｜ alpha {sa}{alpha}% ｜ 胜 {int(win or 0)}%")
         else:
-            lines.append("_自选股评级：近 7 天暂无回顾数据_")
+            lines.append("_pick_outcomes 近 30 天暂无成熟样本_")
     except Exception as e:
-        lines.append(f"_自选股评级查询失败: {e}_")
-    try:
-        rows = conn.execute("""
-          SELECT COUNT(alpha_5d) as n5, COUNT(alpha_20d) as n20,
-                 ROUND(AVG(alpha_5d), 2) as a5,
-                 ROUND(AVG(alpha_20d), 2) as a20,
-                 ROUND(SUM(CASE WHEN alpha_20d > 0 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(alpha_20d), 0), 0) as w20
-          FROM discovery_tracking WHERE generated_date >= ?
-        """, [today - timedelta(days=30)]).fetchall()
-        n5, n20, a5, a20, w20 = rows[0] if rows else (0, 0, None, None, None)
-        if (n5 or n20) and (a5 is not None or a20 is not None):
-            lines.append("")
-            s5 = "+" if (a5 or 0) >= 0 else ""
-            s20 = "+" if (a20 or 0) >= 0 else ""
-            lines.append(f"**🤖 AI 推荐 vs benchmark** · 5d {s5}{a5}% (n={n5}) ｜ 20d {s20}{a20}% ｜ 胜率 {int(w20 or 0)}% (n={n20})")
-        else:
-            lines.append("")
-            lines.append("_AI 推荐 alpha：近 30 天暂无有效数据_")
-    except Exception as e:
-        lines.append(f"_AI 推荐查询失败: {e}_")
+        lines.append(f"_pick_outcomes 查询失败: {e}_")
     conn.close()
     return lines
 

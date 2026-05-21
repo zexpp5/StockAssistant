@@ -209,7 +209,8 @@ def _load_candidates(conn: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
         )
         SELECT
             m.pool_id, m.market, m.symbol, u.name, u.theme, u.industry,
-            p.trade_date, p.close, p.prev_close, p.currency, p.market_cap,
+            p.trade_date, p.close, p.prev_close, p.currency,
+            COALESCE(p.market_cap, f.market_cap) AS market_cap,
             COALESCE(p.forward_pe, f.forward_pe) AS forward_pe,
             COALESCE(p.trailing_pe, f.trailing_pe) AS trailing_pe,
             COALESCE(p.peg_ratio, f.peg_ratio) AS peg_ratio,
