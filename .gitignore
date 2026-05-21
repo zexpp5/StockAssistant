@@ -38,9 +38,15 @@ factor_scores_today.json
 daily_refresh.log*
 
 # 派生产物 — daily_refresh 每天重建，diff 噪音大
-# DB 仍然 track（holdings/recommendation_runs 历史是用户状态，不能纯靠 replay）
 stock_dashboard.html
 morning_brief.md
+
+# 2026-05-21 DuckDB 出仓：74MB 超 GitHub 50MB 推荐上限。
+# 用户状态（holdings/manual_watchlist/portfolio_plans/recommendation_runs/picks/pick_outcomes）
+# 改由 scripts/tools/backup_state_to_json.py 落 state_backup/*.json，是 source of truth。
+# 重建流程：python3 scripts/tools/init_stock_db_v2.py --reset --seed-universe
+#         + python3 scripts/tools/restore_state_from_json.py
+*.duckdb
 
 # 编辑器
 .idea/
