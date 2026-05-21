@@ -83,14 +83,18 @@ USER_CONFIG_DEFAULTS = {
 }
 
 
-def get_db(path: str = DB_PATH) -> duckdb.DuckDBPyConnection:
+def get_db(path: str = DB_PATH, *, read_only: bool = False,
+           ensure_schema: bool | None = None) -> duckdb.DuckDBPyConnection:
     """打开 DuckDB 连接并保证 user_config + holdings 表存在。
 
     2026-05-21 V1 cutover：删除原 4 个 UPDATE picks legacy 数据修复 SQL（picks 表已删）。
     V2 表 schema 由 init_stock_db_v2.py 负责。
     """
-    conn = duckdb.connect(path)
-    conn.execute(SCHEMA_SQL)
+    conn = duckdb.connect(path, read_only=read_only)
+    if ensure_schema is None:
+        ensure_schema = not read_only
+    if ensure_schema:
+        conn.execute(SCHEMA_SQL)
     return conn
 
 
@@ -195,7 +199,7 @@ def fetch_research_records_v2(*, conn: duckdb.DuckDBPyConnection | None = None) 
     """
     own = conn is None
     if own:
-        conn = get_db()
+        conn = get_db(read_only=True)
     rows = conn.execute("""
         WITH latest_price AS (
             SELECT * FROM price_daily
@@ -342,7 +346,7 @@ def fetch_picks_normalized(
     """
     own = conn is None
     if own:
-        conn = get_db()
+        conn = get_db(read_only=True)
     run_row = conn.execute(
         """
         SELECT run_id, run_date FROM recommendation_runs
@@ -407,21 +411,46 @@ def fetch_manual_watchlist(
 ) -> list[dict]:
     """V2 manual_watchlist（dashboard 手动添加的自选股）。
 
-    返回 dict: market / symbol / name / notes / created_at / updated_at + code(=symbol) alias。
+    返回 dict: market / symbol / name / notes / created_at / updated_at + code(=symbol) alias
+              + chain / chain_tier / chain_role / layman_intro (LEFT JOIN chain_metadata)。
+    name 字段：优先 system_universe.name（中文），fallback manual_watchlist.name（可能是英文）。
     可选按 market 过滤。
+
+    Why JOIN system_universe: A 股 manual_watchlist 入库时常存英文公司名
+    (akshare/yfinance 返回的 longName)，system_universe 走中文官方名，dashboard 需中文显示。
+    Why JOIN chain_metadata: 自选股配置页直接显示链条/层级/角色 badge，避免前端二次合并。
     """
     own = conn is None
     if own:
-        conn = get_db()
-    sql = ("SELECT market, symbol, name, notes, created_at, updated_at "
-           "FROM manual_watchlist")
+        conn = get_db(read_only=True)
+    # chain_metadata / system_universe 可能不存在（旧 DB），用 SHOW TABLES 兜底
+    tables = {str(r[0]) for r in conn.execute("SHOW TABLES").fetchall()}
+    has_su = "system_universe" in tables
+    has_chain = "chain_metadata" in tables
+    # 注：manual_watchlist.market 用前端展示值（"A股·沪交所" / "美股"），
+    # system_universe.market 用 ISO 风格（"CN" / "US" / "HK"），两者不直接相等。
+    # symbol 带后缀已全局唯一（NVDA / 605117.SS / 0700.HK），故 JOIN 只按 symbol 匹配。
+    cn_sel = "COALESCE(NULLIF(u.name, mw.symbol), mw.name) AS name" if has_su else "mw.name AS name"
+    su_join = ("LEFT JOIN system_universe u "
+               "  ON u.symbol = mw.symbol") if has_su else ""
+    chain_sel = ("cm.chain, cm.chain_tier, cm.chain_role, cm.layman_intro"
+                 if has_chain else "NULL AS chain, NULL AS chain_tier, NULL AS chain_role, NULL AS layman_intro")
+    chain_join = ("LEFT JOIN chain_metadata cm "
+                  "  ON cm.symbol = mw.symbol") if has_chain else ""
+    sql = (
+        f"SELECT mw.market, mw.symbol, {cn_sel}, mw.notes, mw.created_at, mw.updated_at, "
+        f"{chain_sel} "
+        f"FROM manual_watchlist mw "
+        f"{su_join} {chain_join}"
+    )
     params: list = []
     if market:
-        sql += " WHERE UPPER(market) = ?"
+        sql += " WHERE UPPER(mw.market) = ?"
         params.append(market.upper())
-    sql += " ORDER BY market, symbol"
+    sql += " ORDER BY mw.market, mw.symbol"
     rows = conn.execute(sql, params).fetchall()
-    cols = ["market", "symbol", "name", "notes", "created_at", "updated_at"]
+    cols = ["market", "symbol", "name", "notes", "created_at", "updated_at",
+            "chain", "chain_tier", "chain_role", "layman_intro"]
     out = [dict(zip(cols, r)) for r in rows]
     for r in out:
         r["code"] = r["symbol"]
@@ -478,7 +507,7 @@ def fetch_manual_watchlist_enriched(
     """
     own = conn is None
     if own:
-        conn = get_db()
+        conn = get_db(read_only=True)
     sql = """
         WITH latest_price AS (
             SELECT * FROM price_daily
@@ -545,7 +574,7 @@ def fetch_universe_for_ai_recommendations(
     """
     own = conn is None
     if own:
-        conn = get_db()
+        conn = get_db(read_only=True)
     rows = conn.execute(
         """
         SELECT u.symbol, u.raw_symbol, u.market, u.name, u.industry, u.theme,
@@ -590,7 +619,7 @@ def fetch_latest_portfolio_plan_baseline(
     """
     own = conn is None
     if own:
-        conn = get_db()
+        conn = get_db(read_only=True)
     run_row = conn.execute(
         """
         SELECT run_id FROM recommendation_runs
@@ -636,7 +665,7 @@ def fetch_latest_recommendation_picks(
     """
     own = conn is None
     if own:
-        conn = get_db()
+        conn = get_db(read_only=True)
     row = conn.execute(
         """
         SELECT run_id, run_date FROM recommendation_runs
@@ -710,7 +739,7 @@ def fetch_all_holdings(*, conn: duckdb.DuckDBPyConnection | None = None) -> list
     """读全部持仓，按 entry_date 倒序。返回字段含 symbol 与 code(alias=symbol) 双形态。"""
     own = conn is None
     if own:
-        conn = get_db()
+        conn = get_db(read_only=True)
     rows = conn.execute(
         f"SELECT {','.join(HOLDINGS_FULL_COLS)} "
         "FROM holdings ORDER BY entry_date DESC NULLS LAST, symbol"
@@ -728,7 +757,7 @@ def fetch_all_holdings(*, conn: duckdb.DuckDBPyConnection | None = None) -> list
 def get_holding(holding_id: int, *, conn: duckdb.DuckDBPyConnection | None = None) -> dict | None:
     own = conn is None
     if own:
-        conn = get_db()
+        conn = get_db(read_only=True)
     row = conn.execute(
         f"SELECT {','.join(HOLDINGS_FULL_COLS)} FROM holdings WHERE id = ?",
         [holding_id],
@@ -843,7 +872,7 @@ def get_config(key: str, *, conn: duckdb.DuckDBPyConnection | None = None) -> An
     """读单个配置值；未设置时回退到 USER_CONFIG_DEFAULTS。"""
     own = conn is None
     if own:
-        conn = get_db()
+        conn = get_db(read_only=True)
     row = conn.execute("SELECT value FROM user_config WHERE key = ?", [key]).fetchone()
     if own:
         conn.close()
@@ -859,7 +888,7 @@ def get_all_config(*, conn: duckdb.DuckDBPyConnection | None = None) -> dict[str
     """读全部配置；缺失的 key 用默认值补齐。"""
     own = conn is None
     if own:
-        conn = get_db()
+        conn = get_db(read_only=True)
     rows = conn.execute("SELECT key, value FROM user_config").fetchall()
     if own:
         conn.close()
@@ -889,7 +918,7 @@ def set_config(key: str, value: Any, *, conn: duckdb.DuckDBPyConnection | None =
 
 def stats() -> dict:
     """快速看库状态：V2 表行数 + 时间跨度。"""
-    conn = get_db()
+    conn = get_db(read_only=True)
     out = {}
     v2_tables = [
         ("price_daily", "trade_date"),

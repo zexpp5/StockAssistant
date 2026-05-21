@@ -1691,6 +1691,7 @@ function switchDiscoveryView(view) {
           <th class="px-3 py-2 text-left">市场</th>
           <th class="px-3 py-2 text-left" title="基于学术因子 (F-Score + 12-1 动量 + PEAD + 分析师) 综合评分">AI 评级</th>
           <th class="px-3 py-2 text-left">状态</th>
+          <th class="px-3 py-2 text-left" title="加入自选股的时间（manual_watchlist.created_at）">加入时间</th>
           <th class="px-3 py-2 text-right">操作</th>
         </tr>
       </thead>
@@ -2416,6 +2417,22 @@ function _esc(s) {
   return (s || "").toString().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+// 把 manual_watchlist.created_at 的 ISO 时间格式化成相对/紧凑显示
+//   今天 → "今天 HH:MM" · 7 天内 → "N 天前" · 同年 → "M-DD" · 跨年 → "YYYY-MM-DD"
+function _fmtAddedAt(iso) {
+  if (!iso) return '<span class="text-slate-400">—</span>';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return _esc(iso);
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  if (sameDay) return `今天 ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+  const diffMs = now - d;
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  if (diffDays > 0 && diffDays <= 7) return `${diffDays} 天前`;
+  if (d.getFullYear() === now.getFullYear()) return `${d.getMonth()+1}-${String(d.getDate()).padStart(2,"0")}`;
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+
 // 持仓「持」标记 — 数据来自 _holdingsCache（DB holdings 表）。同 code 多笔自动聚合显示总股数
 function _heldBadge(code) {
   if (!_holdingsCache || _holdingsCache.length === 0) return "";
@@ -2636,7 +2653,7 @@ async function loadWatchlistTable() {
     });
     countEl.textContent = `${filtered.length} / ${_watchlistCache.length} 条`;
     if (filtered.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="10" class="px-3 py-8 text-center text-slate-500 text-sm">没有匹配的记录</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="11" class="px-3 py-8 text-center text-slate-500 text-sm">没有匹配的记录</td></tr>`;
       return;
     }
     tbody.innerHTML = filtered.map(r => `
@@ -2650,6 +2667,7 @@ async function loadWatchlistTable() {
         <td class="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">${_esc(r.market)}</td>
         <td class="px-3 py-2 whitespace-nowrap">${_wlRatingBadge(r.code)}</td>
         <td class="px-3 py-2 text-xs whitespace-nowrap">${_esc(r.status)}</td>
+        <td class="px-3 py-2 text-xs text-slate-500 whitespace-nowrap" title="${_esc(r.created_at || '')}">${_fmtAddedAt(r.created_at)}</td>
         <td class="px-3 py-2 text-right space-x-1 whitespace-nowrap">
           <button onclick="openWatchlistEditor('${_esc(r.code)}')" class="text-xs px-2 py-1 bg-slate-100 hover:bg-violet-100 text-slate-700 rounded">✏️</button>
           <button onclick="deleteWatchlistItem('${_esc(r.code)}')" class="text-xs px-2 py-1 bg-rose-100 hover:bg-rose-200 text-rose-700 rounded">🗑️</button>
@@ -2657,7 +2675,7 @@ async function loadWatchlistTable() {
       </tr>
     `).join("");
   } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="10" class="px-3 py-8 text-center text-rose-700 text-sm">加载失败：${_esc(e.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="11" class="px-3 py-8 text-center text-rose-700 text-sm">加载失败：${_esc(e.message)}</td></tr>`;
   }
 }
 async function forceReloadWatchlist() { _watchlistCache = []; await loadWatchlistTable(); }

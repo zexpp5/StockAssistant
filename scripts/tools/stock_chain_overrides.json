@@ -27,5 +27,10 @@
   "601138.SS": {"chain": "AI 算力", "chain_tier": "下游", "chain_role": "AI 服务器组装", "layman_intro": "工业富联 — 鸿海 A 股版，AI 服务器 ODM 第一"},
   "002463.SZ": {"chain": "AI 算力", "chain_tier": "中游", "chain_role": "AI PCB", "layman_intro": "沪电股份 — AI 服务器高速 PCB 主力"},
   "600584.SS": {"chain": "AI 算力", "chain_tier": "中游", "chain_role": "封装测试", "layman_intro": "长电科技 — 国内最大封测厂"},
-  "688012.SS": {"chain": "AI 算力", "chain_tier": "上游", "chain_role": "半导体设备", "layman_intro": "中微公司 — 国产蚀刻设备代表"}
+  "688012.SS": {"chain": "AI 算力", "chain_tier": "上游", "chain_role": "半导体设备", "layman_intro": "中微公司 — 国产蚀刻设备代表"},
+
+  "600522.SS": {"chain": "数据中心电力", "chain_tier": "基础设施", "chain_role": "海缆/光纤通信", "layman_intro": "中天科技 — 海缆+特种光缆+数据中心连接龙头"},
+  "688525.SS": {"chain": "AI 算力", "chain_tier": "上游", "chain_role": "存储芯片(IDM)", "layman_intro": "佰维存储 — 国产存储模组+企业级 SSD"},
+  "ON":   {"chain": "AI 算力", "chain_tier": "上游", "chain_role": "电源管理芯片", "layman_intro": "ON Semiconductor — 数据中心电源/汽车电子芯片"},
+  "AMD":  {"chain": "AI 算力", "chain_tier": "上游", "chain_role": "AI GPU 二号位 / CPU", "layman_intro": "AMD — MI300 GPU 对标 NVDA + Server CPU 抢英特尔份额"}
 }
