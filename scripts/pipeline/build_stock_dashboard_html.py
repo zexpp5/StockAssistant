@@ -4844,13 +4844,25 @@ async function clearHoldings() {
 }
 
 // ============ 一键加载方案 A v6（学术因子 + risk-aware 客观仓位） ============
+// 按 ticker 后缀判断本币（V2 fx 修复，2026-05-21）
+// .SS / .SZ / .BJ → CNY · .HK → HKD · 其他（裸 ticker）→ USD
+function _currencyForTicker(ticker) {
+  const t = String(ticker || "").toUpperCase();
+  if (/\.(SS|SZ|BJ)$/.test(t)) return "CNY";
+  if (/\.HK$/.test(t)) return "HKD";
+  return "USD";
+}
+// 本币 → RMB 汇率（粗略值，与 stock_research/jobs/optimize_portfolio.py 保持一致）
+const _FX_TO_RMB = { CNY: 1.0, HKD: 0.92, USD: 7.10 };
+function _fxToRMB(currency) { return _FX_TO_RMB[currency] || 1.0; }
+
 async function loadPlanAv6() {
   if (!PLAN_A_V6 || !PLAN_A_V6.plan_v5 || PLAN_A_V6.plan_v5.length === 0) {
     alert("还没有方案 A v6 数据，请先跑：python3 -m stock_research.jobs.optimize_portfolio");
     return;
   }
   if (!confirm(
-    "⚠️ 这个按钮会把方案 v6 推荐的 12 只股票批量抄进「我的持仓」，把今天的现价当作买入价。\n\n" +
+    "⚠️ 这个按钮会把方案 v6 推荐的股票批量抄进「我的持仓」（source=ai_plan，会显示紫色「📋 方案」badge）。\n\n" +
     "✅ 适用场景：你已经按方案在券商下单了，想快速录入再手动改成真实成交价\n" +
     "❌ 不要用：你还没真买，只想看方案表现 → 请直接看顶部「📊 AI 组合方案」tab\n\n" +
     "继续吗？"
@@ -4859,37 +4871,42 @@ async function loadPlanAv6() {
     if (!confirm("当前已有持仓数据，加载方案 A v6 会覆盖。继续？")) return;
   }
   const today = new Date().toISOString().split("T")[0];
-  const USD_TO_RMB = 7.10;
   const holdings = [];
-  let totalAmount = 0;
+  const skipped = [];  // 收集 skip 原因，结束时一次性告诉用户
+  let totalAmountRmb = 0;
   PLAN_A_V6.plan_v5.forEach(p => {
     const amountRmb = p.amount_rmb || 0;
-    if (amountRmb < 100) return;
+    if (amountRmb < 100) { skipped.push(`${p.ticker} (amount_rmb<100，权重过小)`); return; }
     const rec = RECORDS.find(r => r.code === p.ticker);
-    let priceUsd = null;
-    if (rec && rec.latest_price) {
-      const m = String(rec.latest_price).match(/([\d,]+\.?\d*)/);
-      if (m) priceUsd = parseFloat(m[1].replace(/,/g, ""));
+    let priceLocal = null;  // 本币价（A 股 CNY / 港股 HKD / 美股 USD）
+    if (rec && rec.latest_price != null) {
+      const raw = (typeof rec.latest_price === "number") ? rec.latest_price : String(rec.latest_price).replace(/,/g, "");
+      const num = parseFloat(raw);
+      if (!isNaN(num) && num > 0) priceLocal = num;
     }
-    if (!priceUsd) return;
-    const shares = Math.max(1, Math.round(amountRmb / (priceUsd * USD_TO_RMB)));
+    if (!priceLocal) { skipped.push(`${p.ticker} (RECORDS 缺 latest_price)`); return; }
+    const currency = _currencyForTicker(p.ticker);
+    const fx = _fxToRMB(currency);
+    // shares = 本币目标金额 / 本币价 = (amountRmb / fx) / priceLocal
+    const shares = Math.max(1, Math.round(amountRmb / (priceLocal * fx)));
     holdings.push({
       code: p.ticker,
-      entry_price: priceUsd,
+      entry_price: priceLocal,  // 本币价（与 currency 配套；编辑器/盈亏计算需统一口径）
       shares: shares,
       date: today,
       _plan_a_v6: true,
     });
-    totalAmount += shares * priceUsd * USD_TO_RMB;
+    totalAmountRmb += shares * priceLocal * fx;
   });
   await saveHoldings(holdings);
   const metrics = PLAN_A_V6.portfolio_metrics || {};
-  // 渲染持久指标卡片
   renderV6Metrics(metrics);
-  alert(`✅ 已加载 ${holdings.length} 只（总额 ¥${Math.round(totalAmount).toLocaleString()}）\n\n` +
-        `🚨 重要下一步：买入价现在 = 今天现价。请逐行点【编辑】改成你真实成交价和真实数量，否则盈亏算不准。\n\n` +
+  const skipNote = skipped.length ? `\n\n⚠️ 跳过 ${skipped.length} 只：\n  · ${skipped.slice(0, 5).join("\n  · ")}${skipped.length > 5 ? `\n  · …还有 ${skipped.length - 5} 只` : ""}` : "";
+  alert(`✅ 已加载 ${holdings.length} 只（总额 ¥${Math.round(totalAmountRmb).toLocaleString()}）\n\n` +
+        `🚨 重要下一步：买入价 = 今天现价（本币），数量按 fx 换算估算。请逐行【编辑】改成真实成交价和真实数量。\n\n` +
         `📚 backtest 数据（参考，非未来承诺）:\n` +
-        `  · Sharpe ${metrics.annual_sharpe || '?'} | 年化收益 ${metrics.annual_return_pct || '?'}% | 波动 ${metrics.annual_vol_pct || '?'}%`);
+        `  · Sharpe ${metrics.annual_sharpe || '?'} | 年化收益 ${metrics.annual_return_pct || '?'}% | 波动 ${metrics.annual_vol_pct || '?'}%` +
+        skipNote);
 }
 
 function renderV6Metrics(metrics) {
