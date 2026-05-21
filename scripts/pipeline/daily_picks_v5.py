@@ -214,7 +214,7 @@ def main():
             print("\n⚠️ --bypass-audit-gate：用户强制跳过闸门，继续写入（风险自担）\n")
         else:
             print("\n🔴 跨源 audit 闸门 FAIL → 强制 dry-run（不写飞书）")
-            print("   修复方法：python3 -m stock_research.jobs.daily_audit  排查冲突源")
+            print("   修复方法：python3 scripts/tools/recommendation_quality_gate.py  排查冲突源")
             print("   或：使用 --bypass-audit-gate 强行通过（不推荐）\n")
             args.dry_run = True
 
@@ -305,7 +305,7 @@ def main():
 
         try:
             from stock_research.core import fmp_client
-            health = fmp_client.write_source_health(pipeline="v6_us")
+            health = fmp_client.write_source_health(pipeline="v2_us")
             fmp = (health.get("sources") or {}).get("FMP") or {}
             if fmp.get("status") != "ok":
                 print(

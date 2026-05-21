@@ -53,7 +53,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
 
 from .. import config
-from ..adapters import legacy_shim as feishu, store
+from ..adapters import store
+
+import duckdb  # noqa: E402
+
+DB_PATH = _REPO_ROOT / "stock_history_v2.duckdb"
 
 logger = logging.getLogger("stock_research.jobs.archive_picks")
 
@@ -74,16 +78,48 @@ def _normalize(v: Any) -> str:
 
 
 def _get_today_picks(target_date: datetime) -> list[dict]:
-    """拉指定日期入选的 picks。"""
-    picks = feishu.fetch_picks()
-    out = []
-    target_ts = datetime.combine(target_date.date(), datetime.min.time()).timestamp() * 1000
-    next_ts = target_ts + 86400 * 1000
-    for p in picks:
-        f = p.get("fields", {})
-        pd = f.get("入选日期")
-        if pd and target_ts <= pd < next_ts:
-            out.append(f)
+    """拉指定日期入选的 picks（V2 recommendation_picks + system_universe）。
+
+    2026-05-21 V1 cutover：原 feishu.fetch_picks() 改 DuckDB V2 表；字段名按
+    archive 历史 CSV 表头（中文）映射回去，保持归档文件 schema 兼容。
+    """
+    if not DB_PATH.exists():
+        return []
+    conn = duckdb.connect(str(DB_PATH), read_only=True)
+    try:
+        date_str = target_date.strftime("%Y-%m-%d")
+        rows = conn.execute("""
+            SELECT rp.symbol, rp.name, rp.market, rp.rating, rp.total_score,
+                   rp.entry_price, rp.recommendation_reason,
+                   su.theme, su.industry, su.ai_relevance,
+                   rr.run_date
+            FROM recommendation_picks rp
+            JOIN recommendation_runs rr ON rp.run_id = rr.run_id
+            LEFT JOIN system_universe su ON su.symbol = rp.symbol
+            WHERE rr.run_date = ? AND rp.signal = 'buy'
+            ORDER BY rp.total_score DESC NULLS LAST, rp.symbol
+        """, [date_str]).fetchall()
+    finally:
+        conn.close()
+    out: list[dict] = []
+    for (symbol, name, market, rating, total_score, entry_price,
+         reason, theme, industry, ai_relevance, _run_date) in rows:
+        out.append({
+            "代码": symbol,
+            "股票名称": name or "",
+            "市场": market or "",
+            "入选评分": rating or "",
+            "综合得分": float(total_score) if total_score is not None else "",
+            "入选时价格": float(entry_price) if entry_price is not None else "",
+            "入选时PEG": "",  # V2 schema 未持久化 PEG/远期 PE/1Y%（可在 plan 里查）
+            "入选时远期PE": "",
+            "入选时1Y%": "",
+            "AI关联度": ai_relevance or "",
+            "主题分类": theme or industry or "",
+            "入选理由": reason or "",
+            "关键看点（催化剂）": "",
+            "风险提示": "",
+        })
     return out
 
 

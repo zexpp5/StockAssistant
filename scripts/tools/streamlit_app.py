@@ -174,27 +174,40 @@ def _load_json(rel: str) -> dict | None:
 
 @st.cache_data(ttl=300)
 def _load_a_share_picks() -> dict | None:
-    """A 股优选 DB-first；JSON 只作为旧产物 fallback。"""
+    """A 股优选 V2 DB-first；JSON 只作为旧产物 fallback。
+
+    2026-05-21 V1 cutover：原 picks.v6_cn 读法已删；现走 recommendation_picks
+    最新 a_share/cn 市场的 run。
+    """
     db_path = _duckdb_path()
     json_payload = _load_json("data/a_share_picks.json")
     if db_path.exists():
         try:
             import duckdb
             con = duckdb.connect(str(db_path), read_only=True)
-            latest = con.execute(
-                "SELECT MAX(pick_date) FROM picks WHERE model_source = 'v6_cn'"
-            ).fetchone()[0]
-            if latest is not None:
+            tables = {str(r[0]) for r in con.execute("SHOW TABLES").fetchall()}
+            if "recommendation_picks" not in tables or "recommendation_runs" not in tables:
+                con.close()
+                return json_payload
+            latest_run = con.execute("""
+                SELECT rr.run_id, rr.run_date FROM recommendation_runs rr
+                JOIN recommendation_picks rp ON rp.run_id = rr.run_id
+                WHERE rp.market = 'CN' AND rp.signal = 'buy'
+                ORDER BY rr.generated_at DESC LIMIT 1
+            """).fetchone()
+            if latest_run is not None:
+                run_id, run_date = latest_run
                 rows = con.execute("""
-                    SELECT code, name, market, rating, total_score, ai_relevance, theme
-                    FROM picks
-                    WHERE model_source = 'v6_cn' AND pick_date = ?
-                      AND signal = 'buy'
-                    ORDER BY total_score DESC NULLS LAST, code
-                """, [latest]).fetchall()
+                    SELECT rp.symbol AS code, rp.name, rp.market, rp.rating,
+                           rp.total_score, su.theme, su.industry
+                    FROM recommendation_picks rp
+                    LEFT JOIN system_universe su ON su.symbol = rp.symbol
+                    WHERE rp.run_id = ? AND rp.signal = 'buy'
+                    ORDER BY rp.total_score DESC NULLS LAST, rp.symbol
+                """, [run_id]).fetchall()
                 con.close()
                 selected = []
-                for code, name, market, rating, total_score, ai_relevance, theme in rows:
+                for code, name, market, rating, total_score, theme, industry in rows:
                     selected.append({
                         "code": code,
                         "ticker": code,
@@ -202,12 +215,12 @@ def _load_a_share_picks() -> dict | None:
                         "market": market,
                         "rating": rating,
                         "composite": (float(total_score) / 100) if total_score is not None else 0,
-                        "industry": theme or ai_relevance,
+                        "industry": theme or industry,
                         "theme": theme,
                     })
                 return {
-                    "generated_at": f"{str(latest)[:10]}T00:00:00",
-                    "source": "duckdb:picks.v6_cn",
+                    "generated_at": f"{str(run_date)[:10]}T00:00:00",
+                    "source": "duckdb:recommendation_picks.cn",
                     "n_total": len(selected),
                     "n_tradable": len(selected),
                     "n_recommended": len(selected),
@@ -461,11 +474,12 @@ with tab_watchlist:
             if len(closes) < 2:
                 continue
             recent = closes[-60:]
-            pct60 = ((recent[-1] - recent[0]) / recent[0] * 100) if recent[0] else None
+            # 防御：close 列可能含 None（V2 price_daily 早期空段），算 pct 前先过滤
+            pct60 = ((recent[-1] - recent[0]) / recent[0] * 100) if (recent and recent[0] and recent[-1] is not None) else None
             pct20 = None
             if len(closes) >= 20:
                 v20 = closes[-20:]
-                pct20 = ((v20[-1] - v20[0]) / v20[0] * 100) if v20[0] else None
+                pct20 = ((v20[-1] - v20[0]) / v20[0] * 100) if (v20 and v20[0] and v20[-1] is not None) else None
             meta = plan_meta.get(tkr, {})
             weight = (meta.get("v5_weight") or meta.get("weight") or 0) * 100
             rows.append({
@@ -479,7 +493,7 @@ with tab_watchlist:
                 "权重 %": round(weight, 2) if weight else None,
                 "F-Score": meta.get("f_score") if meta else None,
                 "数据天数": len(closes),
-                "最新价": round(float(closes[-1]), 2),
+                "最新价": round(float(closes[-1]), 2) if closes[-1] is not None else None,
             })
 
         if not rows:

@@ -570,7 +570,7 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
             print("\n⚠️ --bypass-audit-gate：用户强制跳过闸门，继续（风险自担）\n")
         else:
             print("\n🔴 跨源 audit 闸门 FAIL → 强制 dry-run（不写飞书 / 不写 DB）")
-            print("   修复：python3 -m stock_research.jobs.daily_audit  或 --bypass-audit-gate\n")
+            print("   修复：python3 scripts/tools/recommendation_quality_gate.py  或 --bypass-audit-gate\n")
             dry_run = True
 
     print(f"\n📊 A 股每日优选 — {datetime.now():%Y-%m-%d %H:%M}")
@@ -860,7 +860,7 @@ def run_a_share_picks(top_k: int = 12, mode: str = "tertile",
                 "theme": e.industry or "A 股",
                 "entry_price": price_map.get(e.code),
                 "entry_currency": "CNY",
-                "model_source": "v6_cn",
+                "model_source": "v2_cn",
                 "signal": "watch" if e.coverage_score < 0.50 else "buy",
                 "coverage_score": e.coverage_score,
                 "missing_factors": e.missing_factors,

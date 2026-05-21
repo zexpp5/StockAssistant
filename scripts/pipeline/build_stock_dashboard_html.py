@@ -7,6 +7,7 @@ AI 投资研究 Dashboard - 专业研究报告风格
 """
 import sys
 import os
+import re
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
 sys.path.insert(0, _REPO)
 sys.path.insert(0, os.path.join(_REPO, "scripts", "lib"))  # 2026-05-11 lib 迁移
@@ -895,7 +896,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <th class="px-3 py-2 text-left">代码</th>
             <th class="px-3 py-2 text-left">名称</th>
             <th class="px-3 py-2 text-left">市场</th>
-            <th class="px-3 py-2 text-left">行业</th>
+            <th class="px-3 py-2 text-left">主题</th>
             <th class="px-3 py-2 text-right">综合 z</th>
             <th class="px-3 py-2 text-right">F-Score</th>
             <th class="px-3 py-2 text-right">12-1 动量</th>
@@ -1440,7 +1441,7 @@ function switchDiscoveryView(view) {
             title="所有已经拉回数据库的股票">🌍 全部 <span id="db-filter-cnt-all">-</span></button>
     <button onclick="setDbExplorerFilter('star3')" id="db-filter-btn-star3"
             class="db-filter-btn px-2.5 py-1 rounded-full border bg-white border-slate-300 text-slate-600 hover:bg-violet-50"
-            title="只看 ⭐⭐⭐ 强烈推荐">🔥 ⭐⭐⭐ <span id="db-filter-cnt-star3">-</span></button>
+            title="强烈推荐（V2: strong_buy / V1: ⭐⭐⭐）">🔥 强买 <span id="db-filter-cnt-star3">-</span></button>
     <button onclick="setDbExplorerFilter('star_any')" id="db-filter-btn-star_any"
             class="db-filter-btn px-2.5 py-1 rounded-full border bg-white border-slate-300 text-slate-600 hover:bg-violet-50"
             title="任何评级（⭐ ⭐⭐ ⭐⭐⭐ 都算，排除无评级的）">⭐ 任意评级 <span id="db-filter-cnt-star_any">-</span></button>
@@ -1473,7 +1474,7 @@ function switchDiscoveryView(view) {
           <th class="sticky-code px-3 py-2 text-left">代码</th>
           <th class="sticky-name px-3 py-2 text-left">名称</th>
           <th class="px-3 py-2 text-left">市场</th>
-          <th class="px-3 py-2 text-left">行业 / 链条</th>
+          <th class="px-3 py-2 text-left">主题</th>
           <th class="px-3 py-2 text-right">价格</th>
           <th class="px-3 py-2 text-right">日涨跌</th>
           <th class="px-3 py-2 text-right">YTD</th>
@@ -1944,7 +1945,7 @@ function switchDiscoveryView(view) {
           <tbody>
             <tr class="border-b border-rose-100">
               <td class="py-1.5 px-2 font-semibold">v9 选股</td>
-              <td class="px-2">6 因子（Piotroski + 动量 + 反转 + 龙虎榜 + 北向 + PEAD + 政策）+ A 股实战约束</td>
+              <td class="px-2">V2 lite 4 因子（估值 + 动量 + 数据质量 + 覆盖度）+ A 股实战约束 · <span class="text-amber-700">F-Score/龙虎榜/北向/PEAD 暂未接入 V2</span></td>
               <td class="px-2 font-mono text-[11px]">a_share_picks.py · apply_a_share_constraints.py</td>
               <td class="px-2 text-emerald-700 font-semibold">✅ 在跑</td>
             </tr>
@@ -2011,7 +2012,7 @@ function switchDiscoveryView(view) {
         </div>
         <div class="bg-white rounded-lg p-3 border border-emerald-200">
           <p class="font-bold text-slate-800 mb-1">7. 执行层（2026-05-10 新增）</p>
-          <p class="text-xs text-slate-600">A 股 6 因子闭环 + 实战约束 / IPO 打新日历 / 解禁减持事件 / 产业政策扫描 / 实盘防御 / OpenBB 综合情报 / DuckDB 持久化</p>
+          <p class="text-xs text-slate-600">A 股 V2 lite 4 因子（估值/动量/数据质量/覆盖度）+ 实战约束 / IPO 打新日历 / 解禁减持事件 / 产业政策扫描 / 实盘防御 / OpenBB 综合情报 / DuckDB 持久化 · <span class="text-amber-700">F-Score/龙虎榜/北向/PEAD 待接入</span></p>
         </div>
         <div class="bg-white rounded-lg p-3 border border-emerald-200">
           <p class="font-bold text-slate-800 mb-1">8. 个股深度研究（B 路线 Phase 1）</p>
@@ -2336,6 +2337,18 @@ function switchDiscoveryView(view) {
 // RECORDS / PICKS / SIMULATION 来自飞书 watchlist API 实时拉（仍保留），其余全部走 DuckDB。
 const DASHBOARD_UPDATE_TIME = "{UPDATE_TIME}";
 const RECORDS      = {RECORDS_JSON};
+// 全局：从 RECORDS 派生 code → 产业链业务主题 lookup（3 个 AI 助手 tab 共用，避免重复存字段）
+const _CHAIN_THEME_BY_CODE = (() => {
+  const m = new Map();
+  (Array.isArray(RECORDS) ? RECORDS : []).forEach(r => {
+    if (r && r.code) m.set(String(r.code), r.theme || "");
+  });
+  return m;
+})();
+function chainThemeFor(code) {
+  if (!code) return "";
+  return _CHAIN_THEME_BY_CODE.get(String(code)) || "";
+}
 const PICKS        = {PICKS_JSON};
 // 2026-05-12 加：各市场 picks JSON 的 generated_at — 让用户知道每条推荐是什么时候算的
 // {us: ISO 时间, hk: ISO 时间, cn: ISO 时间}；某市场没数据时为 null
@@ -2729,6 +2742,9 @@ const _CHAIN_THEME_PALETTE = [
   "bg-teal-50 text-teal-800 border-teal-200",
 ];
 
+let _chainActiveMarket = "us";  // 当前 active 的市场 tab
+function switchChainMarket(key) { _chainActiveMarket = key; loadChainOverview(); }
+
 async function loadChainOverview() {
   const statusEl = document.getElementById("chain-api-status");
   const countEl = document.getElementById("chain-count");
@@ -2750,9 +2766,7 @@ async function loadChainOverview() {
       cn: { label: "A 股", hint: "沪深北", icon: "🇨🇳", rows: [], themes: new Map() },
     };
     sourceRows.forEach(raw => {
-      // A 股 theme=null → 后端已主动排除（医药/化工/食品/家电/工程机械 等非科技/电子）
       const marketKey = _chainMarketKey(raw);
-      if (marketKey === "cn" && !raw.theme) return;
       if (kw) {
         const hay = [raw.market, raw.code, raw.name, raw.theme, raw.industry, raw.ai_relevance]
           .map(x => String(x || "").toLowerCase()).join(" ");
@@ -2760,7 +2774,8 @@ async function loadChainOverview() {
       }
       const m = markets[marketKey] || markets.us;
       m.rows.push(raw);
-      const themeKey = String(raw.theme || raw.industry || "未分类");
+      // theme=null（A 股非科技回退）→ 归入"🗂 其他"分组
+      const themeKey = String(raw.theme || "🗂 其他");
       if (!m.themes.has(themeKey)) m.themes.set(themeKey, []);
       m.themes.get(themeKey).push(raw);
     });
@@ -2769,17 +2784,27 @@ async function loadChainOverview() {
         String(a.code || "").localeCompare(String(b.code || ""))));
     });
 
-    const marketList = [markets.us, markets.hk, markets.cn];
-    const total = marketList.reduce((sum, m) => sum + m.rows.length, 0);
+    const marketList = [
+      { key: "us", m: markets.us },
+      { key: "hk", m: markets.hk },
+      { key: "cn", m: markets.cn },
+    ];
+    const total = marketList.reduce((sum, x) => sum + x.m.rows.length, 0);
     if (countEl) countEl.textContent = `${total} 个标的${kw ? " · 已筛选" : ""}`;
+
+    // 市场 tab 按钮（点击切 active）
+    const activeKey = marketList.some(x => x.key === _chainActiveMarket) ? _chainActiveMarket : "us";
     if (summaryEl) {
-      summaryEl.innerHTML = marketList.map(m => `
-        <a href="#chain-market-${m.label.replace(/\s+/g, "-").toLowerCase()}"
-           onclick="document.getElementById('chain-market-${m.label.replace(/\s+/g, "-").toLowerCase()}')?.scrollIntoView({behavior:'smooth',block:'start'});return false;"
-           class="inline-flex items-center gap-2 px-3 py-1 bg-white border border-slate-200 hover:border-violet-400 hover:bg-violet-50 rounded-full text-xs text-slate-700 transition">
-          <span>${m.icon}</span><span class="font-medium">${m.label}</span><span class="text-violet-600 font-semibold">${m.rows.length}</span>
-        </a>
-      `).join("");
+      summaryEl.innerHTML = marketList.map(({ key, m }) => {
+        const isActive = key === activeKey;
+        const cls = isActive
+          ? "inline-flex items-center gap-2 px-4 py-2 bg-violet-600 text-white rounded-lg text-sm font-semibold shadow-sm"
+          : "inline-flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 hover:border-violet-400 hover:bg-violet-50 rounded-lg text-sm text-slate-700 transition";
+        const badge = isActive
+          ? `<span class="text-xs opacity-80">${m.rows.length}</span>`
+          : `<span class="text-xs text-violet-600 font-semibold">${m.rows.length}</span>`;
+        return `<button type="button" onclick="switchChainMarket('${key}')" class="${cls}"><span>${m.icon}</span><span>${m.label}</span>${badge}</button>`;
+      }).join("");
     }
 
     if (total === 0) {
@@ -2800,23 +2825,31 @@ async function loadChainOverview() {
         </div>
       </div>`;
 
-    container.innerHTML = marketList.map(m => {
-      const themeEntries = Array.from(m.themes.entries()).sort((a, b) => b[1].length - a[1].length);
-      return `
-        <section id="chain-market-${m.label.replace(/\s+/g, "-").toLowerCase()}" class="bg-slate-50 border border-slate-200 rounded-xl p-4">
-          <div class="flex items-center justify-between gap-3 mb-3">
-            <div>
-              <h3 class="text-lg font-bold text-slate-900">${m.icon} ${m.label}</h3>
-              <p class="text-xs text-slate-500">${m.hint} · ${m.rows.length} 个标的 · ${themeEntries.length} 个主题</p>
-            </div>
+    // 只渲染 active 市场
+    const m = markets[activeKey];
+    // 保证每个市场都有"🗂 其他"分组（即使为 0），视觉一致
+    if (!m.themes.has("🗂 其他")) m.themes.set("🗂 其他", []);
+    const themeEntries = Array.from(m.themes.entries()).sort((a, b) => {
+      // "🗂 其他" 永远排到最后
+      const aOther = a[0].startsWith("🗂 其他");
+      const bOther = b[0].startsWith("🗂 其他");
+      if (aOther !== bOther) return aOther ? 1 : -1;
+      return b[1].length - a[1].length;
+    });
+    container.innerHTML = `
+      <section class="bg-slate-50 border border-slate-200 rounded-xl p-4">
+        <div class="flex items-center justify-between gap-3 mb-3">
+          <div>
+            <h3 class="text-lg font-bold text-slate-900">${m.icon} ${m.label}</h3>
+            <p class="text-xs text-slate-500">${m.hint} · ${m.rows.length} 个标的 · ${themeEntries.length} 个主题</p>
           </div>
-          ${themeEntries.length === 0
-            ? `<p class="text-xs text-slate-400 px-2 py-3">—</p>`
-            : `<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">${
-                themeEntries.map(([t, rows], i) => themeColumn(t, rows, i)).join("")
-              }</div>`}
-        </section>`;
-    }).join("");
+        </div>
+        ${themeEntries.length === 0
+          ? `<p class="text-xs text-slate-400 px-2 py-3">—</p>`
+          : `<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">${
+              themeEntries.map(([t, rows], i) => themeColumn(t, rows, i)).join("")
+            }</div>`}
+      </section>`;
   } catch (e) {
     container.innerHTML = `<div class="bg-rose-50 border border-rose-200 rounded p-4 text-sm text-rose-700">加载失败：${_esc(e.message)}</div>`;
   }
@@ -3074,11 +3107,21 @@ function _originBadge(origin) {
 }
 
 // 筛选 chip 判断：一只股票是否符合当前 filter
+// 2026-05-21 V2 兼容：pick_rating 改成 strong_buy/buy，原 ⭐⭐⭐ 文本判断失效；
+// ai_relevance 在 V2 退化成 "科技/AI universe" 兜底文本，原"极强/强"判断也失效。
+// 新逻辑：rating 同时认 V2 + V1 文本；ai_strong 改成"总分 ≥ 80"（V2 高分推荐）。
 function _dbPassesFilter(r, filter) {
   if (filter === "all") return true;
-  if (filter === "star3") return String(r.pick_rating || "").includes("⭐⭐⭐");
-  if (filter === "star_any") return String(r.pick_rating || "").includes("⭐");
+  const rating = String(r.pick_rating || "");
+  if (filter === "star3") {
+    return rating === "strong_buy" || rating.includes("⭐⭐⭐");
+  }
+  if (filter === "star_any") {
+    return rating === "strong_buy" || rating === "buy" || rating.includes("⭐");
+  }
   if (filter === "ai_strong") {
+    const score = Number(r.pick_total_score);
+    if (score >= 80) return true;
     const a = String(r.ai_relevance || "");
     return a.includes("极强") || (a.includes("强") && !a.includes("非"));
   }
@@ -3369,9 +3412,8 @@ function renderDbExplorerTable() {
         </td>
         <td class="sticky-name px-3 py-2 text-slate-800">${_esc(r.name || "—")}</td>
         <td class="px-3 py-2 text-xs text-slate-500">${r.market ? _esc(r.market) : '<span class="text-amber-600" title="watchlist.market 字段为空，自选股编辑里补全 market">⚠️ 未分类</span>'}</td>
-        <td class="px-3 py-2 text-xs text-slate-600">
-          <span>${_esc(r.industry || "—")}</span>
-          <span class="text-[10px] text-slate-400 ml-1">${_esc((r.chain || "") + (r.chain_tier ? " · " + r.chain_tier : "") + (r.chain_role ? " · " + r.chain_role : "")) || ""}</span>
+        <td class="px-3 py-2 text-xs text-slate-600 whitespace-nowrap">
+          <span>${_esc(chainThemeFor(r.code) || r.industry || "—")}</span>
         </td>
         <td class="px-3 py-2 text-right font-mono">${_dbFmtNum(r.price_price)}</td>
         <td class="px-3 py-2 text-right font-mono text-xs">${_dbDayChange(r.price_price, r.price_prev_close)}</td>
@@ -4838,9 +4880,9 @@ function renderV6Metrics(metrics) {
       <div class="text-[10px] text-slate-500">SPY 长期约 15-18%</div>
     </div>
     <div class="bg-white rounded-lg p-3 border border-emerald-200">
-      <div class="text-sm font-bold text-slate-700">6 因子 + risk-aware</div>
-      <div class="text-xs text-slate-600 mt-1">Piotroski / 12-1 动量 / 1月反转</div>
-      <div class="text-xs text-slate-600">PEAD / 分析师上修</div>
+      <div class="text-sm font-bold text-slate-700">V2 lite 4 因子 + risk-aware</div>
+      <div class="text-xs text-slate-600 mt-1">估值 / 12-1 动量 / 数据质量 / 覆盖度</div>
+      <div class="text-xs text-amber-700">Piotroski / PEAD / 分析师上修 待接入</div>
     </div>
   `;
   document.getElementById("v6-metrics-card").style.display = "";
@@ -5510,6 +5552,7 @@ function renderPlanBacktest() {
         <td class="px-3 py-2 text-xs text-slate-500">${i + 1}</td>
         <td class="px-3 py-2 font-mono text-sm font-semibold">${r.ticker}</td>
         <td class="px-3 py-2 text-sm text-slate-700">${r.name || '—'}</td>
+        <td class="px-3 py-2 text-xs text-slate-600 whitespace-nowrap">${_esc(chainThemeFor(r.ticker) || '—')}</td>
         <td class="px-3 py-2 text-sm">${(r.weight * 100).toFixed(2)}%</td>
         <td class="px-3 py-2 text-sm">${r.close_first.toFixed(2)} → ${r.close_last.toFixed(2)}</td>
         <td class="px-3 py-2 text-sm font-semibold ${cls(r.return_pct)}">${fmtPct(r.return_pct)}</td>
@@ -5523,6 +5566,7 @@ function renderPlanBacktest() {
             <th class="px-3 py-2">#</th>
             <th class="px-3 py-2">代码</th>
             <th class="px-3 py-2">公司名</th>
+            <th class="px-3 py-2">主题</th>
             <th class="px-3 py-2">权重</th>
             <th class="px-3 py-2">期初 → 期末</th>
             <th class="px-3 py-2">个股累计</th>
@@ -5858,7 +5902,7 @@ function renderTodayPicksList() {
                    : score >= 55 ? "text-emerald-600"
                    : "text-slate-500";
     const theme = (p.theme || p.ai_relevance || "").toString().trim();
-    const model = String(p.model_source || "").replace("v6_", "").toUpperCase();
+    const model = String(p.model_source || "").replace(/^v[26]_/, "").toUpperCase();
     return `<tr class="border-b border-violet-50 last:border-0 hover:bg-violet-50/50">
       <td class="px-3 py-2 text-right text-[11px] font-mono text-slate-400">${idx + 1}</td>
       <td class="px-3 py-2 min-w-[190px]">
@@ -6425,7 +6469,7 @@ function _computeDiscoveryStats() {
           <div class="mt-0.5">${stockPill(c.ticker, {layout: "mini"})}</div>
         </td>
         <td class="px-3 py-2 text-xs text-slate-700 whitespace-nowrap">${market}</td>
-        <td class="px-3 py-2 text-xs text-slate-500">${c.sector || ""}</td>
+        <td class="px-3 py-2 text-xs text-slate-600 whitespace-nowrap">${_esc(chainThemeFor(c.ticker) || c.sector || "")}</td>
         <td class="px-3 py-2 text-right font-mono ${zColor}">${c.composite_z >= 0 ? "+" : ""}${c.composite_z.toFixed(2)}</td>
         <td class="px-3 py-2 text-right font-mono ${fColor}">${f}</td>
         <td class="px-3 py-2 text-right font-mono ${momColor}">${mom}</td>
@@ -8093,13 +8137,11 @@ def runtime_status_panel_html() -> str:
     )
 
     def pick_detail(source: str) -> tuple[str, str]:
+        # 2026-05-21 V1 cutover：picks 表已删；只读 V2 同市场 key（v2_us/v2_cn/v2_hk）
         picks = db.get("picks") or {}
         row = picks.get(source) or {}
-        # V2 兜底：legacy v6_X 空时，转 V2 同市场（v6_us → v2_us）
-        if not row and source.startswith("v6_"):
-            row = picks.get(source.replace("v6_", "v2_")) or {}
         if not row:
-            return "FAIL", "无最新 production picks"
+            return "WARN", "本市场暂无 production picks（V2 推荐未覆盖该市场或 watchlist 为空）"
         status = "OK" if int(row.get("buy_n") or 0) > 0 else "WARN"
         return status, f"{row.get('latest_date') or '—'} · buy {row.get('buy_n', 0)} / total {row.get('total_n', 0)}"
 
@@ -8177,9 +8219,9 @@ def runtime_status_panel_html() -> str:
     v2_pick = (db.get("picks") or {}).get("system_tech_universe") or {}
     market_health = source_health.get("markets") or {}
 
-    us_pick_status, us_pick_detail = pick_detail("v6_us")
-    cn_pick_status, cn_pick_detail = pick_detail("v6_cn")
-    hk_pick_status, hk_pick_detail = pick_detail("v6_hk")
+    us_pick_status, us_pick_detail = pick_detail("v2_us")
+    cn_pick_status, cn_pick_detail = pick_detail("v2_cn")
+    hk_pick_status, hk_pick_detail = pick_detail("v2_hk")
 
     def market_status(key: str) -> tuple[str, str]:
         info = market_health.get(key) or {}
@@ -8195,7 +8237,7 @@ def runtime_status_panel_html() -> str:
         _runtime_row("市场健康", market_status("US")[0], "data/latest/source_health.json", market_status("US")[1], "先修复美股行情源或 ticker 映射"),
         _runtime_row("行情拉取", "OK" if us_price else "FAIL", "DuckDB.price_daily[US]", f"{us_price} 只 · 最新 {price_latest}", "若为 0，检查 yfinance 美股 ticker"),
         *market_v2_rows("US"),
-        _runtime_row("自选股·AI 优选 picks", us_pick_status, "DuckDB.picks(v6_us) → V2 兜底", us_pick_detail, "watchlist 空时静默退出是 V2 spec 正确行为"),
+        _runtime_row("自选股·AI 优选 picks", us_pick_status, "DuckDB.recommendation_picks(v2_us)", us_pick_detail, "watchlist 空时静默退出是 V2 spec 正确行为"),
         _runtime_row("FMP/yfinance 深度数据", fmp_status, "data/latest/source_health.json", fmp_detail[:140], str(fmp.get("operator_action") or "FMP 降级不一定阻断主推荐")),
     ]
 
@@ -8203,7 +8245,7 @@ def runtime_status_panel_html() -> str:
         _runtime_row("市场健康", market_status("CN")[0], "data/latest/source_health.json", market_status("CN")[1], "先修复 A 股行情源或 ticker 映射"),
         _runtime_row("行情拉取", "OK" if cn_price else "FAIL", "DuckDB.price_daily[CN]", f"{cn_price} 只 · 最新 {price_latest}", "若为 0，检查 Sina / akshare fallback"),
         *market_v2_rows("CN"),
-        _runtime_row("自选股·AI 优选 picks (v6_cn)", cn_pick_status, "DuckDB.picks(v6_cn) → V2 兜底", cn_pick_detail, "watchlist 空时静默退出是 V2 spec 正确行为；A 股闭环 16:30 单独跑"),
+        _runtime_row("自选股·AI 优选 picks (v2_cn)", cn_pick_status, "DuckDB.recommendation_picks(v2_cn)", cn_pick_detail, "watchlist 空时静默退出是 V2 spec 正确行为；A 股闭环 16:30 单独跑"),
         artifact_row("事件日历", "data/event_calendar.json", "data/event_calendar.json", "解禁/减增持/财报事件", "重跑 stock_research.jobs.event_calendar_daily"),
         artifact_row("政策事件", "data/policy_events.json", "data/policy_events.json", "近 7 天政策受益主题", "重跑 stock_research.jobs.policy_scan_daily"),
         artifact_row("A 股权重校准", "data/calibrated_factor_weights.json", "data/calibrated_factor_weights.json", "因子 IC 校准", "重跑 stock_research.jobs.calibrate_a_share_factor_weights"),
@@ -8214,7 +8256,7 @@ def runtime_status_panel_html() -> str:
         _runtime_row("市场健康", market_status("HK")[0], "data/latest/source_health.json", market_status("HK")[1], "先修复港股行情源或 ticker 映射"),
         _runtime_row("行情拉取", "OK" if hk_price else "FAIL", "DuckDB.price_daily[HK]", f"{hk_price} 只 · 最新 {price_latest}", "若为 0，检查 yfinance 港股 .HK 后缀"),
         *market_v2_rows("HK"),
-        _runtime_row("自选股·AI 优选 picks (v6_hk)", hk_pick_status, "DuckDB.picks(v6_hk) → V2 兜底", hk_pick_detail, "watchlist 空时静默退出是 V2 spec 正确行为"),
+        _runtime_row("自选股·AI 优选 picks (v2_hk)", hk_pick_status, "DuckDB.recommendation_picks(v2_hk)", hk_pick_detail, "watchlist 空时静默退出是 V2 spec 正确行为"),
         artifact_row("港股调仓差额", "data/latest/trade_delta_hk.json", "data/latest/trade_delta_hk.json", "目标 - 持仓差额清单", "重跑 trade_delta.py --market hk"),
     ]
 
@@ -8326,11 +8368,58 @@ def runtime_status_panel_html() -> str:
   </div>
 """
 
+    def pipeline_step_label(raw_label: str) -> tuple[str, str]:
+        """Return a user-facing action label plus the technical pipeline id."""
+        label = str(raw_label or "").strip()
+        m = re.match(r"^(\d+[a-z0-9]*(?:/\d+)?)(?:\s+)(.+)$", label, flags=re.I)
+        tech_id = m.group(1) if m else ""
+        body = m.group(2) if m else label
+        rules = [
+            ("V1 表 DROP 守卫", "清理旧表守卫"),
+            ("V2 系统池刷新", "刷新系统股票池"),
+            ("抓价格", "拉取行情数据"),
+            ("V2 推荐 run", "生成 AI 推荐"),
+            ("V2 系统池 enrichment", "补充股票资料"),
+            ("v6 学术因子选股", "自选股评分"),
+            ("港股 picks", "港股推荐生成"),
+            ("risk-aware 仓位优化", "生成模型组合"),
+            ("plan_a 后处理", "组合约束处理"),
+            ("推荐质量闸门（调仓前）", "推荐质量检查"),
+            ("调整清单", "生成调仓清单"),
+            ("风险指标", "计算组合风险"),
+            ("实盘防御检查", "检查防御信号"),
+            ("A 股优选", "A 股盘后推荐"),
+            ("全池 AI 推荐", "生成全池 AI 推荐"),
+            ("V2 pick alpha 评估", "评估历史推荐表现"),
+            ("V2 策略验证汇总", "汇总策略验证"),
+            ("推荐质量闸门（收盘后复核）", "复核推荐质量"),
+            ("推荐有效性证据报告", "生成推荐证据报告"),
+            ("picks 反向审查", "生成买前审查"),
+            ("DuckDB pipeline 同步", "同步运行结果入库"),
+            ("重建 HTML", "刷新 dashboard 页面"),
+            ("早安简报", "生成飞书镜像"),
+            ("生产闭环验收", "生产验收"),
+        ]
+        action = body
+        for needle, replacement in rules:
+            if needle in body:
+                action = replacement
+                break
+        return action, tech_id
+
     step_rows = []
     for step in (pipeline.get("steps") or [])[-14:]:
+        action_label, tech_id = pipeline_step_label(str(step.get("label") or ""))
+        tech_html = (
+            f'<div class="mt-1 text-[11px] text-slate-400">技术编号：{html_lib.escape(tech_id)}</div>'
+            if tech_id else ""
+        )
         step_rows.append(f"""
           <tr class="border-b border-slate-100 align-top">
-            <td class="py-2 pr-3 text-xs font-medium text-slate-900">{html_lib.escape(str(step.get('label') or '—'))}</td>
+            <td class="py-2 pr-3">
+              <div class="text-sm font-semibold text-slate-900">{html_lib.escape(action_label or '—')}</div>
+              {tech_html}
+            </td>
             <td class="py-2 pr-3">{_runtime_badge(str(step.get('status') or 'UNKNOWN'))}</td>
             <td class="py-2 pr-3 text-xs text-slate-600 whitespace-nowrap">{html_lib.escape(str(step.get('duration_seconds') or 0))}s</td>
             <td class="py-2 pr-3 text-xs text-slate-600">{html_lib.escape(str(step.get('sink') or '—'))}</td>
@@ -8341,11 +8430,16 @@ def runtime_status_panel_html() -> str:
     if step_rows:
         pipeline_steps_html = f"""
   <div class="rounded-xl border border-slate-200 bg-white p-4 mt-6">
-    <h3 class="font-bold text-slate-900 mb-3">最近运行步骤</h3>
+    <div class="flex items-start justify-between gap-3 flex-wrap mb-3">
+      <div>
+        <h3 class="font-bold text-slate-900">最近运行步骤</h3>
+        <p class="text-xs text-slate-500 mt-1">左列是给用户看的业务动作；小字技术编号用于排错对照日志。</p>
+      </div>
+    </div>
     <div class="overflow-x-auto">
       <table class="w-full text-left">
         <thead class="text-xs text-slate-500 border-b border-slate-200">
-          <tr><th class="pb-2 pr-3">步骤</th><th class="pb-2 pr-3">状态</th><th class="pb-2 pr-3">耗时</th><th class="pb-2 pr-3">数据落点</th><th class="pb-2">结束时间</th></tr>
+          <tr><th class="pb-2 pr-3">业务动作</th><th class="pb-2 pr-3">状态</th><th class="pb-2 pr-3">耗时</th><th class="pb-2 pr-3">数据落点</th><th class="pb-2">结束时间</th></tr>
         </thead>
         <tbody>{''.join(step_rows)}</tbody>
       </table>
@@ -8377,7 +8471,7 @@ def runtime_status_panel_html() -> str:
         ("launchd_research", "🌙 夜班 (21:00)", "每天 21:00 跑 --research 慢任务（13F / OpenBB / history 预拉 / 事件日历）"),
         ("defense_watcher", "🛡️ 防御信号 (15 min)", "每 15 分钟扫市场层防御（VIX / 200MA），升档即时通知"),
         ("api_8765", "🔌 API 服务", "8765 端口 dashboard 后端 + 个股全历史接口"),
-        ("snapshots_prices", "📸 价格快照", "fetch_stock_prices.py 每次跑落一份；用于 daily_audit 跨源校验"),
+        ("snapshots_prices", "📸 价格快照", "fetch_stock_prices.py 每次跑落一份；用于跨源校验"),
         ("snapshots_reviews", "📸 周回顾快照", "weekly_review.py 每次跑落一份；用于 alpha 跟踪"),
     ]
     for key, label, why in infra_meta:
@@ -8497,16 +8591,16 @@ def runtime_status_panel_html() -> str:
     <h3 class="font-bold text-sky-950 mb-3">数据落点怎么读</h3>
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
       <div class="bg-white rounded-lg border border-sky-100 p-3">
-        <div class="font-mono font-semibold text-slate-800 mb-1">DuckDB.prices</div>
-        <div class="text-slate-600">行情和估值快照。看到“股票池/行情拉取”成功，主要就是这里有最新价格、PE、PEG、涨幅、市值。</div>
+        <div class="font-mono font-semibold text-slate-800 mb-1">DuckDB.price_daily</div>
+        <div class="text-slate-600">每日行情快照。看到"股票池/行情拉取"成功，这里就有最新价格、PE、PEG、涨幅、市值。</div>
       </div>
       <div class="bg-white rounded-lg border border-sky-100 p-3">
-        <div class="font-mono font-semibold text-slate-800 mb-1">DuckDB.picks</div>
-        <div class="text-slate-600">AI 评分和入选记录。美股是 <span class="font-mono">v6_us</span>，A 股是 <span class="font-mono">v6_cn</span>，港股是 <span class="font-mono">v6_hk</span>。</div>
+        <div class="font-mono font-semibold text-slate-800 mb-1">DuckDB.recommendation_picks</div>
+        <div class="text-slate-600">AI 评分和入选记录。美股是 <span class="font-mono">v2_us</span>，A 股是 <span class="font-mono">v2_cn</span>，港股是 <span class="font-mono">v2_hk</span>。</div>
       </div>
       <div class="bg-white rounded-lg border border-sky-100 p-3">
-        <div class="font-mono font-semibold text-slate-800 mb-1">DuckDB.reviews</div>
-        <div class="text-slate-600">推荐后的表现跟踪。用来算持有天数、收益、相对基准 alpha，不决定股票属于哪个池子。</div>
+        <div class="font-mono font-semibold text-slate-800 mb-1">DuckDB.pick_outcomes</div>
+        <div class="text-slate-600">推荐后的表现跟踪。用来算 1d/5d/20d alpha、胜率，不决定股票属于哪个池子。</div>
       </div>
       <div class="bg-white rounded-lg border border-sky-100 p-3">
         <div class="font-mono font-semibold text-slate-800 mb-1">data/latest/*.json</div>
@@ -9024,11 +9118,25 @@ def compute_plan_forward_track(plan: dict, history: dict, benchmark: str = "SPY"
     # 单股贡献：用 baseline → 最新收盘
     last_idx = len(common_dates) - 1
 
-    # 从最新 audit 快照取 ticker → 中文公司名（78 只 watchlist 全覆盖）
+    # ticker → 公司名：优先用 prices 快照（319 只全集，A 股中文 + 美股英文），
+    # audit 快照只在 picks_audit 触发时才有内容，单独用会大面积缺失。
     name_map: dict = {}
     try:
-        audit_dir = os.path.join(_REPO,
-                                 "data", "snapshots", "audit")
+        prices_dir = os.path.join(_REPO, "data", "snapshots", "prices")
+        if os.path.isdir(prices_dir):
+            price_files = sorted([f for f in os.listdir(prices_dir)
+                                   if f.startswith("prices_") and f.endswith(".json")],
+                                  reverse=True)
+            if price_files:
+                with open(os.path.join(prices_dir, price_files[0]), encoding="utf-8") as pf:
+                    prices = json.load(pf)
+                    if isinstance(prices, list):
+                        name_map = {r.get("code"): r.get("name") for r in prices
+                                    if r.get("code") and r.get("name")}
+    except Exception:
+        pass
+    try:
+        audit_dir = os.path.join(_REPO, "data", "snapshots", "audit")
         if os.path.isdir(audit_dir):
             audit_files = sorted([f for f in os.listdir(audit_dir)
                                    if f.startswith("audit_") and f.endswith(".json")],
@@ -9037,18 +9145,24 @@ def compute_plan_forward_track(plan: dict, history: dict, benchmark: str = "SPY"
                 with open(os.path.join(audit_dir, audit_files[0]), encoding="utf-8") as af:
                     audit = json.load(af)
                     if isinstance(audit, list):
-                        name_map = {r.get("ticker"): r.get("name") for r in audit
-                                    if r.get("ticker") and r.get("name")}
+                        for r in audit:
+                            t, n = r.get("ticker"), r.get("name")
+                            if t and n and t not in name_map:
+                                name_map[t] = n
     except Exception:
         pass
 
     per_ticker = []
+    name_hits = 0
     for tkr, w, closes in aligned:
         first, last = closes[baseline_idx], closes[last_idx]
         tret = (last / first - 1.0) if first else 0.0
+        nm = name_map.get(tkr, "")
+        if nm:
+            name_hits += 1
         per_ticker.append({
             "ticker": tkr,
-            "name": name_map.get(tkr, ""),
+            "name": nm,
             "weight": round(w, 4),
             "close_first": round(first, 2),
             "close_last": round(last, 2),
@@ -9056,6 +9170,8 @@ def compute_plan_forward_track(plan: dict, history: dict, benchmark: str = "SPY"
             "contribution_pct": round(w * tret * 100, 2),
         })
     per_ticker.sort(key=lambda x: -x["contribution_pct"])
+    name_total = len(per_ticker)
+    name_hit_rate = (name_hits / name_total) if name_total else 1.0
 
     return {
         "inception_date": inception_date,
@@ -9085,6 +9201,11 @@ def compute_plan_forward_track(plan: dict, history: dict, benchmark: str = "SPY"
         "tickers_used": [t for t, *_ in aligned],
         "tickers_missing": missing,
         "tickers_source": tickers_source,  # P0：标识 tickers 来源（duckdb_inception 或 latest_plan_a_v5_fallback）
+        "name_resolution": {
+            "hits": name_hits,
+            "total": name_total,
+            "hit_rate": round(name_hit_rate, 3),
+        },
     }
 
 
@@ -9145,7 +9266,7 @@ def audit_panel_html(snap):
     <span class="text-3xl">🛡</span>
     <h2 class="text-2xl font-bold text-slate-900">反向审查 · 自我校验</h2>
   </div>
-  <p class="text-slate-600">尚无审查快照。先跑：<code class="bg-slate-200 px-2 py-0.5 rounded">python3 -m stock_research.jobs.audit_picks --fast</code></p>
+  <p class="text-slate-600">尚无审查快照。先跑：<code class="bg-slate-200 px-2 py-0.5 rounded">python3 -m stock_research.jobs.audit_picks_v2 --fast</code></p>
 </section>
 """
 
@@ -9274,7 +9395,7 @@ def audit_panel_html(snap):
 
   <p class="text-xs text-slate-500 mt-4">
     数据来源：<code>data/snapshots/audit/picks_audit_*.json</code> · 重新生成：
-    <code class="bg-slate-200 px-2 py-0.5 rounded">python3 -m stock_research.jobs.audit_picks</code>
+    <code class="bg-slate-200 px-2 py-0.5 rounded">python3 -m stock_research.jobs.audit_picks_v2</code>
   </p>
 </section>
 '''

@@ -16,7 +16,7 @@ from typing import Any
 
 from .. import config
 from ..core import edgar
-from ..adapters import legacy_shim as feishu, store
+from ..adapters import store
 
 logger = logging.getLogger("stock_research.jobs.refresh_13f")
 

@@ -4,16 +4,12 @@
   - 美股 → finnhub (新闻/内部人/分析师) + Google Trends
   - A 股 / 港股 → akshare (实时报价/财务/资金流) + Google Trends
 
-输出：
-  - JSON 快照存 SNAPSHOT_DIR/enrich/
-  - 写回飞书 watchlist 的「数据来源」「信息构成」字段（追加多源标注）
+2026-05-21 V1 cutover：原 run_all + CLI main() 已删（自选股·AI 优选改读 V2
+manual_watchlist，不再需要批量 enrich watchlist 表）。本模块改为 library-only，
+留下 enrich_one() / fetch_earnings_quarters() 等单只 enrichment 函数供 API
+端点 /api/watchlist/auto-enrich 和 dashboard 内联流程调用。
 
-CLI：
-  python3 -m stock_research.jobs.enrich_watchlist                # 全量
-  python3 -m stock_research.jobs.enrich_watchlist --code NVDA    # 单只
-  python3 -m stock_research.jobs.enrich_watchlist --skip-trends  # 跳过慢的 trends
-
-Web 部署时直接 import：
+使用方式：
   from stock_research.jobs.enrich_watchlist import enrich_one
 """
 from __future__ import annotations

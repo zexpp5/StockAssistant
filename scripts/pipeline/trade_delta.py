@@ -4,7 +4,7 @@
 拆分自原单一美股版（2026-05-12 三线独立化）：
   · 美股：plan_a_v5.json    × US 持仓 → trade_delta.json    (兼容文件名，内容来自 v6 risk-aware)
   · 港股：hk_picks.json     × HK 持仓 → trade_delta_hk.json
-  · A 股：DuckDB picks.v6_cn（fallback a_share_picks.json）× A 股持仓 → trade_delta_cn.json
+  · A 股：DuckDB recommendation_picks[CN]（fallback a_share_picks.json）× A 股持仓 → trade_delta_cn.json
 
 为什么不合并到一张调仓单：
   - 三个市场账户独立（美元 / 港元 / 人民币），汇率不同
@@ -67,48 +67,31 @@ def _quality_gate_status(payload: dict | None = None) -> str:
 
 
 def _quality_issue_blocks_market(market: str, issue: dict) -> bool:
-    code = str(issue.get("code") or "")
+    """V2 quality_gate 大部分 issue 都是全局基础设施级别（v2_schema/universe/coverage/run）。
+
+    2026-05-21 V1 cutover：原 v6_us/v6_hk/v6_cn source-prefix 路由已废；
+    现行规则：
+      • details 列表里带 `market` 字段 → 按 market 精确路由（未来增量字段预留）
+      • 其它 → 视为全局，FAIL 时阻断所有市场调仓
+    """
     details = issue.get("details")
-    global_codes = {
-        "production_entry_price_missing",
-        "legacy_rating_mislabeled_as_v6",
-        "legacy_in_dashboard_view",
-    }
-    if code in global_codes:
-        # These checks may carry source-level details; when they do, scope them
-        # to the requested market instead of blocking every market's delta.
-        source = {
-            "us": "v6_us",
-            "hk": "v6_hk",
-            "cn": "v6_cn",
-        }.get(market)
-        if isinstance(details, list) and source:
-            return any(str(row.get("source") or "") == source for row in details if isinstance(row, dict))
-        return True
-    prefixes = {
-        "us": ("v6_us", "us_"),
-        "hk": ("v6_hk", "hk_"),
-        "cn": ("v6_cn", "a_share", "cn_"),
-    }.get(market, ())
-    return code.startswith(prefixes)
+    if isinstance(details, list):
+        for row in details:
+            if isinstance(row, dict):
+                row_market = str(row.get("market") or "").lower()
+                if row_market and row_market in {market, market.upper()}:
+                    return True
+    return True
 
 
 def _quality_gate_block_reason(market: str, payload: dict) -> str | None:
-    status = _quality_gate_status(payload)
-    if status == "FAIL":
-        fail_issues = [i for i in payload.get("issues") or [] if i.get("level") == "FAIL"]
-        blocking = [i for i in fail_issues if _quality_issue_blocks_market(market, i)]
-        if blocking:
-            first = blocking[0]
-            return (
-                f"recommendation_quality_gate FAIL({first.get('code')}) — "
-                "暂停本市场买入/卖出/调仓，先修复数据质量"
-            )
-    if market == "cn":
-        stale_codes = {"v6_cn_missing", "v6_cn_stale", "v6_cn_stale_after_close", "a_share_db_lags_json"}
+    if _quality_gate_status(payload) == "FAIL":
         for issue in payload.get("issues") or []:
-            if issue.get("code") in stale_codes:
-                return f"A 股生产信号未刷新：{issue.get('message', 'v6_cn stale')} — 暂停 A 股调仓"
+            if issue.get("level") == "FAIL" and _quality_issue_blocks_market(market, issue):
+                return (
+                    f"recommendation_quality_gate FAIL({issue.get('code')}) — "
+                    "暂停本市场买入/卖出/调仓，先修复数据质量"
+                )
     return None
 
 
@@ -438,7 +421,7 @@ def build_delta(market: str, plan_file: str, out_file: str,
     if market == "cn":
         plan = _load_cn_plan_from_db()
         if plan:
-            source_label = plan.get("source", "duckdb:picks.v6_cn")
+            source_label = plan.get("source", "duckdb:recommendation_picks[CN]")
     elif market == "hk":
         plan = _load_hk_plan_from_db()
         if plan:

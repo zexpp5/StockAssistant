@@ -50,7 +50,7 @@ def _record_event(level: str, reason: str, path: str, detail: str | None = None)
     })
 
 
-def source_health_snapshot(*, pipeline: str = "v6_us") -> dict[str, Any]:
+def source_health_snapshot(*, pipeline: str = "v2_us") -> dict[str, Any]:
     status = "ok"
     reason = None
     if _FMP_DISABLED_REASON:
@@ -93,7 +93,7 @@ def source_health_snapshot(*, pipeline: str = "v6_us") -> dict[str, Any]:
     }
 
 
-def write_source_health(*, pipeline: str = "v6_us", path: str | Path | None = None) -> dict[str, Any]:
+def write_source_health(*, pipeline: str = "v2_us", path: str | Path | None = None) -> dict[str, Any]:
     """Persist source health so dashboard/brief can show data degradation."""
     payload = source_health_snapshot(pipeline=pipeline)
     out = Path(path) if path is not None else config.DATA_DIR / "latest" / "source_health.json"

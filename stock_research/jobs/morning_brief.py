@@ -190,6 +190,66 @@ def _entry_f_score(entry: dict) -> Any:
     return value
 
 
+# V2 picks factor_scores_json 实际可能出现的子因子 → 中文短标签
+# 与 build_v2_recommendations 内 scoring 字段保持同步；新增因子时在此追加，不删除以保兼容
+_V2_FACTOR_LABELS = {
+    "valuation": "估值",
+    "momentum": "动量",
+    "data_quality": "数据质量",
+    "coverage": "覆盖度",
+    "f_score": "F-Score",
+    "piotroski": "Piotroski",
+    "reversal": "反转",
+    "lhb": "龙虎榜",
+    "north_flow": "北向",
+    "south_flow": "南向",
+    "pead": "PEAD",
+    "policy_boost": "政策",
+    "quality": "质量",
+    "size": "规模",
+    "analyst": "分析师",
+    "insider": "内部人",
+}
+# 不应作为"因子"展示的统计字段（picks JSON 里混在 factor_scores 中的元信息）
+_V2_FACTOR_META = {"total", "rank", "score"}
+
+
+def _parse_factor_scores(raw: Any) -> dict:
+    """把 recommendation_picks.factor_scores_json 解析成 dict（容错空/坏 JSON）。"""
+    if not raw:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _label_v2_factor_set(selected: list[dict]) -> str:
+    """从 V2 selected 抽出实际有值的因子字段，渲染成 '4 因子 lite（估值 + 动量 + ...）'。
+
+    Why: morning_brief 之前写死 '6 因子 + 龙虎榜+北向' / '3 因子 + 港股年报'，
+         但 V2 lite scoring 实际只算 valuation/momentum/data_quality/coverage 4 项；
+         为防止 V2 后续接入新因子时文案再次过时，这里完全由实际 keys 驱动。
+    How to apply: 任何走 V2 recommendation_picks 的市场段标题都该调它，不再写死因子数。
+    """
+    from collections import Counter
+    counter: Counter = Counter()
+    for s in selected:
+        fs = s.get("factor_scores") or {}
+        for k, v in fs.items():
+            if k in _V2_FACTOR_META or v is None:
+                continue
+            counter[k] += 1
+    keys = [k for k, _ in counter.most_common()]
+    if not keys:
+        return "因子明细缺失（factor_scores 为空，请查 V2 pipeline）"
+    labels = [_V2_FACTOR_LABELS.get(k, k) for k in keys]
+    return f"{len(keys)} 因子 lite（{' + '.join(labels)}）"
+
+
 def _load_us_plan() -> dict | None:
     """读取美股生产 plan，避免旧 constrained 文件盖过最新 risk-aware plan。"""
     base = _load_json(REPO / "data" / "latest" / "plan_a_v5.json")
@@ -236,7 +296,7 @@ def _load_hk_picks() -> dict | None:
                 """
                 SELECT p.symbol,
                        COALESCE(NULLIF(u.name, p.symbol), p.name) AS name,
-                       p.rating, p.total_score
+                       p.rating, p.total_score, p.factor_scores_json
                 FROM recommendation_picks p
                 LEFT JOIN system_universe u
                   ON p.market = u.market AND p.symbol = u.symbol
@@ -252,7 +312,8 @@ def _load_hk_picks() -> dict | None:
                     "market": "港股", "rating": rating,
                     "composite": (float(total_score) / 100) if total_score is not None else 0,
                     "industry": "科技", "theme": "科技/AI",
-                } for symbol, name, rating, total_score in v2_rows]
+                    "factor_scores": _parse_factor_scores(factor_scores_json),
+                } for symbol, name, rating, total_score, factor_scores_json in v2_rows]
                 return {
                     "generated_at": _value_to_iso(generated_at),
                     "run_date": str(run_date)[:10] if run_date else None,
@@ -270,8 +331,8 @@ def _load_hk_picks() -> dict | None:
 def _load_a_share_picks() -> dict | None:
     """Load A-share picks JSON, with DuckDB as fresher source of truth.
 
-    2026-05-20: 优先 V2 recommendation_picks（最新 system_tech_universe run 的 CN 筛选），
-    再退 V1 picks.v6_cn（用户没维护自选股时会空），最后兜 a_share_picks.json。
+    2026-05-21 V1 cutover：优先 V2 recommendation_picks（最新 system_tech_universe
+    run 的 CN 筛选），V1 picks.v6_cn 兜底已删；空就兜 a_share_picks.json。
     """
     json_payload = _load_json(REPO / "data" / "a_share_picks.json")
     try:
@@ -296,7 +357,7 @@ def _load_a_share_picks() -> dict | None:
                 """
                 SELECT p.symbol,
                        COALESCE(NULLIF(u.name, p.symbol), p.name) AS name,
-                       p.market, p.rating, p.total_score
+                       p.market, p.rating, p.total_score, p.factor_scores_json
                 FROM recommendation_picks p
                 LEFT JOIN system_universe u
                   ON p.market = u.market AND p.symbol = u.symbol
@@ -316,7 +377,8 @@ def _load_a_share_picks() -> dict | None:
                     "market": market or "A股", "rating": rating,
                     "composite": (float(total_score) / 100) if total_score is not None else 0,
                     "industry": "科技", "theme": "科技/AI",
-                } for symbol, name, market, rating, total_score in v2_rows]
+                    "factor_scores": _parse_factor_scores(factor_scores_json),
+                } for symbol, name, market, rating, total_score, factor_scores_json in v2_rows]
                 return {
                     "generated_at": _value_to_iso(generated_at),
                     "run_date": db_date,
@@ -1179,11 +1241,12 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
         else:
             lines.append("**🇺🇸 美股** — _plan_v5 为空_")
 
-    # 🇭🇰 港股（hk_picks · 3 因子 = Piotroski + 动量 + 反转；南向权重为 0 时不写进理由）
+    # 🇭🇰 港股（V2 lite scoring · 段标题按 factor_scores 实际字段动态生成）
     if hk_picks and hk_picks.get("selected"):
         sel = hk_picks["selected"][:10]
         ts_hk = _fmt_ts(hk_picks.get("generated_at"))
-        lines.append(f"**🇭🇰 港股 ({len(sel)} 只 · 3 因子 + akshare 港股年报)** · {ts_hk}")
+        hk_factor_label = _label_v2_factor_set(sel)
+        lines.append(f"**🇭🇰 港股 ({len(sel)} 只 · {hk_factor_label})** · {ts_hk}")
         for entry in sel:
             ticker = entry.get("code", "?")
             name = entry.get("name", "")
@@ -1208,7 +1271,8 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
     elif a_share_picks and a_share_picks.get("selected"):
         sel = a_share_picks["selected"][:10]
         ts_cn = _fmt_ts(a_share_picks.get("generated_at"))
-        lines.append(f"**🇨🇳 A 股 ({len(sel)} 只 · 6 因子 + 盘后龙虎榜+北向)** · {ts_cn}")
+        cn_factor_label = _label_v2_factor_set(sel)
+        lines.append(f"**🇨🇳 A 股 ({len(sel)} 只 · {cn_factor_label})** · {ts_cn}")
         for entry in sel:
             ticker = entry.get("ticker", entry.get("code", "?"))
             name = entry.get("name", "")

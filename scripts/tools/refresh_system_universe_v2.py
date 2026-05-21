@@ -153,9 +153,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "seeded_current": seeded,
             "deactivated": deactivated,
             "manual_watchlist_count": int(conn.execute("SELECT COUNT(*) FROM manual_watchlist").fetchone()[0]),
-            "watchlist_count": int(conn.execute("SELECT COUNT(*) FROM watchlist").fetchone()[0])
-            if "watchlist" in {str(r[0]) for r in conn.execute("SHOW TABLES").fetchall()}
-            else 0,
+            # 2026-05-21 V1 cutover：旧 watchlist 表已 DROP，count 字段保留兼容下游
+            "watchlist_count": 0,
         }
         _record_fetch_log(conn, run_id, datetime.now(), summary)
         return summary

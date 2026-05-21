@@ -1,19 +1,26 @@
 """
-DuckDB 持久化层 — 股票时间序列本地仓
+DuckDB 持久化层 — 股票时间序列本地仓（V2）
 ─────────────────────────────────────────
 设计原则：
-  • 飞书 Base 仍是「人工编辑入口 + 当前快照」
-  • DuckDB 是「历史时间序列 + 回测分析」的 single source of truth
-  • 三张表，主键都含日期 → 同日重跑覆盖、跨日累积
+  • DuckDB 是 single source of truth（持仓/自选/推荐历史/价格历史）
+  • 用户状态走 state_backup/*.json，DuckDB 是衍生物（74MB 不入仓）
 
-表结构：
-  prices   每日 watchlist 的全字段快照（按日 + 代码主键）
-  picks    每日入选记录（按入选日 + 代码主键）
-  reviews  对入选记录的跟踪刷新（按 review_date + pick_date + 代码主键）
+V2 核心表：
+  system_universe        系统选股池（141 只 = US 66 + CN 42 + HK 33）
+  pool_membership        股票池历史成员
+  price_daily            每日行情（按日 + 代码主键）
+  manual_watchlist       用户自选股（V1 watchlist 表的接位者）
+  recommendation_runs    每日推荐 run 元数据
+  recommendation_picks   每日推荐结果
+  pick_outcomes          推荐 alpha 实现值（1d / 5d / 20d）
+  holdings               用户实际持仓
+  portfolio_plans        组合方案
+  factor_attribution     因子归因
 
-调用方式（其它脚本里）：
-  from stock_db import get_db, upsert_prices, upsert_picks, upsert_reviews
-  upsert_prices(price_results)
+调用方式：
+  from stock_db import (get_db, fetch_universe_for_ai_recommendations,
+                        fetch_manual_watchlist, fetch_latest_recommendation_picks,
+                        fetch_research_records_v2, fetch_picks_normalized)
 """
 from __future__ import annotations
 
