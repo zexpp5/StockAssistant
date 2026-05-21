@@ -25,7 +25,37 @@
       "Bash(/opt/homebrew/bin/python3 scripts/tools/drop_v1_tables_v2.py)",
       "Bash(ps -p 53280 -o pid,etime,command)",
       "Bash(launchctl kickstart *)",
-      "Bash(grep -nA10 \"def fetch_manual_watchlist\" scripts/lib/stock_db.py)"
+      "Bash(grep -nA10 \"def fetch_manual_watchlist\" scripts/lib/stock_db.py)",
+      "Bash(/opt/homebrew/bin/python3 -m stock_research.jobs.audit_picks_v2 --fast)",
+      "Bash(/opt/homebrew/bin/python3 scripts/tools/production_acceptance_check.py --allow-a-share-disabled)",
+      "Bash(/opt/homebrew/bin/python3 -m py_compile stock_research/api/main.py)",
+      "Bash(/opt/homebrew/bin/python3 -m py_compile scripts/pipeline/build_stock_dashboard_html.py)",
+      "Bash(/opt/homebrew/bin/python3 -m py_compile scripts/lib/stock_db.py)",
+      "Bash(/opt/homebrew/bin/python3 -c \"from stock_research import config; print\\(config.DUCKDB_PATH\\)\")",
+      "Bash(chmod +x scripts/tools/backup_state_to_json.py scripts/tools/restore_state_from_json.py)",
+      "Bash(/opt/homebrew/bin/python3 scripts/tools/backup_state_to_json.py)",
+      "Bash(STOCK_DB_PATH= bash -c 'echo \"  DuckDB（数据落地）：${STOCK_DB_PATH:-/path/stock_history_v2.duckdb}\"')",
+      "Bash(STOCK_DB_PATH=/custom/foo.duckdb bash -c 'echo \"  DuckDB（数据落地）：${STOCK_DB_PATH:-/path/stock_history_v2.duckdb}\"')",
+      "Bash(/opt/homebrew/bin/python3 -m py_compile scripts/tools/production_acceptance_check.py stock_research/api/main.py scripts/lib/stock_db.py scripts/pipeline/build_stock_dashboard_html.py stock_research/jobs/morning_brief.py stock_research/core/watchlist_enrich.py)",
+      "Bash(git update-index *)",
+      "Bash(/opt/homebrew/bin/python3 -c \"from stock_research.jobs import refresh_13f\")",
+      "Bash(grep -nB2 -A4 'tbody.innerHTML = cands.map' scripts/pipeline/build_stock_dashboard_html.py)",
+      "Bash(/opt/homebrew/bin/python3 -c \"from stock_research.jobs import refresh_13f; print\\('refresh_13f OK'\\)\")",
+      "Bash(/opt/homebrew/bin/python3 -c \"from stock_research.jobs import archive_picks; print\\('archive_picks OK'\\)\")",
+      "Bash(grep -nA3 'function renderDbExplorerTable' scripts/pipeline/build_stock_dashboard_html.py)",
+      "Bash(grep -nA5 \"industry\\\\|theme\" scripts/pipeline/build_stock_dashboard_html.py)",
+      "Bash(grep -nB1 -A1 \"行业\\\\|主题\\\\|<th \" scripts/pipeline/build_stock_dashboard_html.py)",
+      "Bash(/opt/homebrew/bin/python3 -c \"import scripts.tools.streamlit_app; print\\('streamlit_app OK'\\)\")",
+      "Bash(git push *)",
+      "Bash(lsof -nP -iTCP:8765 -sTCP:LISTEN)",
+      "Bash(tee /tmp/portal_dev.log)",
+      "Bash(curl -sS -o /dev/null -w \"API /health -> HTTP %{http_code} %{time_total}s\\\\n\" http://127.0.0.1:8765/health)",
+      "Bash(curl -sS http://127.0.0.1:8765/openapi.json)",
+      "Bash(curl -sS -o /dev/null -w \"\" http://127.0.0.1:8001/stock_dashboard.html)",
+      "Bash(curl -sS -o /dev/null -w \"stock_dashboard.html -> HTTP %{http_code}  %{size_download} bytes\\\\n\" http://127.0.0.1:8001/stock_dashboard.html)"
+    ],
+    "additionalDirectories": [
+      "/tmp"
     ]
   }
 }
