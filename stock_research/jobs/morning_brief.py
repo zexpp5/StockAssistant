@@ -156,6 +156,56 @@ def _plan_weight_source(plan: dict | None) -> dict[str, Any]:
     }
 
 
+def _plan_cash_breakdown(plan: dict | None) -> dict[str, Any]:
+    """从 plan_a_v5.json 拆出 cash 比例与"为什么不是满仓"。
+
+    Why: 实测 risk_aware 跑出 cash_pct=5% 目标，但 plan 实际 cash_pct_effective=36%；
+         用户/基金经理读早报会问"系统是不是看空 → 才只买六成"。其实是约束器
+         （单股 max_w + ADV cap + 相关性剪枝 + IC 闸门）把不能放进去的额度推回现金，
+         不是 AI 主动看空。
+    How to apply: section_picks 美股段标题后调用一次，把这行解释挂出来。
+    """
+    if not isinstance(plan, dict):
+        return {"cash_pct": None, "gross_pct": None, "explain": ""}
+    cons = plan.get("constraints") if isinstance(plan.get("constraints"), dict) else {}
+    ra = plan.get("risk_aware") if isinstance(plan.get("risk_aware"), dict) else {}
+    cash = cons.get("cash_pct_effective")
+    gross = cons.get("gross_exposure_effective")
+    if cash is None and isinstance(plan.get("plan_v6"), list):
+        try:
+            s = sum(float(x.get("capped_weight") or x.get("target_weight") or 0) for x in plan["plan_v6"])
+            gross = s
+            cash = max(0.0, 1.0 - s)
+        except Exception:
+            pass
+    if cash is None:
+        return {"cash_pct": None, "gross_pct": None, "explain": ""}
+    pieces = []
+    target_cash = cons.get("cash_pct")
+    if isinstance(target_cash, (int, float)) and abs(float(target_cash) - float(cash)) > 0.02:
+        pieces.append(f"目标现金 {float(target_cash)*100:.0f}%，实际 {float(cash)*100:.1f}% 被约束器抬高")
+    max_w = cons.get("max_weight")
+    if isinstance(max_w, (int, float)):
+        pieces.append(f"单股上限 {float(max_w)*100:.0f}%")
+    adv_pct = cons.get("max_adv_pct")
+    if isinstance(adv_pct, (int, float)):
+        pieces.append(f"日均成交≤{float(adv_pct)*100:.0f}%（流动性）")
+    max_corr = cons.get("max_corr")
+    pruned = ra.get("pruned_dropped") if isinstance(ra.get("pruned_dropped"), list) else []
+    if pruned and isinstance(max_corr, (int, float)):
+        pieces.append(f"相关性 ρ<{float(max_corr):.1f} 剪掉 {len(pruned)} 只")
+    ic_gate = plan.get("factor_ic_gate") if isinstance(plan.get("factor_ic_gate"), dict) else {}
+    if ic_gate.get("reason"):
+        pieces.append(f"IC 闸门={ic_gate.get('reason')}")
+    explain = " · ".join(pieces) if pieces else ""
+    return {
+        "cash_pct": float(cash),
+        "gross_pct": float(gross) if gross is not None else (1.0 - float(cash)),
+        "explain": explain,
+        "is_high_cash": float(cash) > 0.30,
+    }
+
+
 def _format_f_score(value: Any) -> str:
     if isinstance(value, bool):
         return "缺失"
@@ -1237,6 +1287,16 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
                 lines.append(f"⚠️ {weight_src['detail']}。这些百分比不是新鲜 risk-aware optimizer 输出。")
                 if weight_src.get("stage_errors"):
                     lines.append("• optimizer 失败摘要：" + " ｜ ".join(weight_src["stage_errors"]))
+            cash_info = _plan_cash_breakdown(plan)
+            if cash_info.get("cash_pct") is not None:
+                tag = "⚠️ " if cash_info.get("is_high_cash") else "💼 "
+                head_line = (
+                    f"{tag}组合现金 **{cash_info['cash_pct']*100:.1f}%** · "
+                    f"已配 {cash_info['gross_pct']*100:.1f}%（{n_us} 只）"
+                )
+                lines.append(head_line)
+                if cash_info.get("explain"):
+                    lines.append(f"• 现金不是看空，是约束器把放不下的额度推回：{cash_info['explain']}")
             lines.extend(us_lines)
         else:
             lines.append("**🇺🇸 美股** — _plan_v5 为空_")

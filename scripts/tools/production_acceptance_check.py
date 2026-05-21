@@ -369,6 +369,33 @@ def _surface_artifact_checks(
         if _extract_tickers(plan_a) != _extract_tickers(plan_v6):
             issues.append(_issue("FAIL", "plan_a_v5_plan_v6_diverge", "plan_a_v5.json 与 plan_v6.json 标的集合不一致"))
 
+    if plan_a and "_error" not in plan_a:
+        cons = plan_a.get("constraints") if isinstance(plan_a.get("constraints"), dict) else {}
+        cash_eff = cons.get("cash_pct_effective")
+        cash_target = cons.get("cash_pct")
+        if isinstance(cash_eff, (int, float)):
+            summary["cash_pct_effective"] = float(cash_eff)
+            summary["cash_pct_target"] = float(cash_target) if isinstance(cash_target, (int, float)) else None
+            brief_text = brief.read_text(encoding="utf-8") if brief.exists() else ""
+            cash_explained = "组合现金" in brief_text and "约束器" in brief_text
+            details = {
+                "cash_pct_effective": round(float(cash_eff), 4),
+                "cash_pct_target": float(cash_target) if isinstance(cash_target, (int, float)) else None,
+                "explained_in_brief": cash_explained,
+            }
+            if float(cash_eff) > 0.70:
+                issues.append(_issue("FAIL", "plan_cash_extreme",
+                    f"组合现金 {float(cash_eff)*100:.1f}% > 70%（接近全空），检查约束/优化器", details))
+            elif float(cash_eff) > 0.50:
+                issues.append(_issue("WARN", "plan_cash_high",
+                    f"组合现金 {float(cash_eff)*100:.1f}% > 50%（已配≤一半），约束器抑制过强", details))
+            elif float(cash_eff) > 0.30 and not cash_explained:
+                issues.append(_issue("WARN", "plan_cash_unexplained",
+                    f"组合现金 {float(cash_eff)*100:.1f}% > 30% 但 morning_brief 未给约束器解释", details))
+            elif float(cash_eff) > 0.30:
+                issues.append(_issue("INFO", "plan_cash_disclosed",
+                    f"组合现金 {float(cash_eff)*100:.1f}% > 30%，已在 morning_brief 标注约束器原因", details))
+
     rec_evidence, _ = _json_load("data/latest/recommendation_evidence.json")
     evidence_dt = _payload_dt(rec_evidence, REPO / "data/latest/recommendation_evidence.json") if rec_evidence else None
     ref_payloads = [p for p in (plan_a, qgate, pipeline_status) if p and "_error" not in p]
@@ -1047,6 +1074,35 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
     if plan_a and plan_v6 and "_error" not in plan_a and "_error" not in plan_v6:
         if _extract_tickers(plan_a) != _extract_tickers(plan_v6):
             issues.append(_issue("FAIL", "plan_a_v5_plan_v6_diverge", "plan_a_v5.json 与 plan_v6.json 标的集合不一致"))
+
+    # 现金比例闸门（对称于上方 surface_artifact_checks 第一份）
+    if plan_a and "_error" not in plan_a:
+        cons2 = plan_a.get("constraints") if isinstance(plan_a.get("constraints"), dict) else {}
+        cash_eff2 = cons2.get("cash_pct_effective")
+        cash_target2 = cons2.get("cash_pct")
+        if isinstance(cash_eff2, (int, float)):
+            summary["cash_pct_effective"] = float(cash_eff2)
+            summary["cash_pct_target"] = float(cash_target2) if isinstance(cash_target2, (int, float)) else None
+            brief2 = REPO / "morning_brief.md"
+            brief_text2 = brief2.read_text(encoding="utf-8") if brief2.exists() else ""
+            cash_explained2 = "组合现金" in brief_text2 and "约束器" in brief_text2
+            details2 = {
+                "cash_pct_effective": round(float(cash_eff2), 4),
+                "cash_pct_target": float(cash_target2) if isinstance(cash_target2, (int, float)) else None,
+                "explained_in_brief": cash_explained2,
+            }
+            if float(cash_eff2) > 0.70:
+                issues.append(_issue("FAIL", "plan_cash_extreme",
+                    f"组合现金 {float(cash_eff2)*100:.1f}% > 70%（接近全空），检查约束/优化器", details2))
+            elif float(cash_eff2) > 0.50:
+                issues.append(_issue("WARN", "plan_cash_high",
+                    f"组合现金 {float(cash_eff2)*100:.1f}% > 50%（已配≤一半），约束器抑制过强", details2))
+            elif float(cash_eff2) > 0.30 and not cash_explained2:
+                issues.append(_issue("WARN", "plan_cash_unexplained",
+                    f"组合现金 {float(cash_eff2)*100:.1f}% > 30% 但 morning_brief 未给约束器解释", details2))
+            elif float(cash_eff2) > 0.30:
+                issues.append(_issue("INFO", "plan_cash_disclosed",
+                    f"组合现金 {float(cash_eff2)*100:.1f}% > 30%，已在 morning_brief 标注约束器原因", details2))
 
     for rel in ("data/latest/trade_delta.json", "data/latest/trade_delta_hk.json", "data/latest/trade_delta_cn.json"):
         if rel == "data/latest/trade_delta_hk.json" and not watchlist_markets["hk"]:
