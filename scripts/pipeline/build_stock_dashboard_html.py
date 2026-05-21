@@ -1198,20 +1198,39 @@ function switchDiscoveryView(view) {
           <label class="text-xs font-medium text-slate-600">股票（选择自选股）</label>
           <select id="form-code" class="w-full mt-1 px-3 py-2 border rounded text-sm"></select>
         </div>
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="text-xs font-medium text-slate-600">买入价</label>
+        <div class="grid grid-cols-3 gap-3">
+          <div class="col-span-2">
+            <label class="text-xs font-medium text-slate-600">买入价 <span id="form-price-currency-hint" class="text-amber-600 font-normal">（按本币填）</span></label>
             <input id="form-price" type="number" step="0.01" class="w-full mt-1 px-3 py-2 border rounded text-sm">
           </div>
+          <div>
+            <label class="text-xs font-medium text-slate-600">币种</label>
+            <select id="form-currency" class="w-full mt-1 px-3 py-2 border rounded text-sm">
+              <option value="USD">USD 美元</option>
+              <option value="CNY">CNY 人民币</option>
+              <option value="HKD">HKD 港币</option>
+              <option value="JPY">JPY 日元</option>
+              <option value="KRW">KRW 韩元</option>
+              <option value="AUD">AUD 澳元</option>
+              <option value="GBP">GBP 英镑</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="text-xs font-medium text-slate-600">数量（股）</label>
             <input id="form-shares" type="number" step="1" class="w-full mt-1 px-3 py-2 border rounded text-sm">
           </div>
+          <div>
+            <label class="text-xs font-medium text-slate-600">买入日期</label>
+            <input id="form-date" type="date" class="w-full mt-1 px-3 py-2 border rounded text-sm">
+          </div>
         </div>
-        <div>
-          <label class="text-xs font-medium text-slate-600">买入日期</label>
-          <input id="form-date" type="date" class="w-full mt-1 px-3 py-2 border rounded text-sm">
-        </div>
+        <p class="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+          💡 <strong>币种规则</strong>：买入价请按<strong>本币</strong>填写。<br>
+          · 美股（NVDA / DELL 等裸 ticker）→ 填 USD 价 · A 股（.SS/.SZ/.BJ）→ 填 CNY 价 · 港股（.HK）→ 填 HKD 价。<br>
+          系统会按 ticker 后缀<strong>自动选币种</strong>，特殊情况你可以手动改。
+        </p>
       </div>
       <div class="flex gap-2 mt-5">
         <button onclick="saveHolding()" class="flex-1 bg-violet-600 hover:bg-violet-700 text-white py-2 rounded font-medium">保存</button>
@@ -4586,6 +4605,7 @@ async function saveHoldings(holdings) {
     shares: h.shares,
     date: h.date,
     source: h._plan_a_v6 ? "ai_plan" : (h.source || "manual"),
+    currency: h.currency || _currencyForTicker(h.code),  // 显式写本币，后续 render 不依赖后缀推断
   }));
   try {
     const r = await fetch(WATCHLIST_API_BASE + "/api/holdings/bulk-replace", {
@@ -4610,6 +4630,8 @@ function editHolding(id) {
   document.getElementById("form-price").value = h.entry_price;
   document.getElementById("form-shares").value = h.shares;
   document.getElementById("form-date").value = h.entry_date || "";
+  // 编辑时优先用 h.currency（db 实际写入的），无值时按 code 推断
+  document.getElementById("form-currency").value = h.currency || _currencyForTicker(h.code);
   openModal();
 }
 
@@ -4625,10 +4647,26 @@ async function deleteHolding(id) {
 function openModal() {
   const sel = document.getElementById("form-code");
   sel.innerHTML = RECORDS.map(r => `<option value="${r.code}">${r.name} (${r.code})</option>`).join("");
+  // 选股票时自动联动币种 + 提示文案（仅新增模式；编辑模式不覆盖用户保存的值）
+  sel.onchange = () => {
+    if (editingId == null) {
+      const cur = _currencyForTicker(sel.value);
+      document.getElementById("form-currency").value = cur;
+      const hint = document.getElementById("form-price-currency-hint");
+      if (hint) hint.textContent = `（按 ${cur} 填）`;
+    }
+  };
   if (editingId == null) {
     document.getElementById("form-price").value = "";
     document.getElementById("form-shares").value = "";
     document.getElementById("form-date").value = new Date().toISOString().split("T")[0];
+    // 触发一次初始联动
+    sel.onchange();
+  } else {
+    // 编辑模式：用 h.currency 反向更新提示
+    const cur = document.getElementById("form-currency").value || "USD";
+    const hint = document.getElementById("form-price-currency-hint");
+    if (hint) hint.textContent = `（按 ${cur} 填）`;
   }
   document.getElementById("holding-modal").classList.remove("hidden");
 }
@@ -4639,8 +4677,9 @@ async function saveHolding() {
   const entry_price = parseFloat(document.getElementById("form-price").value);
   const shares = parseFloat(document.getElementById("form-shares").value);
   const date = document.getElementById("form-date").value;
+  const currency = (document.getElementById("form-currency")?.value || "").trim().toUpperCase();
   if (!code || !entry_price || !shares) { alert("请填完整"); return; }
-  const item = { code, entry_price, shares, date };
+  const item = { code, entry_price, shares, date, currency: currency || _currencyForTicker(code) };
   try {
     let r;
     if (editingId != null) {
@@ -4691,7 +4730,8 @@ async function renderPortfolio() {
     // 行业列优先用 r.theme（中文 emoji，如"💾 AI 算力"），fallback 到 r.industry（V2 universe 英文短语）
     const industry = r ? (r.theme || r.industry || "-") : "-";
     const cur = getCurrentPriceRMB(h.code);
-    const addedAt = _fmtAddedAt(h.entry_date || h.created_at);
+    // 优先 created_at（TIMESTAMP，带时分），entry_date 只是 DATE 没时分会被显示成"今天 08:00"误导
+    const addedAt = _fmtAddedAt(h.created_at || h.entry_date);
     if (!cur) {
       return `<tr class="border-t border-slate-100 group">
         <td class="px-3 py-2 sticky left-0 bg-white group-hover:bg-slate-50 z-10 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.15)]">${stockPill(h.code, {nameOverride: name})}</td>
@@ -4709,8 +4749,11 @@ async function renderPortfolio() {
     }
 
     // 找入选时币种（基于 raw_price 推断）
+    // cost 用 h.currency（用户保存的买入币种）对应的 fx；value 用 cur.fx（ticker 后缀推断的现价币种）
+    // 正常 h.currency == cur.currency（同一只股一种本币），分歧时 RMB 金额仍各自正确
+    const cost_fx = h.currency ? (FX_TO_RMB[h.currency] || 1) : cur.fx;
     const cost_local = h.entry_price * h.shares;
-    const cost_rmb = cost_local * cur.fx;
+    const cost_rmb = cost_local * cost_fx;
     const value_local = cur.raw_price * h.shares;
     const value_rmb = value_local * cur.fx;
     const pnl_rmb = value_rmb - cost_rmb;
@@ -4729,7 +4772,7 @@ async function renderPortfolio() {
     return `<tr class="border-t border-slate-100 hover:bg-slate-50 group">
       <td class="px-3 py-2 font-medium sticky left-0 bg-white group-hover:bg-slate-50 z-10 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.15)]">${stockPill(h.code, {nameOverride: name})}</td>
       <td class="px-3 py-2 text-xs text-slate-700 max-w-[140px]">${industry}</td>
-      <td class="px-3 py-2 text-right font-mono">${h.entry_price.toFixed(2)} ${cur.currency}</td>
+      <td class="px-3 py-2 text-right font-mono">${h.entry_price.toFixed(2)} ${h.currency || cur.currency}</td>
       <td class="px-3 py-2 text-right font-mono">${h.shares}</td>
       <td class="px-3 py-2 text-right font-mono">${cost_rmb.toFixed(0)}</td>
       <td class="px-3 py-2 text-right font-mono">${cur.raw_price.toFixed(2)}</td>
@@ -4737,7 +4780,7 @@ async function renderPortfolio() {
       <td class="px-3 py-2 text-right font-mono ${pnlColor}">${pnl_rmb >= 0 ? '+' : ''}${pnl_rmb.toFixed(0)}</td>
       <td class="px-3 py-2 text-right font-mono ${pnlColor}">${pnl_pct >= 0 ? '+' : ''}${pnl_pct.toFixed(2)}%</td>
       <td class="px-3 py-2 text-right font-mono">${(value_rmb / TOTAL_CAPITAL * 100).toFixed(1)}%</td>
-      <td class="px-3 py-2 text-xs text-slate-500 whitespace-nowrap" title="${_esc(h.entry_date || h.created_at || '')}">${addedAt}</td>
+      <td class="px-3 py-2 text-xs text-slate-500 whitespace-nowrap" title="${_esc(h.created_at || h.entry_date || '')}">${addedAt}</td>
       <td class="px-3 py-2 text-center">
         <button onclick="editHolding(${h.id})" class="text-violet-600 text-xs">编辑</button>
         <button onclick="deleteHolding(${h.id})" class="text-rose-500 text-xs ml-2">删除</button>

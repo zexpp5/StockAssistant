@@ -61,6 +61,10 @@ CREATE TABLE IF NOT EXISTS user_config (
 -- 持仓表 (V2 schema)
 -- 主键：一只股可以分批建仓(不同时间不同价)，所以用自增 id 而非 code
 -- source：'manual'(用户手填) / 'ai_plan'(从 AI 组合方案抄进来)
+-- currency：买入价的本币（USD / CNY / HKD / JPY / KRW / AUD / GBP）
+--   · 默认按 symbol 后缀推断（.SS/.SZ/.BJ→CNY · .HK→HKD · 裸→USD）
+--   · 显式存到 db 是因为：用户手动编辑时可能弄错币种（例如填美股价但选了 RMB），
+--     不能仅靠后缀；显式列让 UI/计算/审计三路保持一致
 CREATE SEQUENCE IF NOT EXISTS holdings_id_seq;
 CREATE TABLE IF NOT EXISTS holdings (
     id          INTEGER   PRIMARY KEY DEFAULT nextval('holdings_id_seq'),
@@ -74,6 +78,7 @@ CREATE TABLE IF NOT EXISTS holdings (
     created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+ALTER TABLE holdings ADD COLUMN IF NOT EXISTS currency VARCHAR;
 """
 
 # user_config 已知 key 的默认值（首次读取或被删除时返回）
@@ -724,7 +729,7 @@ def fetch_latest_recommendation_picks(
 # 兼容：fetch_* 返回字典里仍提供 code=symbol 别名给老调用方（risk_metrics 等）。
 # ============================================================
 
-HOLDINGS_COLS = ["market", "symbol", "entry_price", "shares", "entry_date", "source", "notes"]
+HOLDINGS_COLS = ["market", "symbol", "entry_price", "shares", "entry_date", "source", "notes", "currency"]
 HOLDINGS_FULL_COLS = ["id"] + HOLDINGS_COLS + ["created_at", "updated_at"]
 
 
@@ -735,6 +740,24 @@ def _infer_market_from_ticker(ticker: str) -> str:
     if s.endswith(".HK"):
         return "HK"
     return "US"
+
+
+def _infer_currency_from_ticker(ticker: str) -> str:
+    """按 ticker 后缀推断买入价本币（与前端 _currencyForTicker 同一套规则）。"""
+    s = (ticker or "").upper().strip()
+    if s.endswith(".SS") or s.endswith(".SZ") or s.endswith(".BJ") or s.endswith(".SH"):
+        return "CNY"
+    if s.endswith(".HK"):
+        return "HKD"
+    if s.endswith(".T"):
+        return "JPY"
+    if s.endswith(".KS"):
+        return "KRW"
+    if s.endswith(".AX"):
+        return "AUD"
+    if s.endswith(".IL"):
+        return "GBP"
+    return "USD"  # 裸 ticker 默认美股
 
 
 def fetch_all_holdings(*, conn: duckdb.DuckDBPyConnection | None = None) -> list[dict]:
@@ -774,11 +797,15 @@ def get_holding(holding_id: int, *, conn: duckdb.DuckDBPyConnection | None = Non
 
 
 def _normalize_holding(item: Mapping[str, Any]) -> list:
-    """item → SQL values 对齐 HOLDINGS_COLS。接受 V1 `code` 输入：自动按后缀派生 market。"""
+    """item → SQL values 对齐 HOLDINGS_COLS。接受 V1 `code` 输入：自动按后缀派生 market。
+
+    currency：item 显式传入优先；否则按 symbol 后缀推断（USD/CNY/HKD/JPY/KRW/AUD/GBP）。
+    """
     symbol = item.get("symbol") or item.get("code")
     if not symbol:
         raise ValueError("holding requires symbol (or legacy code)")
     market = item.get("market") or _infer_market_from_ticker(symbol)
+    currency = (item.get("currency") or "").strip().upper() or _infer_currency_from_ticker(symbol)
     return [
         market,
         symbol,
@@ -787,6 +814,7 @@ def _normalize_holding(item: Mapping[str, Any]) -> list:
         _to_date(item.get("entry_date") or item.get("date")),
         item.get("source") or "manual",
         item.get("notes"),
+        currency,
     ]
 
 
@@ -796,9 +824,10 @@ def insert_holding(item: Mapping[str, Any], *, conn: duckdb.DuckDBPyConnection |
     if own:
         conn = get_db()
     vals = _normalize_holding(item)
+    placeholders = ",".join(["?"] * len(HOLDINGS_COLS))
     conn.execute(
         f"INSERT INTO holdings ({','.join(HOLDINGS_COLS)}, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+        f"VALUES ({placeholders}, CURRENT_TIMESTAMP)",
         vals,
     )
     new_id = int(conn.execute("SELECT currval('holdings_id_seq')").fetchone()[0])
@@ -821,9 +850,9 @@ def update_holding(
     n = 0
     if exists:
         vals = _normalize_holding(item)
+        set_clause = ", ".join(f"{c}=?" for c in HOLDINGS_COLS)
         conn.execute(
-            "UPDATE holdings SET market=?, symbol=?, entry_price=?, shares=?, entry_date=?, "
-            "source=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id = ?",
+            f"UPDATE holdings SET {set_clause}, updated_at=CURRENT_TIMESTAMP WHERE id = ?",
             vals + [holding_id],
         )
         n = 1

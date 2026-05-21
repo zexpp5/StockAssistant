@@ -49,9 +49,11 @@ CREATE TABLE IF NOT EXISTS holdings (
     entry_date  DATE,
     source      VARCHAR NOT NULL DEFAULT 'manual',
     notes       VARCHAR,
+    currency    VARCHAR,  -- 买入价本币（USD/CNY/HKD/JPY/KRW/AUD/GBP）· 2026-05-21 V2 加列
     created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+ALTER TABLE holdings ADD COLUMN IF NOT EXISTS currency VARCHAR;
 
 CREATE TABLE IF NOT EXISTS system_universe (
     pool_id       VARCHAR NOT NULL,
