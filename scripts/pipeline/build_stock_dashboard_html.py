@@ -5506,6 +5506,8 @@ async function renderRealHoldings() {
         <button onclick="deleteRealHolding(${x.h.id})" class="text-rose-500 text-xs ml-2">删除</button>
       </td>
     </tr>`;
+  }
+  // ↑ end of nested _renderHoldingRow
 
   const realAllocEl = document.getElementById("chart-real-allocation");
   const realThemeEl = document.getElementById("chart-real-theme");
