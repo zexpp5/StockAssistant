@@ -1,48 +1,335 @@
-"""单一汇率源 —— 全仓库唯一可信汇率常量。
+"""Single source for FX rates used by the whole system.
 
-2026-05-22 收敛：此前 5 处硬编码（risk_metrics / trade_delta / backtest_plan_a /
-dashboard JS x2），HKD 在不同位置写成 0.91 或 0.92，同一只 0700.HK 不同 tab
-RMB 数能差 ~1%。本模块作为单一来源，前端通过 GET /api/fx-rates 拉同一份。
-
-未来升级路径：把 FX_TO_RMB 改成动态值（akshare currency_boc_sina），保持
-get_fx_to_rmb() 接口不变，所有调用方零改动。当前先做静态常量收敛。
-
-接口契约：
-  FX_TO_RMB[ccy] -> float           # 直接查表（已知 ccy）
-  get_fx_to_rmb(ccy) -> float       # 安全获取（未知 ccy 返回 1.0）
-  AS_OF -> str                       # 常量更新日（YYYY-MM-DD），前端可展示
+All RMB conversion must flow through this module or through the `/api/fx-rates`
+endpoint that wraps it. Daily refresh writes `data/latest/fx_rates.json`; if the
+external source is unavailable, callers fall back to one static, repo-wide table.
 """
 from __future__ import annotations
 
-# 本币 → RMB 汇率。
-#   USD 7.10 ─ 2026-05 USD/CNY 区间中值
-#   HKD 0.917 ─ 此前 0.91/0.92 两套并存,取中值统一
-#   其余按公开市价取整位
-FX_TO_RMB: dict[str, float] = {
+import json
+import math
+import os
+import tempfile
+import urllib.parse
+import urllib.request
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+REPO = Path(__file__).resolve().parents[2]
+CACHE_PATH = REPO / "data" / "latest" / "fx_rates.json"
+
+# Repo-wide fallback. These are not "live"; they are the last-resort values used
+# when Yahoo/remote refresh and local cache are both unavailable.
+FALLBACK_FX_TO_RMB: dict[str, float] = {
     "CNY": 1.0,
     "USD": 7.10,
     "HKD": 0.917,
     "JPY": 0.046,
     "KRW": 0.0052,
+    "TWD": 0.22,
+    "EUR": 7.80,
     "AUD": 4.60,
     "GBP": 9.00,
 }
 
-AS_OF: str = "2026-05-22"
+FALLBACK_AS_OF = "2026-05-22"
+
+_YAHOO_SYMBOLS: dict[str, str] = {
+    "USD": "CNY=X",       # CNY per USD
+    "HKD": "HKDCNY=X",    # CNY per HKD
+    "JPY": "JPYCNY=X",    # CNY per JPY
+    "KRW": "KRWCNY=X",    # CNY per KRW
+    "TWD": "TWDCNY=X",    # CNY per TWD
+    "EUR": "EURCNY=X",    # CNY per EUR
+    "AUD": "AUDCNY=X",    # CNY per AUD
+    "GBP": "GBPCNY=X",    # CNY per GBP
+}
+
+_VALID_RANGES: dict[str, tuple[float, float]] = {
+    "CNY": (1.0, 1.0),
+    "USD": (6.0, 7.8),
+    "HKD": (0.80, 1.05),
+    "JPY": (0.035, 0.060),
+    "KRW": (0.0040, 0.0065),
+    "TWD": (0.18, 0.26),
+    "EUR": (7.0, 9.0),
+    "AUD": (4.0, 5.5),
+    "GBP": (7.5, 10.5),
+}
+
+
+def _today() -> str:
+    return date.today().isoformat()
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
+
+def _clean_ccy(ccy: str | None) -> str:
+    return (ccy or "").strip().upper()
+
+
+def _is_valid_rate(ccy: str, value: Any) -> bool:
+    try:
+        v = float(value)
+    except Exception:
+        return False
+    if not math.isfinite(v) or v <= 0:
+        return False
+    lo, hi = _VALID_RANGES.get(ccy, (0.000001, 1_000_000.0))
+    return lo <= v <= hi
+
+
+def _normalize_rates(rates: dict[str, Any] | None) -> dict[str, float]:
+    out = dict(FALLBACK_FX_TO_RMB)
+    if not isinstance(rates, dict):
+        return out
+    for raw_ccy, raw_value in rates.items():
+        ccy = _clean_ccy(raw_ccy)
+        if ccy in FALLBACK_FX_TO_RMB and _is_valid_rate(ccy, raw_value):
+            out[ccy] = float(raw_value)
+    out["CNY"] = 1.0
+    return out
+
+
+def _fallback_payload(*, errors: list[str] | None = None) -> dict[str, Any]:
+    return {
+        "status": "FALLBACK",
+        "source": "static",
+        "as_of": FALLBACK_AS_OF,
+        "refreshed_at": None,
+        "rates": dict(FALLBACK_FX_TO_RMB),
+        "errors": errors or [],
+    }
+
+
+def _read_cache() -> dict[str, Any] | None:
+    try:
+        payload = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    rates = _normalize_rates(payload.get("rates"))
+    payload["rates"] = rates
+    payload.setdefault("status", "OK")
+    payload.setdefault("source", "cache")
+    payload.setdefault("as_of", payload.get("date") or FALLBACK_AS_OF)
+    payload.setdefault("errors", [])
+    return payload
+
+
+def _write_cache(payload: dict[str, Any]) -> None:
+    CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".fx_rates_", suffix=".json", dir=str(CACHE_PATH.parent))
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2, sort_keys=True)
+        f.write("\n")
+    Path(tmp).replace(CACHE_PATH)
+
+
+def _fetch_yahoo_rate(symbol: str, *, timeout_sec: float = 6.0) -> float | None:
+    encoded = urllib.parse.quote(symbol, safe="")
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{encoded}?range=5d&interval=1d"
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "StockAssistant/1.0"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    result = ((data.get("chart") or {}).get("result") or [None])[0] or {}
+    meta = result.get("meta") or {}
+    price = meta.get("regularMarketPrice") or meta.get("previousClose")
+    if price is not None and math.isfinite(float(price)):
+        return float(price)
+    closes = (((result.get("indicators") or {}).get("quote") or [{}])[0]).get("close") or []
+    for value in reversed(closes):
+        if value is not None and math.isfinite(float(value)):
+            return float(value)
+    return None
+
+
+def _coerce_date(value: Any) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, str):
+        try:
+            return datetime.strptime(value[:10], "%Y-%m-%d").date()
+        except Exception:
+            return None
+    return None
+
+
+def _fetch_yahoo_historical_rate(
+    symbol: str,
+    target_date: date,
+    *,
+    timeout_sec: float = 6.0,
+) -> tuple[float, str] | None:
+    """Fetch the closest daily close on or before target_date from Yahoo."""
+    start = target_date - timedelta(days=8)
+    end = target_date + timedelta(days=2)
+    period1 = int(datetime(start.year, start.month, start.day, tzinfo=timezone.utc).timestamp())
+    period2 = int(datetime(end.year, end.month, end.day, tzinfo=timezone.utc).timestamp())
+    encoded = urllib.parse.quote(symbol, safe="")
+    url = (
+        f"https://query1.finance.yahoo.com/v8/finance/chart/{encoded}"
+        f"?period1={period1}&period2={period2}&interval=1d"
+    )
+    req = urllib.request.Request(url, headers={"User-Agent": "StockAssistant/1.0"})
+    with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    result = ((data.get("chart") or {}).get("result") or [None])[0] or {}
+    timestamps = result.get("timestamp") or []
+    closes = (((result.get("indicators") or {}).get("quote") or [{}])[0]).get("close") or []
+    candidates: list[tuple[date, float]] = []
+    for ts, close in zip(timestamps, closes):
+        if close is None:
+            continue
+        try:
+            d = datetime.fromtimestamp(float(ts), tz=timezone.utc).date()
+            v = float(close)
+        except Exception:
+            continue
+        if math.isfinite(v) and v > 0:
+            candidates.append((d, v))
+    if not candidates:
+        return None
+    before = [x for x in candidates if x[0] <= target_date]
+    picked = max(before, key=lambda x: x[0]) if before else min(candidates, key=lambda x: x[0])
+    return picked[1], picked[0].isoformat()
+
+
+def refresh_fx_rates(*, timeout_sec: float = 6.0, write_cache: bool = True) -> dict[str, Any]:
+    """Refresh live FX rates.
+
+    The function never raises for source/network failures. It returns a payload
+    with `status=OK` when all configured live rates were fetched, `PARTIAL` when
+    some currencies fell back, and `FALLBACK` when all remote calls failed.
+    """
+    rates = dict(FALLBACK_FX_TO_RMB)
+    errors: list[str] = []
+    live_count = 0
+
+    for ccy, symbol in _YAHOO_SYMBOLS.items():
+        try:
+            value = _fetch_yahoo_rate(symbol, timeout_sec=timeout_sec)
+            if value is None or not _is_valid_rate(ccy, value):
+                raise ValueError(f"invalid {symbol}={value}")
+            rates[ccy] = float(value)
+            live_count += 1
+        except Exception as exc:
+            errors.append(f"{ccy}:{symbol}:{str(exc)[:120]}")
+
+    rates["CNY"] = 1.0
+    if live_count == len(_YAHOO_SYMBOLS):
+        status = "OK"
+        source = "yahoo"
+    elif live_count > 0:
+        status = "PARTIAL"
+        source = "yahoo+fallback"
+    else:
+        status = "FALLBACK"
+        source = "static"
+
+    payload = {
+        "status": status,
+        "source": source,
+        "as_of": _today() if live_count else FALLBACK_AS_OF,
+        "refreshed_at": _now_iso(),
+        "rates": rates,
+        "errors": errors,
+    }
+    if write_cache:
+        _write_cache(payload)
+    return payload
+
+
+def get_fx_payload(*, prefer_cache: bool = True) -> dict[str, Any]:
+    """Return the latest cached payload, or the static fallback payload."""
+    if prefer_cache:
+        cached = _read_cache()
+        if cached:
+            return cached
+    return _fallback_payload()
+
+
+def get_all_fx_to_rmb(*, prefer_cache: bool = True) -> dict[str, float]:
+    return dict(get_fx_payload(prefer_cache=prefer_cache)["rates"])
 
 
 def get_fx_to_rmb(ccy: str | None) -> float:
-    """安全查询本币→RMB 汇率。未知币种返回 1.0（按 CNY 处理）。"""
+    """Safely query currency-to-RMB. Unknown currencies are treated as CNY."""
+    ccy = _clean_ccy(ccy)
     if not ccy:
         return 1.0
-    return FX_TO_RMB.get(ccy.upper(), 1.0)
+    return get_all_fx_to_rmb().get(ccy, 1.0)
+
+
+def get_historical_fx_payload(
+    ccy: str | None,
+    target_date: Any,
+    *,
+    timeout_sec: float = 6.0,
+) -> dict[str, Any]:
+    """Return an RMB FX rate intended to be locked on a holding's entry date.
+
+    This function is deliberately fail-soft: if a historical quote cannot be
+    fetched, it falls back to the current single-source FX cache, then to the
+    static table. Callers can safely persist the returned `rate` with its source.
+    """
+    clean = _clean_ccy(ccy) or "CNY"
+    d = _coerce_date(target_date)
+    errors: list[str] = []
+
+    if clean == "CNY":
+        return {"currency": "CNY", "rate": 1.0, "as_of": (d or date.today()).isoformat(), "source": "identity", "errors": []}
+
+    symbol = _YAHOO_SYMBOLS.get(clean)
+    if symbol and d:
+        try:
+            fetched = _fetch_yahoo_historical_rate(symbol, d, timeout_sec=timeout_sec)
+            if fetched is not None:
+                rate, as_of = fetched
+                if _is_valid_rate(clean, rate):
+                    return {
+                        "currency": clean,
+                        "rate": float(rate),
+                        "as_of": as_of,
+                        "source": "yahoo_historical",
+                        "errors": [],
+                    }
+                errors.append(f"invalid historical {symbol}={rate}")
+            else:
+                errors.append(f"no historical quote for {symbol}")
+        except Exception as exc:
+            errors.append(f"{symbol}:{str(exc)[:120]}")
+
+    payload = get_fx_payload()
+    rates = _normalize_rates(payload.get("rates"))
+    rate = rates.get(clean, FALLBACK_FX_TO_RMB.get(clean, 1.0))
+    if not _is_valid_rate(clean, rate):
+        rate = FALLBACK_FX_TO_RMB.get(clean, 1.0)
+        source = "static_fallback"
+        as_of = FALLBACK_AS_OF
+    else:
+        source = f"{payload.get('source') or 'cache'}_entry_fallback"
+        as_of = str(payload.get("as_of") or FALLBACK_AS_OF)
+    return {
+        "currency": clean,
+        "rate": float(rate),
+        "as_of": as_of,
+        "source": source,
+        "errors": errors,
+    }
 
 
 def infer_currency_from_ticker(ticker: str | None) -> str:
-    """按 ticker 后缀推断本币 —— 与 stock_db._infer_currency_from_ticker 保持一致。
-
-    裸 ticker 默认 USD（与前端 _currencyForTicker 同规则）。
-    """
+    """Infer quote currency from ticker suffix."""
     if not ticker:
         return "USD"
     s = ticker.upper().strip()
@@ -59,3 +346,10 @@ def infer_currency_from_ticker(ticker: str | None) -> str:
     if s.endswith((".L", ".IL")):
         return "GBP"
     return "USD"
+
+
+_INITIAL_PAYLOAD = get_fx_payload()
+FX_TO_RMB: dict[str, float] = dict(_INITIAL_PAYLOAD["rates"])
+AS_OF: str = str(_INITIAL_PAYLOAD.get("as_of") or FALLBACK_AS_OF)
+SOURCE: str = str(_INITIAL_PAYLOAD.get("source") or "static")
+STATUS: str = str(_INITIAL_PAYLOAD.get("status") or "FALLBACK")

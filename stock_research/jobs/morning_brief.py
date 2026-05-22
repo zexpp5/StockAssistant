@@ -846,22 +846,254 @@ def section_calendar(plan: dict | None) -> str:
 # Section 1: regime gate — 今天能不能动手
 # ────────────────────────────────────────────────────────
 
+# ────────────────────────────────────────────────────────
+# 真实持仓 7 档判断（pure function · 早报 + dashboard endpoint 共用）
+# ────────────────────────────────────────────────────────
+#
+# 2026-05-22: 此前持仓止损告警只去飞书早报,dashboard 看不到。
+# 拆出 compute_holdings_verdict() 作单一计算源:
+#   - 早报: section_holdings_stoploss 调本函数取 stop/watch/avwap 部分拼 markdown
+#   - dashboard: GET /api/real-holdings/daily-verdict 调本函数返回完整 dict
+# 前端只渲染不重算 —— feedback_single_source_no_double_engine 原则。
+
+# 7 档标签 (label_kind, emoji, 中文文案, 优先级 1=最严重)
+_VERDICT_LABELS = {
+    "stop_breach":  ("🔴", "破止损线",  1),
+    "stop_watch":   ("🟡", "接近止损",  2),
+    "model_weak":   ("⚠️", "模型转弱",  3),
+    "near_event":   ("📅", "临近事件",  4),
+    "weight_off":   ("🎯", "偏离目标",  5),
+    "normal":       ("🟢", "持有观察",  6),
+    "ai_uncovered": ("⚪", "AI 未覆盖", 7),
+}
+
+
+def compute_holdings_verdict(
+    holdings: list[dict],
+    history: dict | None = None,
+    *,
+    picks: list[dict] | None = None,
+    universe: list[dict] | None = None,
+    events_data: dict | None = None,
+    target_weights: dict | None = None,
+    total_capital: float = 500000,
+    stop_pct: float = 0.15,
+    weight_off_threshold_pt: float = 3.0,
+    today_date: date | None = None,
+) -> dict:
+    """对真实持仓做 7 档判断（破止损/接近止损/模型转弱/临近事件/偏离目标/持有观察/AI未覆盖）。
+
+    纯函数,不做 IO — 调用方负责拉:
+      - holdings: stock_db.fetch_all_real_holdings()
+      - history: 各 ticker {close, high, low, volume, ts} 字典
+      - picks: stock_db.fetch_latest_recommendation_picks()(决定 model_weak/normal)
+      - universe: stock_db.fetch_universe_for_ai_recommendations()(决定 ai_uncovered)
+      - events_data: 解析 data/event_calendar.json(决定 near_event)
+      - target_weights: {ticker: target_weight 0-1} 来自 plan_v6(决定 weight_off)
+      - total_capital: 计算 current_weight 的分母
+
+    返回:
+      {
+        "as_of": "YYYY-MM-DD",
+        "holdings": [{code, label_kind, label_emoji, label_text, current, dd_pct,
+                      stop_pct, reasons[{kind, text}], ...}, ...],
+        "summary": {stoploss_breached, stoploss_watched, model_weakened,
+                    near_event, weight_off, ai_uncovered, normal},
+      }
+    """
+    from stock_research.core.portfolio_constraints import (
+        check_stop_loss_breach, volatility_adaptive_stop_pct,
+    )
+    from stock_research.core.technical_indicators import anchored_vwap
+
+    today = today_date or date.today()
+    horizon = today + timedelta(days=3)
+
+    # ── 索引: picks by code, universe by code, events by code(A 股 6 位代码) ──
+    picks_by_code: dict[str, dict] = {}
+    for p in (picks or []):
+        c = p.get("code") or p.get("symbol")
+        if c:
+            picks_by_code[c] = p
+    universe_codes: set[str] = set()
+    for u in (universe or []):
+        c = u.get("code") or u.get("symbol")
+        if c:
+            universe_codes.add(c)
+    events_by_code: dict[str, list[dict]] = {}
+    for ev in (events_data or {}).get("events", []) or []:
+        try:
+            ed = datetime.strptime(ev.get("event_date", ""), "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if not (today <= ed <= horizon):
+            continue
+        code6 = ev.get("code", "")
+        events_by_code.setdefault(code6, []).append({"date": ed, "desc": ev.get("description", "")})
+
+    history = history or {}
+    out_holdings: list[dict] = []
+    summary = {"stoploss_breached": 0, "stoploss_watched": 0, "model_weakened": 0,
+               "near_event": 0, "weight_off": 0, "ai_uncovered": 0, "normal": 0}
+
+    for h in holdings:
+        code = h.get("code") or h.get("symbol")
+        entry = h.get("entry_price")
+        entry_date = h.get("entry_date")
+        if not code or entry is None:
+            continue
+
+        reasons: list[dict] = []
+        candidate_labels: list[str] = []  # 收集触发的 label_kind,最终取优先级最高
+
+        # ── 价格相关计算 ──
+        ticker_hist = history.get(code) or {}
+        closes = [float(v) for v in (ticker_hist.get("close") or []) if _is_pos_num(v)]
+        highs = ticker_hist.get("high") or None
+        lows = ticker_hist.get("low") or None
+        volumes = ticker_hist.get("volume") or None
+        ts_list = ticker_hist.get("ts") or []
+
+        current = closes[-1] if closes else None
+        dd_pct = None
+        dyn_stop_pct = None
+        if current is not None:
+            dyn_stop, _atr_src = volatility_adaptive_stop_pct(
+                closes, highs=highs, lows=lows, fallback=stop_pct,
+            )
+            dyn_watch = max(0.05, dyn_stop - 0.05)
+            triggered, dd = check_stop_loss_breach(float(entry), current, stop_pct=dyn_stop)
+            dd_pct = dd * 100
+            dyn_stop_pct = dyn_stop * 100
+            if triggered:
+                candidate_labels.append("stop_breach")
+                reasons.append({"kind": "stop_breach",
+                                "text": f"回撤 {dd_pct:+.1f}% · 已破止损线 -{dyn_stop_pct:.0f}%"})
+            elif dd <= -dyn_watch:
+                candidate_labels.append("stop_watch")
+                reasons.append({"kind": "stop_watch",
+                                "text": f"回撤 {dd_pct:+.1f}% · 接近止损线 -{dyn_stop_pct:.0f}%"})
+
+            # AVWAP 跌破成本线 — 作为辅助 reason,不抢主标签
+            if volumes and entry_date and ts_list:
+                try:
+                    entry_str = str(entry_date)[:10]
+                    anchor_idx = next((i for i, d in enumerate(ts_list) if d >= entry_str), None)
+                    if anchor_idx is not None and anchor_idx < len(closes) - 5:
+                        avw = anchored_vwap(closes, volumes, anchor_idx=anchor_idx)
+                        dev = avw.get("deviation_pct")
+                        if dev is not None and dev < -3.0:
+                            reasons.append({"kind": "avwap_below",
+                                            "text": f"现价低于买入以来 AVWAP {dev:+.1f}%"})
+                except Exception:
+                    pass
+
+        # ── 模型转弱 / AI 未覆盖 ──
+        pick = picks_by_code.get(code)
+        if pick is None:
+            if code in universe_codes:
+                # 在 universe 里被系统看过,但今天没入推荐池 → 模型转弱
+                candidate_labels.append("model_weak")
+                reasons.append({"kind": "model_weak",
+                                "text": "今日未入系统推荐池(此前在覆盖范围内)"})
+            else:
+                candidate_labels.append("ai_uncovered")
+                reasons.append({"kind": "ai_uncovered",
+                                "text": "不在系统覆盖池,模型无法评价"})
+        else:
+            rating = (pick.get("rating") or "").lower()
+            if rating == "watch":
+                candidate_labels.append("model_weak")
+                reasons.append({"kind": "model_weak",
+                                "text": f"系统评级 watch(此前 {pick.get('signal') or '-'})"})
+
+        # ── 临近事件 ──
+        code6 = code.split(".")[0] if "." in code else code
+        evs = events_by_code.get(code6) or []
+        if evs:
+            candidate_labels.append("near_event")
+            ev_text = ", ".join(f"{e['date'].strftime('%m-%d')} {e['desc'][:30]}" for e in evs[:2])
+            reasons.append({"kind": "near_event", "text": f"3 天内事件: {ev_text}"})
+
+        # ── 偏离 AI 目标 ──
+        target_w = (target_weights or {}).get(code)
+        if target_w is not None and current is not None and total_capital > 0:
+            shares = float(h.get("shares") or 0)
+            # 注意: 这里 current 是本币价,目标权重通常按 RMB 计。
+            # 不精确换汇,只在已有持仓 RMB 估值后做权重比对 — 简化为接受小偏差,
+            # weight_off 阈值 3pt 远大于汇率误差。
+            value_local = current * shares
+            current_w = value_local / total_capital  # 同币种比较为简化
+            gap_pt = (current_w - target_w) * 100
+            if abs(gap_pt) >= weight_off_threshold_pt:
+                candidate_labels.append("weight_off")
+                reasons.append({"kind": "weight_off",
+                                "text": f"当前 {current_w*100:.1f}% vs 目标 {target_w*100:.1f}% · 差 {gap_pt:+.1f}pt"})
+
+        # ── 取最严重标签 (priority 数字最小) ──
+        if candidate_labels:
+            label_kind = min(candidate_labels, key=lambda k: _VERDICT_LABELS[k][2])
+        else:
+            label_kind = "normal"
+        emoji, label_text, _prio = _VERDICT_LABELS[label_kind]
+
+        # 累计 summary
+        if label_kind == "stop_breach":
+            summary["stoploss_breached"] += 1
+        elif label_kind == "stop_watch":
+            summary["stoploss_watched"] += 1
+        elif label_kind == "model_weak":
+            summary["model_weakened"] += 1
+        elif label_kind == "near_event":
+            summary["near_event"] += 1
+        elif label_kind == "weight_off":
+            summary["weight_off"] += 1
+        elif label_kind == "ai_uncovered":
+            summary["ai_uncovered"] += 1
+        else:
+            summary["normal"] += 1
+
+        out_holdings.append({
+            "code": code,
+            "label_kind": label_kind,
+            "label_emoji": emoji,
+            "label_text": label_text,
+            "entry": float(entry),
+            "current": current,
+            "dd_pct": dd_pct,
+            "stop_pct": dyn_stop_pct,
+            "reasons": reasons,
+        })
+
+    return {
+        "as_of": today.strftime("%Y-%m-%d"),
+        "holdings": out_holdings,
+        "summary": summary,
+    }
+
+
+def _is_pos_num(v) -> bool:
+    """numeric > 0 检查（用于过滤 history close 序列里的脏数据）。"""
+    try:
+        return float(v) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def section_holdings_stoploss(history: dict | None = None,
                               stop_pct: float = 0.15,
                               watch_pct: float = 0.10) -> str:
-    """读 real_holdings 表 + 最新收盘价，告警触发 -stop_pct 止损线的真实持仓。
+    """读 real_holdings 表 + 最新收盘价,告警触发各自动态止损线的真实持仓。
 
-    生产实时监控（vs apply_stop_loss 的回测语义）：每天早上扫一遍，
-    破线→红色清仓建议；接近线（回撤 ≥ watch_pct）→ 黄色观察。
-    空持仓 / 无告警时返回 "" → build_brief 整段省略。
+    生产实时监控(vs apply_stop_loss 的回测语义):每天早上扫一遍,
+    破线→🔴 复查;接近线→🟡 留意。空持仓 / 无告警时返回 "" → build_brief 整段省略。
+
+    2026-05-22: 重构为调 compute_holdings_verdict() 单一源,
+    措辞从"建议清仓或减半"软化为"建议复查"(feedback_advisory_not_directive)。
     """
     try:
         sys.path.insert(0, str(REPO / "scripts" / "lib"))
         import stock_db  # type: ignore
-        from stock_research.core.portfolio_constraints import (
-            check_stop_loss_breach, volatility_adaptive_stop_pct,
-        )
-        from stock_research.core.technical_indicators import anchored_vwap
         holdings = stock_db.fetch_all_real_holdings()
     except Exception:
         return ""
@@ -869,75 +1101,19 @@ def section_holdings_stoploss(history: dict | None = None,
     if not holdings:
         return ""
 
-    history = history or {}
-    breached: list[dict] = []
-    watched: list[dict] = []
-    avwap_alerts: list[dict] = []  # AVWAP 跌破成本线告警（与 -15% 止损独立）
+    verdict = compute_holdings_verdict(holdings, history=history, stop_pct=stop_pct)
+    breached = [h for h in verdict["holdings"] if h["label_kind"] == "stop_breach"]
+    watched = [h for h in verdict["holdings"] if h["label_kind"] == "stop_watch"]
+    avwap_only = [h for h in verdict["holdings"]
+                  if h["label_kind"] not in ("stop_breach", "stop_watch")
+                  and any(r["kind"] == "avwap_below" for r in h["reasons"])]
 
-    for h in holdings:
-        code = h.get("code")
-        entry = h.get("entry_price")
-        entry_date = h.get("entry_date")  # datetime / str / None
-        if not code or entry is None:
-            continue
-        ticker_hist = history.get(code) or {}
-        closes = ticker_hist.get("close") or []
-        highs = ticker_hist.get("high") or None
-        lows = ticker_hist.get("low") or None
-        volumes = ticker_hist.get("volume") or None
-        ts_list = ticker_hist.get("ts") or []
-        if not closes:
-            continue
-        clean_closes = []
-        for v in closes:
-            try:
-                fv = float(v)
-            except (TypeError, ValueError):
-                continue
-            if fv > 0:
-                clean_closes.append(fv)
-        if not clean_closes:
-            continue
-        current = clean_closes[-1]
-        # 动态止损：优先真 ATR（含 high/low），fallback 到 close-only proxy
-        dyn_stop, atr_source = volatility_adaptive_stop_pct(
-            clean_closes, highs=highs, lows=lows, fallback=stop_pct,
-        )
-        dyn_watch = max(0.05, dyn_stop - 0.05)
-        triggered, dd = check_stop_loss_breach(entry, current, stop_pct=dyn_stop)
-        row = {"code": code, "entry": float(entry),
-               "current": float(current), "dd_pct": dd * 100,
-               "stop_pct": dyn_stop * 100, "atr_source": atr_source}
-        if triggered:
-            breached.append(row)
-        elif dd <= -dyn_watch:
-            watched.append(row)
-
-        # AVWAP 锚定 entry_date 之后的成交量加权均价（事件成本线）
-        # 跌破 AVWAP = "买入以来市场平均成本"已失守，比绝对回撤更敏感
-        if volumes and entry_date and ts_list:
-            try:
-                entry_str = str(entry_date)[:10]
-                anchor_idx = next((i for i, d in enumerate(ts_list) if d >= entry_str), None)
-                if anchor_idx is not None and anchor_idx < len(closes) - 5:
-                    avw = anchored_vwap(closes, volumes, anchor_idx=anchor_idx)
-                    if avw.get("avwap") is not None and avw.get("deviation_pct") is not None:
-                        dev = avw["deviation_pct"]
-                        if dev < -3.0:  # 现价低于 AVWAP > 3%
-                            avwap_alerts.append({
-                                "code": code, "avwap": avw["avwap"],
-                                "current": current, "dev_pct": dev,
-                                "days": avw.get("days_since_anchor", 0),
-                            })
-            except Exception:
-                pass
-
-    if not breached and not watched and not avwap_alerts:
+    if not breached and not watched and not avwap_only:
         return ""
 
     lines = ["#### 1.5 持仓止损告警（ATR-proxy + AVWAP 成本线双闸门）"]
     if breached:
-        lines.append(f"🔴 **{len(breached)} 只破各自动态止损线**（建议清仓或减半）：")
+        lines.append(f"🔴 **{len(breached)} 只破各自动态止损线**（建议复查）：")
         for r in breached[:10]:
             lines.append(f"• **{r['code']}** {r['dd_pct']:+.1f}% (止损线 -{r['stop_pct']:.0f}%) · "
                          f"entry {r['entry']:.2f} → now {r['current']:.2f}")
@@ -948,14 +1124,15 @@ def section_holdings_stoploss(history: dict | None = None,
         for r in watched[:10]:
             lines.append(f"• {r['code']} {r['dd_pct']:+.1f}% (止损线 -{r['stop_pct']:.0f}%) · "
                          f"entry {r['entry']:.2f} → now {r['current']:.2f}")
-    if avwap_alerts:
+    if avwap_only:
         if breached or watched:
             lines.append("")
-        lines.append(f"⚠️ **{len(avwap_alerts)} 只跌破 entry 后 AVWAP 成本线** "
+        lines.append(f"⚠️ **{len(avwap_only)} 只跌破 entry 后 AVWAP 成本线** "
                      f"(市场平均买入成本已失守 > 3%)：")
-        for r in avwap_alerts[:10]:
-            lines.append(f"• {r['code']} 现价 {r['current']:.2f} vs AVWAP {r['avwap']:.2f} "
-                         f"({r['dev_pct']:+.1f}%, 持有 {r['days']}d)")
+        for h in avwap_only[:10]:
+            avw_reason = next((r for r in h["reasons"] if r["kind"] == "avwap_below"), None)
+            extra = avw_reason["text"] if avw_reason else ""
+            lines.append(f"• {h['code']} 现价 {h['current']:.2f} · {extra}")
     return "\n".join(lines) + "\n"
 
 

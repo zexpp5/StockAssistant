@@ -125,6 +125,7 @@ pipeline_sink_for_label() {
         *"walk-forward"*) echo "data/latest/walk_forward*.json + strategy validation artifacts" ;;
         *"早安简报"*) echo "morning_brief.md + data/reports/morning_brief_*.md" ;;
         *"生产闭环验收"*) echo "data/latest/production_acceptance_check.json" ;;
+        *"汇率"*) echo "data/latest/fx_rates.json + /api/fx-rates" ;;
         *) echo "见脚本输出" ;;
     esac
 }
@@ -322,6 +323,7 @@ if [ "$MODE" = "a_share_only" ]; then
         write_pipeline_status "FAIL" "$ts"
         exit 1
     fi
+    run_step "0b/25 汇率刷新（单一 FX 源）" "scripts/tools/refresh_fx_rates.py"
     run_a_share_steps
     # a_share_picks 跑完后重跑约束器 — A 股真实持仓约束可能变化，需要刷新美股 plan_constrained
     run_step "10b/25 plan_a 后处理（美股仓位约束）" "-m stock_research.jobs.apply_a_share_constraints"
@@ -365,7 +367,9 @@ fi
 is_morning_step && run_step "0a/25 V1 表 DROP 守卫（V2 schema 完整性）" \
     "scripts/tools/drop_v1_tables_v2.py"
 # M
-run_step "0b/25 V2 系统池刷新（live universe → system_universe/pool_membership）" \
+is_morning_step && run_step "0b/25 汇率刷新（单一 FX 源）" "scripts/tools/refresh_fx_rates.py"
+# M
+run_step "0c/25 V2 系统池刷新（live universe → system_universe/pool_membership）" \
     "scripts/tools/refresh_system_universe_v2.py"
 run_step "1/25 抓价格（手动 watchlist + 科技/AI universe）" "scripts/pipeline/fetch_stock_prices.py --source both"
 # M — V2 Piotroski P5-Lite（必须早于 build_v2_recommendations，让 picks 当日带上 f_score）

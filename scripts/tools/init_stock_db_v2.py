@@ -65,10 +65,18 @@ CREATE TABLE IF NOT EXISTS real_holdings (
     shares      DOUBLE NOT NULL,
     entry_date  DATE,
     currency    VARCHAR,
+    entry_fx_rate   DOUBLE,
+    entry_fx_as_of  DATE,
+    entry_fx_source VARCHAR,
+    cost_rmb_locked DOUBLE,
     notes       VARCHAR,
     created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS entry_fx_rate DOUBLE;
+ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS entry_fx_as_of DATE;
+ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS entry_fx_source VARCHAR;
+ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS cost_rmb_locked DOUBLE;
 
 CREATE SEQUENCE IF NOT EXISTS model_sim_holdings_id_seq;
 CREATE TABLE IF NOT EXISTS model_sim_holdings (

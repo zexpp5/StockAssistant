@@ -82,7 +82,15 @@ def create_app():
         升级到实时汇率时只改 scripts/lib/fx_rates.py 内部实现,接口字段不变。
         """
         import fx_rates
-        return {"rates": dict(fx_rates.FX_TO_RMB), "as_of": fx_rates.AS_OF}
+        payload = fx_rates.get_fx_payload()
+        return {
+            "rates": dict(payload.get("rates") or {}),
+            "as_of": payload.get("as_of"),
+            "source": payload.get("source"),
+            "status": payload.get("status"),
+            "refreshed_at": payload.get("refreshed_at"),
+            "errors": payload.get("errors") or [],
+        }
 
     # ────────── 13F 查询 ──────────
     @app.get("/api/13f/investors")
@@ -230,7 +238,9 @@ def create_app():
             return meta
 
         import duckdb
-        conn = duckdb.connect(stock_db.DB_PATH, read_only=True)
+        # 2026-05-22: read_only=False 与 stock_db.get_db 保持一致,
+        # 避免 API 多线程内不同 mode 的 conn 冲突
+        conn = duckdb.connect(stock_db.DB_PATH, read_only=False)
         try:
             tables = {str(r[0]) for r in conn.execute("SHOW TABLES").fetchall()}
             if "system_universe" not in tables or "price_daily" not in tables:
@@ -928,9 +938,11 @@ _sys.exit(rc)
     def _json_dates(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for r in rows:
             for k, v in list(r.items()):
-                if k.endswith("_date") and hasattr(v, "isoformat"):
-                    r[k] = v.isoformat()
-                elif k in {"created_at", "updated_at", "generated_at"} and hasattr(v, "isoformat"):
+                if hasattr(v, "isoformat") and (
+                    k.endswith("_date")
+                    or k.endswith("_as_of")
+                    or k in {"created_at", "updated_at", "generated_at"}
+                ):
                     r[k] = v.isoformat()
         return rows
 
@@ -942,11 +954,95 @@ _sys.exit(rc)
 
     @app.post("/api/real-holdings")
     def create_real_holding(item: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        """录入真实持仓 + 自动同步到自选股(2026-05-22 方案 A)。
+
+        持仓与 manual_watchlist 之前完全解耦,导致非科技股(MCD/IAUM/BRK.B 等)
+        永远不进 daily_picks_v5 评级,verdict 永远显示 ⚪ AI 未覆盖。
+        现在:录入持仓 → upsert manual_watchlist → 触发 picks rerun,
+        让系统每天对持仓也评级,verdict 才能产生有意义的 7 档判断。
+        """
         import stock_db
-        if not (item.get("code") or item.get("symbol")):
+        symbol = item.get("code") or item.get("symbol")
+        if not symbol:
             raise HTTPException(400, "code is required")
         new_id = stock_db.insert_real_holding(item)
-        return {"status": "ok", "id": new_id}
+
+        # 自动同步到 manual_watchlist + 触发评级,失败不影响主流程返回
+        sync_info: dict[str, Any] = {"status": "skipped"}
+        try:
+            stock_db.upsert_manual_watchlist([{
+                "code": symbol,
+                "symbol": symbol,
+                "name": item.get("name"),
+                "notes": "auto-sync from real_holdings",
+            }])
+            sync_info = _spawn_picks_rerun(trigger=f"watchlist:holding:{symbol}")
+            sync_info["watchlist_synced"] = True
+        except Exception as e:
+            sync_info = {"status": "error", "error": str(e), "watchlist_synced": False}
+
+        return {"status": "ok", "id": new_id, "sync": sync_info}
+
+    @app.post("/api/real-holdings/fetch-prices")
+    def fetch_holdings_prices() -> dict[str, Any]:
+        """立刻触发 fetch_stock_prices.py --source watchlist 子进程拉行情。
+
+        前提:持仓已通过 sync-to-watchlist 进入 manual_watchlist。
+        非阻塞,返回 PID;实际数据 1-2 分钟后才落 price_daily。
+        失败 fail-soft 返回 error 字段,不抛 HTTP 5xx。
+        """
+        import subprocess as _sub
+        import time as _time
+        cmd = [
+            sys.executable,
+            str(_REPO_ROOT / "scripts" / "pipeline" / "fetch_stock_prices.py"),
+            "--source", "watchlist",
+        ]
+        log_dir = _REPO_ROOT / "data" / "latest"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "fetch_prices_on_demand.log"
+        try:
+            with open(log_path, "ab") as log_f:
+                log_f.write(f"\n=== on-demand fetch-prices {_time.strftime('%Y-%m-%d %H:%M:%S')} ===\n".encode())
+                proc = _sub.Popen(
+                    cmd, cwd=str(_REPO_ROOT), stdout=log_f, stderr=_sub.STDOUT,
+                    start_new_session=True,
+                )
+            return {
+                "status": "started", "pid": proc.pid,
+                "log": str(log_path),
+                "hint": "约 1-2 分钟后 price_daily 会有数据,再刷 dashboard 现价就出来",
+            }
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
+    @app.post("/api/real-holdings/sync-to-watchlist")
+    def sync_holdings_to_watchlist() -> dict[str, Any]:
+        """一键把现有所有 real_holdings 批量同步到 manual_watchlist + 触发一次评级。
+
+        给 2026-05-22 方案 A 之前录入的老持仓补同步。POST endpoint 后自动同步逻辑
+        只对新录入持仓生效,历史持仓走这个补救入口。批量同步只触发**一次**
+        picks rerun(daily_picks_v5 启动后会评全表),而不是每只一次。
+        """
+        import stock_db
+        holdings = stock_db.fetch_all_real_holdings()
+        if not holdings:
+            return {"status": "ok", "synced": 0, "rerun": {"status": "skipped", "reason": "no holdings"}}
+        rows = []
+        for h in holdings:
+            sym = h.get("code") or h.get("symbol")
+            if not sym:
+                continue
+            rows.append({"code": sym, "symbol": sym, "name": h.get("name"),
+                         "notes": "auto-sync from real_holdings (batch)"})
+        n = stock_db.upsert_manual_watchlist(rows) if rows else 0
+        rerun_info: dict[str, Any] = {"status": "skipped"}
+        if n > 0:
+            try:
+                rerun_info = _spawn_picks_rerun(trigger="watchlist:holdings-batch-sync")
+            except Exception as e:
+                rerun_info = {"status": "error", "error": str(e)}
+        return {"status": "ok", "synced": n, "rerun": rerun_info}
 
     @app.put("/api/real-holdings/{holding_id}")
     def update_real_holding_one(holding_id: int, item: dict[str, Any] = Body(...)) -> dict[str, Any]:
@@ -963,6 +1059,79 @@ _sys.exit(rc)
         if n == 0:
             raise HTTPException(404, f"real holding id not found: {holding_id}")
         return {"status": "ok", "id": holding_id, "rows_deleted": n}
+
+    @app.get("/api/real-holdings/daily-verdict")
+    def real_holdings_daily_verdict() -> dict[str, Any]:
+        """真实持仓 7 档判断单一源 — 复用 morning_brief.compute_holdings_verdict 纯函数。
+
+        前端持仓页「💡 今日动作」卡片 + 表格「系统判断」列 + 决策台「持仓体检」小卡
+        共用这一个 endpoint，避免前端重算业务规则
+        （feedback_single_source_no_double_engine）。
+        """
+        import stock_db
+        from stock_research.jobs.morning_brief import compute_holdings_verdict
+
+        holdings = stock_db.fetch_all_real_holdings()
+        # 空持仓 — 返回空结构,前端能渲染空态
+        if not holdings:
+            return {
+                "as_of": "",
+                "holdings": [],
+                "summary": {"stoploss_breached": 0, "stoploss_watched": 0,
+                            "model_weakened": 0, "near_event": 0,
+                            "weight_off": 0, "ai_uncovered": 0, "normal": 0},
+            }
+
+        # IO 全在 endpoint 内:history / picks / universe / events / target_weights
+        def _load_latest_json(rel: str) -> dict:
+            p = _REPO_ROOT / rel
+            if not p.exists():
+                return {}
+            try:
+                return json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                return {}
+
+        history_doc = _load_latest_json("data/latest/history_data.json")
+        history = (history_doc.get("tickers") if isinstance(history_doc, dict) else None) or {}
+
+        try:
+            picks = stock_db.fetch_latest_recommendation_picks()
+        except Exception:
+            picks = []
+        try:
+            universe = stock_db.fetch_universe_for_ai_recommendations()
+        except Exception:
+            universe = []
+
+        events_data = _load_latest_json("data/event_calendar.json") or {}
+
+        plan = _load_latest_json("data/latest/plan_a_v5.json") or {}
+        plan_items = plan.get("plan_v5") or plan.get("plan_v6") or []
+        target_weights: dict[str, float] = {}
+        for it in plan_items:
+            t = it.get("ticker") or it.get("code") or it.get("symbol")
+            w = it.get("capped_weight") or it.get("target_weight")
+            if t and w is not None:
+                try:
+                    target_weights[t] = float(w)
+                except Exception:
+                    pass
+
+        try:
+            total_capital = float(stock_db.get_config("total_capital") or 500000)
+        except Exception:
+            total_capital = 500000.0
+
+        return compute_holdings_verdict(
+            holdings,
+            history=history,
+            picks=picks,
+            universe=universe,
+            events_data=events_data,
+            target_weights=target_weights,
+            total_capital=total_capital,
+        )
 
     @app.get("/api/model-sim-holdings")
     def list_model_sim_holdings() -> list[dict[str, Any]]:

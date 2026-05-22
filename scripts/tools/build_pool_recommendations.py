@@ -25,19 +25,19 @@ from stock_db import (  # noqa: E402
     fetch_universe_for_ai_recommendations,
     fetch_latest_recommendation_picks,
 )
+from fx_rates import get_all_fx_to_rmb  # noqa: E402
 
 
-FX_TO_USD = {
-    "USD": 1.0,
-    "CNY": 0.139,
-    "HKD": 0.128,
-    "TWD": 0.031,
-    "KRW": 0.00074,
-    "JPY": 0.0067,
-    "EUR": 1.07,
-    "GBP": 1.27,
-    "AUD": 0.66,
-}
+def _fx_to_usd(ccy: str | None) -> float:
+    rates = get_all_fx_to_rmb()
+    ccy = (ccy or "USD").strip().upper()
+    if ccy == "USD":
+        return 1.0
+    usd_rmb = rates.get("USD") or 1.0
+    ccy_rmb = rates.get(ccy)
+    if not ccy_rmb:
+        return 1.0
+    return ccy_rmb / usd_rmb
 
 
 def _num(v: Any) -> float | None:
@@ -203,7 +203,7 @@ def build_recommendations(top: int = 20, out_path: str = "data/discovery_candida
     # Local derived fields used for cross-sectional z-scores.
     for r in rows:
         cap = _num(r.get("market_cap"))
-        fx = FX_TO_USD.get((r.get("currency") or "USD").upper(), 1.0)
+        fx = _fx_to_usd(r.get("currency"))
         r["market_cap_usd"] = cap * fx if cap is not None else None
         one_year = _clip(_num(r.get("one_year_pct")), -80, 250)
         one_month = _clip(_num(r.get("one_month_pct")), -50, 80)

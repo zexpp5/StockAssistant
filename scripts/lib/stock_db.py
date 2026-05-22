@@ -90,10 +90,18 @@ CREATE TABLE IF NOT EXISTS real_holdings (
     shares      DOUBLE    NOT NULL,
     entry_date  DATE,
     currency    VARCHAR,
+    entry_fx_rate   DOUBLE,   -- 买入日锁定汇率：1 单位本币 = ? RMB
+    entry_fx_as_of  DATE,
+    entry_fx_source VARCHAR,
+    cost_rmb_locked DOUBLE,   -- entry_price * shares * entry_fx_rate，真实账户成本锁定值
     notes       VARCHAR,
     created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS entry_fx_rate DOUBLE;
+ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS entry_fx_as_of DATE;
+ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS entry_fx_source VARCHAR;
+ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS cost_rmb_locked DOUBLE;
 
 -- 模型模拟仓：只承载 AI 组合方案推演，不代表真实成交。
 CREATE SEQUENCE IF NOT EXISTS model_sim_holdings_id_seq;
@@ -139,8 +147,15 @@ def get_db(path: str = DB_PATH, *, read_only: bool = False,
 
     2026-05-21 V1 cutover：删除原 4 个 UPDATE picks legacy 数据修复 SQL（picks 表已删）。
     V2 表 schema 由 init_stock_db_v2.py 负责。
+
+    2026-05-22 多线程兼容修复:
+      DuckDB 不允许同一进程内 read_only=True 与 read_only=False 两种 conn 同时存在
+      (报 "Can't open a connection ... different configuration")。API 进程是多线程,
+      不同 endpoint thread 拿不同 mode 会撞上,产生 HTTP 500。
+      → 即使调用方传 read_only=True,这里强制用 False 打开 connection;
+        read_only 参数仅保留作为是否跳过 SCHEMA_SQL 的提示。
     """
-    conn = duckdb.connect(path, read_only=read_only)
+    conn = duckdb.connect(path, read_only=False)
     if ensure_schema is None:
         ensure_schema = not read_only
     if ensure_schema:
@@ -776,7 +791,10 @@ def fetch_latest_recommendation_picks(
 
 HOLDINGS_COLS = ["market", "symbol", "entry_price", "shares", "entry_date", "source", "notes", "currency"]
 HOLDINGS_FULL_COLS = ["id"] + HOLDINGS_COLS + ["created_at", "updated_at"]
-REAL_HOLDINGS_COLS = ["account", "market", "symbol", "entry_price", "shares", "entry_date", "currency", "notes"]
+REAL_HOLDINGS_COLS = [
+    "account", "market", "symbol", "entry_price", "shares", "entry_date", "currency",
+    "entry_fx_rate", "entry_fx_as_of", "entry_fx_source", "cost_rmb_locked", "notes",
+]
 REAL_HOLDINGS_FULL_COLS = ["id"] + REAL_HOLDINGS_COLS + ["created_at", "updated_at"]
 MODEL_SIM_HOLDINGS_COLS = [
     "plan_run_id", "plan_version", "market", "symbol", "target_weight", "amount_rmb",
@@ -844,23 +862,85 @@ def _normalize_real_holding(item: Mapping[str, Any]) -> list:
         raise ValueError("real holding requires symbol (or legacy code)")
     market = item.get("market") or _infer_market_from_ticker(symbol)
     currency = (item.get("currency") or "").strip().upper() or _infer_currency_from_ticker(symbol)
+    entry_price = float(item.get("entry_price") or 0)
+    shares = float(item.get("shares") or 0)
+    entry_date = _to_date(item.get("entry_date") or item.get("date"))
+    entry_fx_rate, entry_fx_as_of, entry_fx_source, cost_rmb_locked = _resolve_real_holding_entry_fx(
+        item,
+        currency=currency,
+        entry_date=entry_date,
+        entry_price=entry_price,
+        shares=shares,
+    )
     return [
         item.get("account") or "default",
         market,
         symbol,
-        float(item.get("entry_price") or 0),
-        float(item.get("shares") or 0),
-        _to_date(item.get("entry_date") or item.get("date")),
+        entry_price,
+        shares,
+        entry_date,
         currency,
+        entry_fx_rate,
+        entry_fx_as_of,
+        entry_fx_source,
+        cost_rmb_locked,
         item.get("notes"),
     ]
+
+
+def _as_float_or_none(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        v = float(value)
+    except Exception:
+        return None
+    if v <= 0:
+        return None
+    return v
+
+
+def _resolve_real_holding_entry_fx(
+    item: Mapping[str, Any],
+    *,
+    currency: str,
+    entry_date: date | None,
+    entry_price: float,
+    shares: float,
+) -> tuple[float, date | None, str, float]:
+    manual_rate = _as_float_or_none(item.get("entry_fx_rate") or item.get("fx_rate"))
+    if manual_rate is not None:
+        fx_rate = manual_rate
+        fx_as_of = _to_date(item.get("entry_fx_as_of") or entry_date)
+        fx_source = str(item.get("entry_fx_source") or "manual")
+    else:
+        try:
+            import fx_rates
+            payload = fx_rates.get_historical_fx_payload(currency, entry_date)
+            fx_rate = float(payload.get("rate") or fx_rates.get_fx_to_rmb(currency))
+            fx_as_of = _to_date(payload.get("as_of") or entry_date)
+            fx_source = str(payload.get("source") or "fx_rates")
+        except Exception:
+            fallback = {
+                "CNY": 1.0, "USD": 7.10, "HKD": 0.917, "JPY": 0.046,
+                "KRW": 0.0052, "TWD": 0.22, "EUR": 7.80, "AUD": 4.60, "GBP": 9.00,
+            }
+            fx_rate = fallback.get(currency, 1.0)
+            fx_as_of = entry_date
+            fx_source = "static_exception_fallback"
+
+    manual_cost = _as_float_or_none(item.get("cost_rmb_locked"))
+    cost_rmb_locked = manual_cost if manual_cost is not None else entry_price * shares * fx_rate
+    return fx_rate, fx_as_of, fx_source, cost_rmb_locked
 
 
 def fetch_all_real_holdings(*, conn: duckdb.DuckDBPyConnection | None = None) -> list[dict]:
     """读真实持仓。只来自 real_holdings，不混入模型模拟仓。"""
     own = conn is None
     if own:
-        conn = get_db(read_only=True)
+        # Own connections ensure the user-state schema is current before
+        # selecting newly-added locked FX columns.
+        conn = get_db()
     rows = conn.execute(
         f"SELECT {','.join(REAL_HOLDINGS_FULL_COLS)} "
         "FROM real_holdings ORDER BY entry_date DESC NULLS LAST, symbol"
@@ -891,10 +971,29 @@ def update_real_holding(holding_id: int, item: Mapping[str, Any], *, conn: duckd
     own = conn is None
     if own:
         conn = get_db()
-    exists = conn.execute("SELECT 1 FROM real_holdings WHERE id = ?", [holding_id]).fetchone()
+    existing_row = conn.execute(
+        f"SELECT {','.join(REAL_HOLDINGS_FULL_COLS)} FROM real_holdings WHERE id = ?",
+        [holding_id],
+    ).fetchone()
     n = 0
-    if exists:
-        vals = _normalize_real_holding(item)
+    if existing_row:
+        merged = dict(item)
+        existing = _rowdict(REAL_HOLDINGS_FULL_COLS, existing_row)
+        new_symbol = merged.get("symbol") or merged.get("code") or existing.get("symbol")
+        new_currency = (merged.get("currency") or existing.get("currency") or "").strip().upper() or _infer_currency_from_ticker(new_symbol)
+        new_entry_date = _to_date(merged.get("entry_date") or merged.get("date") or existing.get("entry_date"))
+        has_explicit_fx = _as_float_or_none(merged.get("entry_fx_rate") or merged.get("fx_rate")) is not None
+        same_fx_context = (
+            new_currency == (existing.get("currency") or "").strip().upper()
+            and new_entry_date == existing.get("entry_date")
+        )
+        if not has_explicit_fx and same_fx_context and existing.get("entry_fx_rate"):
+            # Editing shares/price/notes should preserve the original locked
+            # entry-date FX; cost_rmb_locked will be recomputed with that rate.
+            merged["entry_fx_rate"] = existing.get("entry_fx_rate")
+            merged["entry_fx_as_of"] = existing.get("entry_fx_as_of")
+            merged["entry_fx_source"] = existing.get("entry_fx_source")
+        vals = _normalize_real_holding(merged)
         set_clause = ", ".join(f"{c}=?" for c in REAL_HOLDINGS_COLS)
         conn.execute(
             f"UPDATE real_holdings SET {set_clause}, updated_at=CURRENT_TIMESTAMP WHERE id = ?",
@@ -915,6 +1014,44 @@ def delete_real_holding(holding_id: int, *, conn: duckdb.DuckDBPyConnection | No
     if exists:
         conn.execute("DELETE FROM real_holdings WHERE id = ?", [holding_id])
         n = 1
+    if own:
+        conn.close()
+    return n
+
+
+def backfill_real_holding_entry_fx(*, conn: duckdb.DuckDBPyConnection | None = None) -> int:
+    """Fill locked entry FX/cost fields for existing real holdings."""
+    own = conn is None
+    if own:
+        conn = get_db()
+    rows = conn.execute(
+        """
+        SELECT id, account, market, symbol, entry_price, shares, entry_date, currency, notes
+        FROM real_holdings
+        WHERE entry_fx_rate IS NULL OR cost_rmb_locked IS NULL
+        ORDER BY id
+        """
+    ).fetchall()
+    n = 0
+    for row in rows:
+        holding_id, account, market, symbol, entry_price, shares, entry_date, currency, notes = row
+        item = {
+            "account": account,
+            "market": market,
+            "symbol": symbol,
+            "entry_price": entry_price,
+            "shares": shares,
+            "entry_date": entry_date,
+            "currency": currency,
+            "notes": notes,
+        }
+        vals = _normalize_real_holding(item)
+        set_clause = ", ".join(f"{c}=?" for c in REAL_HOLDINGS_COLS)
+        conn.execute(
+            f"UPDATE real_holdings SET {set_clause}, updated_at=CURRENT_TIMESTAMP WHERE id = ?",
+            vals + [holding_id],
+        )
+        n += 1
     if own:
         conn.close()
     return n
