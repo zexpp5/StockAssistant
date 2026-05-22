@@ -132,12 +132,70 @@ CREATE TABLE IF NOT EXISTS real_holding_snapshots (
     payload_json    VARCHAR,
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 真实持仓每日体检：只评价用户已录入的 real_holdings，不产生股票池，也不写模拟仓。
+CREATE TABLE IF NOT EXISTS real_holding_review_runs (
+    review_run_id   VARCHAR PRIMARY KEY,
+    as_of_date      DATE NOT NULL,
+    status          VARCHAR,
+    holding_count   INTEGER,
+    data_quality    VARCHAR,
+    notes           VARCHAR,
+    generated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS real_holding_review_items (
+    review_run_id      VARCHAR NOT NULL,
+    account            VARCHAR,
+    market             VARCHAR,
+    symbol             VARCHAR NOT NULL,
+    asset_class        VARCHAR,
+    treatment_class    VARCHAR,
+    score              DOUBLE,
+    coverage_score     DOUBLE,
+    rating             VARCHAR,
+    action_label       VARCHAR,
+    action_priority    INTEGER,
+    current_price      DOUBLE,
+    current_currency   VARCHAR,
+    current_value_rmb  DOUBLE,
+    cost_rmb_locked    DOUBLE,
+    pnl_rmb            DOUBLE,
+    pnl_pct            DOUBLE,
+    current_weight     DOUBLE,
+    target_weight      DOUBLE,
+    weight_gap_pt      DOUBLE,
+    reasons_json       VARCHAR,
+    risk_flags_json    VARCHAR,
+    data_flags_json    VARCHAR,
+    created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (review_run_id, symbol)
+);
 """
 
 # user_config 已知 key 的默认值（首次读取或被删除时返回）
 USER_CONFIG_DEFAULTS = {
     "total_capital": 500000,   # 进场本金，跑批 + 前端共用
     "stoploss_line": 300000,   # 止损红线（组合市值跌至此则强制清仓）
+    "real_holding_review_rules": {
+        "version": "v1_guardrail_2026_05_22",
+        "source": "manual_guardrail_pending_backtest",
+        "notes": "真实持仓页第一版保守体检阈值；用于防误导，不代表已回测验证的交易 alpha。",
+        "loss_review_pct": -12.0,
+        "tracking_loss_review_pct": -8.0,
+        "stop_breach_score_cap": 30.0,
+        "loss_score_cap": 45.0,
+        "watch_score_cap": 55.0,
+        "near_event_score_penalty": 5.0,
+        "missing_price_score_penalty": 15.0,
+        "weak_score_threshold": 55.0,
+        "add_watch_min_score": 70.0,
+        "underweight_add_gap_pt": -2.5,
+        "coverage_base": 0.20,
+        "coverage_price": 0.30,
+        "coverage_model_score": 0.30,
+        "coverage_target_or_tracking": 0.20,
+    },
 }
 
 
@@ -801,6 +859,18 @@ MODEL_SIM_HOLDINGS_COLS = [
     "entry_price", "shares", "entry_date", "currency", "notes",
 ]
 MODEL_SIM_HOLDINGS_FULL_COLS = ["id"] + MODEL_SIM_HOLDINGS_COLS + ["created_at", "updated_at"]
+REAL_HOLDING_REVIEW_RUN_COLS = [
+    "review_run_id", "as_of_date", "status", "holding_count", "data_quality", "notes",
+]
+REAL_HOLDING_REVIEW_RUN_FULL_COLS = REAL_HOLDING_REVIEW_RUN_COLS + ["generated_at"]
+REAL_HOLDING_REVIEW_ITEM_COLS = [
+    "review_run_id", "account", "market", "symbol", "asset_class", "treatment_class",
+    "score", "coverage_score", "rating", "action_label", "action_priority",
+    "current_price", "current_currency", "current_value_rmb", "cost_rmb_locked",
+    "pnl_rmb", "pnl_pct", "current_weight", "target_weight", "weight_gap_pt",
+    "reasons_json", "risk_flags_json", "data_flags_json",
+]
+REAL_HOLDING_REVIEW_ITEM_FULL_COLS = REAL_HOLDING_REVIEW_ITEM_COLS + ["created_at"]
 
 
 def _infer_market_from_ticker(ticker: str) -> str:
@@ -1055,6 +1125,137 @@ def backfill_real_holding_entry_fx(*, conn: duckdb.DuckDBPyConnection | None = N
     if own:
         conn.close()
     return n
+
+
+def _dump_json_field(value: Any) -> str:
+    if value is None:
+        value = []
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _load_json_field(value: Any, fallback: Any) -> Any:
+    if value is None or value == "":
+        return fallback
+    try:
+        return json.loads(value)
+    except Exception:
+        return fallback
+
+
+def save_real_holding_review(
+    run: Mapping[str, Any],
+    items: Iterable[Mapping[str, Any]],
+    *,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> int:
+    """Persist one real-holding daily review run.
+
+    This is intentionally separate from recommendation_picks and model_sim_holdings:
+    it evaluates only the user's current real_holdings snapshot.
+    """
+    own = conn is None
+    if own:
+        conn = get_db()
+
+    review_run_id = str(run.get("review_run_id") or "")
+    if not review_run_id:
+        raise ValueError("review_run_id is required")
+
+    conn.execute("DELETE FROM real_holding_review_items WHERE review_run_id = ?", [review_run_id])
+    conn.execute("DELETE FROM real_holding_review_runs WHERE review_run_id = ?", [review_run_id])
+
+    run_vals = [
+        review_run_id,
+        _to_date(run.get("as_of_date") or run.get("as_of")),
+        run.get("status") or "generated",
+        int(run.get("holding_count") or 0),
+        run.get("data_quality") or "unknown",
+        run.get("notes"),
+    ]
+    conn.execute(
+        f"INSERT INTO real_holding_review_runs ({','.join(REAL_HOLDING_REVIEW_RUN_COLS)}) "
+        f"VALUES ({','.join(['?'] * len(REAL_HOLDING_REVIEW_RUN_COLS))})",
+        run_vals,
+    )
+
+    n = 0
+    for item in items:
+        symbol = item.get("symbol") or item.get("code")
+        if not symbol:
+            continue
+        vals = [
+            review_run_id,
+            item.get("account") or "default",
+            item.get("market") or _infer_market_from_ticker(str(symbol)),
+            symbol,
+            item.get("asset_class"),
+            item.get("treatment_class"),
+            item.get("score"),
+            item.get("coverage_score"),
+            item.get("rating"),
+            item.get("action_label"),
+            int(item.get("action_priority") or 99),
+            item.get("current_price"),
+            item.get("current_currency"),
+            item.get("current_value_rmb"),
+            item.get("cost_rmb_locked"),
+            item.get("pnl_rmb"),
+            item.get("pnl_pct"),
+            item.get("current_weight"),
+            item.get("target_weight"),
+            item.get("weight_gap_pt"),
+            _dump_json_field(item.get("reasons")),
+            _dump_json_field(item.get("risk_flags")),
+            _dump_json_field(item.get("data_flags")),
+        ]
+        conn.execute(
+            f"INSERT INTO real_holding_review_items ({','.join(REAL_HOLDING_REVIEW_ITEM_COLS)}) "
+            f"VALUES ({','.join(['?'] * len(REAL_HOLDING_REVIEW_ITEM_COLS))})",
+            vals,
+        )
+        n += 1
+
+    if own:
+        conn.close()
+    return n
+
+
+def fetch_latest_real_holding_review(
+    *,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> dict[str, Any] | None:
+    """Fetch the newest persisted real-holding daily review run."""
+    own = conn is None
+    if own:
+        conn = get_db(read_only=True)
+
+    row = conn.execute(
+        f"SELECT {','.join(REAL_HOLDING_REVIEW_RUN_FULL_COLS)} "
+        "FROM real_holding_review_runs ORDER BY generated_at DESC LIMIT 1"
+    ).fetchone()
+    if not row:
+        if own:
+            conn.close()
+        return None
+
+    run = _rowdict(REAL_HOLDING_REVIEW_RUN_FULL_COLS, row)
+    item_rows = conn.execute(
+        f"SELECT {','.join(REAL_HOLDING_REVIEW_ITEM_FULL_COLS)} "
+        "FROM real_holding_review_items WHERE review_run_id = ? "
+        "ORDER BY action_priority ASC, symbol ASC",
+        [run["review_run_id"]],
+    ).fetchall()
+    items = []
+    for r in item_rows:
+        d = _rowdict(REAL_HOLDING_REVIEW_ITEM_FULL_COLS, r)
+        d["reasons"] = _load_json_field(d.pop("reasons_json", None), [])
+        d["risk_flags"] = _load_json_field(d.pop("risk_flags_json", None), [])
+        d["data_flags"] = _load_json_field(d.pop("data_flags_json", None), [])
+        items.append(d)
+
+    if own:
+        conn.close()
+    return {"run": run, "items": items}
 
 
 def _normalize_model_sim_holding(item: Mapping[str, Any]) -> list:

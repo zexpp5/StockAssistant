@@ -864,7 +864,7 @@ _VERDICT_LABELS = {
     "near_event":   ("📅", "临近事件",  4),
     "weight_off":   ("🎯", "偏离目标",  5),
     "normal":       ("🟢", "持有观察",  6),
-    "ai_uncovered": ("⚪", "AI 未覆盖", 7),
+    "ai_uncovered": ("⚪", "未评分",    7),
 }
 
 # 持仓覆盖分类 (coverage_class, emoji, 中文文案, group 顺序)
@@ -875,30 +875,74 @@ _VERDICT_LABELS = {
 #   needs_fix     — 行情拉不到 / ticker 非法,需用户修正
 _COVERAGE_CLASSES = {
     "ai_portfolio":  ("💼", "AI 组合覆盖",       1),
-    "picks_only":    ("📊", "自选股评分覆盖",     2),
+    "picks_only":    ("📊", "普通股票评分",       2),
     "tracking_only": ("🛡️", "仅风控跟踪",        3),
     "needs_fix":     ("⚠️", "待修正",             4),
 }
+
+# 系统处理方式 (treatment_class)。
+# 与 coverage_class 不再同值:
+#   coverage_class 说明"数据覆盖到哪一层"
+#   treatment_class 说明"本系统实际采用哪种分析方法"
+_TREATMENT_CLASSES = {
+    "portfolio_model": ("💼", "AI组合模型",   "使用 AI 组合目标 + 股票评分 + 风控判断"),
+    "stock_score":     ("📊", "股票评分",     "使用普通股票评分 + 风控判断；不进入 AI 组合目标"),
+    "risk_only":       ("🛡️", "仅风控跟踪",  "黄金/ETF/债券等不套股票因子模型，只看市值、盈亏和风控"),
+    "data_blocked":    ("⚠️", "数据阻塞",    "代码或行情/评分缺失，先补数据再判断"),
+}
+
+# 市面常用资产类别 (asset_class)。
+# 这层回答"它是什么资产";下面的 coverage_class 回答"本系统怎么处理它"。
+_ASSET_CLASSES = {
+    "equity":       ("股票",       "公司股权/普通股",          1),
+    "fund_etf":     ("ETF/基金",   "指数/行业/跨市场基金",      2),
+    "commodity":    ("商品/黄金",  "黄金/白银/商品类工具",      3),
+    "fixed_income": ("债券/固收",  "债券/固收类工具",          4),
+    "crypto":       ("加密资产",   "加密资产 ETF/信托",         5),
+    "cash":         ("现金",       "账户现金",                 6),
+    "unknown":      ("待修正",     "代码或行情需要修正",        9),
+}
+
+_GOLD_ETFS = {"IAUM", "GLD", "GLDM", "IAU", "SLV", "SGOL", "BAR", "PHYS"}
+_INDEX_ETFS = {"SPY", "QQQ", "VOO", "VTI", "IWM", "DIA", "VTV", "VUG"}
+_BOND_ETFS = {"TLT", "BND", "AGG", "GOVT", "LQD", "HYG", "TIP", "MUB", "IEF", "SHY"}
+_INTERNATIONAL_ETFS = {"VEA", "VWO", "EFA", "EEM"}
+_COMMODITY_ETFS = {"USO", "UNG", "DBA", "DBC"}
+_CRYPTO_ETFS = {"GBTC", "IBIT", "FBTC"}
 
 # ETF / 大盘指数 / 商品/债券基金硬编码白名单。
 # 这类工具不适用 Piotroski Z-Score / Beneish M 等股票因子模型 —
 # 硬给评级是噪音,只展示市值/盈亏/止损/风控线即可。
 # 长期方案: fetch_stock_prices.py 拉 yfinance quote_type=ETF 自动归类,
 # 当前先用 keyword 覆盖账户里常见的 18 只。
-_TRACKING_ONLY_TICKERS = {
-    # 黄金
-    "IAUM", "GLD", "GLDM", "IAU", "SLV", "SGOL", "BAR", "PHYS",
-    # 大盘指数
-    "SPY", "QQQ", "VOO", "VTI", "IWM", "DIA", "VTV", "VUG",
-    # 债券
-    "TLT", "BND", "AGG", "GOVT", "LQD", "HYG", "TIP", "MUB", "IEF", "SHY",
-    # 海外/新兴
-    "VEA", "VWO", "EFA", "EEM",
-    # 商品
-    "USO", "UNG", "DBA", "DBC",
-    # 加密
-    "GBTC", "IBIT", "FBTC",
-}
+_TRACKING_ONLY_TICKERS = (
+    _GOLD_ETFS | _INDEX_ETFS | _BOND_ETFS | _INTERNATIONAL_ETFS | _COMMODITY_ETFS | _CRYPTO_ETFS
+)
+
+
+def _classify_asset_class(code: str, coverage_class: str | None = None) -> tuple[str, str, str]:
+    """按市面常见口径给持仓归资产类别。
+
+    返回 (asset_class, asset_label, asset_hint)。这不等于系统覆盖方式:
+      - 9992.HK / MCD / BRK-B: equity,但未必进 AI 组合
+      - IAUM: commodity,系统只做风控跟踪
+      - SPY/QQQ: fund_etf,系统只做风控跟踪
+    """
+    c = (code or "").upper()
+    if coverage_class == "needs_fix":
+        key = "unknown"
+    elif c in _GOLD_ETFS or c in _COMMODITY_ETFS:
+        key = "commodity"
+    elif c in _BOND_ETFS:
+        key = "fixed_income"
+    elif c in _INDEX_ETFS or c in _INTERNATIONAL_ETFS:
+        key = "fund_etf"
+    elif c in _CRYPTO_ETFS:
+        key = "crypto"
+    else:
+        key = "equity"
+    label, hint, _order = _ASSET_CLASSES[key]
+    return key, label, hint
 
 
 def _is_needs_fix(code: str, current: float | None) -> tuple[bool, str]:
@@ -944,6 +988,19 @@ def _classify_coverage(
     return "picks_only"
 
 
+def _treatment_for_coverage(coverage_class: str) -> tuple[str, str, str, str]:
+    if coverage_class == "ai_portfolio":
+        key = "portfolio_model"
+    elif coverage_class == "tracking_only":
+        key = "risk_only"
+    elif coverage_class == "needs_fix":
+        key = "data_blocked"
+    else:
+        key = "stock_score"
+    emoji, text, hint = _TREATMENT_CLASSES[key]
+    return key, emoji, text, hint
+
+
 def compute_holdings_verdict(
     holdings: list[dict],
     history: dict | None = None,
@@ -957,7 +1014,7 @@ def compute_holdings_verdict(
     weight_off_threshold_pt: float = 3.0,
     today_date: date | None = None,
 ) -> dict:
-    """对真实持仓做 7 档判断（破止损/接近止损/模型转弱/临近事件/偏离目标/持有观察/AI未覆盖）。
+    """对真实持仓做判断:资产类别 + 系统处理方式 + 7 档风险/动作标签。
 
     纯函数,不做 IO — 调用方负责拉:
       - holdings: stock_db.fetch_all_real_holdings()
@@ -971,10 +1028,12 @@ def compute_holdings_verdict(
     返回:
       {
         "as_of": "YYYY-MM-DD",
-        "holdings": [{code, label_kind, label_emoji, label_text, current, dd_pct,
+        "holdings": [{code, asset_class, asset_label, coverage_class,
+                      label_kind, label_emoji, label_text, current, dd_pct,
                       stop_pct, reasons[{kind, text}], ...}, ...],
         "summary": {stoploss_breached, stoploss_watched, model_weakened,
-                    near_event, weight_off, ai_uncovered, normal},
+                    near_event, weight_off, ai_uncovered(未评分), normal,
+                    coverage_*, asset_*},
       }
     """
     from stock_research.core.portfolio_constraints import (
@@ -1073,6 +1132,8 @@ def compute_holdings_verdict(
         )
         is_needs_fix, fix_hint = _is_needs_fix(code, current)
         coverage_emoji, coverage_text, _grp = _COVERAGE_CLASSES[coverage_class]
+        asset_class, asset_label, asset_hint = _classify_asset_class(code, coverage_class)
+        treatment_class, treatment_emoji, treatment_text, treatment_hint = _treatment_for_coverage(coverage_class)
 
         # needs_fix 跳过 model_weak / 临近事件 / weight_off 评判 — 数据不全,
         # 强行评出来会误导。tracking_only 也跳过 model_weak(ETF 不适用股票因子)。
@@ -1092,7 +1153,7 @@ def compute_holdings_verdict(
                 else:
                     candidate_labels.append("ai_uncovered")
                     reasons.append({"kind": "ai_uncovered",
-                                    "text": "不在系统覆盖池,模型无法评价"})
+                                    "text": "不在 AI 组合或普通评分结果内,暂不下结论"})
             else:
                 rating = (pick.get("rating") or "").lower()
                 if rating == "watch":
@@ -1153,6 +1214,13 @@ def compute_holdings_verdict(
             "coverage_class": coverage_class,
             "coverage_emoji": coverage_emoji,
             "coverage_text": coverage_text,
+            "asset_class": asset_class,
+            "asset_label": asset_label,
+            "asset_hint": asset_hint,
+            "treatment_class": treatment_class,
+            "treatment_emoji": treatment_emoji,
+            "treatment_text": treatment_text,
+            "treatment_hint": treatment_hint,
             "fix_hint": fix_hint or None,
             "entry": float(entry),
             "current": current,
@@ -1163,6 +1231,8 @@ def compute_holdings_verdict(
         # 累计 coverage 分组计数
         cov_key = f"coverage_{coverage_class}"
         summary[cov_key] = summary.get(cov_key, 0) + 1
+        asset_key = f"asset_{asset_class}"
+        summary[asset_key] = summary.get(asset_key, 0) + 1
 
     return {
         "as_of": today.strftime("%Y-%m-%d"),

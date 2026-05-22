@@ -946,6 +946,15 @@ _sys.exit(rc)
                     r[k] = v.isoformat()
         return rows
 
+    def _json_any(value: Any) -> Any:
+        if hasattr(value, "isoformat"):
+            return value.isoformat()
+        if isinstance(value, list):
+            return [_json_any(v) for v in value]
+        if isinstance(value, dict):
+            return {k: _json_any(v) for k, v in value.items()}
+        return value
+
     # ────────── 真实持仓 / 模型模拟仓（V2 split · 不再混用 holdings.source） ──────────
     @app.get("/api/real-holdings")
     def list_real_holdings() -> list[dict[str, Any]]:
@@ -1134,6 +1143,31 @@ _sys.exit(rc)
             target_weights=target_weights,
             total_capital=total_capital,
         )
+
+    @app.get("/api/real-holdings/daily-review/latest")
+    def real_holdings_daily_review_latest() -> dict[str, Any]:
+        """真实持仓每日体检最新结果。
+
+        这是“我的持仓”页的评分/建议单一源。该接口只读落库快照；
+        没有快照时返回 missing,不在 GET 请求里临时重算，避免刷新页面产生副作用。
+        """
+        import stock_db
+        payload = stock_db.fetch_latest_real_holding_review()
+        if payload is None:
+            payload = {
+                "status": "missing",
+                "run": None,
+                "items": [],
+                "message": "今日真实持仓体检尚未生成；请等待 daily_refresh 23f 或调用 POST /api/real-holdings/daily-review/run。",
+            }
+        payload["transient"] = False
+        return _json_any(payload)
+
+    @app.post("/api/real-holdings/daily-review/run")
+    def real_holdings_daily_review_run() -> dict[str, Any]:
+        """手动重算并落库真实持仓每日体检。"""
+        from stock_research.jobs.real_holding_review import build_real_holding_review
+        return _json_any(build_real_holding_review(persist=True))
 
     @app.get("/api/model-sim-holdings")
     def list_model_sim_holdings() -> list[dict[str, Any]]:

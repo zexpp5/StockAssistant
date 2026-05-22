@@ -120,44 +120,63 @@ class HoldingsCoverageClassTest(unittest.TestCase):
         from stock_research.jobs.morning_brief import (  # type: ignore
             compute_holdings_verdict, _classify_coverage, _is_needs_fix,
             _TRACKING_ONLY_TICKERS, _COVERAGE_CLASSES,
+            _classify_asset_class, _ASSET_CLASSES,
         )
-        return compute_holdings_verdict, _classify_coverage, _is_needs_fix, _TRACKING_ONLY_TICKERS, _COVERAGE_CLASSES
+        return (compute_holdings_verdict, _classify_coverage, _is_needs_fix,
+                _TRACKING_ONLY_TICKERS, _COVERAGE_CLASSES,
+                _classify_asset_class, _ASSET_CLASSES)
 
     def test_four_classes_registered(self):
-        _, _, _, _, classes = self._import()
+        _, _, _, _, classes, _, _ = self._import()
         self.assertEqual(set(classes.keys()),
                          {"ai_portfolio", "picks_only", "tracking_only", "needs_fix"})
 
     def test_etf_whitelist_contains_common_etfs(self):
-        _, _, _, whitelist, _ = self._import()
+        _, _, _, whitelist, _, _, _ = self._import()
         # 账户里的 IAUM 必须命中,其他主流也要
         for etf in ("IAUM", "GLD", "SPY", "QQQ", "TLT"):
             self.assertIn(etf, whitelist)
 
+    def test_asset_classes_registered(self):
+        _, _, _, _, _, _, classes = self._import()
+        self.assertEqual(set(classes.keys()),
+                         {"equity", "fund_etf", "commodity", "fixed_income",
+                          "crypto", "cash", "unknown"})
+
+    def test_asset_class_market_standard_mapping(self):
+        _, _, _, _, _, classify_asset, _ = self._import()
+        self.assertEqual(classify_asset("MCD", "picks_only")[0], "equity")
+        self.assertEqual(classify_asset("9992.HK", "picks_only")[0], "equity")
+        self.assertEqual(classify_asset("BRK-B", "picks_only")[0], "equity")
+        self.assertEqual(classify_asset("IAUM", "tracking_only")[0], "commodity")
+        self.assertEqual(classify_asset("SPY", "tracking_only")[0], "fund_etf")
+        self.assertEqual(classify_asset("TLT", "tracking_only")[0], "fixed_income")
+        self.assertEqual(classify_asset("泡泡玛特", "needs_fix")[0], "unknown")
+
     def test_ai_portfolio_when_has_target(self):
-        _, classify, _, _, _ = self._import()
+        _, classify, _, _, _, _, _ = self._import()
         self.assertEqual(classify("NVDA", 132.0, in_picks=True, in_target=True), "ai_portfolio")
 
     def test_picks_only_when_in_picks_no_target(self):
-        _, classify, _, _, _ = self._import()
+        _, classify, _, _, _, _, _ = self._import()
         # MCD: 普通股,行情有但不在 AI 组合 → picks_only
         self.assertEqual(classify("MCD", 280.0, in_picks=True, in_target=False), "picks_only")
         # 即使不在 picks 但行情有 + 不是 ETF + 不是错误 → picks_only(默认兜底)
         self.assertEqual(classify("UNKNOWN", 100.0, in_picks=False, in_target=False), "picks_only")
 
     def test_tracking_only_for_etfs(self):
-        _, classify, _, _, _ = self._import()
+        _, classify, _, _, _, _, _ = self._import()
         # IAUM 是 ETF,即使行情有也归 tracking_only
         self.assertEqual(classify("IAUM", 45.0, in_picks=False, in_target=False), "tracking_only")
         self.assertEqual(classify("GLD", 200.0, in_picks=False, in_target=False), "tracking_only")
 
     def test_needs_fix_chinese_ticker(self):
-        _, classify, _, _, _ = self._import()
+        _, classify, _, _, _, _, _ = self._import()
         self.assertEqual(classify("泡泡玛特", None, in_picks=False, in_target=False), "needs_fix")
         self.assertEqual(classify("泡泡玛特", 148.0, in_picks=False, in_target=False), "needs_fix")  # 即使有 current
 
     def test_needs_fix_b_class_when_no_price(self):
-        _, classify, _, _, _ = self._import()
+        _, classify, _, _, _, _, _ = self._import()
         # BRK.B 拉不到 → needs_fix
         self.assertEqual(classify("BRK.B", None, in_picks=False, in_target=False), "needs_fix")
         # 但 BRK-B(连字符)拉得到 → 不应触发 needs_fix
@@ -165,11 +184,11 @@ class HoldingsCoverageClassTest(unittest.TestCase):
 
     def test_etf_priority_higher_than_no_price(self):
         """IAUM 即使行情没拉到,仍优先 tracking_only(避免 ETF 临时数据缺失被误判为 needs_fix)。"""
-        _, classify, _, _, _ = self._import()
+        _, classify, _, _, _, _, _ = self._import()
         self.assertEqual(classify("IAUM", None, in_picks=False, in_target=False), "tracking_only")
 
     def test_compute_returns_coverage_class_field(self):
-        compute_holdings_verdict, _, _, _, _ = self._import()
+        compute_holdings_verdict, _, _, _, _, _, _ = self._import()
         holdings = [
             {"code": "NVDA", "entry_price": 100, "shares": 10},
             {"code": "IAUM", "entry_price": 45, "shares": 100},
@@ -182,10 +201,16 @@ class HoldingsCoverageClassTest(unittest.TestCase):
         self.assertEqual(by_code["NVDA"]["coverage_class"], "ai_portfolio")
         self.assertEqual(by_code["IAUM"]["coverage_class"], "tracking_only")
         self.assertEqual(by_code["泡泡玛特"]["coverage_class"], "needs_fix")
+        self.assertEqual(by_code["NVDA"]["asset_class"], "equity")
+        self.assertEqual(by_code["IAUM"]["asset_class"], "commodity")
+        self.assertEqual(by_code["泡泡玛特"]["asset_class"], "unknown")
         # summary 里有 coverage 计数
         self.assertEqual(r["summary"].get("coverage_ai_portfolio"), 1)
         self.assertEqual(r["summary"].get("coverage_tracking_only"), 1)
         self.assertEqual(r["summary"].get("coverage_needs_fix"), 1)
+        self.assertEqual(r["summary"].get("asset_equity"), 1)
+        self.assertEqual(r["summary"].get("asset_commodity"), 1)
+        self.assertEqual(r["summary"].get("asset_unknown"), 1)
 
 
 class DailyVerdictEndpointTest(unittest.TestCase):
@@ -195,8 +220,10 @@ class DailyVerdictEndpointTest(unittest.TestCase):
         try:
             from fastapi.testclient import TestClient
             from stock_research.api.main import create_app
-        except ImportError:
-            self.skipTest("fastapi not installed")
+        except (ImportError, RuntimeError) as exc:
+            if "httpx" not in str(exc).lower() and not isinstance(exc, ImportError):
+                raise
+            self.skipTest("fastapi/httpx test client deps not installed")
         app = create_app()
         client = TestClient(app)
         r = client.get("/api/real-holdings/daily-verdict")
