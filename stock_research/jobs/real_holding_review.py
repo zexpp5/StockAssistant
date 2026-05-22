@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import math
 import sys
 from datetime import date, datetime
@@ -23,6 +24,7 @@ from stock_research.jobs.morning_brief import compute_holdings_verdict
 
 
 OUT_PATH = REPO / "data" / "latest" / "real_holding_review.json"
+logger = logging.getLogger(__name__)
 
 ACTION_PRIORITY = {
     "风险复查": 1,
@@ -34,6 +36,17 @@ ACTION_PRIORITY = {
     "仅风控跟踪": 7,
 }
 
+_TREATMENT_CLASS_ALIASES = {
+    "ai_portfolio": "portfolio_model",
+    "portfolio_model": "portfolio_model",
+    "picks_only": "stock_score",
+    "stock_score": "stock_score",
+    "tracking_only": "risk_only",
+    "risk_only": "risk_only",
+    "needs_fix": "data_blocked",
+    "data_blocked": "data_blocked",
+}
+
 
 def _default_rules() -> dict[str, float | str]:
     return dict(stock_db.USER_CONFIG_DEFAULTS["real_holding_review_rules"])
@@ -43,11 +56,20 @@ def _load_review_rules(conn=None) -> dict[str, Any]:
     rules = _default_rules()
     try:
         configured = stock_db.get_config("real_holding_review_rules", conn=conn)
-    except Exception:
+    except Exception as exc:
+        logger.warning("real_holding_review_rules 读取失败,使用默认规则: %s", exc)
         configured = None
     if isinstance(configured, dict):
         rules.update(configured)
     return rules
+
+
+def _normalize_treatment_class(treatment_class: Any, coverage_class: Any = None) -> str:
+    for raw in (treatment_class, coverage_class):
+        if raw:
+            raw_text = str(raw)
+            return _TREATMENT_CLASS_ALIASES.get(raw_text, raw_text)
+    return "stock_score"
 
 
 def _load_json(path: Path) -> dict:
@@ -232,20 +254,7 @@ def _build_item(
     rules = rules or _default_rules()
     symbol = str(holding.get("symbol") or holding.get("code"))
     coverage_class = (verdict or {}).get("coverage_class")
-    treatment_class = (verdict or {}).get("treatment_class")
-    if not treatment_class:
-        treatment_class = {
-            "ai_portfolio": "portfolio_model",
-            "tracking_only": "risk_only",
-            "needs_fix": "data_blocked",
-        }.get(str(coverage_class or ""), "stock_score")
-    else:
-        treatment_class = {
-            "ai_portfolio": "portfolio_model",
-            "picks_only": "stock_score",
-            "tracking_only": "risk_only",
-            "needs_fix": "data_blocked",
-        }.get(str(treatment_class), str(treatment_class))
+    treatment_class = _normalize_treatment_class((verdict or {}).get("treatment_class"), coverage_class)
     asset_class = (verdict or {}).get("asset_class") or "equity"
     shares = _as_float(holding.get("shares")) or 0.0
     entry_price = _as_float(holding.get("entry_price")) or 0.0
@@ -351,7 +360,7 @@ def _build_item(
         "treatment_class": treatment_class,
         "score": score,
         "coverage_score": coverage_score,
-        "rating": (pick or {}).get("rating") or ("tracking" if treatment_class == "tracking_only" else "unrated"),
+        "rating": (pick or {}).get("rating") or ("tracking" if treatment_class == "risk_only" else "unrated"),
         "action_label": action,
         "action_priority": ACTION_PRIORITY.get(action, 99),
         "current_price": current_price,
@@ -376,10 +385,7 @@ def build_real_holding_review(*, persist: bool = True) -> dict[str, Any]:
         symbols = [str(h.get("symbol") or h.get("code")) for h in holdings if h.get("symbol") or h.get("code")]
         prices = _latest_prices_by_symbol(conn, symbols)
         picks = _latest_picks_by_symbol(conn, symbols)
-        try:
-            universe = stock_db.fetch_universe_for_ai_recommendations(conn=conn)
-        except TypeError:
-            universe = stock_db.fetch_universe_for_ai_recommendations()
+        universe = stock_db.fetch_universe_for_ai_recommendations(conn=conn)
         target_weights = _target_weights_from_plan()
         total_capital = float(stock_db.get_config("total_capital", conn=conn) or 500000)
         rules = _load_review_rules(conn)

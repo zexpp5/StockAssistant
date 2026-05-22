@@ -12,7 +12,11 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "scripts" / "lib"))
 
 import stock_db  # type: ignore
-from stock_research.jobs.real_holding_review import _build_item, _default_rules  # type: ignore
+from stock_research.jobs.real_holding_review import (  # type: ignore
+    _build_item,
+    _default_rules,
+    _normalize_treatment_class,
+)
 
 
 class RealHoldingReviewTest(unittest.TestCase):
@@ -41,6 +45,13 @@ class RealHoldingReviewTest(unittest.TestCase):
         )
         self.assertEqual(item["action_label"], "仅风控跟踪")
         self.assertIsNone(item["score"])
+        self.assertEqual(item["rating"], "tracking")
+
+    def test_treatment_class_normalization_accepts_old_and_new_names(self):
+        self.assertEqual(_normalize_treatment_class("tracking_only"), "risk_only")
+        self.assertEqual(_normalize_treatment_class("risk_only"), "risk_only")
+        self.assertEqual(_normalize_treatment_class(None, "ai_portfolio"), "portfolio_model")
+        self.assertEqual(_normalize_treatment_class(None, "picks_only"), "stock_score")
 
     def test_large_loss_takes_priority_over_buy_signal(self):
         item = _build_item(

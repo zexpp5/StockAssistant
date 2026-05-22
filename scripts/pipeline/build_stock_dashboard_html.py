@@ -4898,7 +4898,6 @@ function _reviewCell(item) {
   return `<td class="px-3 py-2 text-center whitespace-nowrap cursor-help" title="${_esc(title)}">
     <span class="inline-flex px-2 py-0.5 rounded-full border text-[11px] font-medium ${meta.cls}">${_esc(action)}</span>
     <div class="mt-1 text-[11px] text-slate-500">评分 ${_esc(score)} · 覆盖 ${_esc(coverage)}</div>
-    <div class="text-[10px] text-slate-400">快照盈亏 ${_esc(snapPnl)}</div>
   </td>`;
 }
 
@@ -5665,7 +5664,7 @@ async function renderRealHoldings() {
   const theme = x.rec ? (x.rec.theme || x.rec.industry || "-") : "-";
   const assetKind = x._asset || _assetClassForRow(x, verdict);
   const assetMeta = _assetMeta(assetKind);
-  const treatmentKind = (reviewItem && reviewItem.treatment_class) || (verdict && verdict.treatment_class) || (cls === "ai_portfolio" ? "portfolio_model" : cls === "tracking_only" ? "risk_only" : cls === "needs_fix" ? "data_blocked" : "stock_score");
+  const treatmentKind = (reviewItem && reviewItem.treatment_class) || (verdict && verdict.treatment_class) || "stock_score";
   const treatmentMeta = _TREATMENT_META[treatmentKind] || _TREATMENT_META.stock_score;
   const currentPrice = x.cur ? x.cur.raw_price.toFixed(2) : "无价格";
   const pnlCls = x.pnlRmb >= 0 ? "text-emerald-600" : "text-rose-600";
