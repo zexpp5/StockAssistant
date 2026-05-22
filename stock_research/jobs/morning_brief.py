@@ -867,6 +867,82 @@ _VERDICT_LABELS = {
     "ai_uncovered": ("⚪", "AI 未覆盖", 7),
 }
 
+# 持仓覆盖分类 (coverage_class, emoji, 中文文案, group 顺序)
+# Part 3 · 2026-05-22: 不同类型持仓字段集不同,模型边界诚实表达
+#   ai_portfolio  — AI 组合方案给目标仓位,完整评级 + 调仓建议
+#   picks_only    — 普通股,系统能评但不进 AI 组合,只看评级 + 风险
+#   tracking_only — ETF/黄金/债券,股票因子模型不适用,只看市值/盈亏/止损
+#   needs_fix     — 行情拉不到 / ticker 非法,需用户修正
+_COVERAGE_CLASSES = {
+    "ai_portfolio":  ("💼", "AI 组合覆盖",       1),
+    "picks_only":    ("📊", "自选股评分覆盖",     2),
+    "tracking_only": ("🛡️", "仅风控跟踪",        3),
+    "needs_fix":     ("⚠️", "待修正",             4),
+}
+
+# ETF / 大盘指数 / 商品/债券基金硬编码白名单。
+# 这类工具不适用 Piotroski Z-Score / Beneish M 等股票因子模型 —
+# 硬给评级是噪音,只展示市值/盈亏/止损/风控线即可。
+# 长期方案: fetch_stock_prices.py 拉 yfinance quote_type=ETF 自动归类,
+# 当前先用 keyword 覆盖账户里常见的 18 只。
+_TRACKING_ONLY_TICKERS = {
+    # 黄金
+    "IAUM", "GLD", "GLDM", "IAU", "SLV", "SGOL", "BAR", "PHYS",
+    # 大盘指数
+    "SPY", "QQQ", "VOO", "VTI", "IWM", "DIA", "VTV", "VUG",
+    # 债券
+    "TLT", "BND", "AGG", "GOVT", "LQD", "HYG", "TIP", "MUB", "IEF", "SHY",
+    # 海外/新兴
+    "VEA", "VWO", "EFA", "EEM",
+    # 商品
+    "USO", "UNG", "DBA", "DBC",
+    # 加密
+    "GBTC", "IBIT", "FBTC",
+}
+
+
+def _is_needs_fix(code: str, current: float | None) -> tuple[bool, str]:
+    """检测 ticker 是否结构性错误(永远拉不到)。返回 (是否, 原因)。
+
+    只判"真坏":
+      1. ticker 含非 ASCII 字符(如中文公司名),yfinance/akshare 永远拉不到
+      2. 美股子类股 .B / .A(雅虎用 -B / -A 连字符),且 current 拉不到 → 大概率结构错误
+
+    不判"暂时没行情":
+      - current=None 单独不算 needs_fix(可能只是 history 数据 staleness,
+        会被 daily_refresh 第二天补上)。
+    """
+    if not code:
+        return False, ""
+    if not code.isascii():
+        return True, "ticker 含非 ASCII 字符(中文名等),需改成标准代码"
+    if current is None and "." in code and not any(
+        code.upper().endswith(suffix) for suffix in
+        (".HK", ".SS", ".SZ", ".BJ", ".SH", ".T", ".KS", ".AX", ".L", ".IL")
+    ):
+        return True, f"行情拉不到 — {code} 可能需改成 {code.replace('.', '-')}(雅虎子类股用连字符)"
+    return False, ""
+
+
+def _classify_coverage(
+    code: str,
+    current: float | None,
+    in_picks: bool,
+    in_target: bool,
+) -> str:
+    """对单只持仓分类覆盖度(4 档)。
+
+    优先级: needs_fix(结构性错误) > tracking_only(ETF) > ai_portfolio(在 AI 组合) > picks_only(普通股,默认)
+    """
+    is_bad, _ = _is_needs_fix(code, current)
+    if is_bad:
+        return "needs_fix"
+    if (code or "").upper() in _TRACKING_ONLY_TICKERS:
+        return "tracking_only"
+    if in_target:
+        return "ai_portfolio"
+    return "picks_only"
+
 
 def compute_holdings_verdict(
     holdings: list[dict],
@@ -988,24 +1064,41 @@ def compute_holdings_verdict(
                 except Exception:
                     pass
 
-        # ── 模型转弱 / AI 未覆盖 ──
+        # ── 持仓覆盖分类 (Part 3 · 2026-05-22) ──
+        # 4 档分类决定字段集 + 是否跑后续标签判定
         pick = picks_by_code.get(code)
-        if pick is None:
-            if code in universe_codes:
-                # 在 universe 里被系统看过,但今天没入推荐池 → 模型转弱
-                candidate_labels.append("model_weak")
-                reasons.append({"kind": "model_weak",
-                                "text": "今日未入系统推荐池(此前在覆盖范围内)"})
+        target_w = (target_weights or {}).get(code)
+        coverage_class = _classify_coverage(
+            code, current, in_picks=(pick is not None), in_target=(target_w is not None),
+        )
+        is_needs_fix, fix_hint = _is_needs_fix(code, current)
+        coverage_emoji, coverage_text, _grp = _COVERAGE_CLASSES[coverage_class]
+
+        # needs_fix 跳过 model_weak / 临近事件 / weight_off 评判 — 数据不全,
+        # 强行评出来会误导。tracking_only 也跳过 model_weak(ETF 不适用股票因子)。
+        skip_model_eval = coverage_class in ("needs_fix", "tracking_only")
+        skip_weight_eval = coverage_class in ("needs_fix", "tracking_only", "picks_only")
+
+        if is_needs_fix:
+            reasons.append({"kind": "needs_fix", "text": fix_hint})
+
+        # ── 模型转弱 / AI 未覆盖 (跳过 needs_fix / tracking_only) ──
+        if not skip_model_eval:
+            if pick is None:
+                if code in universe_codes:
+                    candidate_labels.append("model_weak")
+                    reasons.append({"kind": "model_weak",
+                                    "text": "今日未入系统推荐池(此前在覆盖范围内)"})
+                else:
+                    candidate_labels.append("ai_uncovered")
+                    reasons.append({"kind": "ai_uncovered",
+                                    "text": "不在系统覆盖池,模型无法评价"})
             else:
-                candidate_labels.append("ai_uncovered")
-                reasons.append({"kind": "ai_uncovered",
-                                "text": "不在系统覆盖池,模型无法评价"})
-        else:
-            rating = (pick.get("rating") or "").lower()
-            if rating == "watch":
-                candidate_labels.append("model_weak")
-                reasons.append({"kind": "model_weak",
-                                "text": f"系统评级 watch(此前 {pick.get('signal') or '-'})"})
+                rating = (pick.get("rating") or "").lower()
+                if rating == "watch":
+                    candidate_labels.append("model_weak")
+                    reasons.append({"kind": "model_weak",
+                                    "text": f"系统评级 watch(此前 {pick.get('signal') or '-'})"})
 
         # ── 临近事件 ──
         code6 = code.split(".")[0] if "." in code else code
@@ -1015,8 +1108,7 @@ def compute_holdings_verdict(
             ev_text = ", ".join(f"{e['date'].strftime('%m-%d')} {e['desc'][:30]}" for e in evs[:2])
             reasons.append({"kind": "near_event", "text": f"3 天内事件: {ev_text}"})
 
-        # ── 偏离 AI 目标 ──
-        target_w = (target_weights or {}).get(code)
+        # ── 偏离 AI 目标 (target_w 已在上面取过) ──
         if target_w is not None and current is not None and total_capital > 0:
             shares = float(h.get("shares") or 0)
             # 注意: 这里 current 是本币价,目标权重通常按 RMB 计。
@@ -1058,12 +1150,19 @@ def compute_holdings_verdict(
             "label_kind": label_kind,
             "label_emoji": emoji,
             "label_text": label_text,
+            "coverage_class": coverage_class,
+            "coverage_emoji": coverage_emoji,
+            "coverage_text": coverage_text,
+            "fix_hint": fix_hint or None,
             "entry": float(entry),
             "current": current,
             "dd_pct": dd_pct,
             "stop_pct": dyn_stop_pct,
             "reasons": reasons,
         })
+        # 累计 coverage 分组计数
+        cov_key = f"coverage_{coverage_class}"
+        summary[cov_key] = summary.get(cov_key, 0) + 1
 
     return {
         "as_of": today.strftime("%Y-%m-%d"),

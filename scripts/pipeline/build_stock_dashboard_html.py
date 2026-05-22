@@ -5392,43 +5392,103 @@ async function renderRealHoldings() {
   _renderAccountRiskLine("real-alert-line", realAccountValue, "录入持仓后会显示真实账户风控线", "真实账户");
 
   const verdictMap = _verdictByCode();
-  tbody.innerHTML = enrichedWithGap.map(x => {
-    const name = x.rec ? x.rec.name : x.code;
-    const theme = x.rec ? (x.rec.theme || x.rec.industry || "-") : "-";
-    const currentPrice = x.cur ? x.cur.raw_price.toFixed(2) : "无价格";
-    const pnlCls = x.pnlRmb >= 0 ? "text-emerald-600" : "text-rose-600";
+
+  // Part 3 · 按 coverage_class 分组渲染。字段集随类型变,模型边界诚实表达。
+  const CLASS_ORDER = ["ai_portfolio", "picks_only", "tracking_only", "needs_fix"];
+  const CLASS_META = {
+    ai_portfolio:  {emoji: "💼", text: "AI 组合覆盖",     hint: "完整评级 + 调仓建议",            rowBg: "bg-white",     subBg: "bg-violet-50"},
+    picks_only:    {emoji: "📊", text: "自选股评分覆盖",   hint: "评分 + 风险点,不进 AI 组合",      rowBg: "bg-white",     subBg: "bg-sky-50"},
+    tracking_only: {emoji: "🛡️", text: "仅风控跟踪",      hint: "ETF/黄金/债券,股票因子模型不适用", rowBg: "bg-white",     subBg: "bg-amber-50"},
+    needs_fix:     {emoji: "⚠️", text: "待修正",           hint: "ticker 错误或行情拉不到,请编辑修正", rowBg: "bg-rose-50",   subBg: "bg-rose-100"},
+  };
+
+  const grouped = {};
+  enrichedWithGap.forEach(x => {
+    const v = verdictMap[x.code];
+    const cls = (v && v.coverage_class) || "picks_only";
+    (grouped[cls] = grouped[cls] || []).push({...x, _verdict: v, _cls: cls});
+  });
+
+  tbody.innerHTML = CLASS_ORDER.flatMap(cls => {
+    const items = grouped[cls];
+    if (!items || items.length === 0) return [];
+    const meta = CLASS_META[cls];
+    const subHeader = `<tr class="${meta.subBg} border-t-2 border-slate-200">
+      <td colspan="15" class="px-3 py-2 text-[13px] font-semibold text-slate-800">
+        ${meta.emoji} ${meta.text} · <span class="text-slate-500 font-normal">${items.length} 只 · ${meta.hint}</span>
+      </td>
+    </tr>`;
+    return [subHeader, ...items.map(x => _renderHoldingRow(x, x._verdict, x._cls, CLASS_META[x._cls]))];
+  }).join("");
+
+  function _renderHoldingRow(x, verdict, cls, meta) {
+  const name = x.rec ? x.rec.name : x.code;
+  const theme = x.rec ? (x.rec.theme || x.rec.industry || "-") : "-";
+  const currentPrice = x.cur ? x.cur.raw_price.toFixed(2) : "无价格";
+  const pnlCls = x.pnlRmb >= 0 ? "text-emerald-600" : "text-rose-600";
+  const entryFx = _entryFxForHolding(x.h, x.code, x.cur);
+  const fxSource = x.h.entry_fx_source || (x.h.entry_fx_rate ? "locked" : "current");
+  const fxAsOf = x.h.entry_fx_as_of || "";
+  const costTitle = `买入日汇率 ${entryFx.toFixed(4)}${fxAsOf ? " · " + fxAsOf : ""} · ${fxSource}`;
+
+  // 按 coverage_class 弱化或隐藏某些列
+  let targetCell, diffCell, verdictCell;
+  if (cls === "ai_portfolio") {
+    // 完整显示
     const targetText = x.targetWeight == null ? "—" : (x.targetWeight * 100).toFixed(1) + "%";
-    const diffText = x.weightDiff == null ? "AI方案缺失" : `${x.weightDiff >= 0 ? "+" : ""}${(x.weightDiff * 100).toFixed(1)}pt`;
+    const diffText = x.weightDiff == null ? "—" : `${x.weightDiff >= 0 ? "+" : ""}${(x.weightDiff * 100).toFixed(1)}pt`;
     const diffCls = x.weightDiff == null ? "text-slate-400" : (x.weightDiff > 0 ? "text-amber-700" : "text-sky-700");
-    const entryFx = _entryFxForHolding(x.h, x.code, x.cur);
-    const fxSource = x.h.entry_fx_source || (x.h.entry_fx_rate ? "locked" : "current");
-    const fxAsOf = x.h.entry_fx_as_of || "";
-    const costTitle = `买入日汇率 ${entryFx.toFixed(4)}${fxAsOf ? " · " + fxAsOf : ""} · ${fxSource}`;
-    const verdict = verdictMap[x.code];
-    let verdictCell;
+    targetCell = `<td class="px-3 py-2 text-right font-mono">${targetText}</td>`;
+    diffCell = `<td class="px-3 py-2 text-right font-mono ${diffCls}" title="当前仓位 - AI目标仓位">${_esc(diffText)}</td>`;
     if (verdict) {
       const reasonsTitle = (verdict.reasons || []).map(r => "· " + r.text).join("\n") || verdict.label_text;
       verdictCell = `<td class="px-3 py-2 text-center cursor-help whitespace-nowrap" title="${_esc(reasonsTitle)}">
         <div class="text-base leading-tight">${verdict.label_emoji}</div>
-        <div class="text-[10px] text-slate-500 leading-tight mt-0.5">${_esc(verdict.label_text)}</div>
-      </td>`;
+        <div class="text-[10px] text-slate-500 leading-tight mt-0.5">${_esc(verdict.label_text)}</div></td>`;
     } else {
       verdictCell = `<td class="px-3 py-2 text-center text-slate-300">—</td>`;
     }
-    // 买入日期 + 持有天数(派生自 entry_date)
-    const entryDate = x.h.entry_date || "";
-    let holdDaysText = "—";
-    if (entryDate) {
-      try {
-        const dEntry = new Date(entryDate);
-        const dNow = new Date();
-        const days = Math.floor((dNow - dEntry) / (1000 * 60 * 60 * 24));
-        if (!isNaN(days) && days >= 0) holdDaysText = days + " 天";
-      } catch (e) {}
+  } else if (cls === "picks_only") {
+    targetCell = `<td class="px-3 py-2 text-right text-[11px] text-slate-400 italic">—（不在AI组合）</td>`;
+    diffCell = `<td class="px-3 py-2 text-right text-[11px] text-slate-400 italic">—</td>`;
+    if (verdict) {
+      const reasonsTitle = (verdict.reasons || []).map(r => "· " + r.text).join("\n") || verdict.label_text;
+      verdictCell = `<td class="px-3 py-2 text-center cursor-help whitespace-nowrap" title="${_esc(reasonsTitle)}">
+        <div class="text-base leading-tight">${verdict.label_emoji}</div>
+        <div class="text-[10px] text-slate-500 leading-tight mt-0.5">${_esc(verdict.label_text)}</div></td>`;
+    } else {
+      verdictCell = `<td class="px-3 py-2 text-center text-slate-300">—</td>`;
     }
-    return `<tr class="border-t border-slate-100 hover:bg-slate-50 group">
-      <td class="px-3 py-2 font-medium sticky left-0 bg-white group-hover:bg-slate-50 z-10 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.15)] w-[140px] max-w-[140px]">${stockPill(x.code, {nameOverride: name})}</td>
-      <td class="px-3 py-2 text-xs text-slate-700 sticky left-[140px] bg-white group-hover:bg-slate-50 z-10 max-w-[160px] truncate">${_esc(theme)}</td>
+  } else if (cls === "tracking_only") {
+    targetCell = `<td class="px-3 py-2 text-right text-[11px] text-slate-400 italic">—（不适用）</td>`;
+    diffCell = `<td class="px-3 py-2 text-right text-[11px] text-slate-400 italic">—</td>`;
+    verdictCell = `<td class="px-3 py-2 text-center text-[11px] text-slate-500 italic" title="ETF / 黄金 / 债券类不用股票因子模型评级,只看市值/盈亏/止损">—（ETF 不评级）</td>`;
+  } else {  // needs_fix
+    targetCell = `<td class="px-3 py-2 text-right text-[11px] text-slate-400">—</td>`;
+    diffCell = `<td class="px-3 py-2 text-right text-[11px] text-slate-400">—</td>`;
+    const fixHint = (verdict && verdict.fix_hint) || "ticker 错误或行情拉不到,请编辑修正";
+    verdictCell = `<td class="px-3 py-2 text-center cursor-help whitespace-nowrap" title="${_esc(fixHint)}">
+      <div class="text-base leading-tight">⚠️</div>
+      <div class="text-[10px] text-rose-700 leading-tight mt-0.5">需修正</div></td>`;
+  }
+
+  // 买入日期 + 持有天数
+  const entryDate = x.h.entry_date || "";
+  let holdDaysText = "—";
+  if (entryDate) {
+    try {
+      const dEntry = new Date(entryDate);
+      const dNow = new Date();
+      const days = Math.floor((dNow - dEntry) / (1000 * 60 * 60 * 24));
+      if (!isNaN(days) && days >= 0) holdDaysText = days + " 天";
+    } catch (e) {}
+  }
+
+  const rowBg = meta.rowBg;
+  const stickyBg = cls === "needs_fix" ? "bg-rose-50" : "bg-white";
+  return `<tr class="border-t border-slate-100 hover:bg-slate-50 group ${rowBg}">
+      <td class="px-3 py-2 font-medium sticky left-0 ${stickyBg} group-hover:bg-slate-50 z-10 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.15)] w-[140px] max-w-[140px]">${stockPill(x.code, {nameOverride: name})}</td>
+      <td class="px-3 py-2 text-xs text-slate-700 sticky left-[140px] ${stickyBg} group-hover:bg-slate-50 z-10 max-w-[160px] truncate">${_esc(theme)}</td>
       <td class="px-3 py-2 text-right font-mono">${Number(x.h.entry_price || 0).toFixed(2)} ${_esc(x.h.currency || _currencyForTicker(x.code))}</td>
       <td class="px-3 py-2 text-right font-mono" title="${_esc(costTitle)}">${x.costRmb.toLocaleString(undefined, {maximumFractionDigits:0})}<br><span class="text-[10px] text-slate-400">FX ${entryFx.toFixed(4)}</span></td>
       <td class="px-3 py-2 text-right font-mono">${Number(x.h.shares || 0)} <span class="text-[10px] text-slate-400">股</span></td>
@@ -5436,8 +5496,8 @@ async function renderRealHoldings() {
       <td class="px-3 py-2 text-right font-mono">${x.valueRmb.toLocaleString(undefined, {maximumFractionDigits:0})} <span class="text-[10px] text-slate-400">RMB</span></td>
       <td class="px-3 py-2 text-right font-mono ${pnlCls}">${x.pnlRmb >= 0 ? "+" : ""}${x.pnlRmb.toLocaleString(undefined, {maximumFractionDigits:0})} <span class="text-[10px] text-slate-400">RMB</span><br><span class="text-[11px]">${x.pnlPct >= 0 ? "+" : ""}${x.pnlPct.toFixed(2)}%</span></td>
       <td class="px-3 py-2 text-right font-mono">${(x.currentWeight * 100).toFixed(1)}%</td>
-      <td class="px-3 py-2 text-right font-mono">${targetText}</td>
-      <td class="px-3 py-2 text-right font-mono ${diffCls}" title="当前仓位 - AI目标仓位">${_esc(diffText)}</td>
+      ${targetCell}
+      ${diffCell}
       ${verdictCell}
       <td class="px-3 py-2 text-xs text-slate-600 whitespace-nowrap">${_esc(entryDate)}</td>
       <td class="px-3 py-2 text-right font-mono text-slate-600 whitespace-nowrap">${holdDaysText}</td>
@@ -5446,7 +5506,6 @@ async function renderRealHoldings() {
         <button onclick="deleteRealHolding(${x.h.id})" class="text-rose-500 text-xs ml-2">删除</button>
       </td>
     </tr>`;
-  }).join("");
 
   const realAllocEl = document.getElementById("chart-real-allocation");
   const realThemeEl = document.getElementById("chart-real-theme");

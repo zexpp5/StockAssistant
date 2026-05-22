@@ -1079,7 +1079,9 @@ _sys.exit(rc)
                 "holdings": [],
                 "summary": {"stoploss_breached": 0, "stoploss_watched": 0,
                             "model_weakened": 0, "near_event": 0,
-                            "weight_off": 0, "ai_uncovered": 0, "normal": 0},
+                            "weight_off": 0, "ai_uncovered": 0, "normal": 0,
+                            "coverage_ai_portfolio": 0, "coverage_picks_only": 0,
+                            "coverage_tracking_only": 0, "coverage_needs_fix": 0},
             }
 
         # IO 全在 endpoint 内:history / picks / universe / events / target_weights
