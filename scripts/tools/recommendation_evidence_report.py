@@ -7,6 +7,7 @@ No network calls are made here.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +19,7 @@ sys.path.insert(0, str(REPO / "scripts" / "lib"))
 from stock_db import get_db  # noqa: E402
 
 # 2026-05-21 V1 cutover: V1 production sources 已废
+PRODUCTION_METRICS_START_DATE = os.environ.get("STOCK_ASSISTANT_METRICS_START_DATE", "2026-05-21")
 
 
 def _load_json(rel: str) -> dict | None:
@@ -51,21 +53,25 @@ def _v2_market_metrics(conn) -> list[dict[str, Any]]:
     其中只有 alpha_pct 不空的进入 outcomes，全是 buy）。
     """
     tables = {str(r[0]) for r in conn.execute("SHOW TABLES").fetchall()}
-    if "pick_outcomes" not in tables:
+    if not {"pick_outcomes", "recommendation_runs"}.issubset(tables):
         return []
     rows = conn.execute(
         """
-        SELECT market, horizon,
+        SELECT po.market, po.horizon,
                COUNT(*) AS n,
-               ROUND(AVG(return_pct), 2) AS avg_pct,
-               ROUND(AVG(benchmark_pct), 2) AS avg_benchmark_pct,
-               ROUND(AVG(alpha_pct), 2) AS avg_alpha_pct,
-               ROUND(SUM(CASE WHEN is_success THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) AS hit_rate
-        FROM pick_outcomes
-        WHERE alpha_pct IS NOT NULL
-        GROUP BY market, horizon
-        ORDER BY market, horizon
-        """
+               ROUND(AVG(po.return_pct), 2) AS avg_pct,
+               ROUND(AVG(po.benchmark_pct), 2) AS avg_benchmark_pct,
+               ROUND(AVG(po.alpha_pct), 2) AS avg_alpha_pct,
+               ROUND(SUM(CASE WHEN po.is_success THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) AS hit_rate
+        FROM pick_outcomes po
+        JOIN recommendation_runs rr ON rr.run_id = po.run_id
+        WHERE po.alpha_pct IS NOT NULL
+          AND rr.universe_scope = 'system_tech_universe'
+          AND rr.run_date >= ?
+        GROUP BY po.market, po.horizon
+        ORDER BY po.market, po.horizon
+        """,
+        [PRODUCTION_METRICS_START_DATE],
     ).fetchall()
     out = []
     for market, horizon, n, avg_pct, avg_bench, avg_alpha, hit_rate in rows:
@@ -142,17 +148,24 @@ def _review_coverage(conn) -> dict[str, Any]:
                 WHERE rr.universe_scope = 'system_tech_universe'
                   AND rr.status = 'generated'
                   AND rp.signal = 'buy'
+                  AND rr.run_date >= ?
                   AND (rr.run_date + INTERVAL (h.days) DAY) <= CURRENT_DATE
             )
             GROUP BY horizon
-            """
+            """,
+            [PRODUCTION_METRICS_START_DATE],
         ).fetchall()
         v2_reviewed_rows = conn.execute(
             """
-            SELECT horizon, COUNT(*) FROM pick_outcomes
-            WHERE alpha_pct IS NOT NULL
-            GROUP BY horizon
-            """
+            SELECT po.horizon, COUNT(*)
+            FROM pick_outcomes po
+            JOIN recommendation_runs rr ON rr.run_id = po.run_id
+            WHERE po.alpha_pct IS NOT NULL
+              AND rr.universe_scope = 'system_tech_universe'
+              AND rr.run_date >= ?
+            GROUP BY po.horizon
+            """,
+            [PRODUCTION_METRICS_START_DATE],
         ).fetchall()
         mature_by_h = {h: int(n) for h, n in v2_mature_rows}
         reviewed_by_h = {h: int(n) for h, n in v2_reviewed_rows}
@@ -176,18 +189,22 @@ def _discovery_metrics(conn) -> dict[str, Any]:
     """V2 path：pick_outcomes 按 horizon 聚合（取代 V1 discovery_tracking）。"""
     out: dict[str, Any] = {}
     tables = {str(r[0]) for r in conn.execute("SHOW TABLES").fetchall()}
-    if "pick_outcomes" not in tables:
+    if not {"pick_outcomes", "recommendation_runs"}.issubset(tables):
         return {f"{w}d": {"n": 0, "avg_alpha_pct": None, "hit_rate": None} for w in (1, 5, 20)}
     for horizon in ("1d", "5d", "20d"):
         row = conn.execute(
             """
-            SELECT COUNT(alpha_pct) AS n,
-                   ROUND(AVG(alpha_pct), 2) AS avg_alpha,
-                   ROUND(SUM(CASE WHEN alpha_pct > 0 THEN 1 ELSE 0 END) * 100.0
-                         / NULLIF(COUNT(alpha_pct), 0), 1) AS hit_rate
-            FROM pick_outcomes WHERE horizon = ?
+            SELECT COUNT(po.alpha_pct) AS n,
+                   ROUND(AVG(po.alpha_pct), 2) AS avg_alpha,
+                   ROUND(SUM(CASE WHEN po.alpha_pct > 0 THEN 1 ELSE 0 END) * 100.0
+                         / NULLIF(COUNT(po.alpha_pct), 0), 1) AS hit_rate
+            FROM pick_outcomes po
+            JOIN recommendation_runs rr ON rr.run_id = po.run_id
+            WHERE po.horizon = ?
+              AND rr.universe_scope = 'system_tech_universe'
+              AND rr.run_date >= ?
             """,
-            [horizon],
+            [horizon, PRODUCTION_METRICS_START_DATE],
         ).fetchone()
         out[horizon] = {
             "n": int(row[0] or 0),
@@ -223,6 +240,7 @@ def _to_markdown(payload: dict[str, Any]) -> str:
         "# Recommendation Evidence Report",
         "",
         f"Generated: {payload['generated_at']}",
+        f"Metrics start date: **{payload.get('metrics_start_date', '—')}**",
         f"Evidence grade: **{payload['evidence_grade']}**",
         f"Quality gate: **{(payload.get('quality_gate') or {}).get('status', 'UNKNOWN')}**",
         "",
@@ -282,6 +300,8 @@ def build_report() -> dict[str, Any]:
     # V2-only 数据：pick_outcomes 按 market×horizon 聚合 + 最新 run 按 market 拆 picks
     payload = {
         "generated_at": datetime.now().isoformat(),
+        "metrics_start_date": PRODUCTION_METRICS_START_DATE,
+        "sample_policy": f"Only V2 recommendation runs on/after {PRODUCTION_METRICS_START_DATE} count toward user-facing evidence; earlier rows are retained for audit only.",
         "quality_gate": _load_json("data/latest/recommendation_quality_gate.json") or {},
         "latest_picks": _v2_latest_pick_metrics(conn),
         "review_coverage": _review_coverage(conn),

@@ -41,6 +41,7 @@ import requests
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
+PRODUCTION_METRICS_START_DATE = os.environ.get("STOCK_ASSISTANT_METRICS_START_DATE", "2026-05-21")
 
 from stock_research import config
 
@@ -848,7 +849,7 @@ def section_calendar(plan: dict | None) -> str:
 def section_holdings_stoploss(history: dict | None = None,
                               stop_pct: float = 0.15,
                               watch_pct: float = 0.10) -> str:
-    """读 holdings 表 + 最新收盘价，告警触发 -stop_pct 止损线的持仓。
+    """读 real_holdings 表 + 最新收盘价，告警触发 -stop_pct 止损线的真实持仓。
 
     生产实时监控（vs apply_stop_loss 的回测语义）：每天早上扫一遍，
     破线→红色清仓建议；接近线（回撤 ≥ watch_pct）→ 黄色观察。
@@ -861,7 +862,7 @@ def section_holdings_stoploss(history: dict | None = None,
             check_stop_loss_breach, volatility_adaptive_stop_pct,
         )
         from stock_research.core.technical_indicators import anchored_vwap
-        holdings = stock_db.fetch_all_holdings()
+        holdings = stock_db.fetch_all_real_holdings()
     except Exception:
         return ""
 
@@ -1510,18 +1511,22 @@ def section_weekly_hitrate(today: date | None = None) -> str:
     try:
         rows = conn.execute(
             """
-            SELECT horizon, COUNT(*) n,
-                   ROUND(AVG(return_pct), 2) avg_ret,
-                   ROUND(AVG(alpha_pct), 2) avg_alpha,
-                   ROUND(SUM(CASE WHEN is_success THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 0) win_rate
-            FROM pick_outcomes
-            WHERE outcome_date >= ? AND alpha_pct IS NOT NULL
-            GROUP BY horizon ORDER BY horizon
+            SELECT po.horizon, COUNT(*) n,
+                   ROUND(AVG(po.return_pct), 2) avg_ret,
+                   ROUND(AVG(po.alpha_pct), 2) avg_alpha,
+                   ROUND(SUM(CASE WHEN po.is_success THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 0) win_rate
+            FROM pick_outcomes po
+            JOIN recommendation_runs rr ON rr.run_id = po.run_id
+            WHERE po.outcome_date >= ?
+              AND po.alpha_pct IS NOT NULL
+              AND rr.universe_scope = 'system_tech_universe'
+              AND rr.run_date >= ?
+            GROUP BY po.horizon ORDER BY po.horizon
             """,
-            [today - timedelta(days=30)],
+            [today - timedelta(days=30), PRODUCTION_METRICS_START_DATE],
         ).fetchall()
         if rows:
-            lines.append("**V2 推荐 alpha（近 30 天成熟样本）**")
+            lines.append(f"**V2 推荐 alpha（近 30 天成熟样本，生产统计自 {PRODUCTION_METRICS_START_DATE} 起）**")
             lines.append("| Horizon | 样本 | 平均涨幅 | 平均 alpha | 胜率 |")
             lines.append("|---|---:|---:|---:|---:|")
             for h, n, ret, alpha, win in rows:
@@ -2083,18 +2088,22 @@ def _hitrate_card_lines(today: date) -> list[str]:
     try:
         rows = conn.execute(
             """
-            SELECT horizon, COUNT(*) n,
-                   ROUND(AVG(return_pct), 2) avg_ret,
-                   ROUND(AVG(alpha_pct), 2) avg_alpha,
-                   ROUND(SUM(CASE WHEN is_success THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 0) win
-            FROM pick_outcomes
-            WHERE outcome_date >= ? AND alpha_pct IS NOT NULL
-            GROUP BY horizon ORDER BY horizon
+            SELECT po.horizon, COUNT(*) n,
+                   ROUND(AVG(po.return_pct), 2) avg_ret,
+                   ROUND(AVG(po.alpha_pct), 2) avg_alpha,
+                   ROUND(SUM(CASE WHEN po.is_success THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 0) win
+            FROM pick_outcomes po
+            JOIN recommendation_runs rr ON rr.run_id = po.run_id
+            WHERE po.outcome_date >= ?
+              AND po.alpha_pct IS NOT NULL
+              AND rr.universe_scope = 'system_tech_universe'
+              AND rr.run_date >= ?
+            GROUP BY po.horizon ORDER BY po.horizon
             """,
-            [today - timedelta(days=30)],
+            [today - timedelta(days=30), PRODUCTION_METRICS_START_DATE],
         ).fetchall()
         if rows:
-            lines.append("**V2 推荐 alpha（近 30 天成熟样本）**")
+            lines.append(f"**V2 推荐 alpha（近 30 天成熟样本，自 {PRODUCTION_METRICS_START_DATE} 起）**")
             for h, n, ret, alpha, win in rows:
                 sr = "+" if (ret or 0) >= 0 else ""
                 sa = "+" if (alpha or 0) >= 0 else ""

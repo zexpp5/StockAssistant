@@ -708,7 +708,8 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
                 v1_present,
             ))
     v2_required_tables = {
-        "manual_watchlist", "holdings", "system_universe", "pool_membership",
+        "manual_watchlist", "real_holdings", "model_sim_holdings",
+        "system_universe", "pool_membership",
         "price_daily", "recommendation_runs", "recommendation_picks",
         "portfolio_plans", "strategy_versions", "strategy_review_reports",
         "pipeline_runs", "pipeline_steps", "source_fetch_log",
@@ -722,7 +723,8 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
         if missing_v2:
             issues.append(_issue("FAIL", "v2_schema_missing_tables", "v2 新库缺少 P0 表", missing_v2))
         if conn is not None:
-            for table in ("manual_watchlist", "holdings", "system_universe", "pool_membership",
+            for table in ("manual_watchlist", "real_holdings", "model_sim_holdings",
+                          "holdings", "system_universe", "pool_membership",
                           "price_daily", "recommendation_runs", "recommendation_picks", "portfolio_plans",
                           "pick_outcomes", "portfolio_performance", "factor_attribution",
                           "strategy_review_reports"):
@@ -746,6 +748,12 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
                 issues.append(_issue("FAIL", "v2_pool_membership_empty", "v2 pool_membership 为空"))
             if "price_daily" in db_tables and summary.get("price_daily_count", 0) <= 0:
                 issues.append(_issue("FAIL", "v2_price_daily_empty", "v2 还没有从新数据源拉取行情"))
+            if summary.get("holdings_count", 0) > 0:
+                issues.append(_issue(
+                    "WARN",
+                    "legacy_holdings_nonempty",
+                    f"legacy holdings 表仍有 {summary.get('holdings_count')} 行；真实持仓应写 real_holdings，推荐模拟应写 model_sim_holdings",
+                ))
             if "price_daily" in db_tables and "pool_membership" in db_tables and summary.get("price_daily_count", 0) > 0:
                 active_pool_count = int(conn.execute(
                     "SELECT COUNT(*) FROM pool_membership WHERE active = TRUE AND pool_type = 'system_tech_universe'"

@@ -13,7 +13,9 @@ V2 核心表：
   recommendation_runs    每日推荐 run 元数据
   recommendation_picks   每日推荐结果
   pick_outcomes          推荐 alpha 实现值（1d / 5d / 20d）
-  holdings               用户实际持仓
+  real_holdings          用户真实持仓
+  model_sim_holdings     模型推荐模拟仓
+  holdings               legacy 兼容表（逐步退场）
   portfolio_plans        组合方案
   factor_attribution     因子归因
 
@@ -48,8 +50,10 @@ SCHEMA_SQL = """
 -- discovery_history / discovery_tracking / earnings_history 等 V1 表 CREATE 语句。
 -- V2 schema (system_universe / pool_membership / price_daily / recommendation_runs /
 -- recommendation_picks / portfolio_plans / pick_outcomes / manual_watchlist /
--- holdings / source_raw_snapshots / 等) 由 scripts/tools/init_stock_db_v2.py 管理。
--- stock_db.py 这里只保留两个共享的小表（user_config + holdings）。
+-- real_holdings / model_sim_holdings / source_raw_snapshots / 等)
+-- 由 scripts/tools/init_stock_db_v2.py 管理。
+-- stock_db.py 这里只保留用户态共享表（user_config + real_holdings /
+-- model_sim_holdings），以及 legacy holdings 兼容表。
 -- 其它 V2 表全部由 scripts/tools/init_stock_db_v2.py 管理。
 
 CREATE TABLE IF NOT EXISTS user_config (
@@ -58,13 +62,8 @@ CREATE TABLE IF NOT EXISTS user_config (
     updated_at TIMESTAMP
 );
 
--- 持仓表 (V2 schema)
--- 主键：一只股可以分批建仓(不同时间不同价)，所以用自增 id 而非 code
--- source：'manual'(用户手填) / 'ai_plan'(从 AI 组合方案抄进来)
--- currency：买入价的本币（USD / CNY / HKD / JPY / KRW / AUD / GBP）
---   · 默认按 symbol 后缀推断（.SS/.SZ/.BJ→CNY · .HK→HKD · 裸→USD）
---   · 显式存到 db 是因为：用户手动编辑时可能弄错币种（例如填美股价但选了 RMB），
---     不能仅靠后缀；显式列让 UI/计算/审计三路保持一致
+-- legacy 持仓表：只为旧数据迁移/旧接口退场保留，不再承载真实持仓或模型模拟仓。
+-- 新代码必须读写 real_holdings / model_sim_holdings。
 CREATE SEQUENCE IF NOT EXISTS holdings_id_seq;
 CREATE TABLE IF NOT EXISTS holdings (
     id          INTEGER   PRIMARY KEY DEFAULT nextval('holdings_id_seq'),
@@ -79,6 +78,52 @@ CREATE TABLE IF NOT EXISTS holdings (
     updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ALTER TABLE holdings ADD COLUMN IF NOT EXISTS currency VARCHAR;
+
+-- 真实持仓：只记录用户实际买入/卖出后手动维护的真钱仓位。
+CREATE SEQUENCE IF NOT EXISTS real_holdings_id_seq;
+CREATE TABLE IF NOT EXISTS real_holdings (
+    id          INTEGER   PRIMARY KEY DEFAULT nextval('real_holdings_id_seq'),
+    account     VARCHAR   DEFAULT 'default',
+    market      VARCHAR   NOT NULL,
+    symbol      VARCHAR   NOT NULL,
+    entry_price DOUBLE    NOT NULL,
+    shares      DOUBLE    NOT NULL,
+    entry_date  DATE,
+    currency    VARCHAR,
+    notes       VARCHAR,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 模型模拟仓：只承载 AI 组合方案推演，不代表真实成交。
+CREATE SEQUENCE IF NOT EXISTS model_sim_holdings_id_seq;
+CREATE TABLE IF NOT EXISTS model_sim_holdings (
+    id            INTEGER   PRIMARY KEY DEFAULT nextval('model_sim_holdings_id_seq'),
+    plan_run_id   VARCHAR,
+    plan_version  VARCHAR,
+    market        VARCHAR   NOT NULL,
+    symbol        VARCHAR   NOT NULL,
+    target_weight DOUBLE,
+    amount_rmb    DOUBLE,
+    entry_price   DOUBLE    NOT NULL,
+    shares        DOUBLE    NOT NULL,
+    entry_date    DATE,
+    currency      VARCHAR,
+    notes         VARCHAR,
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 真实持仓市值快照（后续画“我的账户真实曲线”用）。
+CREATE TABLE IF NOT EXISTS real_holding_snapshots (
+    snapshot_id     VARCHAR PRIMARY KEY,
+    as_of_date      DATE NOT NULL,
+    total_cost_rmb  DOUBLE,
+    total_value_rmb DOUBLE,
+    cash_rmb        DOUBLE,
+    payload_json    VARCHAR,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 # user_config 已知 key 的默认值（首次读取或被删除时返回）
@@ -90,7 +135,7 @@ USER_CONFIG_DEFAULTS = {
 
 def get_db(path: str = DB_PATH, *, read_only: bool = False,
            ensure_schema: bool | None = None) -> duckdb.DuckDBPyConnection:
-    """打开 DuckDB 连接并保证 user_config + holdings 表存在。
+    """打开 DuckDB 连接并保证用户态共享表存在。
 
     2026-05-21 V1 cutover：删除原 4 个 UPDATE picks legacy 数据修复 SQL（picks 表已删）。
     V2 表 schema 由 init_stock_db_v2.py 负责。
@@ -731,6 +776,13 @@ def fetch_latest_recommendation_picks(
 
 HOLDINGS_COLS = ["market", "symbol", "entry_price", "shares", "entry_date", "source", "notes", "currency"]
 HOLDINGS_FULL_COLS = ["id"] + HOLDINGS_COLS + ["created_at", "updated_at"]
+REAL_HOLDINGS_COLS = ["account", "market", "symbol", "entry_price", "shares", "entry_date", "currency", "notes"]
+REAL_HOLDINGS_FULL_COLS = ["id"] + REAL_HOLDINGS_COLS + ["created_at", "updated_at"]
+MODEL_SIM_HOLDINGS_COLS = [
+    "plan_run_id", "plan_version", "market", "symbol", "target_weight", "amount_rmb",
+    "entry_price", "shares", "entry_date", "currency", "notes",
+]
+MODEL_SIM_HOLDINGS_FULL_COLS = ["id"] + MODEL_SIM_HOLDINGS_COLS + ["created_at", "updated_at"]
 
 
 def _infer_market_from_ticker(ticker: str) -> str:
@@ -777,6 +829,164 @@ def fetch_all_holdings(*, conn: duckdb.DuckDBPyConnection | None = None) -> list
     if own:
         conn.close()
     return out
+
+
+def _rowdict(cols: list[str], row: tuple) -> dict:
+    d = dict(zip(cols, row))
+    if "symbol" in d:
+        d["code"] = d.get("symbol")
+    return d
+
+
+def _normalize_real_holding(item: Mapping[str, Any]) -> list:
+    symbol = item.get("symbol") or item.get("code")
+    if not symbol:
+        raise ValueError("real holding requires symbol (or legacy code)")
+    market = item.get("market") or _infer_market_from_ticker(symbol)
+    currency = (item.get("currency") or "").strip().upper() or _infer_currency_from_ticker(symbol)
+    return [
+        item.get("account") or "default",
+        market,
+        symbol,
+        float(item.get("entry_price") or 0),
+        float(item.get("shares") or 0),
+        _to_date(item.get("entry_date") or item.get("date")),
+        currency,
+        item.get("notes"),
+    ]
+
+
+def fetch_all_real_holdings(*, conn: duckdb.DuckDBPyConnection | None = None) -> list[dict]:
+    """读真实持仓。只来自 real_holdings，不混入模型模拟仓。"""
+    own = conn is None
+    if own:
+        conn = get_db(read_only=True)
+    rows = conn.execute(
+        f"SELECT {','.join(REAL_HOLDINGS_FULL_COLS)} "
+        "FROM real_holdings ORDER BY entry_date DESC NULLS LAST, symbol"
+    ).fetchall()
+    out = [_rowdict(REAL_HOLDINGS_FULL_COLS, r) for r in rows]
+    if own:
+        conn.close()
+    return out
+
+
+def insert_real_holding(item: Mapping[str, Any], *, conn: duckdb.DuckDBPyConnection | None = None) -> int:
+    own = conn is None
+    if own:
+        conn = get_db()
+    vals = _normalize_real_holding(item)
+    conn.execute(
+        f"INSERT INTO real_holdings ({','.join(REAL_HOLDINGS_COLS)}, updated_at) "
+        f"VALUES ({','.join(['?'] * len(REAL_HOLDINGS_COLS))}, CURRENT_TIMESTAMP)",
+        vals,
+    )
+    new_id = int(conn.execute("SELECT currval('real_holdings_id_seq')").fetchone()[0])
+    if own:
+        conn.close()
+    return new_id
+
+
+def update_real_holding(holding_id: int, item: Mapping[str, Any], *, conn: duckdb.DuckDBPyConnection | None = None) -> int:
+    own = conn is None
+    if own:
+        conn = get_db()
+    exists = conn.execute("SELECT 1 FROM real_holdings WHERE id = ?", [holding_id]).fetchone()
+    n = 0
+    if exists:
+        vals = _normalize_real_holding(item)
+        set_clause = ", ".join(f"{c}=?" for c in REAL_HOLDINGS_COLS)
+        conn.execute(
+            f"UPDATE real_holdings SET {set_clause}, updated_at=CURRENT_TIMESTAMP WHERE id = ?",
+            vals + [holding_id],
+        )
+        n = 1
+    if own:
+        conn.close()
+    return n
+
+
+def delete_real_holding(holding_id: int, *, conn: duckdb.DuckDBPyConnection | None = None) -> int:
+    own = conn is None
+    if own:
+        conn = get_db()
+    exists = conn.execute("SELECT 1 FROM real_holdings WHERE id = ?", [holding_id]).fetchone()
+    n = 0
+    if exists:
+        conn.execute("DELETE FROM real_holdings WHERE id = ?", [holding_id])
+        n = 1
+    if own:
+        conn.close()
+    return n
+
+
+def _normalize_model_sim_holding(item: Mapping[str, Any]) -> list:
+    symbol = item.get("symbol") or item.get("code")
+    if not symbol:
+        raise ValueError("model sim holding requires symbol (or legacy code)")
+    market = item.get("market") or _infer_market_from_ticker(symbol)
+    currency = (item.get("currency") or "").strip().upper() or _infer_currency_from_ticker(symbol)
+    return [
+        item.get("plan_run_id") or item.get("run_id"),
+        item.get("plan_version") or "v6_risk_aware",
+        market,
+        symbol,
+        float(item.get("target_weight") or 0),
+        float(item.get("amount_rmb") or item.get("amount") or 0),
+        float(item.get("entry_price") or 0),
+        float(item.get("shares") or 0),
+        _to_date(item.get("entry_date") or item.get("date")),
+        currency,
+        item.get("notes"),
+    ]
+
+
+def fetch_all_model_sim_holdings(*, conn: duckdb.DuckDBPyConnection | None = None) -> list[dict]:
+    """读模型推荐模拟仓。它不代表真实成交。"""
+    own = conn is None
+    if own:
+        conn = get_db(read_only=True)
+    rows = conn.execute(
+        f"SELECT {','.join(MODEL_SIM_HOLDINGS_FULL_COLS)} "
+        "FROM model_sim_holdings ORDER BY target_weight DESC NULLS LAST, symbol"
+    ).fetchall()
+    out = [_rowdict(MODEL_SIM_HOLDINGS_FULL_COLS, r) for r in rows]
+    if own:
+        conn.close()
+    return out
+
+
+def bulk_replace_model_sim_holdings(items: Iterable[Mapping[str, Any]], *, conn: duckdb.DuckDBPyConnection | None = None) -> int:
+    own = conn is None
+    if own:
+        conn = get_db()
+    conn.execute("DELETE FROM model_sim_holdings")
+    n = 0
+    for item in items:
+        vals = _normalize_model_sim_holding(item)
+        conn.execute(
+            f"INSERT INTO model_sim_holdings ({','.join(MODEL_SIM_HOLDINGS_COLS)}, updated_at) "
+            f"VALUES ({','.join(['?'] * len(MODEL_SIM_HOLDINGS_COLS))}, CURRENT_TIMESTAMP)",
+            vals,
+        )
+        n += 1
+    if own:
+        conn.close()
+    return n
+
+
+def delete_model_sim_holding(holding_id: int, *, conn: duckdb.DuckDBPyConnection | None = None) -> int:
+    own = conn is None
+    if own:
+        conn = get_db()
+    exists = conn.execute("SELECT 1 FROM model_sim_holdings WHERE id = ?", [holding_id]).fetchone()
+    n = 0
+    if exists:
+        conn.execute("DELETE FROM model_sim_holdings WHERE id = ?", [holding_id])
+        n = 1
+    if own:
+        conn.close()
+    return n
 
 
 def get_holding(holding_id: int, *, conn: duckdb.DuckDBPyConnection | None = None) -> dict | None:

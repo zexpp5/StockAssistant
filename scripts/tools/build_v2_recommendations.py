@@ -125,30 +125,30 @@ def _quality_flags(row: dict[str, Any]) -> list[dict[str, Any]]:
         flags.append({
             "code": "MOMENTUM_MISSING",
             "severity": "medium",
-            "message": "price_daily has no non-null momentum fields for this symbol; default momentum score may be used.",
+            "message": "该标的 price_daily 找不到任何非空动量字段，可能用了默认动量分。",
         })
     elif not _same_day(row.get("momentum_trade_date"), row.get("trade_date")):
         flags.append({
             "code": "MOMENTUM_REUSED_RECENT_V2_SNAPSHOT",
             "severity": "low",
             "message": (
-                "Latest price row has incomplete momentum fields; reused the most recent "
-                f"non-null V2 price_daily snapshot from {str(row.get('momentum_trade_date'))[:10]}."
+                "最新行情动量字段为空，已回退到 "
+                f"{str(row.get('momentum_trade_date'))[:10]} 最近一次有效快照。"
             ),
         })
     if not row.get("fundamentals_trade_date"):
         flags.append({
             "code": "FUNDAMENTALS_MISSING",
             "severity": "medium",
-            "message": "price_daily has no non-null valuation fields for this symbol.",
+            "message": "该标的 price_daily 找不到任何非空估值字段。",
         })
     elif not _same_day(row.get("fundamentals_trade_date"), row.get("trade_date")):
         flags.append({
             "code": "FUNDAMENTALS_REUSED_RECENT_V2_SNAPSHOT",
             "severity": "low",
             "message": (
-                "Latest price row has incomplete valuation fields; reused the most recent "
-                f"non-null V2 price_daily snapshot from {str(row.get('fundamentals_trade_date'))[:10]}."
+                "最新行情估值字段为空，已回退到 "
+                f"{str(row.get('fundamentals_trade_date'))[:10]} 最近一次有效快照。"
             ),
         })
     return flags

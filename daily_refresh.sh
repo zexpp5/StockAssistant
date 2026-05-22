@@ -323,7 +323,7 @@ if [ "$MODE" = "a_share_only" ]; then
         exit 1
     fi
     run_a_share_steps
-    # a_share_picks 跑完后重跑约束器 — A 股 holdings 可能变化，需要刷新美股 plan_constrained
+    # a_share_picks 跑完后重跑约束器 — A 股真实持仓约束可能变化，需要刷新美股 plan_constrained
     run_step "10b/25 plan_a 后处理（美股仓位约束）" "-m stock_research.jobs.apply_a_share_constraints"
     run_step "24/25 DuckDB pipeline 同步" "scripts/migrate/migrate_pipeline_to_duckdb.py"
     # 24b: V2 产业链分类（rule_classify + manual_override → chain_metadata 表 → dashboard 链条 pill）
@@ -391,7 +391,7 @@ is_research_step && run_step "8b/25 每日新闻同步飞书" "scripts/daily_new
 run_step "9/25 v6 学术因子选股（已落 DuckDB picks）" "scripts/pipeline/daily_picks_v5.py"
 run_step "9b/25 港股 picks（3 因子 + DuckDB picks 表，south_flow standby）" "scripts/pipeline/hk_picks.py"
 run_step "10/25 risk-aware 仓位优化（方案 A v6）" "-m stock_research.jobs.optimize_portfolio"
-# step 10b 处理美股 plan_constrained（A 股 holdings → 美股 plan），早班必须跑
+# step 10b 处理美股 plan_constrained（真实持仓约束 → 美股 plan），早班必须跑
 run_step "10b/25 plan_a 后处理（美股仓位约束）" "-m stock_research.jobs.apply_a_share_constraints"
 run_step "10c/25 推荐质量闸门（调仓前）" "scripts/tools/recommendation_quality_gate.py"
 run_step "11/25 调整清单（卖/买/调）→ trade_delta.json" "scripts/pipeline/trade_delta.py"

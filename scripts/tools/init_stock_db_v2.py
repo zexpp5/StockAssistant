@@ -55,6 +55,49 @@ CREATE TABLE IF NOT EXISTS holdings (
 );
 ALTER TABLE holdings ADD COLUMN IF NOT EXISTS currency VARCHAR;
 
+CREATE SEQUENCE IF NOT EXISTS real_holdings_id_seq;
+CREATE TABLE IF NOT EXISTS real_holdings (
+    id          BIGINT PRIMARY KEY DEFAULT nextval('real_holdings_id_seq'),
+    account     VARCHAR DEFAULT 'default',
+    market      VARCHAR NOT NULL,
+    symbol      VARCHAR NOT NULL,
+    entry_price DOUBLE NOT NULL,
+    shares      DOUBLE NOT NULL,
+    entry_date  DATE,
+    currency    VARCHAR,
+    notes       VARCHAR,
+    created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE SEQUENCE IF NOT EXISTS model_sim_holdings_id_seq;
+CREATE TABLE IF NOT EXISTS model_sim_holdings (
+    id            BIGINT PRIMARY KEY DEFAULT nextval('model_sim_holdings_id_seq'),
+    plan_run_id   VARCHAR,
+    plan_version  VARCHAR,
+    market        VARCHAR NOT NULL,
+    symbol        VARCHAR NOT NULL,
+    target_weight DOUBLE,
+    amount_rmb    DOUBLE,
+    entry_price   DOUBLE NOT NULL,
+    shares        DOUBLE NOT NULL,
+    entry_date    DATE,
+    currency      VARCHAR,
+    notes         VARCHAR,
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS real_holding_snapshots (
+    snapshot_id     VARCHAR PRIMARY KEY,
+    as_of_date      DATE NOT NULL,
+    total_cost_rmb  DOUBLE,
+    total_value_rmb DOUBLE,
+    cash_rmb        DOUBLE,
+    payload_json    VARCHAR,
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS system_universe (
     pool_id       VARCHAR NOT NULL,
     pool_name     VARCHAR,

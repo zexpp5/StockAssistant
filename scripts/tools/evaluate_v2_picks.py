@@ -31,6 +31,9 @@ import duckdb  # noqa: E402
 HORIZONS = {"1d": 1, "5d": 5, "20d": 20}
 BENCHMARK_BY_MARKET = {"US": "SPY", "HK": "^HSI", "CN": "000300.SS"}
 LOOKBACK_DAYS = 70  # 扫过去 70 天的 run
+PRODUCTION_METRICS_START_DATE = date.fromisoformat(
+    os.environ.get("STOCK_ASSISTANT_METRICS_START_DATE", "2026-05-21")
+)
 
 
 def _benchmark_close_cache() -> dict:
@@ -90,7 +93,7 @@ def main() -> int:
     conn = duckdb.connect(db_path)
     try:
         today = date.today()
-        cutoff = today - timedelta(days=LOOKBACK_DAYS)
+        cutoff = max(today - timedelta(days=LOOKBACK_DAYS), PRODUCTION_METRICS_START_DATE)
         runs = conn.execute(
             """
             SELECT run_id, run_date FROM recommendation_runs
@@ -101,7 +104,7 @@ def main() -> int:
             [cutoff],
         ).fetchall()
         if not runs:
-            print(f"evaluate_v2_picks: no runs in last {LOOKBACK_DAYS} days")
+            print(f"evaluate_v2_picks: no production runs on/after {cutoff}")
             return 0
 
         bench_cache = _benchmark_close_cache()
@@ -165,14 +168,21 @@ def main() -> int:
         # 汇总成熟样本 / 总样本，供 morning_brief surface
         summary = conn.execute(
             """
-            SELECT horizon, COUNT(*) AS n_total,
-                   SUM(CASE WHEN is_success THEN 1 ELSE 0 END) AS n_win,
-                   AVG(alpha_pct) AS avg_alpha
-            FROM pick_outcomes
-            GROUP BY horizon ORDER BY horizon
-            """
+            SELECT po.horizon, COUNT(*) AS n_total,
+                   SUM(CASE WHEN po.is_success THEN 1 ELSE 0 END) AS n_win,
+                   AVG(po.alpha_pct) AS avg_alpha
+            FROM pick_outcomes po
+            JOIN recommendation_runs rr ON rr.run_id = po.run_id
+            WHERE rr.universe_scope = 'system_tech_universe'
+              AND rr.run_date >= ?
+            GROUP BY po.horizon ORDER BY po.horizon
+            """,
+            [PRODUCTION_METRICS_START_DATE],
         ).fetchall()
-        print(f"evaluate_v2_picks: wrote={wrote} skipped_immature={skipped_immature}")
+        print(
+            f"evaluate_v2_picks: wrote={wrote} skipped_immature={skipped_immature} "
+            f"metrics_start={PRODUCTION_METRICS_START_DATE}"
+        )
         for horizon, n_total, n_win, avg_alpha in summary:
             win_rate = (n_win / n_total * 100) if n_total else 0
             avg_str = f"{avg_alpha:+.2f}%" if avg_alpha is not None else "—"

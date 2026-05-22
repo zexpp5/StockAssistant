@@ -37,6 +37,7 @@ from stock_db import DB_PATH  # noqa: E402
 
 OUT_PATH = REPO / "data" / "latest" / "strategy_validation_report.json"
 FACTORS = ("valuation", "momentum", "data_quality", "coverage")
+PRODUCTION_METRICS_START_DATE = os.environ.get("STOCK_ASSISTANT_METRICS_START_DATE", "2026-05-21")
 
 
 def _tables(conn: duckdb.DuckDBPyConnection) -> set[str]:
@@ -95,10 +96,12 @@ def _load_outcome_summary(conn: duckdb.DuckDBPyConnection) -> tuple[dict, dict]:
         FROM pick_outcomes po
         JOIN recommendation_runs rr ON rr.run_id = po.run_id
         WHERE rr.universe_scope = 'system_tech_universe'
+          AND rr.run_date >= ?
           AND po.alpha_pct IS NOT NULL
         GROUP BY rr.strategy_version, po.market, po.horizon
         ORDER BY rr.strategy_version, po.market, po.horizon
-        """
+        """,
+        [PRODUCTION_METRICS_START_DATE],
     ).fetchall()
     by_strategy_market: dict[tuple[str, str], dict[str, Any]] = defaultdict(lambda: {"by_horizon": {}})
     by_market_total: dict[str, dict[str, Any]] = {}
@@ -195,9 +198,11 @@ def _write_factor_attribution(conn: duckdb.DuckDBPyConnection) -> list[dict[str,
           ON rp.run_id = po.run_id AND rp.market = po.market AND rp.symbol = po.symbol
         JOIN recommendation_runs rr ON rr.run_id = po.run_id
         WHERE rr.universe_scope = 'system_tech_universe'
+          AND rr.run_date >= ?
           AND po.horizon = '1d'
           AND po.alpha_pct IS NOT NULL
-        """
+        """,
+        [PRODUCTION_METRICS_START_DATE],
     ).fetchall()
     grouped: dict[tuple[str, str], dict[str, Any]] = defaultdict(lambda: {"factors": defaultdict(list), "alphas": [], "starts": [], "ends": []})
     for strategy_version, market, factor_json, alpha, run_date, outcome_date in rows:
@@ -285,8 +290,11 @@ def _write_portfolio_performance(conn: duckdb.DuckDBPyConnection) -> list[dict[s
         SELECT pp.run_id, pp.plan_version, rr.run_date
         FROM portfolio_plans pp
         JOIN recommendation_runs rr ON rr.run_id = pp.run_id
+        WHERE rr.universe_scope = 'system_tech_universe'
+          AND rr.run_date >= ?
         GROUP BY pp.run_id, pp.plan_version, rr.run_date
-        """
+        """,
+        [PRODUCTION_METRICS_START_DATE],
     ).fetchall()
     written: list[dict[str, Any]] = []
     for run_id, plan_version, run_date in plan_keys:
@@ -385,6 +393,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         payload = {
             "generated_at": datetime.now().isoformat(timespec="seconds"),
             "db_path": str(db_path),
+            "metrics_start_date": PRODUCTION_METRICS_START_DATE,
+            "sample_policy": f"Only V2 recommendation runs on/after {PRODUCTION_METRICS_START_DATE} are included in user-facing validation; older debug rows remain in DuckDB for audit.",
             "status": "PASS" if reports or portfolio else "WARN",
             "summary": {
                 "strategy_review_reports_written": len(reports),

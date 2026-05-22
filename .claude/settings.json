@@ -52,7 +52,8 @@
       "Bash(curl -sS -o /dev/null -w \"API /health -> HTTP %{http_code} %{time_total}s\\\\n\" http://127.0.0.1:8765/health)",
       "Bash(curl -sS http://127.0.0.1:8765/openapi.json)",
       "Bash(curl -sS -o /dev/null -w \"\" http://127.0.0.1:8001/stock_dashboard.html)",
-      "Bash(curl -sS -o /dev/null -w \"stock_dashboard.html -> HTTP %{http_code}  %{size_download} bytes\\\\n\" http://127.0.0.1:8001/stock_dashboard.html)"
+      "Bash(curl -sS -o /dev/null -w \"stock_dashboard.html -> HTTP %{http_code}  %{size_download} bytes\\\\n\" http://127.0.0.1:8001/stock_dashboard.html)",
+      "Bash(awk '/^[ \\\\t]*db_rows[\\\\.\\\\[]/{print NR\": \"$0}' scripts/pipeline/daily_picks_v5.py)"
     ],
     "additionalDirectories": [
       "/tmp"
