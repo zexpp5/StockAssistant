@@ -12,7 +12,7 @@
   - 仓位算法不同（US risk-aware / hk 等权 / cn sector cap）
   合并会把 weight 含义搞乱，新人无法直接拿去下单
 
-输入持仓：DuckDB holdings 表（前端 /api/holdings 写入）
+输入持仓：DuckDB real_holdings 表（真实账户持仓；推荐模拟仓不参与真实调仓）
 """
 import sys
 import os
@@ -27,11 +27,12 @@ import yfinance as yf
 import stock_db
 from stock_research import config
 
+from fx_rates import get_fx_to_rmb  # 单一汇率源（2026-05-22 收敛）
+
 try:
     TOTAL_CAPITAL = stock_db.get_config("total_capital")
 except Exception:
     TOTAL_CAPITAL = 500000  # 默认 50 万 RMB
-USD_TO_RMB = 7.10
 
 
 def _a_share_enabled() -> bool:
@@ -96,20 +97,20 @@ def _quality_gate_block_reason(market: str, payload: dict) -> str | None:
 
 
 def _infer_fx_to_rmb(ticker: str) -> float:
-    """按 ticker 后缀粗略推断换 RMB 汇率。"""
+    """按 ticker 后缀粗略推断换 RMB 汇率（统一走 fx_rates 单一源）。"""
     m = _market_of(ticker)
     if m == "cn":
-        return 1.0
+        return get_fx_to_rmb("CNY")
     if m == "hk":
-        return 0.92          # HKD ≈ 0.92 RMB
+        return get_fx_to_rmb("HKD")
     t = (ticker or "").upper()
     if t.endswith(".T"):
-        return 0.048         # JPY
+        return get_fx_to_rmb("JPY")
     if t.endswith(".KS"):
-        return 0.0053        # KRW
+        return get_fx_to_rmb("KRW")
     if t.endswith(".L"):
-        return 9.0           # GBP
-    return USD_TO_RMB         # 默认 USD
+        return get_fx_to_rmb("GBP")
+    return get_fx_to_rmb("USD")  # 默认 USD
 
 
 def _to_yfinance_ticker(ticker: str) -> str:
@@ -127,11 +128,11 @@ def _to_yfinance_ticker(ticker: str) -> str:
 
 
 def load_current_from_holdings(total_capital: float, market: str | None = None) -> dict:
-    """从 DuckDB holdings 表构建当前持仓字典 {ticker: {name, weight, amount_rmb, shares}}。
+    """从 DuckDB real_holdings 表构建当前持仓字典 {ticker: {name, weight, amount_rmb, shares}}。
 
     market 过滤：'us' / 'hk' / 'cn' / None（全部）
     """
-    holdings = stock_db.fetch_all_holdings()
+    holdings = stock_db.fetch_all_real_holdings()
     if not holdings:
         return {}
     # V2 name lookup：manual_watchlist + system_universe（V1 watchlist 表已删）

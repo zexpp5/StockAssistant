@@ -74,6 +74,16 @@ def create_app():
             "data_source": "V2 DuckDB",
         }
 
+    # ────────── 汇率（单一来源，前端读这里替代两份 JS 硬编码 FX_TO_RMB） ──────────
+    @app.get("/api/fx-rates")
+    def get_fx_rates() -> dict[str, Any]:
+        """本币→RMB 汇率单一来源。前端启动时拉一次写入 window.FX_RATES。
+
+        升级到实时汇率时只改 scripts/lib/fx_rates.py 内部实现,接口字段不变。
+        """
+        import fx_rates
+        return {"rates": dict(fx_rates.FX_TO_RMB), "as_of": fx_rates.AS_OF}
+
     # ────────── 13F 查询 ──────────
     @app.get("/api/13f/investors")
     def list_investors() -> dict[str, str]:
@@ -915,51 +925,84 @@ _sys.exit(rc)
             "model_source": row[5],
         }
 
-    # ────────── 持仓 holdings（2026-05-12 从 dashboard localStorage 迁过来） ──────────
+    def _json_dates(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        for r in rows:
+            for k, v in list(r.items()):
+                if k.endswith("_date") and hasattr(v, "isoformat"):
+                    r[k] = v.isoformat()
+                elif k in {"created_at", "updated_at", "generated_at"} and hasattr(v, "isoformat"):
+                    r[k] = v.isoformat()
+        return rows
+
+    # ────────── 真实持仓 / 模型模拟仓（V2 split · 不再混用 holdings.source） ──────────
+    @app.get("/api/real-holdings")
+    def list_real_holdings() -> list[dict[str, Any]]:
+        import stock_db
+        return _json_dates(stock_db.fetch_all_real_holdings())
+
+    @app.post("/api/real-holdings")
+    def create_real_holding(item: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        import stock_db
+        if not (item.get("code") or item.get("symbol")):
+            raise HTTPException(400, "code is required")
+        new_id = stock_db.insert_real_holding(item)
+        return {"status": "ok", "id": new_id}
+
+    @app.put("/api/real-holdings/{holding_id}")
+    def update_real_holding_one(holding_id: int, item: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        import stock_db
+        n = stock_db.update_real_holding(holding_id, item)
+        if n == 0:
+            raise HTTPException(404, f"real holding id not found: {holding_id}")
+        return {"status": "ok", "id": holding_id, "rows_affected": n}
+
+    @app.delete("/api/real-holdings/{holding_id}")
+    def delete_real_holding_one(holding_id: int) -> dict[str, Any]:
+        import stock_db
+        n = stock_db.delete_real_holding(holding_id)
+        if n == 0:
+            raise HTTPException(404, f"real holding id not found: {holding_id}")
+        return {"status": "ok", "id": holding_id, "rows_deleted": n}
+
+    @app.get("/api/model-sim-holdings")
+    def list_model_sim_holdings() -> list[dict[str, Any]]:
+        import stock_db
+        return _json_dates(stock_db.fetch_all_model_sim_holdings())
+
+    @app.post("/api/model-sim-holdings/bulk-replace")
+    def bulk_replace_model_sim_holdings_endpoint(items: list[dict[str, Any]] = Body(...)) -> dict[str, Any]:
+        import stock_db
+        n = stock_db.bulk_replace_model_sim_holdings(items)
+        return {"status": "ok", "rows_inserted": n}
+
+    @app.delete("/api/model-sim-holdings/{holding_id}")
+    def delete_model_sim_holding_one(holding_id: int) -> dict[str, Any]:
+        import stock_db
+        n = stock_db.delete_model_sim_holding(holding_id)
+        if n == 0:
+            raise HTTPException(404, f"model sim holding id not found: {holding_id}")
+        return {"status": "ok", "id": holding_id, "rows_deleted": n}
+
+    # ────────── legacy holdings（V2 split 后停用，避免真实/模拟再次混表） ──────────
     @app.get("/api/holdings")
     def list_holdings() -> list[dict[str, Any]]:
-        """读全部持仓，按 entry_date 倒序。"""
-        import stock_db
-        rows = stock_db.fetch_all_holdings()
-        for r in rows:
-            if r.get("entry_date"):
-                r["entry_date"] = r["entry_date"].isoformat()
-            for k in ("created_at", "updated_at"):
-                if r.get(k):
-                    r[k] = r[k].isoformat()
-        return rows
+        raise HTTPException(410, "deprecated: use /api/real-holdings or /api/model-sim-holdings")
 
     @app.post("/api/holdings")
     def create_holding(item: dict[str, Any] = Body(...)) -> dict[str, Any]:
-        """新增持仓一条。body: {code, entry_price, shares, date, source?, notes?}"""
-        import stock_db
-        if not item.get("code"):
-            raise HTTPException(400, "code is required")
-        new_id = stock_db.insert_holding(item)
-        return {"status": "ok", "id": new_id}
+        raise HTTPException(410, "deprecated: write real holdings to /api/real-holdings; model simulations to /api/model-sim-holdings/bulk-replace")
 
     @app.put("/api/holdings/{holding_id}")
     def update_holding_one(holding_id: int, item: dict[str, Any] = Body(...)) -> dict[str, Any]:
-        import stock_db
-        n = stock_db.update_holding(holding_id, item)
-        if n == 0:
-            raise HTTPException(404, f"holding id not found: {holding_id}")
-        return {"status": "ok", "id": holding_id, "rows_affected": n}
+        raise HTTPException(410, "deprecated: use /api/real-holdings")
 
     @app.delete("/api/holdings/{holding_id}")
     def delete_holding_one(holding_id: int) -> dict[str, Any]:
-        import stock_db
-        n = stock_db.delete_holding(holding_id)
-        if n == 0:
-            raise HTTPException(404, f"holding id not found: {holding_id}")
-        return {"status": "ok", "id": holding_id, "rows_deleted": n}
+        raise HTTPException(410, "deprecated: use /api/real-holdings or /api/model-sim-holdings")
 
     @app.post("/api/holdings/bulk-replace")
     def bulk_replace_holdings_endpoint(items: list[dict[str, Any]] = Body(...)) -> dict[str, Any]:
-        """整批替换持仓（清空 + 重插）。用于从 localStorage 一次性迁移。"""
-        import stock_db
-        n = stock_db.bulk_replace_holdings(items)
-        return {"status": "ok", "rows_inserted": n}
+        raise HTTPException(410, "deprecated: use /api/model-sim-holdings/bulk-replace")
 
     # ────────── 投资方案配置（DuckDB user_config 表 · 2026-05-11 PM 起） ──────────
     @app.get("/api/config")

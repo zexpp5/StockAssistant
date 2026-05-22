@@ -33,7 +33,7 @@ PORTFOLIO = [
 CASH_RMB = 25000
 TOTAL_CAPITAL = 500000
 
-FX_TO_RMB = {"USD": 7.10, "HKD": 0.91, "AUD": 4.60, "CNY": 1.0}
+from fx_rates import FX_TO_RMB  # 单一汇率源（2026-05-22 收敛）
 
 # 命令行参数（默认 5/1 → 5/9，可改 --start-date 跑其他周期）
 _parser = argparse.ArgumentParser()

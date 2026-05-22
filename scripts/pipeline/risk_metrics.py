@@ -35,7 +35,8 @@ try:
 except Exception:
     TOTAL_CAPITAL = 500000
 
-FX_TO_RMB = {"USD": 7.10, "HKD": 0.91, "AUD": 4.60, "CNY": 1.0}
+from fx_rates import FX_TO_RMB  # 单一汇率源（2026-05-22 收敛，HKD 统一为 0.917）
+
 RISK_FREE_RATE = 0.045  # 美国 10Y 国债收益率 ~4.5%
 TRADING_DAYS = 252
 _HISTORY_CACHE = None
@@ -53,7 +54,7 @@ def _ccy_from_ticker(ticker: str) -> str:
 
 
 def load_portfolio_from_holdings():
-    """优先读 DuckDB holdings 表（用户真实持仓）。
+    """优先读 DuckDB real_holdings 表（用户真实持仓）。
 
     返回 (portfolio, cash_pct, source)；无持仓时返回 (None, None, None)，
     上层 fallback 到 plan_a_v5.json。
@@ -65,9 +66,9 @@ def load_portfolio_from_holdings():
     """
     try:
         import stock_db
-        holdings = stock_db.fetch_all_holdings()
+        holdings = stock_db.fetch_all_real_holdings()
     except Exception as e:
-        print(f"  ⚠️  holdings 表读取失败，fallback plan: {e}")
+        print(f"  ⚠️  real_holdings 表读取失败，fallback plan: {e}")
         return None, None, None
     if not holdings:
         return None, None, None

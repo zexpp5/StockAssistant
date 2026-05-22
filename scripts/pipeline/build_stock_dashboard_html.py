@@ -8,6 +8,7 @@ AI 投资研究 Dashboard - 专业研究报告风格
 import sys
 import os
 import re
+import math
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
 sys.path.insert(0, _REPO)
 sys.path.insert(0, os.path.join(_REPO, "scripts", "lib"))  # 2026-05-11 lib 迁移
@@ -18,6 +19,7 @@ from datetime import datetime
 # 2026-05-11 PM 第二轮:飞书 100% 退役 — 不再从 Bitable 拉数据
 # 旧版 records / picks 口径已退场；v2 页面摘要优先读 DuckDB(system_universe + price_daily + recommendation_picks)
 OUTPUT = os.path.join(_REPO, "stock_dashboard.html")
+PRODUCTION_METRICS_START_DATE = os.environ.get("STOCK_ASSISTANT_METRICS_START_DATE", "2026-05-21")
 
 
 def _duckdb_path() -> str:
@@ -351,17 +353,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <a href="#today" data-tab="today" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">今日决策台</a>
     </div>
 
-    <!-- 我的池子 = 持仓 + 自选股配置 + 自选股 AI 优选 -->
+    <!-- 我的池子 = 真实持仓 + 自选股配置（含自选股 AI 优选） -->
     <div class="mb-4">
       <div class="text-base font-bold text-slate-800 mb-2 px-2">🗂️ 我的池子</div>
-      <a href="#portfolio" data-tab="portfolio" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">💼 我的持仓</a>
+      <a href="#real-holdings" data-tab="real-holdings" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">💼 我的持仓</a>
       <a href="#watchlist-edit" data-tab="init-config" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">⭐ 自选股配置</a>
-      <a href="#picks" data-tab="picks" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🔝 自选股·AI 优选</a>
     </div>
 
-    <!-- AI 助手 = 系统科技池 AI 推荐 + AI 组合方案 + 已拉取股票池 -->
+    <!-- AI 助手 = AI 方案模拟 + 系统科技池 AI 推荐 + AI 组合方案 + 已拉取股票池 -->
     <div class="mb-4">
       <div class="text-base font-bold text-slate-800 mb-2 px-2">🧠 AI 助手</div>
+      <a href="#portfolio" data-tab="portfolio" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🧪 AI 方案模拟</a>
       <a href="#discovery" data-tab="discovery" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🤖 AI 推荐</a>
       <a href="#backtest" data-tab="backtest" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🎼 AI 组合方案</a>
       <a href="#db-explorer" data-tab="db-explorer" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🗄 已拉取股票池</a>
@@ -370,19 +372,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <!-- 深度研究 = 买前解释和审查 -->
     <div class="mb-4">
       <div class="text-base font-bold text-slate-800 mb-2 px-2">🔬 深度研究</div>
-      <a href="#valuation" data-tab="valuation" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">📈 个股研究</a>
+      <a href="#buy-research" data-tab="buy-research" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🛡 买前研究</a>
       <a href="#chain" data-tab="chain" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🌳 产业链地图</a>
-      <a href="#audit" data-tab="audit" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🛡 买前审查</a>
     </div>
 
     <hr class="my-4 border-slate-200">
 
-    <!-- ⚙️ 管理：系统说明与升级建议 -->
+    <!-- ⚙️ 管理：只保留系统状态；说明/升级文档不再占主入口 -->
     <div class="mb-4">
       <div class="text-base font-bold text-slate-800 mb-2 px-2">⚙️ 管理</div>
-      <a href="#runtime-status" data-tab="runtime-status" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-500 hover:text-violet-600 hover:bg-violet-50 rounded transition">🧪 运行状态</a>
-      <a href="#upgrade" data-tab="upgrade" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-500 hover:text-violet-600 hover:bg-violet-50 rounded transition">💰 升级建议</a>
-      <a href="#about" data-tab="about" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-500 hover:text-violet-600 hover:bg-violet-50 rounded transition">🧭 系统介绍</a>
+      <a href="#runtime-status" data-tab="runtime-status" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-500 hover:text-violet-600 hover:bg-violet-50 rounded transition">🧪 系统状态</a>
     </div>
 
     <hr class="my-4 border-slate-200">
@@ -393,6 +392,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <span title="数据源">数据源</span>
         <span class="text-[10px] font-mono px-2 py-0.5 rounded border border-emerald-300 bg-emerald-50 text-emerald-800" title="2026-05-11 起 DuckDB 是 single source of truth · 飞书仅作通知">DuckDB</span>
       </div>
+      <a href="#about" data-tab="about" class="tab-link block text-[11px] text-slate-400 hover:text-violet-600 transition">关于系统</a>
       <div class="text-[10px] text-slate-400">{UPDATE_TIME}</div>
       <div class="text-[10px] text-slate-400 leading-snug pt-2 border-t border-slate-100">⚠️ 不构成投资建议<br>崩盘期 alpha = -9.77%</div>
     </div>
@@ -878,11 +878,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="flex items-center gap-1 mb-4 border-b border-slate-200">
     <button onclick="switchDiscoveryView('today')" id="disc-tab-today"
       class="px-4 py-2 text-sm font-medium border-b-2 border-violet-500 text-violet-600 transition">
-      🔍 今日候选
+      🔍 今日 Top
     </button>
     <button onclick="switchDiscoveryView('history')" id="disc-tab-history"
       class="px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-600 hover:text-violet-600 transition">
-      📅 推荐历史
+      📅 完整批次历史
     </button>
     <span class="ml-auto text-xs text-slate-400" id="disc-tab-count"></span>
   </div>
@@ -892,22 +892,44 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div id="discovery-empty" class="hidden text-center py-12 text-slate-500 bg-white rounded-xl">
       暂无AI 推荐数据(运行 <code class="text-xs bg-slate-200 px-1.5 py-0.5 rounded">python3 scripts/tools/build_pool_recommendations.py</code> 生成)
     </div>
+    <div id="discovery-count-explain" class="hidden mb-4 rounded-lg border border-violet-200 bg-white px-4 py-3 text-sm text-slate-700"></div>
+    <div id="discovery-market-tabs" class="hidden mb-4 flex flex-wrap gap-2"></div>
+    <style>
+      /* 今日 Top 表：所有字段单行显示 + 横向滚动；前两列(排名/代码) sticky 固定 */
+      #discovery-table-wrap td, #discovery-table-wrap th { white-space: nowrap; }
+      #discovery-table-wrap .disc-sticky-rank,
+      #discovery-table-wrap .disc-sticky-code { position: sticky; z-index: 2; background: #ffffff; }
+      #discovery-table-wrap .disc-sticky-rank { left: 0; min-width: 80px; }
+      #discovery-table-wrap .disc-sticky-code { left: 80px; min-width: 110px; box-shadow: 1px 0 0 rgba(15,23,42,0.06); }
+      #discovery-table-wrap thead th.disc-sticky-rank,
+      #discovery-table-wrap thead th.disc-sticky-code { background: #f8fafc; z-index: 5; }
+      #discovery-table-wrap tbody tr:hover .disc-sticky-rank,
+      #discovery-table-wrap tbody tr:hover .disc-sticky-code { background: #f8fafc; }
+      /* 展开详情面板里允许换行 */
+      #discovery-table-wrap tbody tr.disc-detail-row td { white-space: normal; }
+      /* 风险列文字较长，允许换行 + 限宽，避免把整张表撑爆 */
+      #discovery-table-wrap td.disc-cell-wrap { white-space: normal; }
+      /* 行内因子拆解的 pill 一行排，不换行；展开面板里(disc-detail-row)仍可换行 */
+      #discovery-table-wrap tbody tr:not(.disc-detail-row) .flex-wrap { flex-wrap: nowrap; }
+    </style>
     <div id="discovery-table-wrap" class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
       <table class="w-full text-sm">
         <thead class="bg-slate-50 text-slate-600 text-xs uppercase tracking-wide">
           <tr>
-            <th class="px-3 py-2 text-left">排名</th>
-            <th class="px-3 py-2 text-left">代码</th>
+            <th class="disc-sticky-rank px-3 py-2 text-left">排名</th>
+            <th class="disc-sticky-code px-3 py-2 text-left">代码</th>
             <th class="px-3 py-2 text-left">名称</th>
+            <th class="px-3 py-2 text-left">信号</th>
             <th class="px-3 py-2 text-left">市场</th>
             <th class="px-3 py-2 text-left">主题</th>
-            <th class="px-3 py-2 text-right">综合 z</th>
-            <th class="px-3 py-2 text-right">F-Score</th>
-            <th class="px-3 py-2 text-right">12-1 动量</th>
-            <th class="px-3 py-2 text-right">分析师</th>
+            <th class="px-3 py-2 text-right">综合分</th>
+            <th class="px-3 py-2 text-left">因子拆解</th>
+            <th class="px-3 py-2 text-right">入选价</th>
             <th class="px-3 py-2 text-right">市值 ($B)</th>
             <th class="px-3 py-2 text-right" title="入选后 5 天涨幅 - 同期 SPY 涨幅">5d α</th>
             <th class="px-3 py-2 text-right" title="入选后 20 天涨幅 - 同期 SPY 涨幅">20d α</th>
+            <th class="px-3 py-2 text-left">推荐依据</th>
+            <th class="px-3 py-2 text-left">风险</th>
             <th class="px-3 py-2 text-left">来源</th>
             <th class="px-3 py-2 text-center" title="AI 系统跑这批推荐的实际时间 — 防止误以为是实时数据">推荐时间</th>
             <th class="px-3 py-2 text-center">操作</th>
@@ -919,15 +941,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <p class="text-xs text-slate-500 mt-4">
       💡 <strong>怎么用</strong>: 这是科技/AI 股票池横向排名。未在自选的标的可去自选股管理页调研后加入；
       已在自选的标的可回到详情页复核它为什么排在这里。
-      <strong class="text-violet-700">α 列</strong>显示推荐后 5/20 交易日相对 SPY 的超额收益,
-      数据来自 <code class="text-xs bg-slate-100 px-1 rounded">discovery_tracking</code> 表(每日刷新)。
+      <strong class="text-violet-700">α 列</strong>显示推荐后 5/20 交易日相对各市场基准的超额收益,
+      数据来自 <code class="text-xs bg-slate-100 px-1 rounded">recommendation_picks + pick_outcomes</code>（V2，每日刷新；生产统计从 2026-05-21 起）。
     </p>
   </div>
 
   <!-- 推荐历史 view(默认隐藏,切换 sub-tab 后显示) -->
   <div id="disc-view-history" style="display:none">
     <div class="flex items-center gap-3 mb-4">
-      <span class="text-xs text-slate-500">按推荐日倒序 · 点击展开查看当日 20 只候选 + 各自 alpha</span>
+      <span class="text-xs text-slate-500">按推荐批次倒序 · 每批是后台完整候选（美股/A股/港股各最多 20 只）· 点击展开查看各自 alpha</span>
     </div>
     <div id="discovery-history-list" class="space-y-2"></div>
   </div>
@@ -959,15 +981,15 @@ function switchDiscoveryView(view) {
 }
 </script>
 
-<!-- ============ 估值视角 ============ -->
+<!-- ============ 买前研究（个股研究 + 风险反证） ============ -->
 <section id="valuation" class="max-w-7xl mx-auto px-6 py-10 bg-gradient-to-br from-cyan-50 to-blue-50 rounded-2xl my-6">
   <div class="flex items-center gap-3 mb-2">
-    <span class="text-3xl">📈</span>
-    <h2 class="text-2xl font-bold text-slate-900">估值视角（PE × 涨幅）</h2>
+    <span class="text-3xl">🛡</span>
+    <h2 class="text-2xl font-bold text-slate-900">买前研究 — 个股研究 + 风险反证</h2>
   </div>
   <p class="text-slate-700 mb-6 max-w-3xl">
-    用 <strong>远期 PE</strong>（市场对未来 12 个月利润的预期估值）和 <strong>YTD 涨幅</strong>
-    交叉分析，找「相对便宜+业绩在加速」的组合。<strong class="text-rose-600">PE 仅是单一维度参考，不构成投资建议</strong>。
+    这里承接从 AI 推荐、持仓、自选股点进来的买前判断：先看估值、价格、数据覆盖，再往下看反向审查。
+    <strong class="text-rose-600">它是研究工作台，不是推荐列表，也不会写入持仓。</strong>
   </p>
 
   <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6">
@@ -1077,17 +1099,129 @@ function switchDiscoveryView(view) {
   </div>
 </section>
 
-<!-- ============ 💼 持仓管理 Tab（localStorage） ============ -->
+<!-- ============ 💼 我的持仓 Tab（只允许用户手动维护真实账户） ============ -->
+<section id="real-holdings" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
+  <div class="flex items-center justify-between gap-3 flex-wrap mb-5">
+    <div>
+      <h2 class="text-2xl font-bold text-slate-900">💼 我的持仓</h2>
+      <p class="text-sm text-slate-600 mt-1">这里记录你实际已经买入的股票，用来对账成本、市值、盈亏、风控线，以及和 AI 目标仓位的差距。</p>
+    </div>
+  </div>
+
+  <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-4 mb-5">
+    <div class="flex items-start gap-3">
+      <div class="text-xl">🧭</div>
+      <div>
+        <h3 class="font-bold text-emerald-950">每天怎么用这页</h3>
+        <p class="text-sm text-emerald-800 mt-1">这里不直接给买卖结论，只回答“我的真钱账户现在是什么状态”。要做交易决策，请看今日决策台、AI 组合方案和调仓清单。</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="real-holdings-summary" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4"></div>
+  <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
+    <h3 class="text-sm font-semibold text-slate-700 mb-3">⚠️ 真实账户风控线（基于本金 <span data-cfg="total_capital">50 万</span>）</h3>
+    <div id="real-alert-line" class="space-y-2"></div>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-4">
+    <div id="real-holding-form-card" class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 h-fit transition">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="font-bold text-slate-900">录入持仓</h3>
+        <button onclick="resetRealHoldingForm()" class="text-xs text-slate-500 hover:text-violet-600">清空表单</button>
+      </div>
+      <p id="real-form-mode-hint" class="text-[11px] text-slate-500 mb-3">先填股票、成本价、数量；点“保存到我的持仓”后才会写入真实持仓表。</p>
+      <input id="real-form-id" type="hidden">
+      <div class="space-y-3">
+        <div>
+          <label class="text-xs font-medium text-slate-600">股票 ticker</label>
+          <input id="real-form-code" list="real-form-code-list" autocomplete="off" placeholder="例：NVDA / 600519.SS / 9988.HK"
+                 class="w-full mt-1 px-3 py-2 border rounded text-sm font-mono uppercase">
+          <datalist id="real-form-code-list"></datalist>
+        </div>
+        <div class="grid grid-cols-3 gap-3">
+          <div class="col-span-2">
+            <label class="text-xs font-medium text-slate-600">成本价 <span id="real-form-price-currency-hint" class="text-amber-600 font-normal">（按本币填）</span></label>
+            <input id="real-form-price" type="number" step="0.01" class="w-full mt-1 px-3 py-2 border rounded text-sm">
+          </div>
+          <div>
+            <label class="text-xs font-medium text-slate-600">币种</label>
+            <select id="real-form-currency" class="w-full mt-1 px-3 py-2 border rounded text-sm">
+              <option value="USD">USD</option>
+              <option value="CNY">CNY</option>
+              <option value="HKD">HKD</option>
+              <option value="JPY">JPY</option>
+              <option value="KRW">KRW</option>
+              <option value="AUD">AUD</option>
+              <option value="GBP">GBP</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs font-medium text-slate-600">数量（股）</label>
+            <input id="real-form-shares" type="number" step="1" class="w-full mt-1 px-3 py-2 border rounded text-sm">
+          </div>
+          <div>
+            <label class="text-xs font-medium text-slate-600">买入日期</label>
+            <input id="real-form-date" type="date" value="{TODAY_DATE}" class="w-full mt-1 px-3 py-2 border rounded text-sm">
+          </div>
+        </div>
+        <button onclick="saveRealHolding()" class="w-full bg-violet-600 hover:bg-violet-700 text-white py-2 rounded font-medium">保存到我的持仓</button>
+      </div>
+      <p class="text-[11px] text-slate-500 mt-3 leading-relaxed">真实持仓写入 DuckDB <span class="font-mono">real_holdings</span>。AI 方案模拟仓写入 <span class="font-mono">model_sim_holdings</span>，两者不会混用。</p>
+    </div>
+
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
+      <table class="min-w-max w-full text-sm">
+        <thead class="bg-slate-100">
+          <tr>
+            <th class="px-3 py-2 text-left whitespace-nowrap">股票</th>
+            <th class="px-3 py-2 text-left whitespace-nowrap">主题</th>
+            <th class="px-3 py-2 text-right whitespace-nowrap">成本价</th>
+            <th class="px-3 py-2 text-right whitespace-nowrap">数量</th>
+            <th class="px-3 py-2 text-right whitespace-nowrap">现价</th>
+            <th class="px-3 py-2 text-right whitespace-nowrap">市值 RMB</th>
+            <th class="px-3 py-2 text-right whitespace-nowrap">盈亏</th>
+            <th class="px-3 py-2 text-right whitespace-nowrap">当前仓位</th>
+            <th class="px-3 py-2 text-right whitespace-nowrap">AI 目标</th>
+            <th class="px-3 py-2 text-right whitespace-nowrap">差距</th>
+            <th class="px-3 py-2 text-center whitespace-nowrap">操作</th>
+          </tr>
+        </thead>
+        <tbody id="real-holdings-table">
+          <tr><td colspan="11" class="text-center text-slate-500 py-8">暂无持仓 · 点击左侧表单添加</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+      <h3 class="text-sm font-semibold text-slate-700 mb-2">📊 我的持仓分布</h3>
+      <div id="chart-real-allocation" style="height:280px"></div>
+    </div>
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+      <h3 class="text-sm font-semibold text-slate-700 mb-2">📈 我的主题分布</h3>
+      <div id="chart-real-theme" style="height:280px"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 🧪 AI 方案模拟 Tab ============ -->
 <section id="portfolio" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
   <div class="flex items-center justify-between mb-4">
     <div>
-      <h2 class="text-2xl font-bold text-slate-900">💼 我的持仓管理</h2>
-      <p class="text-sm text-slate-600 mt-1">本地浏览器保存（localStorage）· 实时与 yfinance 数据计算盈亏 · <strong class="text-rose-600">不构成投资建议</strong></p>
+      <h2 class="text-2xl font-bold text-slate-900">🧪 AI 方案模拟</h2>
+      <p class="text-sm text-slate-600 mt-1">这里只看 AI 组合方案生成的模拟仓（DuckDB model_sim_holdings），用于观察模型能力。<strong class="text-rose-600">不是你的真实持仓</strong>。</p>
     </div>
     <div class="flex gap-2">
-      <button onclick="loadPlanAv6()" title="把 AI 组合方案推荐的 12 只批量抄进持仓 — 仅在你已经真下单后用，下一步要手动改成真实成交价" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-lg text-sm font-medium">📋 把 AI 组合方案抄进持仓（仅在你真下单后用）</button>
-      <button onclick="addHolding()" class="bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-lg text-sm font-medium">+ 添加持仓</button>
+      <button onclick="loadPlanAv6()" title="用当前 AI 组合方案刷新推荐模拟仓，不会覆盖你的真实持仓" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-lg text-sm font-medium">📋 用 AI 组合方案刷新模拟仓</button>
     </div>
+  </div>
+
+  <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 mb-5 text-sm text-amber-900">
+    <strong>怎么理解：</strong>这里是“如果我照模型买，会是什么样”的模拟账本。你的真钱股票请放到「我的持仓」；模拟仓里的买入价和股数由模型估算，不能当真实成交记录。
   </div>
 
   <!-- 2026-05-21: "数据窗口/年化 95%/夏普 2.95/NVDA +330%" 黄底说明块已删除：
@@ -1135,7 +1269,7 @@ function switchDiscoveryView(view) {
 
   <!-- 三层警戒线进度条 -->
   <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
-    <h3 class="text-sm font-semibold text-slate-700 mb-3">⚠️ 风险警戒线（基于本金 <span data-cfg="total_capital">50 万</span>）</h3>
+    <h3 class="text-sm font-semibold text-slate-700 mb-3">⚠️ 模拟账户风控线（基于本金 <span data-cfg="total_capital">50 万</span>）</h3>
     <div id="alert-line" class="space-y-2"></div>
   </div>
 
@@ -1159,7 +1293,7 @@ function switchDiscoveryView(view) {
         </tr>
       </thead>
       <tbody id="holdings-table">
-        <tr><td colspan="12" class="text-center text-slate-500 py-8">暂无持仓 · 点击「+ 添加持仓」开始记录</td></tr>
+        <tr><td colspan="12" class="text-center text-slate-500 py-8">暂无推荐模拟仓 · 点击「用 AI 组合方案刷新模拟仓」开始观察模型能力</td></tr>
       </tbody>
       <tfoot id="holdings-footer" class="bg-slate-50 font-semibold text-slate-800" style="display:none">
         <tr>
@@ -1180,103 +1314,84 @@ function switchDiscoveryView(view) {
   <!-- 仓位健康度饼图 -->
   <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
     <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-      <h3 class="text-sm font-semibold text-slate-700 mb-2">📊 当前仓位分布</h3>
+      <h3 class="text-sm font-semibold text-slate-700 mb-2">📊 AI 模拟仓分布</h3>
       <div id="chart-allocation" style="height:280px"></div>
     </div>
     <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-      <h3 class="text-sm font-semibold text-slate-700 mb-2">📈 主题分布</h3>
+      <h3 class="text-sm font-semibold text-slate-700 mb-2">📈 AI 模拟主题分布</h3>
       <div id="chart-theme" style="height:280px"></div>
     </div>
   </div>
 
-  <!-- 添加持仓表单（隐藏 + 弹窗） -->
-  <div id="holding-modal" class="fixed inset-0 bg-black bg-opacity-50 z-50 hidden flex items-center justify-center">
-    <div class="bg-white rounded-xl p-6 max-w-md w-full mx-4">
-      <h3 class="text-lg font-bold mb-4">添加 / 编辑持仓</h3>
-      <div class="space-y-3">
-        <div>
-          <label class="text-xs font-medium text-slate-600">股票（选择自选股）</label>
-          <select id="form-code" class="w-full mt-1 px-3 py-2 border rounded text-sm"></select>
-        </div>
-        <div class="grid grid-cols-3 gap-3">
-          <div class="col-span-2">
-            <label class="text-xs font-medium text-slate-600">买入价 <span id="form-price-currency-hint" class="text-amber-600 font-normal">（按本币填）</span></label>
-            <input id="form-price" type="number" step="0.01" class="w-full mt-1 px-3 py-2 border rounded text-sm">
-          </div>
-          <div>
-            <label class="text-xs font-medium text-slate-600">币种</label>
-            <select id="form-currency" class="w-full mt-1 px-3 py-2 border rounded text-sm">
-              <option value="USD">USD 美元</option>
-              <option value="CNY">CNY 人民币</option>
-              <option value="HKD">HKD 港币</option>
-              <option value="JPY">JPY 日元</option>
-              <option value="KRW">KRW 韩元</option>
-              <option value="AUD">AUD 澳元</option>
-              <option value="GBP">GBP 英镑</option>
-            </select>
-          </div>
-        </div>
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="text-xs font-medium text-slate-600">数量（股）</label>
-            <input id="form-shares" type="number" step="1" class="w-full mt-1 px-3 py-2 border rounded text-sm">
-          </div>
-          <div>
-            <label class="text-xs font-medium text-slate-600">买入日期</label>
-            <input id="form-date" type="date" class="w-full mt-1 px-3 py-2 border rounded text-sm">
-          </div>
-        </div>
-        <p class="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
-          💡 <strong>币种规则</strong>：买入价请按<strong>本币</strong>填写。<br>
-          · 美股（NVDA / DELL 等裸 ticker）→ 填 USD 价 · A 股（.SS/.SZ/.BJ）→ 填 CNY 价 · 港股（.HK）→ 填 HKD 价。<br>
-          系统会按 ticker 后缀<strong>自动选币种</strong>，特殊情况你可以手动改。
-        </p>
-      </div>
-      <div class="flex gap-2 mt-5">
-        <button onclick="saveHolding()" class="flex-1 bg-violet-600 hover:bg-violet-700 text-white py-2 rounded font-medium">保存</button>
-        <button onclick="closeModal()" class="flex-1 bg-slate-200 hover:bg-slate-300 py-2 rounded">取消</button>
-      </div>
-    </div>
-  </div>
-
   <p class="text-xs text-slate-500 mt-4">
-    💾 数据保存在你浏览器 localStorage，<strong>清缓存会丢失</strong>。建议每次买卖后导出 JSON 备份。
+    💾 模拟仓写在 DuckDB <code class="bg-slate-100 px-1 rounded">model_sim_holdings</code> 表里，只用于观察模型，不参与真实账户对账。
     <button onclick="exportHoldings()" class="text-violet-600 hover:underline">导出 JSON</button> ·
     <button onclick="importHoldings()" class="text-violet-600 hover:underline">导入 JSON</button> ·
-    <button onclick="clearHoldings()" class="text-rose-600 hover:underline">清空全部</button>
+    <button onclick="clearHoldings()" class="text-rose-600 hover:underline">清空模拟仓</button>
   </p>
 </section>
 
 <!-- ============ 🤖 AI 组合方案 Tab ============ -->
 <section id="backtest" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
   <div class="mb-6">
-    <h2 class="text-2xl font-bold text-slate-900">🆚 系统在跑两个方案 · 看 AI 到底有没有用</h2>
-    <p class="text-sm text-slate-600 mt-1">每周一同时跑两套策略，让数据自然分胜负。<strong class="text-emerald-700">差距 C − A = AI 加的 alpha</strong>。基准 SPY · daily_refresh 自动累加。⚠️ <strong>这不是你的真实账户</strong>。</p>
+    <h2 class="text-2xl font-bold text-slate-900">⚖️ AI 组合方案</h2>
+    <p class="text-sm text-slate-600 mt-1">把今天的 AI 推荐转成“模型目标仓位”，再用历史快照检查动态调仓有没有比静态持有更好。这里只是模型方案，<strong class="text-rose-600">不是你的真实账户，也不会自动下单</strong>。</p>
   </div>
 
-  <!-- 🧪 v6 模型回测期望（2026-05-21 从"我的持仓"挪过来）-->
-  <div id="v6-metrics-card" class="bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-300 rounded-xl p-4 mb-6" style="display:none">
-    <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
-      <h3 class="text-sm font-bold text-emerald-900">🧪 v6 模型回测期望（<strong>不是你真实持仓的预期回报</strong> · 每日 rebalance 假设 · 基于过去 252 天均值）</h3>
-      <span class="text-xs text-emerald-700 bg-emerald-100 px-2 py-1 rounded">⚠️ 模型期望，非未来预测</span>
+  <div class="bg-white border border-slate-200 rounded-xl p-4 mb-5">
+    <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
+      <h3 class="text-base font-bold text-slate-900">先看这三件事</h3>
+      <span class="text-xs text-slate-500">这页用于“配仓 + 验证”，不是买卖确认单</span>
     </div>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3" id="v6-metrics-content"></div>
-    <p class="text-xs text-emerald-800 mt-3"><strong>⚠️ 注意</strong>：这是 Markowitz 优化器的"<strong>每日 rebalance 模型期望</strong>"（mean × 252，arithmetic）。下面 NAV 曲线用 <strong>buy-and-hold 复利</strong>口径会得到不同（通常更高）的数字 —— 两个都对，<strong>假设不同</strong>。仅用于<strong>不同方案的相对优劣对比</strong>，不是未来收益预测，更不是你点不点"📋 抄进持仓"按钮后的回报。</p>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+      <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <div class="text-sm font-semibold text-slate-900">1. 今天目标组合</div>
+        <p class="text-xs text-slate-600 mt-1">看模型建议买哪些、各占多少、现金留多少。真正要不要买，还要结合买前研究。</p>
+      </div>
+      <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <div class="text-sm font-semibold text-slate-900">2. 执行风险</div>
+        <p class="text-xs text-slate-600 mt-1">看是否现金过高、仓位太集中、数据不足或生产验收 WARN。这些会影响“今天能不能照着看”。</p>
+      </div>
+      <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <div class="text-sm font-semibold text-slate-900">3. 策略验证</div>
+        <p class="text-xs text-slate-600 mt-1">看动态调仓 C 是否跑赢静态方案 A。样本不足时只当观察，不当结论。</p>
+      </div>
+    </div>
   </div>
+
+  <!-- 🧪 v6 模型回测期望（技术自查，默认折叠）-->
+  <details id="v6-metrics-details" class="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-6" style="display:none">
+    <summary class="cursor-pointer list-none flex items-center justify-between gap-3 flex-wrap">
+      <span class="text-sm font-bold text-slate-900">模型预期指标（可选查看，主要给系统自查）</span>
+      <span class="text-xs text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded">不是收益承诺</span>
+    </summary>
+    <div id="v6-metrics-card" class="mt-4 bg-white border border-slate-200 rounded-lg p-4" style="display:none">
+      <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <h3 class="text-sm font-bold text-slate-900">v6 优化器 sanity check（每日 rebalance 假设 · 基于过去 252 天均值）</h3>
+        <span class="text-xs text-slate-600 bg-slate-100 px-2 py-1 rounded">模型期望，非未来预测</span>
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3" id="v6-metrics-content"></div>
+      <p class="text-xs text-slate-600 mt-3"><strong>怎么看</strong>：这里只检查优化器在历史均值和协方差假设下是否合理，例如收益/波动是否离谱。下面的 NAV 曲线是另一套口径：它用历史快照验证 A/C 方案的实际走势。两者服务不同目的，都不能当未来收益预测。</p>
+    </div>
+  </details>
 
   <!-- 🆚 两个方案对比卡（让新人一眼看懂 "两个方案 + 比什么"）-->
+  <div class="mb-3">
+    <h3 class="text-base font-bold text-slate-900">策略验证：A 静态 vs C 动态</h3>
+    <p class="text-xs text-slate-500 mt-1">A 是对照组，C 是听 AI 调仓。比较 C − A，才知道 AI 动态调仓有没有额外价值。</p>
+  </div>
   <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
     <!-- 方案 A · 静态死守（紫色，跟 NAV 曲线颜色一致） -->
     <div class="bg-violet-50 border-2 border-violet-300 rounded-xl p-5">
       <div class="flex items-center gap-2 mb-2">
         <span class="text-2xl">📦</span>
-        <h3 class="text-lg font-bold text-violet-900">方案 A · 静态死守</h3>
+        <h3 class="text-lg font-bold text-violet-900">A 静态方案：锁定后不调仓</h3>
       </div>
-      <p class="text-sm text-violet-800 font-medium mb-3">5-10 锁定 11 只股 · 从此不调仓</p>
+      <p class="text-sm text-violet-800 font-medium mb-3">用来当对照组：如果只是买入一批股票不动，会怎样？</p>
       <ul class="text-xs text-violet-700 space-y-1.5">
-        <li>✓ 模拟「<strong>佛系投资者</strong>」</li>
-        <li>✓ 不调仓 → <strong>0 手续费</strong>，无 look-ahead bias</li>
-        <li>✓ 完全取决于锁定日的初始选股运气</li>
+        <li>✓ 锁定一批股票后不再调仓</li>
+        <li>✓ 0 手续费，适合作为干净基准</li>
+        <li>✓ 结果主要取决于锁定日那批股票本身</li>
       </ul>
     </div>
 
@@ -1284,25 +1399,25 @@ function switchDiscoveryView(view) {
     <div class="bg-orange-50 border-2 border-orange-300 rounded-xl p-5">
       <div class="flex items-center gap-2 mb-2">
         <span class="text-2xl">🔄</span>
-        <h3 class="text-lg font-bold text-orange-900">方案 C · 动态调仓</h3>
+        <h3 class="text-lg font-bold text-orange-900">C 动态方案：按 AI 推荐调仓</h3>
       </div>
-      <p class="text-sm text-orange-800 font-medium mb-3">每周一按 AI 推荐重新优化</p>
+      <p class="text-sm text-orange-800 font-medium mb-3">用来验证 AI 是否真的增加价值：按最新推荐重新优化。</p>
       <ul class="text-xs text-orange-700 space-y-1.5">
-        <li>✓ 模拟「<strong>听 AI 调仓</strong>」</li>
-        <li>✓ 扣 <strong>10bps / 换股</strong> 手续费（A 股可调到 8bps）</li>
-        <li>✓ 跟踪 AI 实时选股建议</li>
+        <li>✓ 定期用最新 AI 推荐生成目标组合</li>
+        <li>✓ 扣 10bps / 换股手续费</li>
+        <li>✓ 如果长期跑赢 A，才说明调仓有价值</li>
       </ul>
     </div>
   </div>
 
   <!-- 核心 KPI：C - A spread = AI alpha 的硬证据 -->
   <div class="bg-gradient-to-r from-emerald-50 via-emerald-50 to-blue-50 border-2 border-emerald-300 rounded-xl p-5 mb-6 text-center">
-    <div class="text-[11px] uppercase tracking-widest text-emerald-700 font-bold mb-1">AI 加的 alpha</div>
+    <div class="text-[11px] uppercase tracking-widest text-emerald-700 font-bold mb-1">动态调仓有没有额外价值</div>
     <div class="text-3xl md:text-4xl font-bold text-emerald-900 mb-1">
       <span id="ai-alpha-spread-display">—</span>
       <span class="text-sm text-emerald-600 font-normal">= C 累计 − A 累计</span>
     </div>
-    <div class="text-xs text-slate-600 mt-2">C 一直跑赢 A → AI 动态调仓有价值；C 跟不上 A → AI 加价值不够覆盖手续费</div>
+    <div class="text-xs text-slate-600 mt-2">正数表示动态调仓暂时跑赢静态方案；负数表示调仓没有覆盖手续费或选股效果不够。样本少时只看趋势，不下结论。</div>
   </div>
 
   <div id="backtest-inception-banner" class="mb-4 hidden bg-violet-50 border-l-4 border-violet-500 rounded-r-lg p-3 text-sm text-slate-800"></div>
@@ -1597,7 +1712,11 @@ function switchDiscoveryView(view) {
     </button>
     <button onclick="switchInitSub('watchlist')" id="init-sub-btn-watchlist"
             class="init-sub-btn px-4 py-2 text-sm font-medium border-b-2 transition">
-      ✨ 自选股配置
+      ✨ 自选股
+    </button>
+    <button onclick="switchInitSub('picks')" id="init-sub-btn-picks"
+            class="init-sub-btn px-4 py-2 text-sm font-medium border-b-2 transition">
+      🔝 AI 优选
     </button>
   </div>
 </section>
@@ -1860,10 +1979,10 @@ function switchDiscoveryView(view) {
   <div class="mb-6">
     <div class="flex items-center gap-3 mb-2">
       <span class="text-3xl">🧪</span>
-      <h2 class="text-3xl font-bold text-slate-900">运行状态</h2>
+      <h2 class="text-3xl font-bold text-slate-900">系统状态</h2>
     </div>
     <p class="text-sm text-slate-600">
-      按美股 / A 股 / 港股拆开看今天的数据拉取、分析、推荐、组合和验收状态。这里是系统健康页，不是买卖建议。
+      先看今天推荐是否可用、组合是否可执行、自动化是否正常。技术链路默认折叠，避免把真问题淹没在日志里。
     </p>
   </div>
   {RUNTIME_STATUS_PANEL}
@@ -2384,8 +2503,8 @@ const SIMULATION   = {SIMULATION_JSON};
 // 2026-05-11 PM: watchlist 链条定位信息(chain/chain_tier/chain_role/layman_intro)
 // 按 code 索引 → 任何 tab 显示股票时,Stock Pill 都能查到上下文
 const WATCHLIST_CHAIN_INFO = {WATCHLIST_CHAIN_INFO_JSON};
-// 2026-05-11 PM: AI 推荐的历史推荐 + 准确度跟踪(discovery_history JOIN tracking)
-// 数组,每条 = 一次 (generated_date, ticker) 推荐 + 它的 alpha 数据
+// V2: AI 推荐的 point-in-time 历史 + 准确度跟踪(recommendation_picks JOIN pick_outcomes)
+// 数组,每条 = 一次 (run_id, ticker) 推荐 + 它的 alpha 数据
 const DISCOVERY_HISTORY = {DISCOVERY_HISTORY_JSON};
 const RISK_METRICS = {RISK_METRICS_JSON_DB};
 const TRACK_13F    = {TRACK_13F_JSON_DB};
@@ -2469,12 +2588,12 @@ function _heldBadge(code) {
   if (manual.length > 0) {
     const n = manual.reduce((a, b) => a + (b.shares || 0), 0);
     const li = manual.length > 1 ? `（${manual.length} 笔）` : "";
-    badges.push(`<span class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-700 align-middle" title="你已持仓 ${n} 股${li}（来自 holdings 表 source=manual）">💼 持仓</span>`);
+    badges.push(`<span class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-700 align-middle" title="你已持仓 ${n} 股${li}（来自 real_holdings 真实持仓表）">💼 持仓</span>`);
   }
   if (aiPlan.length > 0) {
     const n = aiPlan.reduce((a, b) => a + (b.shares || 0), 0);
     const li = aiPlan.length > 1 ? `（${aiPlan.length} 笔）` : "";
-    badges.push(`<span class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold bg-violet-50 text-violet-600 ring-1 ring-violet-200 align-middle" title="AI 方案模拟持仓 ${n} 股${li} — 不是你真买的（source=ai_plan，可在持仓页清理）">📋 方案</span>`);
+    badges.push(`<span class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold bg-violet-50 text-violet-600 ring-1 ring-violet-200 align-middle" title="AI 方案模拟持仓 ${n} 股${li} — 不是你真买的（来自 model_sim_holdings，可在模拟仓页清理）">📋 方案</span>`);
   }
   return badges.length ? " " + badges.join(" ") : "";
 }
@@ -4282,11 +4401,13 @@ const TAB_SECTIONS = {
   today: ["today-decision"],
   about: ["about"],
   overview: ["hero", "stress-test", "thesis", "evolution", "scarce", "events", "hundred-x"],
+  "real-holdings": ["real-holdings"],
   portfolio: ["portfolio"],
   picks: ["scoring-rules", "picks-review"],
   discovery: ["discovery"],
-  audit: ["audit-panel"],
-  valuation: ["valuation"],
+  "buy-research": ["valuation", "audit-panel"],
+  audit: ["valuation", "audit-panel"],
+  valuation: ["valuation", "audit-panel"],
   // chain = 「产业链地图」· 取代原 themes + chain-overview（主题分组已退役）
   chain: ["chain-header", "chain-overview"],
   backtest: ["backtest"],
@@ -4297,17 +4418,38 @@ const TAB_SECTIONS = {
   "stock-detail": ["stock-detail"],
   "runtime-status": ["runtime-status"],
   upgrade: ["upgrade"],
-  "init-config": ["init-config", "portfolio-config", "watchlist-edit"],
+  "init-config": ["init-config", "portfolio-config", "watchlist-edit", "scoring-rules", "picks-review"],
 };
 
-// 二级 tab：在 #init-config 父 tab 里切换 投资方案 / 关注股票
+// 二级 tab：在 #init-config 父 tab 里切换 投资方案 / 自选股 / AI 优选
 let _initSubCurrent = "portfolio";
+function _mountInitPicksSections() {
+  const wled = document.getElementById("watchlist-edit");
+  const scoring = document.getElementById("scoring-rules");
+  const review = document.getElementById("picks-review");
+  if (!wled) return;
+  if (scoring && scoring.previousElementSibling !== wled) {
+    wled.insertAdjacentElement("afterend", scoring);
+  }
+  if (review) {
+    const anchor = scoring || wled;
+    if (review.previousElementSibling !== anchor) {
+      anchor.insertAdjacentElement("afterend", review);
+    }
+  }
+}
+
 function switchInitSub(sub) {
   _initSubCurrent = sub;
+  _mountInitPicksSections();
   const pcfg = document.getElementById("portfolio-config");
   const wled = document.getElementById("watchlist-edit");
+  const scoring = document.getElementById("scoring-rules");
+  const review = document.getElementById("picks-review");
   if (pcfg) pcfg.style.display = (sub === "portfolio") ? "" : "none";
   if (wled) wled.style.display = (sub === "watchlist") ? "" : "none";
+  if (scoring) scoring.style.display = (sub === "picks") ? "" : "none";
+  if (review) review.style.display = (sub === "picks") ? "" : "none";
   // 按钮 active 样式
   document.querySelectorAll(".init-sub-btn").forEach(b => {
     const active = b.id === "init-sub-btn-" + sub;
@@ -4320,6 +4462,7 @@ function switchInitSub(sub) {
   // 触发子页 lazy load
   if (sub === "portfolio") setTimeout(loadPortfolioConfig, 50);
   if (sub === "watchlist") setTimeout(loadWatchlistTable, 50);
+  if (sub === "picks") setTimeout(renderTodayPicksList, 50);
 }
 
 function switchTab(tab) {
@@ -4345,12 +4488,13 @@ function switchTab(tab) {
   // 滚到顶部
   window.scrollTo(0, 0);
   // tab 特定的延迟初始化
+  if (tab === "real-holdings") setTimeout(async () => { await _ensureHoldingsLoaded(); renderRealHoldings(); }, 50);
   if (tab === "portfolio") setTimeout(async () => { await _ensureHoldingsLoaded(); renderPortfolio(); }, 50);
   if (tab === "backtest") setTimeout(renderPlanBacktest, 100);
   if (tab === "professional") setTimeout(renderProfessional, 50);
   if (tab === "db-explorer") setTimeout(loadDbExplorer, 50);
   if (tab === "chain") setTimeout(loadChainOverview, 50);
-  if (tab === "init-config") setTimeout(() => switchInitSub(_initSubCurrent), 50);
+  if (tab === "init-config") switchInitSub(_initSubCurrent);
 }
 
 function getTabFromHash() {
@@ -4358,6 +4502,12 @@ function getTabFromHash() {
   // 老 hash 兼容：portfolio-config / watchlist-edit → init-config（并切到对应子页）
   if (h === "portfolio-config") { _initSubCurrent = "portfolio"; return "init-config"; }
   if (h === "watchlist-edit")   { _initSubCurrent = "watchlist"; return "init-config"; }
+  if (h === "picks" || h === "picks-review" || h === "scoring-rules") {
+    _initSubCurrent = "picks";
+    return "init-config";
+  }
+  // 老 hash 兼容：个股研究 / 买前审查 → 买前研究工作台
+  if (h === "valuation" || h === "audit") return "buy-research";
   // 老 hash 兼容：themes / chain-overview / landscape → chain（2026-05-11 合并 + 改名后）
   if (h === "themes" || h === "chain-overview" || h === "landscape") return "chain";
   // 默认首屏是今日决策台：先判断今天链路是否可用，再进入推荐/组合/研究。
@@ -4366,7 +4516,7 @@ function getTabFromHash() {
 window.addEventListener("hashchange", () => switchTab(getTabFromHash()));
 window.addEventListener("DOMContentLoaded", () => switchTab(getTabFromHash()));
 
-// ============ 持仓管理（DuckDB · /api/holdings · 2026-05-12 从 localStorage 迁过来） ============
+// ============ 持仓管理（DuckDB · real_holdings / model_sim_holdings 两本账） ============
 const STORAGE_KEY = "ai_portfolio_holdings_v1";  // 仅用于首次启动检测+一次性导入到 DuckDB,导入完清空
 // 投资方案配置 · 默认值,会被 /api/config 覆盖
 let TOTAL_CAPITAL = 500000;
@@ -4393,10 +4543,30 @@ function _recomputePortfolioLines() {
       const portfolioEl = document.getElementById("portfolio");
       if (portfolioEl && portfolioEl.style.display !== "none") renderPortfolio();
     }
+    if (typeof renderRealHoldings === "function") {
+      const realEl = document.getElementById("real-holdings");
+      if (realEl && realEl.style.display !== "none") renderRealHoldings();
+    }
     // 系统介绍页里的金额展示也刷新
     _refreshAboutPageNumbers();
   } catch (e) {
     // API 离线 · 静默回退默认值
+  }
+})();
+
+// 启动时拉汇率单一源 · 覆盖 FX_TO_RMB fallback
+// 设计：API 不可用时静默用 fallback,保证 file:// 直接打开 HTML 也能渲染
+(async function _initFxRates() {
+  try {
+    const r = await fetch(WATCHLIST_API_BASE + "/api/fx-rates");
+    if (!r.ok) return;
+    const payload = await r.json();
+    if (payload && payload.rates && typeof payload.rates === "object") {
+      FX_TO_RMB = Object.assign({}, FX_TO_RMB, payload.rates);
+      FX_AS_OF = payload.as_of || "unknown";
+    }
+  } catch (e) {
+    // API 离线 · 静默回退到 const FX_TO_RMB fallback
   }
 })();
 
@@ -4491,6 +4661,10 @@ async function savePortfolioConfig() {
       const portfolioEl = document.getElementById("portfolio");
       if (portfolioEl && portfolioEl.style.display !== "none") renderPortfolio();
     }
+    if (typeof renderRealHoldings === "function") {
+      const realEl = document.getElementById("real-holdings");
+      if (realEl && realEl.style.display !== "none") renderRealHoldings();
+    }
     if (banner) {
       banner.className = "mb-4 px-4 py-3 rounded-lg text-sm bg-emerald-50 border border-emerald-200 text-emerald-800";
       banner.textContent = `✅ 已保存 · 持仓页和系统介绍页已用新值刷新。飞书早报需等下一次跑批生效。`;
@@ -4541,8 +4715,11 @@ function parsePrice(s) {
   return { price: parseFloat(m[1].replace(/,/g, "")), currency: m[2] || "USD" };
 }
 
-// 简化汇率（用于跨币种统一为 RMB）—— 真实使用应该实时拉
-const FX_TO_RMB = { USD: 7.1, HKD: 0.91, KRW: 0.0052, JPY: 0.046, AUD: 4.6, CNY: 1, GBP: 9.0 };
+// 跨币种 → RMB 汇率。fallback 值仅在 /api/fx-rates 不可用时使用。
+// 启动时 _initFxRates() 会用后端 scripts/lib/fx_rates.py 的值覆盖,确保前后端一致。
+// 改这里的 fallback 不要忘了同步 scripts/lib/fx_rates.py。
+let FX_TO_RMB = { USD: 7.10, HKD: 0.917, KRW: 0.0052, JPY: 0.046, AUD: 4.60, CNY: 1.0, GBP: 9.00 };
+let FX_AS_OF = "fallback";
 
 function getCurrentPriceRMB(code) {
   const r = RECORDS.find(x => x.code === code);
@@ -4566,157 +4743,431 @@ function getCurrentPriceRMB(code) {
   return { rmb_price: p.price * fx, raw_price: p.price, currency: currency, fx };
 }
 
-let _holdingsCache = [];          // 同步快照,供 renderPortfolio 用
-let _holdingsLoaded = false;      // 是否已从 API 拉过一次(含 legacy 迁移)
+let _realHoldingsCache = [];      // 真实持仓：/api/real-holdings
+let _simHoldingsCache = [];       // 推荐模拟仓：/api/model-sim-holdings
+let _holdingsCache = [];          // 合并快照，仅供 stockPill badge 等展示
+let _holdingsLoaded = false;      // 是否已从新 API 拉过一次
 
 async function _ensureHoldingsLoaded() {
   if (_holdingsLoaded) return;
-  // 2026-05-21: 删除 legacy localStorage migration（2026-05-12 迁移日已过 9 天，
-  // 全部用户应该迁完；保留 migration 是 race condition 源 —— 多个 DOMContentLoaded
-  // handler 并行触发时可能用 stale localStorage 覆盖 db 新数据）。
-  // 若用户机器还有 localStorage 残留，旁边清一下：localStorage.removeItem("ai_portfolio_holdings_v1")
   try {
-    const r = await fetch(WATCHLIST_API_BASE + "/api/holdings");
-    _holdingsCache = r.ok ? await r.json() : [];
+    const [realResp, simResp] = await Promise.all([
+      fetch(WATCHLIST_API_BASE + "/api/real-holdings"),
+      fetch(WATCHLIST_API_BASE + "/api/model-sim-holdings"),
+    ]);
+    _realHoldingsCache = realResp.ok ? await realResp.json() : [];
+    _simHoldingsCache = simResp.ok ? await simResp.json() : [];
   } catch (e) {
-    _holdingsCache = [];
+    _realHoldingsCache = [];
+    _simHoldingsCache = [];
   }
+  _holdingsCache = _realHoldingsCache.concat(_simHoldingsCache.map(h => ({...h, source: "ai_plan"})));
   _holdingsLoaded = true;
 }
 
 // 同步返回 cache(供同步代码用)
 function loadHoldings() { return _holdingsCache; }
 
+function _holdingSource(h) {
+  if (!h) return "manual";
+  if (h.plan_run_id || h.plan_version || h.target_weight != null || h.amount_rmb != null) return "ai_plan";
+  return (h.source) ? String(h.source) : "manual";
+}
+
+function _isRealHolding(h) {
+  return _holdingSource(h) !== "ai_plan";
+}
+
+function _isSimHolding(h) {
+  return _holdingSource(h) === "ai_plan";
+}
+
+function _holdingsBySource(source) {
+  if (source === "manual") return _realHoldingsCache;
+  if (source === "ai_plan") return _simHoldingsCache;
+  return loadHoldings();
+}
+
+function _findRecord(code) {
+  return RECORDS.find(x => String(x.code || "").toUpperCase() === String(code || "").toUpperCase());
+}
+
+function _findAiPick(code) {
+  const c = String(code || "").toUpperCase();
+  const candidates = DISCOVERY && Array.isArray(DISCOVERY.candidates) ? DISCOVERY.candidates : [];
+  return candidates.find(x => String(x.ticker || x.code || "").toUpperCase() === c) || null;
+}
+
+function _targetWeightFor(code) {
+  const c = String(code || "").toUpperCase();
+  const rows = (PLAN_A_V6 && (PLAN_A_V6.plan_v6 || PLAN_A_V6.plan_v5 || PLAN_A_V6.plan)) || [];
+  const hit = rows.find(p => String(p.ticker || p.code || "").toUpperCase() === c);
+  if (!hit) return null;
+  const w = hit.target_weight ?? hit.v6_weight ?? hit.v5_weight ?? hit.capped_weight ?? hit.weight ?? 0;
+  return Number(w) || 0;
+}
+
+function _renderAccountRiskLine(containerId, portfolioValue, emptyText, accountLabel) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  if (!portfolioValue || portfolioValue <= 0) {
+    el.innerHTML = `<div class="text-sm text-slate-500">${_esc(emptyText || "暂无账户市值")}</div>`;
+    return;
+  }
+  const distToStop = portfolioValue - STOPLOSS_LINE;
+  const distToTarget = TARGET_LINE - portfolioValue;
+  const drawdownPct = (TOTAL_CAPITAL - portfolioValue) / TOTAL_CAPITAL * 100;
+  let statusBadge, statusText, statusTip;
+  if (portfolioValue <= STOPLOSS_LINE) {
+    statusBadge = "bg-rose-100 text-rose-700 ring-2 ring-rose-400";
+    statusText = "🔴 已破止损线";
+    statusTip = `${accountLabel}总值跌破止损线`;
+  } else if (portfolioValue <= WARNING_LINE) {
+    statusBadge = "bg-amber-100 text-amber-700 ring-2 ring-amber-400";
+    statusText = "⚠️ 进入预警区";
+    statusTip = `${accountLabel}总值进入预警区`;
+  } else if (portfolioValue >= TARGET_LINE) {
+    statusBadge = "bg-violet-100 text-violet-700 ring-2 ring-violet-400";
+    statusText = "🎯 触及止盈参考";
+    statusTip = `${accountLabel}总值触及止盈参考线`;
+  } else {
+    statusBadge = "bg-emerald-100 text-emerald-700 ring-2 ring-emerald-400";
+    statusText = "✅ 安全区";
+    statusTip = `${accountLabel}在预警线和止盈线之间`;
+  }
+  const lossClr = distToStop > 0 ? "text-emerald-600" : "text-rose-600";
+  const targetClr = distToTarget > 0 ? "text-slate-600" : "text-violet-600";
+  const ddSign = drawdownPct > 0 ? "-" : "+";
+  const ddAbs = Math.abs(drawdownPct).toFixed(2);
+  const ddClr = drawdownPct > 0 ? "text-rose-600" : "text-emerald-600";
+  el.innerHTML = `
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+      <div class="rounded-lg p-3 ${statusBadge}" title="${_esc(statusTip)}">
+        <div class="text-xs opacity-75 mb-1">${_esc(accountLabel)}状态</div>
+        <div class="text-lg font-bold">${statusText}</div>
+        <div class="text-[11px] opacity-75 mt-1">vs 本金 <strong class="${ddClr}">${ddSign}${ddAbs}%</strong></div>
+      </div>
+      <div class="rounded-lg p-3 bg-rose-50 border border-rose-200" title="账户总值 - 止损线">
+        <div class="text-xs text-rose-600 mb-1">距 ${Math.round(STOPLOSS_LINE / 10000)} 万止损线还有</div>
+        <div class="text-lg font-bold ${lossClr}">${distToStop >= 0 ? "+" : ""}${distToStop.toLocaleString(undefined, {maximumFractionDigits:0})} <span class="text-xs font-normal">RMB</span></div>
+        <div class="text-[11px] text-rose-500 mt-1">${distToStop > 0 ? `约可再跌 ${(distToStop / portfolioValue * 100).toFixed(1)}%` : "已跌破止损线"}</div>
+      </div>
+      <div class="rounded-lg p-3 bg-violet-50 border border-violet-200" title="止盈参考线 - 账户总值">
+        <div class="text-xs text-violet-600 mb-1">距 ${Math.round(TARGET_LINE / 10000)} 万止盈线还差</div>
+        <div class="text-lg font-bold ${targetClr}">${distToTarget >= 0 ? "" : "+"}${Math.abs(distToTarget).toLocaleString(undefined, {maximumFractionDigits:0})} <span class="text-xs font-normal">RMB</span></div>
+        <div class="text-[11px] text-violet-500 mt-1">${distToTarget > 0 ? `约还要涨 ${(distToTarget / portfolioValue * 100).toFixed(1)}%` : "已超止盈线"}</div>
+      </div>
+    </div>
+  `;
+}
+
 // 重新拉最新数据并 render
 async function refreshHoldingsAndRender() {
   try {
-    const r = await fetch(WATCHLIST_API_BASE + "/api/holdings");
-    if (r.ok) _holdingsCache = await r.json();
+    const [realResp, simResp] = await Promise.all([
+      fetch(WATCHLIST_API_BASE + "/api/real-holdings"),
+      fetch(WATCHLIST_API_BASE + "/api/model-sim-holdings"),
+    ]);
+    _realHoldingsCache = realResp.ok ? await realResp.json() : [];
+    _simHoldingsCache = simResp.ok ? await simResp.json() : [];
   } catch (e) {}
+  _holdingsCache = _realHoldingsCache.concat(_simHoldingsCache.map(h => ({...h, source: "ai_plan"})));
   _holdingsLoaded = true;
-  renderPortfolio();
+  if (typeof renderPortfolio === "function") renderPortfolio();
+  if (typeof renderRealHoldings === "function") renderRealHoldings();
 }
 
-// 整批替换(loadPlanAv6 / importHoldings / clearHoldings)
-async function saveHoldings(holdings) {
+// 整批替换推荐模拟仓。真实持仓由 /api/real-holdings 单独维护。
+async function saveHoldings(holdings, sourceScope=null) {
   const items = holdings.map(h => ({
     code: h.code,
     entry_price: h.entry_price,
     shares: h.shares,
     date: h.date,
-    source: h._plan_a_v6 ? "ai_plan" : (h.source || "manual"),
+    target_weight: h.target_weight || 0,
+    amount_rmb: h.amount_rmb || h.amount || 0,
+    plan_run_id: h.plan_run_id || h.run_id || (PLAN_A_V6 && (PLAN_A_V6.run_id || PLAN_A_V6.portfolio_plan_sync?.run_id)) || null,
+    plan_version: h.plan_version || "v6_risk_aware",
     currency: h.currency || _currencyForTicker(h.code),  // 显式写本币，后续 render 不依赖后缀推断
+    notes: h.notes || null,
   }));
   try {
-    const r = await fetch(WATCHLIST_API_BASE + "/api/holdings/bulk-replace", {
+    const r = await fetch(WATCHLIST_API_BASE + "/api/model-sim-holdings/bulk-replace", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(items),
     });
-    if (!r.ok) { alert("保存持仓失败: HTTP " + r.status); return; }
-  } catch (e) { alert("保存持仓失败: " + e.message); return; }
+    if (!r.ok) { alert("保存模拟仓失败: HTTP " + r.status); return; }
+  } catch (e) { alert("保存模拟仓失败: " + e.message); return; }
   await refreshHoldingsAndRender();
 }
 
-let editingId = null;  // null = 新增, 数字 = 编辑该 id
-
-function addHolding() { editingId = null; openModal(); }
-
-function editHolding(id) {
-  editingId = id;
-  const h = _holdingsCache.find(x => x.id === id);
-  if (!h) return;
-  document.getElementById("form-code").value = h.code;
-  document.getElementById("form-price").value = h.entry_price;
-  document.getElementById("form-shares").value = h.shares;
-  document.getElementById("form-date").value = h.entry_date || "";
-  // 编辑时优先用 h.currency（db 实际写入的），无值时按 code 推断
-  document.getElementById("form-currency").value = h.currency || _currencyForTicker(h.code);
-  openModal();
+function _syncRealFormCurrency() {
+  const code = (document.getElementById("real-form-code")?.value || "").trim().toUpperCase();
+  if (!code) return;
+  const cur = _currencyForTicker(code);
+  const sel = document.getElementById("real-form-currency");
+  const hint = document.getElementById("real-form-price-currency-hint");
+  if (sel) sel.value = cur;
+  if (hint) hint.textContent = `（按 ${cur} 填）`;
 }
 
-async function deleteHolding(id) {
-  if (!confirm("确定删除？")) return;
+function resetRealHoldingForm() {
+  const list = document.getElementById("real-form-code-list");
+  if (list) list.innerHTML = RECORDS.map(r => `<option value="${r.code}">${r.name}</option>`).join("");
+  const today = new Date().toISOString().split("T")[0];
+  ["id", "code", "price", "shares"].forEach(k => {
+    const el = document.getElementById("real-form-" + k);
+    if (el) el.value = "";
+  });
+  const dateEl = document.getElementById("real-form-date");
+  if (dateEl) dateEl.value = today;
+  const curEl = document.getElementById("real-form-currency");
+  if (curEl) curEl.value = "USD";
+  const hint = document.getElementById("real-form-price-currency-hint");
+  if (hint) hint.textContent = "（按 USD 填）";
+}
+
+function _focusRealHoldingForm({highlight = false} = {}) {
+  const card = document.getElementById("real-holding-form-card");
+  const codeEl = document.getElementById("real-form-code");
+  if (card) {
+    card.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (highlight) {
+      card.classList.add("ring-2", "ring-violet-300", "ring-offset-2");
+      setTimeout(() => card.classList.remove("ring-2", "ring-violet-300", "ring-offset-2"), 1800);
+    }
+  }
+  setTimeout(() => codeEl?.focus(), 250);
+}
+
+document.addEventListener("input", e => {
+  if (e.target && e.target.id === "real-form-code") _syncRealFormCurrency();
+});
+document.addEventListener("change", e => {
+  if (e.target && e.target.id === "real-form-code") _syncRealFormCurrency();
+  if (e.target && e.target.id === "real-form-currency") {
+    const hint = document.getElementById("real-form-price-currency-hint");
+    if (hint) hint.textContent = `（按 ${e.target.value || "本币"} 填）`;
+  }
+});
+
+async function saveRealHolding() {
+  const id = (document.getElementById("real-form-id")?.value || "").trim();
+  const code = (document.getElementById("real-form-code")?.value || "").trim().toUpperCase();
+  const entry_price = parseFloat(document.getElementById("real-form-price")?.value || "");
+  const shares = parseFloat(document.getElementById("real-form-shares")?.value || "");
+  const date = document.getElementById("real-form-date")?.value || new Date().toISOString().split("T")[0];
+  const currency = (document.getElementById("real-form-currency")?.value || _currencyForTicker(code)).trim().toUpperCase();
+  if (!code || !entry_price || !shares) { alert("请填完整：股票、成本价、数量"); return; }
+  const item = { code, entry_price, shares, date, currency, source: "manual" };
   try {
-    const r = await fetch(WATCHLIST_API_BASE + "/api/holdings/" + id, { method: "DELETE" });
+    const url = WATCHLIST_API_BASE + "/api/real-holdings" + (id ? "/" + id : "");
+    const r = await fetch(url, {
+      method: id ? "PUT" : "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(item),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      alert("保存真实持仓失败: " + (err.detail || r.status));
+      return;
+    }
+  } catch (e) {
+    alert("保存真实持仓失败: " + e.message);
+    return;
+  }
+  resetRealHoldingForm();
+  await refreshHoldingsAndRender();
+}
+
+function editRealHolding(id) {
+  const h = _holdingsCache.find(x => x.id === id);
+  if (!h) return;
+  document.getElementById("real-form-id").value = h.id;
+  document.getElementById("real-form-code").value = h.code || h.symbol;
+  document.getElementById("real-form-price").value = h.entry_price;
+  document.getElementById("real-form-shares").value = h.shares;
+  document.getElementById("real-form-date").value = h.entry_date || "";
+  document.getElementById("real-form-currency").value = h.currency || _currencyForTicker(h.code || h.symbol);
+  const hint = document.getElementById("real-form-price-currency-hint");
+  if (hint) hint.textContent = `（按 ${document.getElementById("real-form-currency").value} 填）`;
+  _focusRealHoldingForm({highlight: true});
+}
+
+async function deleteRealHolding(id) {
+  if (!confirm("确定删除这条真实持仓？")) return;
+  try {
+    const r = await fetch(WATCHLIST_API_BASE + "/api/real-holdings/" + id, { method: "DELETE" });
     if (!r.ok) { alert("删除失败: HTTP " + r.status); return; }
   } catch (e) { alert("删除失败: " + e.message); return; }
   await refreshHoldingsAndRender();
 }
 
-function openModal() {
-  const sel = document.getElementById("form-code");
-  sel.innerHTML = RECORDS.map(r => `<option value="${r.code}">${r.name} (${r.code})</option>`).join("");
-  // 选股票时自动联动币种 + 提示文案（仅新增模式；编辑模式不覆盖用户保存的值）
-  sel.onchange = () => {
-    if (editingId == null) {
-      const cur = _currencyForTicker(sel.value);
-      document.getElementById("form-currency").value = cur;
-      const hint = document.getElementById("form-price-currency-hint");
-      if (hint) hint.textContent = `（按 ${cur} 填）`;
-    }
-  };
-  if (editingId == null) {
-    document.getElementById("form-price").value = "";
-    document.getElementById("form-shares").value = "";
-    document.getElementById("form-date").value = new Date().toISOString().split("T")[0];
-    // 触发一次初始联动
-    sel.onchange();
-  } else {
-    // 编辑模式：用 h.currency 反向更新提示
-    const cur = document.getElementById("form-currency").value || "USD";
-    const hint = document.getElementById("form-price-currency-hint");
-    if (hint) hint.textContent = `（按 ${cur} 填）`;
-  }
-  document.getElementById("holding-modal").classList.remove("hidden");
-}
-function closeModal() { document.getElementById("holding-modal").classList.add("hidden"); }
-
-async function saveHolding() {
-  const code = document.getElementById("form-code").value;
-  const entry_price = parseFloat(document.getElementById("form-price").value);
-  const shares = parseFloat(document.getElementById("form-shares").value);
-  const date = document.getElementById("form-date").value;
-  const currency = (document.getElementById("form-currency")?.value || "").trim().toUpperCase();
-  if (!code || !entry_price || !shares) { alert("请填完整"); return; }
-  const item = { code, entry_price, shares, date, currency: currency || _currencyForTicker(code) };
+async function deleteHolding(id) {
+  if (!confirm("确定删除？")) return;
   try {
-    let r;
-    if (editingId != null) {
-      r = await fetch(WATCHLIST_API_BASE + "/api/holdings/" + editingId, {
-        method: "PUT", headers: {"Content-Type":"application/json"}, body: JSON.stringify(item),
-      });
-    } else {
-      r = await fetch(WATCHLIST_API_BASE + "/api/holdings", {
-        method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(item),
-      });
-    }
-    if (!r.ok) {
-      const err = await r.json().catch(() => ({}));
-      alert("保存失败: " + (err.detail || r.status));
-      return;
-    }
-  } catch (e) { alert("保存失败: " + e.message); return; }
-  closeModal();
+    const r = await fetch(WATCHLIST_API_BASE + "/api/model-sim-holdings/" + id, { method: "DELETE" });
+    if (!r.ok) { alert("删除失败: HTTP " + r.status); return; }
+  } catch (e) { alert("删除失败: " + e.message); return; }
   await refreshHoldingsAndRender();
+}
+
+async function renderRealHoldings() {
+  try {
+    const r = await fetch(WATCHLIST_API_BASE + "/api/real-holdings");
+    if (r.ok) _realHoldingsCache = await r.json();
+  } catch (e) {}
+  _holdingsCache = _realHoldingsCache.concat(_simHoldingsCache.map(h => ({...h, source: "ai_plan"})));
+  const list = document.getElementById("real-form-code-list");
+  if (list && !list.innerHTML) list.innerHTML = RECORDS.map(r => `<option value="${r.code}">${r.name}</option>`).join("");
+  const dateInput = document.getElementById("real-form-date");
+  if (dateInput && !dateInput.value) dateInput.value = new Date().toISOString().split("T")[0];
+  const holdings = _holdingsBySource("manual");
+  const summaryEl = document.getElementById("real-holdings-summary");
+  const tbody = document.getElementById("real-holdings-table");
+  if (!summaryEl || !tbody) return;
+
+  if (holdings.length === 0) {
+    summaryEl.innerHTML = `
+      <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200"><div class="text-2xl font-bold text-slate-900">0</div><div class="text-xs text-slate-500 mt-1">真实持仓</div></div>
+      <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200"><div class="text-2xl font-bold text-slate-900">0</div><div class="text-xs text-slate-500 mt-1">股票市值 RMB</div></div>
+      <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200"><div class="text-2xl font-bold text-slate-900">0.0%</div><div class="text-xs text-slate-500 mt-1">股票仓位</div></div>
+      <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200"><div class="text-2xl font-bold text-slate-900">—</div><div class="text-xs text-slate-500 mt-1">AI目标差距</div></div>
+    `;
+    _renderAccountRiskLine("real-alert-line", 0, "录入持仓后会显示真实账户风控线", "真实账户");
+    tbody.innerHTML = '<tr><td colspan="11" class="text-center text-slate-500 py-8">暂无持仓 · 点击左侧表单添加</td></tr>';
+    const realAlloc = document.getElementById("chart-real-allocation");
+    const realTheme = document.getElementById("chart-real-theme");
+    if (realAlloc) realAlloc.innerHTML = '<div class="text-sm text-slate-400 p-6">暂无持仓分布</div>';
+    if (realTheme) realTheme.innerHTML = '<div class="text-sm text-slate-400 p-6">暂无主题分布</div>';
+    return;
+  }
+
+  let totalCost = 0;
+  let totalValue = 0;
+  const realThemeAlloc = {};
+  const realStockAlloc = [];
+  const enriched = holdings.map(h => {
+    const code = h.code || h.symbol;
+    const rec = _findRecord(code);
+    const cur = getCurrentPriceRMB(code);
+    const costFx = h.currency ? (FX_TO_RMB[h.currency] || 1) : (cur ? cur.fx : _fxToRMB(_currencyForTicker(code)));
+    const costRmb = Number(h.entry_price || 0) * Number(h.shares || 0) * costFx;
+    const valueRmb = cur ? cur.raw_price * Number(h.shares || 0) * cur.fx : costRmb;
+    const pnlRmb = valueRmb - costRmb;
+    const pnlPct = costRmb > 0 ? pnlRmb / costRmb * 100 : 0;
+    totalCost += costRmb;
+    totalValue += valueRmb;
+    const name = rec ? rec.name : code;
+    const theme = rec ? (rec.theme || rec.industry || "-") : "-";
+    realThemeAlloc[theme] = (realThemeAlloc[theme] || 0) + valueRmb;
+    realStockAlloc.push({ name, value: valueRmb });
+    return { h, code, rec, cur, costRmb, valueRmb, pnlRmb, pnlPct };
+  });
+
+  const enrichedWithGap = enriched.map(x => {
+    const currentWeight = TOTAL_CAPITAL > 0 ? x.valueRmb / TOTAL_CAPITAL : 0;
+    const targetWeight = _targetWeightFor(x.code);
+    const weightDiff = targetWeight == null ? null : currentWeight - targetWeight;
+    return { ...x, currentWeight, targetWeight, weightDiff };
+  });
+
+  const totalPnl = totalValue - totalCost;
+  const totalPnlPct = totalCost > 0 ? totalPnl / totalCost * 100 : 0;
+  const stockWeight = TOTAL_CAPITAL > 0 ? totalValue / TOTAL_CAPITAL * 100 : 0;
+  const pnlColor = totalPnl >= 0 ? "text-emerald-600" : "text-rose-600";
+  const coveredByAi = enrichedWithGap.filter(x => x.targetWeight != null);
+  const stockWeightCovered = coveredByAi.reduce((sum, x) => sum + x.currentWeight, 0);
+  const totalTargetCovered = coveredByAi.reduce((sum, x) => sum + x.targetWeight, 0);
+  const totalDiff = stockWeightCovered - totalTargetCovered;
+  const totalDiffText = coveredByAi.length ? `${totalDiff >= 0 ? "+" : ""}${(totalDiff * 100).toFixed(1)}pt` : "—";
+  const diffColor = totalDiff > 0 ? "text-amber-700" : (totalDiff < 0 ? "text-sky-700" : "text-slate-900");
+  const aiCoverageLabel = coveredByAi.length ? `AI覆盖 ${coveredByAi.length}/${holdings.length} 只 · 差距` : "AI未覆盖当前持仓";
+  const realCash = Math.max(0, TOTAL_CAPITAL - totalCost);
+  const realAccountValue = totalValue + realCash;
+
+  summaryEl.innerHTML = `
+    <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200"><div class="text-2xl font-bold text-slate-900">${holdings.length}</div><div class="text-xs text-slate-500 mt-1">真实持仓</div></div>
+    <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200"><div class="text-2xl font-bold text-slate-900">${totalValue.toLocaleString(undefined, {maximumFractionDigits:0})}</div><div class="text-xs text-slate-500 mt-1">股票市值 RMB</div></div>
+    <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200"><div class="text-2xl font-bold ${pnlColor}">${totalPnl >= 0 ? "+" : ""}${totalPnl.toLocaleString(undefined, {maximumFractionDigits:0})}</div><div class="text-xs text-slate-500 mt-1">累计盈亏 · ${totalPnlPct >= 0 ? "+" : ""}${totalPnlPct.toFixed(2)}%</div></div>
+    <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200"><div class="text-2xl font-bold ${coveredByAi.length ? diffColor : "text-slate-900"}">${totalDiffText}</div><div class="text-xs text-slate-500 mt-1">${aiCoverageLabel}</div></div>
+  `;
+  _renderAccountRiskLine("real-alert-line", realAccountValue, "录入持仓后会显示真实账户风控线", "真实账户");
+
+  tbody.innerHTML = enrichedWithGap.map(x => {
+    const name = x.rec ? x.rec.name : x.code;
+    const theme = x.rec ? (x.rec.theme || x.rec.industry || "-") : "-";
+    const currentPrice = x.cur ? x.cur.raw_price.toFixed(2) : "无价格";
+    const pnlCls = x.pnlRmb >= 0 ? "text-emerald-600" : "text-rose-600";
+    const targetText = x.targetWeight == null ? "—" : (x.targetWeight * 100).toFixed(1) + "%";
+    const diffText = x.weightDiff == null ? "AI方案缺失" : `${x.weightDiff >= 0 ? "+" : ""}${(x.weightDiff * 100).toFixed(1)}pt`;
+    const diffCls = x.weightDiff == null ? "text-slate-400" : (x.weightDiff > 0 ? "text-amber-700" : "text-sky-700");
+    return `<tr class="border-t border-slate-100 hover:bg-slate-50">
+      <td class="px-3 py-2 font-medium">${stockPill(x.code, {nameOverride: name})}</td>
+      <td class="px-3 py-2 text-xs text-slate-700 max-w-[160px]">${_esc(theme)}</td>
+      <td class="px-3 py-2 text-right font-mono">${Number(x.h.entry_price || 0).toFixed(2)} ${_esc(x.h.currency || _currencyForTicker(x.code))}</td>
+      <td class="px-3 py-2 text-right font-mono">${Number(x.h.shares || 0)}</td>
+      <td class="px-3 py-2 text-right font-mono">${currentPrice}</td>
+      <td class="px-3 py-2 text-right font-mono">${x.valueRmb.toLocaleString(undefined, {maximumFractionDigits:0})}</td>
+      <td class="px-3 py-2 text-right font-mono ${pnlCls}">${x.pnlRmb >= 0 ? "+" : ""}${x.pnlRmb.toLocaleString(undefined, {maximumFractionDigits:0})}<br><span class="text-[11px]">${x.pnlPct >= 0 ? "+" : ""}${x.pnlPct.toFixed(2)}%</span></td>
+      <td class="px-3 py-2 text-right font-mono">${(x.currentWeight * 100).toFixed(1)}%</td>
+      <td class="px-3 py-2 text-right font-mono">${targetText}</td>
+      <td class="px-3 py-2 text-right font-mono ${diffCls}" title="当前仓位 - AI目标仓位">${_esc(diffText)}</td>
+      <td class="px-3 py-2 text-center whitespace-nowrap">
+        <button onclick="editRealHolding(${x.h.id})" class="text-violet-600 text-xs">编辑</button>
+        <button onclick="deleteRealHolding(${x.h.id})" class="text-rose-500 text-xs ml-2">删除</button>
+      </td>
+    </tr>`;
+  }).join("");
+
+  const realAllocEl = document.getElementById("chart-real-allocation");
+  const realThemeEl = document.getElementById("chart-real-theme");
+  if (realAllocEl && realStockAlloc.length) {
+    const sorted = [...realStockAlloc].sort((a, b) => a.value - b.value);
+    const total = sorted.reduce((s, x) => s + x.value, 0);
+    echarts.init(realAllocEl).setOption({
+      tooltip: { trigger: "axis", axisPointer: { type: "shadow" },
+        formatter: p => `${p[0].name}<br/>${p[0].value.toLocaleString()} RMB (${(p[0].value / total * 100).toFixed(1)}%)` },
+      grid: { left: 100, right: 50, top: 10, bottom: 20 },
+      xAxis: { type: "value", axisLabel: { formatter: v => (v / 1000).toFixed(0) + "k" } },
+      yAxis: { type: "category", data: sorted.map(x => x.name), axisLabel: { fontSize: 11 } },
+      series: [{ name: "真实持仓", type: "bar", data: sorted.map(x => x.value), itemStyle: { color: "#2563eb" },
+        label: { show: true, position: "right", formatter: p => (p.value / total * 100).toFixed(1) + "%", fontSize: 11 } }]
+    });
+  }
+  if (realThemeEl && Object.keys(realThemeAlloc).length) {
+    const arr = Object.entries(realThemeAlloc).map(([k, v]) => ({ name: k, value: v })).sort((a, b) => a.value - b.value);
+    const total = arr.reduce((s, x) => s + x.value, 0);
+    echarts.init(realThemeEl).setOption({
+      tooltip: { trigger: "axis", axisPointer: { type: "shadow" },
+        formatter: p => `${p[0].name}<br/>${p[0].value.toLocaleString()} RMB (${(p[0].value / total * 100).toFixed(1)}%)` },
+      grid: { left: 120, right: 50, top: 10, bottom: 20 },
+      xAxis: { type: "value", axisLabel: { formatter: v => (v / 1000).toFixed(0) + "k" } },
+      yAxis: { type: "category", data: arr.map(x => x.name), axisLabel: { fontSize: 11 } },
+      series: [{ name: "主题", type: "bar", data: arr.map(x => x.value), itemStyle: { color: "#10b981" },
+        label: { show: true, position: "right", formatter: p => (p.value / total * 100).toFixed(1) + "%", fontSize: 11 } }]
+    });
+  }
 }
 
 async function renderPortfolio() {
   // 防御 race condition：每次 render 都重新 fetch，不依赖任何 cache
   // 之前多次切 tab / DOMContentLoaded 并发触发，cache 可能 stale
   try {
-    const r = await fetch(WATCHLIST_API_BASE + "/api/holdings");
-    if (r.ok) _holdingsCache = await r.json();
+    const r = await fetch(WATCHLIST_API_BASE + "/api/model-sim-holdings");
+    if (r.ok) _simHoldingsCache = await r.json();
   } catch (e) { /* keep cache */ }
-  const holdings = loadHoldings();
+  _holdingsCache = _realHoldingsCache.concat(_simHoldingsCache.map(h => ({...h, source: "ai_plan"})));
+  const holdings = _holdingsBySource("ai_plan");
   const tbody = document.getElementById("holdings-table");
   if (!tbody) return;
-  console.log(`[renderPortfolio] holdings=${holdings.length}`, holdings.slice(0, 3));  // debug
+  console.log(`[renderPortfolio] simulated holdings=${holdings.length}`, holdings.slice(0, 3));  // debug
 
   if (holdings.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="10" class="text-center text-slate-500 py-8">暂无持仓 · 点击「+ 添加持仓」开始记录</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="12" class="text-center text-slate-500 py-8">暂无推荐模拟仓 · 点击「用 AI 组合方案刷新模拟仓」开始观察模型能力</td></tr>';
     document.getElementById("portfolio-summary").innerHTML = "";
-    document.getElementById("alert-line").innerHTML = '<div class="text-sm text-slate-500">添加持仓后会显示警戒线</div>';
+    document.getElementById("alert-line").innerHTML = '<div class="text-sm text-slate-500">生成模拟仓后会显示模型账户警戒线</div>';
     return;
   }
 
@@ -4742,7 +5193,7 @@ async function renderPortfolio() {
         <td class="px-3 py-2 text-right text-slate-400" colspan="5">无价格数据</td>
         <td class="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">${addedAt}</td>
         <td class="px-3 py-2 text-center">
-          <button onclick="editHolding(${h.id})" class="text-violet-600 text-xs">编辑</button>
+          <span class="text-xs text-slate-400">模拟</span>
           <button onclick="deleteHolding(${h.id})" class="text-rose-500 text-xs ml-2">删除</button>
         </td>
       </tr>`;
@@ -4782,7 +5233,7 @@ async function renderPortfolio() {
       <td class="px-3 py-2 text-right font-mono">${(value_rmb / TOTAL_CAPITAL * 100).toFixed(1)}%</td>
       <td class="px-3 py-2 text-xs text-slate-500 whitespace-nowrap" title="${_esc(h.created_at || h.entry_date || '')}">${addedAt}</td>
       <td class="px-3 py-2 text-center">
-        <button onclick="editHolding(${h.id})" class="text-violet-600 text-xs">编辑</button>
+        <span class="text-xs text-slate-400">模拟</span>
         <button onclick="deleteHolding(${h.id})" class="text-rose-500 text-xs ml-2">删除</button>
       </td>
     </tr>`;
@@ -4850,55 +5301,7 @@ async function renderPortfolio() {
     </div>
   `;
 
-  // 风险警戒线 — 2026-05-21 重设计：3 张卡片清楚说明组合健康度，去掉新人看不懂的横条
-  const dist_to_stop = portfolio_value - STOPLOSS_LINE;          // 正=还有缓冲，负=已破线
-  const dist_to_target = TARGET_LINE - portfolio_value;          // 正=未到止盈，负=已超
-  const drawdown_pct = (TOTAL_CAPITAL - portfolio_value) / TOTAL_CAPITAL * 100;  // 正=亏损，负=盈利
-
-  let statusBadge, statusText, statusTip;
-  if (portfolio_value <= STOPLOSS_LINE) {
-    statusBadge = "bg-rose-100 text-rose-700 ring-2 ring-rose-400";
-    statusText = "🔴 已破止损线";
-    statusTip = "组合市值跌破 30 万止损线，按规则应该清仓 sit out";
-  } else if (portfolio_value <= WARNING_LINE) {
-    statusBadge = "bg-amber-100 text-amber-700 ring-2 ring-amber-400";
-    statusText = "⚠️ 进入预警区";
-    statusTip = `组合市值跌到 40 万预警线以下，离 30 万止损还有 ${dist_to_stop.toLocaleString()}，建议减仓观望`;
-  } else if (portfolio_value >= TARGET_LINE) {
-    statusBadge = "bg-violet-100 text-violet-700 ring-2 ring-violet-400";
-    statusText = "🎯 触及止盈参考";
-    statusTip = "已达 55 万止盈参考线，可考虑部分获利了结";
-  } else {
-    statusBadge = "bg-emerald-100 text-emerald-700 ring-2 ring-emerald-400";
-    statusText = "✅ 安全区";
-    statusTip = `组合在 40 万预警线与 55 万止盈线之间，正常运转`;
-  }
-
-  const lossClr = dist_to_stop > 0 ? "text-emerald-600" : "text-rose-600";
-  const targetClr = dist_to_target > 0 ? "text-slate-600" : "text-violet-600";
-  const ddSign = drawdown_pct > 0 ? "-" : "+";
-  const ddAbs = Math.abs(drawdown_pct).toFixed(2);
-  const ddClr = drawdown_pct > 0 ? "text-rose-600" : "text-emerald-600";
-
-  document.getElementById("alert-line").innerHTML = `
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-      <div class="rounded-lg p-3 ${statusBadge}" title="${_esc(statusTip)}">
-        <div class="text-xs opacity-75 mb-1">组合状态</div>
-        <div class="text-lg font-bold">${statusText}</div>
-        <div class="text-[11px] opacity-75 mt-1">vs 本金 <strong class="${ddClr}">${ddSign}${ddAbs}%</strong></div>
-      </div>
-      <div class="rounded-lg p-3 bg-rose-50 border border-rose-200" title="组合市值 - 30 万止损线 = 还能跌多少才碰线">
-        <div class="text-xs text-rose-600 mb-1">距 30 万止损线还有</div>
-        <div class="text-lg font-bold ${lossClr}">${dist_to_stop >= 0 ? '+' : ''}${dist_to_stop.toLocaleString(undefined, {maximumFractionDigits:0})} <span class="text-xs font-normal">RMB</span></div>
-        <div class="text-[11px] text-rose-500 mt-1">${dist_to_stop > 0 ? `约可再亏 ${(dist_to_stop/portfolio_value*100).toFixed(1)}%` : '已跌破止损线'}</div>
-      </div>
-      <div class="rounded-lg p-3 bg-violet-50 border border-violet-200" title="55 万止盈参考线 - 组合市值 = 还差多少触及止盈">
-        <div class="text-xs text-violet-600 mb-1">距 55 万止盈线还差</div>
-        <div class="text-lg font-bold ${targetClr}">${dist_to_target >= 0 ? '' : '+'}${Math.abs(dist_to_target).toLocaleString(undefined, {maximumFractionDigits:0})} <span class="text-xs font-normal">RMB</span></div>
-        <div class="text-[11px] text-violet-500 mt-1">${dist_to_target > 0 ? `约还要涨 ${(dist_to_target/portfolio_value*100).toFixed(1)}%` : '已超止盈线'}</div>
-      </div>
-    </div>
-  `;
+  _renderAccountRiskLine("alert-line", portfolio_value, "生成模拟仓后会显示模型账户风控线", "模拟账户");
 
   // 仓位分布饼图
   // 2026-05-21: 饼图改横向柱状图（按 value 从大到小，从上到下排）
@@ -4936,11 +5339,11 @@ async function renderPortfolio() {
 }
 
 function exportHoldings() {
-  const data = loadHoldings();
+  const data = _holdingsBySource("ai_plan");
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `portfolio_${new Date().toISOString().split("T")[0]}.json`;
+  a.download = `simulated_portfolio_${new Date().toISOString().split("T")[0]}.json`;
   a.click();
 }
 function importHoldings() {
@@ -4953,7 +5356,7 @@ function importHoldings() {
     reader.onload = ev => {
       try {
         const data = JSON.parse(ev.target.result);
-        if (Array.isArray(data)) saveHoldings(data);
+        if (Array.isArray(data)) saveHoldings(data.map(x => ({...x, source: "ai_plan"})), "ai_plan");
         else alert("格式错误");
       } catch { alert("JSON 解析失败"); }
     };
@@ -4962,8 +5365,8 @@ function importHoldings() {
   input.click();
 }
 async function clearHoldings() {
-  if (!confirm("确定清空所有持仓？")) return;
-  await saveHoldings([]);
+  if (!confirm("确定清空推荐模拟仓？真实持仓会保留。")) return;
+  await saveHoldings([], "ai_plan");
 }
 
 // ============ 一键加载方案 A v6（学术因子 + risk-aware 客观仓位） ============
@@ -4975,9 +5378,8 @@ function _currencyForTicker(ticker) {
   if (/\.HK$/.test(t)) return "HKD";
   return "USD";
 }
-// 本币 → RMB 汇率（粗略值，与 stock_research/jobs/optimize_portfolio.py 保持一致）
-const _FX_TO_RMB = { CNY: 1.0, HKD: 0.92, USD: 7.10 };
-function _fxToRMB(currency) { return _FX_TO_RMB[currency] || 1.0; }
+// _fxToRMB 直接读统一 FX_TO_RMB（2026-05-22 收敛,删了独立的 _FX_TO_RMB）
+function _fxToRMB(currency) { return FX_TO_RMB[currency] || 1.0; }
 
 async function loadPlanAv6() {
   if (!PLAN_A_V6 || !PLAN_A_V6.plan_v5 || PLAN_A_V6.plan_v5.length === 0) {
@@ -4985,13 +5387,14 @@ async function loadPlanAv6() {
     return;
   }
   if (!confirm(
-    "⚠️ 这个按钮会把方案 v6 推荐的股票批量抄进「我的持仓」（source=ai_plan，会显示紫色「📋 方案」badge）。\n\n" +
-    "✅ 适用场景：你已经按方案在券商下单了，想快速录入再手动改成真实成交价\n" +
-    "❌ 不要用：你还没真买，只想看方案表现 → 请直接看顶部「📊 AI 组合方案」tab\n\n" +
+    "这会用当前 AI 组合方案刷新「AI 方案模拟」里的 model_sim_holdings 记录。\n\n" +
+    "✅ 它只用于观察模型能力\n" +
+    "✅ 会保留你的真实持仓（real_holdings）\n" +
+    "❌ 不会代表你已经真买，也不会写成真实持仓\n\n" +
     "继续吗？"
   )) return;
-  if (loadHoldings().length > 0) {
-    if (!confirm("当前已有持仓数据，加载方案 A v6 会覆盖。继续？")) return;
+  if (_holdingsBySource("ai_plan").length > 0) {
+    if (!confirm("当前已有推荐模拟仓，刷新后会替换旧模拟仓。继续？")) return;
   }
   const today = new Date().toISOString().split("T")[0];
   const holdings = [];
@@ -5017,11 +5420,15 @@ async function loadPlanAv6() {
       entry_price: priceLocal,  // 本币价（与 currency 配套；编辑器/盈亏计算需统一口径）
       shares: shares,
       date: today,
+      target_weight: p.target_weight || p.v6_weight || p.v5_weight || p.capped_weight || 0,
+      amount_rmb: amountRmb,
+      plan_run_id: p.run_id || (PLAN_A_V6.portfolio_plan_sync && PLAN_A_V6.portfolio_plan_sync.run_id) || PLAN_A_V6.run_id || null,
+      plan_version: "v6_risk_aware",
       _plan_a_v6: true,
     });
     totalAmountRmb += shares * priceLocal * fx;
   });
-  await saveHoldings(holdings);
+  await saveHoldings(holdings, "ai_plan");
   // 强制重新拉 + 渲染（saveHoldings 内部已经调 refreshHoldingsAndRender，
   // 但 race condition 下 cache 可能 stale；这里多一次保证 UI 与 db 一致）
   _holdingsLoaded = false;
@@ -5030,44 +5437,50 @@ async function loadPlanAv6() {
   const metrics = PLAN_A_V6.portfolio_metrics || {};
   renderV6Metrics(metrics);
   const skipNote = skipped.length ? `\n\n⚠️ 跳过 ${skipped.length} 只：\n  · ${skipped.slice(0, 5).join("\n  · ")}${skipped.length > 5 ? `\n  · …还有 ${skipped.length - 5} 只` : ""}` : "";
-  alert(`✅ 已加载 ${holdings.length} 只（总额 ¥${Math.round(totalAmountRmb).toLocaleString()}）\n\n` +
-        `🚨 重要下一步：买入价 = 今天现价（本币），数量按 fx 换算估算。请逐行【编辑】改成真实成交价和真实数量。\n\n` +
-        `📚 backtest 数据（参考，非未来承诺）:\n` +
+  alert(`✅ 已刷新推荐模拟仓 ${holdings.length} 只（估算总额 ¥${Math.round(totalAmountRmb).toLocaleString()}）\n\n` +
+        `它仍然是模型模拟，不是你的真实成交记录。你的真实股票请录入「我的持仓」。\n\n` +
+        `📚 模型参考数据（非未来承诺）:\n` +
         `  · Sharpe ${metrics.annual_sharpe || '?'} | 年化收益 ${metrics.annual_return_pct || '?'}% | 波动 ${metrics.annual_vol_pct || '?'}%` +
         skipNote);
 }
 
 function renderV6Metrics(metrics) {
+  const details = document.getElementById("v6-metrics-details");
+  const card = document.getElementById("v6-metrics-card");
+  const content = document.getElementById("v6-metrics-content");
+  if (!card || !content) return;
   if (!metrics || (!metrics.annual_sharpe && !metrics.annual_return_pct)) {
-    document.getElementById("v6-metrics-card").style.display = "none";
+    card.style.display = "none";
+    if (details) details.style.display = "none";
     return;
   }
   const sharpe = metrics.annual_sharpe ? Number(metrics.annual_sharpe).toFixed(2) : "?";
   const ret = metrics.annual_return_pct ? Number(metrics.annual_return_pct).toFixed(1) : "?";
   const vol = metrics.annual_vol_pct ? Number(metrics.annual_vol_pct).toFixed(1) : "?";
-  document.getElementById("v6-metrics-content").innerHTML = `
-    <div class="bg-white rounded-lg p-3 border border-emerald-200">
-      <div class="text-3xl font-bold text-emerald-700">${sharpe}</div>
-      <div class="text-xs text-slate-600 mt-1">年化夏普比率</div>
-      <div class="text-[10px] text-slate-500">巴菲特长期 0.76</div>
+  content.innerHTML = `
+    <div class="bg-slate-50 rounded-lg p-3 border border-slate-200">
+      <div class="text-2xl font-bold text-slate-900">${sharpe}</div>
+      <div class="text-xs text-slate-600 mt-1">收益/波动质量</div>
+      <div class="text-[10px] text-slate-500">Sharpe，越高代表单位波动收益越好</div>
     </div>
-    <div class="bg-white rounded-lg p-3 border border-emerald-200">
-      <div class="text-3xl font-bold text-emerald-700">+${ret}%</div>
-      <div class="text-xs text-slate-600 mt-1">年化收益率</div>
-      <div class="text-[10px] text-slate-500">每日 rebalance 假设（≠ 实测）</div>
+    <div class="bg-slate-50 rounded-lg p-3 border border-slate-200">
+      <div class="text-2xl font-bold text-slate-900">+${ret}%</div>
+      <div class="text-xs text-slate-600 mt-1">模型年化收益</div>
+      <div class="text-[10px] text-slate-500">历史均值推算，不是实测收益</div>
     </div>
-    <div class="bg-white rounded-lg p-3 border border-emerald-200">
-      <div class="text-3xl font-bold text-amber-700">${vol}%</div>
-      <div class="text-xs text-slate-600 mt-1">年化波动率</div>
-      <div class="text-[10px] text-slate-500">SPY 长期约 15-18%</div>
+    <div class="bg-slate-50 rounded-lg p-3 border border-slate-200">
+      <div class="text-2xl font-bold text-amber-700">${vol}%</div>
+      <div class="text-xs text-slate-600 mt-1">模型年化波动</div>
+      <div class="text-[10px] text-slate-500">用于检查组合风险是否过高</div>
     </div>
-    <div class="bg-white rounded-lg p-3 border border-emerald-200">
+    <div class="bg-slate-50 rounded-lg p-3 border border-slate-200">
       <div class="text-sm font-bold text-slate-700">V2 lite 4 因子 + risk-aware</div>
       <div class="text-xs text-slate-600 mt-1">估值 / 12-1 动量 / 数据质量 / 覆盖度</div>
       <div class="text-xs text-amber-700">Piotroski / PEAD / 分析师上修 待接入</div>
     </div>
   `;
-  document.getElementById("v6-metrics-card").style.display = "";
+  if (details) details.style.display = "";
+  card.style.display = "";
 }
 
 // 2026-05-21: v6 指标卡挪到 AI 组合方案 tab 后，触发条件只看 PLAN_A_V6 有没有数据
@@ -6405,6 +6818,30 @@ function _renderReasonPanel(c) {
     <span><strong>AI 算于 ${ts.short}</strong> ${ts.age}</span>
     ${ts.age.includes("⚠️") ? '<span class="ml-auto text-[11px]">⚠️ 数据已过期 — 跑 daily_refresh.sh 刷新</span>' : ''}
   </div>`;
+  const score = (c.composite_z === null || c.composite_z === undefined || Number.isNaN(Number(c.composite_z)))
+    ? "—"
+    : Number(c.composite_z).toFixed(1);
+  const pickSnapshot = `<div class="bg-white px-4 py-3 border-b border-slate-100">
+    <div class="grid grid-cols-1 lg:grid-cols-[160px_240px_1fr_260px] gap-3 items-start">
+      <div>
+        <div class="text-[11px] text-slate-500 mb-1">推荐信号</div>
+        <div class="flex items-center gap-2">${_signalBadge(c)}<span class="font-mono text-xs text-slate-600">score ${score}</span></div>
+        <div class="text-[11px] text-slate-500 mt-2">入选价 <span class="font-mono text-slate-700">${_fmtEntryPrice(c)}</span></div>
+      </div>
+      <div>
+        <div class="text-[11px] text-slate-500 mb-1">因子拆解</div>
+        ${_factorBreakdownHtml(c)}
+      </div>
+      <div>
+        <div class="text-[11px] text-emerald-700 font-semibold mb-1">推荐依据</div>
+        <div class="text-sm text-slate-700 leading-snug">${_esc(_reasonSummary(c))}</div>
+      </div>
+      <div>
+        <div class="text-[11px] text-amber-700 font-semibold mb-1">风险提示</div>
+        <div class="text-sm leading-snug">${_riskSummaryHtml(c, 3)}</div>
+      </div>
+    </div>
+  </div>`;
   const prosHtml = pros.length
     ? `<div class="space-y-1">
          <div class="text-xs font-semibold text-emerald-700 mb-1">✅ 推荐理由</div>
@@ -6439,7 +6876,7 @@ function _renderReasonPanel(c) {
          <div id="disc-rich-${tk}" class="text-xs text-slate-400 py-2">⏳ 详情数据未加载，展开本行时会自动拉取…</div>
        </div>`;
 
-  return tsBanner + reasonHtml + richHtml;
+  return tsBanner + pickSnapshot + reasonHtml + richHtml;
 }
 
 // 切换 detail row 显隐 + 首次展开懒加载 _dbExplorerData（用于回填"系统池详情"卡）
@@ -6483,7 +6920,7 @@ async function _ensureDiscoveryRichLoaded(triggeringTicker) {
   });
 }
 
-// 工具:从 DISCOVERY_HISTORY 找 (date, ticker) 对应的 alpha 记录
+// 工具:从 DISCOVERY_HISTORY 找 ticker 对应的 alpha 记录
 function _lookupTrackingForToday(ticker) {
   if (!Array.isArray(DISCOVERY_HISTORY) || !DISCOVERY_HISTORY.length) return null;
   // 找最早一次推荐这个 ticker 的 alpha (最早推荐说明跟踪时间最长)
@@ -6495,7 +6932,9 @@ function _lookupTrackingForToday(ticker) {
 
 // 工具:聚合统计 — 用于准确度面板
 function _computeDiscoveryStats() {
-  const all = (DISCOVERY_HISTORY || []).filter(r => r.alpha_5d != null || r.alpha_20d != null);
+  const all = (DISCOVERY_HISTORY || []).filter(r =>
+    r.alpha_1d != null || r.alpha_5d != null || r.alpha_20d != null || r.alpha_60d != null
+  );
   if (!all.length) {
     return { totalRecs: (DISCOVERY_HISTORY || []).length, evaluated: 0, panel: null };
   }
@@ -6506,7 +6945,7 @@ function _computeDiscoveryStats() {
   const a60 = all.map(r => r.alpha_60d).filter(v => v != null);
   const hit20 = a20.filter(v => v > 5).length;
   const hitRate = a20.length ? (hit20 / a20.length * 100) : null;
-  // composite_z 分位 vs alpha_20d 看相关性(简化 IC: 高分组 vs 低分组的 alpha 差异)
+  // score 分位 vs alpha_20d 看相关性(简化 IC: 高分组 vs 低分组的 alpha 差异)
   const zRanked = all.filter(r => r.composite_z != null && r.alpha_20d != null)
     .sort((a, b) => b.composite_z - a.composite_z);
   let topAlpha20 = null, botAlpha20 = null;
@@ -6533,6 +6972,148 @@ function _computeDiscoveryStats() {
   };
 }
 
+function _marketLabel(m) {
+  const key = String(m || "").toUpperCase();
+  if (key === "US") return "美股";
+  if (key === "CN") return "A股";
+  if (key === "HK") return "港股";
+  return key || "未知";
+}
+
+function _candidateMarketCode(row) {
+  const m = String((row || {}).market || "").toUpperCase();
+  const t = String((row || {}).ticker || (row || {}).code || "").toUpperCase();
+  if (m === "US" || m.includes("UNITED") || m.includes("美股")) return "US";
+  if (m === "CN" || m.includes("CHINA") || m.includes("A股") || t.endsWith(".SS") || t.endsWith(".SZ")) return "CN";
+  if (m === "HK" || m.includes("HONG KONG") || m.includes("港股") || t.endsWith(".HK")) return "HK";
+  return "US";
+}
+
+function _formatMarketCountsFromRows(rows) {
+  const counts = {};
+  (rows || []).forEach(r => {
+    const key = _candidateMarketCode(r);
+    counts[key] = (counts[key] || 0) + 1;
+  });
+  return ["US", "CN", "HK"]
+    .filter(k => counts[k])
+    .map(k => `${_marketLabel(k)}${counts[k]}`)
+    .join(" / ");
+}
+
+function _formatMarketCountsFromMeta(meta) {
+  const counts = meta || {};
+  return ["US", "CN", "HK"]
+    .filter(k => counts[k])
+    .map(k => {
+      const v = counts[k];
+      const n = typeof v === "number" ? v : (v.total || v.n || 0);
+      return `${_marketLabel(k)}${n}`;
+    })
+    .join(" / ");
+}
+
+function _fmtPlainNumber(v, digits = 1) {
+  if (v === null || v === undefined || v === "" || Number.isNaN(Number(v))) return "—";
+  return Number(v).toFixed(digits);
+}
+
+function _fmtEntryPrice(row) {
+  const v = row && row.entry_price;
+  if (v === null || v === undefined || v === "" || Number.isNaN(Number(v))) return "—";
+  const n = Number(v);
+  const digits = n >= 100 ? 2 : 3;
+  const currency = (row.entry_currency || "").toString().trim();
+  return `${n.toFixed(digits)}${currency ? " " + _esc(currency) : ""}`;
+}
+
+function _signalBadge(row) {
+  const signal = String((row && row.signal) || "").toLowerCase();
+  const rating = String((row && row.rating) || "").toLowerCase();
+  const key = signal || rating || "watch";
+  if (key.includes("avoid")) {
+    return `<span class="inline-flex px-2 py-0.5 rounded-full border border-rose-200 bg-rose-50 text-rose-700 text-[11px] font-semibold">回避</span>`;
+  }
+  if (key.includes("watch")) {
+    return `<span class="inline-flex px-2 py-0.5 rounded-full border border-amber-200 bg-amber-50 text-amber-700 text-[11px] font-semibold">观察</span>`;
+  }
+  const label = rating === "strong_buy" ? "强买" : "买入";
+  return `<span class="inline-flex px-2 py-0.5 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700 text-[11px] font-semibold">${label}</span>`;
+}
+
+function _factorValue(row, keys) {
+  const factors = (row && row.factor_scores) || {};
+  for (const k of keys) {
+    const direct = row ? row[k] : null;
+    if (direct !== null && direct !== undefined && direct !== "" && !Number.isNaN(Number(direct))) return Number(direct);
+    const v = factors[k];
+    if (v !== null && v !== undefined && v !== "" && !Number.isNaN(Number(v))) return Number(v);
+  }
+  return null;
+}
+
+function _factorBreakdownHtml(row, compact = false) {
+  const items = [
+    ["动量", _factorValue(row, ["momentum_score", "momentum"])],
+    ["估值", _factorValue(row, ["valuation_score", "valuation"])],
+    ["质量", _factorValue(row, ["quality_score", "quality", "data_quality"])],
+    ["覆盖", _factorValue(row, ["coverage_score", "coverage"])],
+  ].map(([label, v]) => {
+    let value = v;
+    if (label === "覆盖" && value !== null && value <= 1) value = value * 100;
+    const color = value === null ? "text-slate-300" : (value >= 70 ? "text-emerald-700" : value >= 50 ? "text-amber-700" : "text-rose-700");
+    return `<span class="inline-flex items-center gap-1 rounded bg-slate-50 border border-slate-200 px-1.5 py-0.5 ${compact ? "text-[10px]" : "text-[11px]"}">
+      <span class="text-slate-500">${label}</span><span class="font-mono ${color}">${value === null ? "—" : value.toFixed(0)}</span>
+    </span>`;
+  });
+  return `<div class="flex flex-wrap gap-1">${items.join("")}</div>`;
+}
+
+function _riskFlagText(flag) {
+  if (!flag) return "";
+  if (typeof flag === "string") return flag;
+  return flag.message || flag.code || JSON.stringify(flag);
+}
+
+function _riskSummaryHtml(row, maxItems = 1) {
+  const flags = Array.isArray(row && row.risk_flags) ? row.risk_flags : [];
+  if (!flags.length) return `<span class="text-slate-400">暂无结构化风险</span>`;
+  const items = flags.slice(0, maxItems).map(f => _esc(_riskFlagText(f))).filter(Boolean);
+  const more = flags.length > maxItems ? `<span class="text-slate-400">等 ${flags.length} 条</span>` : "";
+  return `<span class="text-amber-700">${items.join("；")}</span>${more ? " " + more : ""}`;
+}
+
+function _reasonSummary(row) {
+  const explicit = row && row.recommendation_reason;
+  if (explicit) {
+    const text = String(explicit);
+    const m = text.match(/momentum=([^,]+),\s*valuation=([^,]+),\s*coverage=([^;]+);\s*momentum_source=price_daily:([^,]+),\s*valuation_source=price_daily:(.+)$/);
+    if (m) {
+      const momentum = Number(m[1]);
+      const valuation = Number(m[2]);
+      const coverageRaw = Number(m[3]);
+      const coverage = Number.isFinite(coverageRaw) ? (coverageRaw <= 1 ? coverageRaw * 100 : coverageRaw) : null;
+      const parts = [];
+      if (Number.isFinite(momentum)) parts.push(`动量 ${momentum.toFixed(0)}`);
+      if (Number.isFinite(valuation)) parts.push(`估值 ${valuation.toFixed(0)}`);
+      if (coverage !== null) parts.push(`覆盖 ${coverage.toFixed(0)}%`);
+      const dates = [];
+      if (m[4] && m[4] !== "missing") dates.push(`动量 ${m[4]}`);
+      if (m[5] && m[5] !== "missing") dates.push(`估值 ${m[5]}`);
+      return `${parts.join(" / ")}${dates.length ? `；数据源 ${dates.join("，")}` : ""}`;
+    }
+    return text;
+  }
+  const detail = (row && row.detail) || {};
+  if (detail.recommendation_reason) return String(detail.recommendation_reason);
+  const f = (row && row.factor_scores) || detail.factor_scores || {};
+  const parts = [];
+  if (f.momentum != null) parts.push(`动量 ${Number(f.momentum).toFixed(0)}`);
+  if (f.valuation != null) parts.push(`估值 ${Number(f.valuation).toFixed(0)}`);
+  if (f.data_quality != null) parts.push(`数据 ${Number(f.data_quality).toFixed(0)}`);
+  return parts.length ? parts.join(" / ") : "暂无结构化推荐理由";
+}
+
 (function renderDiscovery() {
   const wrap = document.getElementById("discovery-table-wrap");
   const empty = document.getElementById("discovery-empty");
@@ -6540,25 +7121,29 @@ function _computeDiscoveryStats() {
   const tbody = document.getElementById("discovery-table-body");
   const accuracyEl = document.getElementById("discovery-accuracy");
   const historyEl = document.getElementById("discovery-history-list");
+  const countExplainEl = document.getElementById("discovery-count-explain");
+  const marketTabsEl = document.getElementById("discovery-market-tabs");
   const cands = (DISCOVERY && DISCOVERY.candidates) || [];
 
   // ── sub-tab 计数显示
   const tabCountEl = document.getElementById("disc-tab-count");
   if (tabCountEl) {
     const nHist = Array.isArray(DISCOVERY_HISTORY) ? DISCOVERY_HISTORY.length : 0;
-    const nDates = nHist ? new Set(DISCOVERY_HISTORY.map(h => h.generated_date)).size : 0;
-    tabCountEl.textContent = `今日 ${cands.length} 只 · 历史 ${nDates} 天 / ${nHist} 条推荐`;
+    const nRuns = nHist ? new Set(DISCOVERY_HISTORY.map(h => h.run_id || h.generated_date)).size : 0;
+    const batchTotal = Number(DISCOVERY.full_batch_count || DISCOVERY.batch_total || cands.length || 0);
+    const todayLabel = `今日完整 ${batchTotal || cands.length} 只`;
+    tabCountEl.textContent = `${todayLabel} · 历史 ${nRuns} 批 / ${nHist} 条推荐`;
   }
 
-  // ── 准确度面板(基于 DISCOVERY_HISTORY 历史回测数据)
+  // ── 准确度面板(基于 V2 DISCOVERY_HISTORY 历史回测数据)
   const stats = _computeDiscoveryStats();
   if (accuracyEl) {
     if (!stats.totalRecs) {
       accuracyEl.innerHTML = `<div class="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-800">
-        <strong>📊 算法准确度</strong> · 暂无历史推荐数据 — 每天跑一次 build_pool_recommendations.py + evaluate_discovery.py,数据将自动累积。1 周后回来看第一组 5d alpha,1 个月后看 20d alpha。</div>`;
+        <strong>📊 算法准确度</strong> · 暂无 V2 历史推荐数据 — 每天跑一次 build_v2_recommendations.py + evaluate_v2_picks.py，数据会在 recommendation_picks / pick_outcomes 自动累积。</div>`;
     } else if (!stats.evaluated) {
       accuracyEl.innerHTML = `<div class="bg-sky-50 border border-sky-200 rounded-lg p-4 text-sm text-sky-800">
-        <strong>📊 算法准确度</strong> · 已记录 ${stats.totalRecs} 条推荐,但**还没有 alpha 数据**(可能 evaluate_discovery 还没跑,或推荐才生成不久 yfinance 拉不到对应日期的价格)。</div>`;
+        <strong>📊 算法准确度</strong> · 已记录 ${stats.totalRecs} 条 V2 推荐,但**还没有 alpha 数据**(可能 evaluate_v2_picks 还没跑,或推荐才生成不久还没到评估窗口)。</div>`;
     } else {
       const p = stats.panel;
       const cell = (label, v, hint) => {
@@ -6585,19 +7170,19 @@ function _computeDiscoveryStats() {
         <div class="flex items-center gap-2 mb-3">
           <span class="text-xl">📊</span>
           <h3 class="text-lg font-bold text-slate-900">算法准确度</h3>
-          <span class="text-xs text-slate-500">基于过去 ${stats.totalRecs} 次推荐 · ${stats.evaluated} 条已评估</span>
+          <span class="text-xs text-slate-500">基于过去 ${stats.totalRecs} 条 V2 推荐 · ${stats.evaluated} 条已评估</span>
         </div>
         <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-          ${cell("平均 1d α", p.alpha_1d, "1 个交易日 vs SPY")}
-          ${cell("平均 5d α", p.alpha_5d, "5 个交易日 vs SPY")}
+          ${cell("平均 1d α", p.alpha_1d, "1 个交易日 vs 各市场基准")}
+          ${cell("平均 5d α", p.alpha_5d, "5 个交易日 vs 各市场基准")}
           ${cell("平均 20d α", p.alpha_20d, "20 个交易日 ≈ 1 个月")}
           ${cell("平均 60d α", p.alpha_60d, "60 个交易日 ≈ 3 个月")}
           ${hitCell}
           ${icCell}
         </div>
         <p class="text-xs text-slate-500 mt-3">
-          📌 <strong>α (alpha)</strong> = 推荐后涨幅 - 同期 SPY 涨幅。正值 = 跑赢基准,负值 = 跑输。
-          <strong>信号 IC</strong> 正值越大,说明 composite_z 高分组真的更准。
+          📌 <strong>α (alpha)</strong> = 推荐后涨幅 - 同期市场基准涨幅。正值 = 跑赢基准,负值 = 跑输。
+          <strong>信号 IC</strong> 正值越大,说明高分组真的更准。
         </p>
       </div>`;
     }
@@ -6616,21 +7201,70 @@ function _computeDiscoveryStats() {
       : (_scope === "all_pool" || _scope === "all_db_prices")
       ? "全池扫描，未排除自选股"
       : `已排除 watchlist ${DISCOVERY.watchlist_excluded || "?"} 只`;
+    const _batchTotal = Number(DISCOVERY.full_batch_count || DISCOVERY.batch_total || cands.length || 0);
+    const _marketBreakdown = _formatMarketCountsFromMeta(DISCOVERY.market_breakdown || DISCOVERY.batch_market_counts);
+    const _displayText = `今日完整 ${_batchTotal || cands.length} 只`;
     meta.innerHTML = `<span class="${_ageColor}" title="${_metaTs.full}">🕐 AI 算于 ${_metaTs.short} ${_metaTs.age}</span> · `
+      + `${_displayText}${_marketBreakdown ? `（${_marketBreakdown}）` : ""} · `
       + `universe ${DISCOVERY.universe_size || "?"} 只（${_scopeText}） · `
       + `数据源 ${(DISCOVERY.etf_sources || []).join(" / ")} · `
       + `市值门槛 $${((DISCOVERY.min_market_cap_usd || 0) / 1e9).toFixed(0)}B`;
+    if (countExplainEl) {
+      countExplainEl.classList.remove("hidden");
+      countExplainEl.innerHTML = `<div class="flex flex-col md:flex-row md:items-center gap-2 md:gap-4">
+           <div class="font-semibold text-slate-900">今天完整推荐 ${_batchTotal || cands.length} 只，下面按市场切换查看。</div>
+           <div class="text-slate-600">${_marketBreakdown || "美股 / A股 / 港股"}；每个市场最多 20 只。</div>
+         </div>`;
+    }
     // 整批 candidates 是同一次 build_pool_recommendations.py 跑出来的，时间相同；算一次复用
     const _discoveryTs = _fmtTs(DISCOVERY.generated_at);
-    tbody.innerHTML = cands.map((c, idx) => {
-      const isFirst = idx === 0;  // 第一行默认展开 reason 面板
+    const _marketOrder = ["US", "CN", "HK"];
+    const _marketCounts = {};
+    cands.forEach(c => {
+      const key = _candidateMarketCode(c);
+      _marketCounts[key] = (_marketCounts[key] || 0) + 1;
+    });
+    const _availableMarkets = _marketOrder.filter(k => _marketCounts[k]);
+    if (!window._activeDiscoveryMarket || !_marketCounts[window._activeDiscoveryMarket]) {
+      window._activeDiscoveryMarket = _availableMarkets[0] || "US";
+    }
+
+    function _renderDiscoveryMarketTabs() {
+      if (!marketTabsEl) return;
+      marketTabsEl.classList.remove("hidden");
+      marketTabsEl.innerHTML = _availableMarkets.map(k => {
+        const active = window._activeDiscoveryMarket === k;
+        const cls = active
+          ? "bg-violet-600 text-white border-violet-600"
+          : "bg-white text-slate-700 border-slate-200 hover:border-violet-300 hover:text-violet-700";
+        return `<button onclick="switchDiscoveryMarket('${k}')"
+                  class="px-3 py-1.5 rounded-md border text-sm font-medium transition ${cls}">
+                  ${_marketLabel(k)} ${_marketCounts[k] || 0}
+                </button>`;
+      }).join("");
+    }
+
+    function _visibleDiscoveryCandidates() {
+      return cands
+        .filter(c => _candidateMarketCode(c) === window._activeDiscoveryMarket)
+        .sort((a, b) => (a.rank || 9999) - (b.rank || 9999));
+    }
+
+    function _renderDiscoveryMarketRows() {
+      const visibleCands = _visibleDiscoveryCandidates();
+      tbody.innerHTML = visibleCands.map((c, idx) => {
       const cap = c.market_cap_usd ? (c.market_cap_usd / 1e9).toFixed(1) : "-";
       const f = c.f_score == null ? "-" : Math.round(c.f_score);
       const fColor = c.f_score >= 7 ? "text-emerald-600" : (c.f_score >= 4 ? "text-amber-600" : "text-rose-600");
       const mom = c.momentum_12_1 == null ? "-" : (c.momentum_12_1 > 0 ? "+" : "") + c.momentum_12_1.toFixed(1) + "%";
       const momColor = (c.momentum_12_1 || 0) > 0 ? "text-emerald-600" : "text-rose-600";
-      const zColor = c.composite_z > 0 ? "text-emerald-600 font-bold" : "text-rose-600";
+      const scoreNum = Number(c.composite_z);
+      const scoreText = Number.isFinite(scoreNum) ? (scoreNum >= 0 ? "+" : "") + scoreNum.toFixed(2) : "—";
+      const zColor = scoreNum > 0 ? "text-emerald-600 font-bold" : (Number.isFinite(scoreNum) ? "text-rose-600" : "text-slate-400");
       const etfs = (c.etfs || []).map(e => `<span class="inline-block px-1.5 py-0.5 mr-1 text-xs bg-indigo-100 text-indigo-700 rounded">${e}</span>`).join("");
+      const reasonText = _reasonSummary(c);
+      const entryText = _fmtEntryPrice(c);
+      const factorHtml = _factorBreakdownHtml(c);
       const market = (() => {
         const t = c.ticker || "";
         if (t.endsWith(".SS")) return "🇨🇳 沪 A";
@@ -6649,28 +7283,30 @@ function _computeDiscoveryStats() {
       const alpha20 = track ? track.alpha_20d : null;
       const tk = _esc(c.ticker);
       return `<tr class="hover:bg-slate-50">
-        <td class="px-3 py-2 font-mono text-slate-500">
+        <td class="disc-sticky-rank px-3 py-2 font-mono text-slate-500">
           <button id="disc-toggle-${tk}" onclick="toggleDiscoveryDetail('${tk}')"
                   class="text-violet-600 hover:text-violet-800 mr-1 font-bold"
-                  title="展开/折叠推荐理由">${isFirst ? "▼" : "▶"}</button>
+                  title="展开/折叠推荐理由">▶</button>
           ${c.rank}
         </td>
-        <td class="px-3 py-2 font-mono font-semibold text-slate-900 cursor-pointer"
+        <td class="disc-sticky-code px-3 py-2 font-mono font-semibold text-slate-900 cursor-pointer"
             onclick="toggleDiscoveryDetail('${tk}')">${c.ticker}</td>
         <td class="px-3 py-2 text-slate-700 cursor-pointer"
             onclick="toggleDiscoveryDetail('${tk}')">
           <div>${c.name || ""}</div>
           <div class="mt-0.5">${stockPill(c.ticker, {layout: "mini"})}</div>
         </td>
+        <td class="px-3 py-2 whitespace-nowrap">${_signalBadge(c)}</td>
         <td class="px-3 py-2 text-xs text-slate-700 whitespace-nowrap">${market}</td>
         <td class="px-3 py-2 text-xs text-slate-600 whitespace-nowrap">${_esc(chainThemeFor(c.ticker) || c.sector || "")}</td>
-        <td class="px-3 py-2 text-right font-mono ${zColor}">${c.composite_z >= 0 ? "+" : ""}${c.composite_z.toFixed(2)}</td>
-        <td class="px-3 py-2 text-right font-mono ${fColor}">${f}</td>
-        <td class="px-3 py-2 text-right font-mono ${momColor}">${mom}</td>
-        <td class="px-3 py-2 text-right font-mono text-slate-700">${c.analyst_score || 0}</td>
+        <td class="px-3 py-2 text-right font-mono ${zColor}">${scoreText}</td>
+        <td class="px-3 py-2 min-w-[210px]">${factorHtml}</td>
+        <td class="px-3 py-2 text-right font-mono text-slate-700 whitespace-nowrap">${entryText}</td>
         <td class="px-3 py-2 text-right font-mono text-slate-700">${cap}</td>
         <td class="px-3 py-2 text-right">${_fmtAlpha(alpha5)}</td>
         <td class="px-3 py-2 text-right">${_fmtAlpha(alpha20)}</td>
+        <td class="px-3 py-2 text-xs text-slate-700 min-w-[260px] leading-snug">${_esc(reasonText)}</td>
+        <td class="disc-cell-wrap px-3 py-2 text-xs min-w-[200px] max-w-[320px] leading-snug">${_riskSummaryHtml(c, 1)}</td>
         <td class="px-3 py-2">${etfs}</td>
         <td class="px-3 py-2 text-center text-xs whitespace-nowrap" title="${_esc(_discoveryTs.full)}">
           <span class="${_discoveryTs.age.includes('⚠️') ? 'text-rose-600 font-medium' : 'text-slate-500'}">
@@ -6686,30 +7322,35 @@ function _computeDiscoveryStats() {
           </button>
         </td>
       </tr>
-      <tr id="disc-detail-${tk}" class="${isFirst ? '' : 'hidden'}">
-        <td colspan="15" class="p-0 border-t border-slate-100">${_renderReasonPanel(c)}</td>
+      <tr id="disc-detail-${tk}" class="disc-detail-row hidden">
+        <td colspan="17" class="p-0 border-t border-slate-100">${_renderReasonPanel(c)}</td>
       </tr>`;
-    }).join("");
+      }).join("");
 
-    // 异步加载 watchlist,把已在自选里的票按钮置灰
-    _markDiscoveryAddedButtons();
-    // 默认展开的第一行需要"系统池详情"卡：若 _dbExplorerData 未就绪，懒加载后回填
-    if (cands.length && !_dbExplorerData) {
-      _ensureDiscoveryRichLoaded(cands[0].ticker);
+      // 异步加载 watchlist,把已在自选里的票按钮置灰
+      _markDiscoveryAddedButtons();
     }
+
+    window.switchDiscoveryMarket = function(market) {
+      window._activeDiscoveryMarket = market;
+      _renderDiscoveryMarketTabs();
+      _renderDiscoveryMarketRows();
+    };
+    _renderDiscoveryMarketTabs();
+    _renderDiscoveryMarketRows();
   }
 
   // ── 推荐历史(按日期分组,折叠/展开)
   if (historyEl) {
     if (!Array.isArray(DISCOVERY_HISTORY) || !DISCOVERY_HISTORY.length) {
       historyEl.innerHTML = `<div class="text-sm text-slate-500 bg-white rounded-lg p-4 border border-slate-200">
-        暂无历史推荐数据。每次跑 build_pool_recommendations.py 会自动追加一批,跨日累积。
+        暂无 V2 历史推荐数据。每次跑 build_v2_recommendations.py 会写入 recommendation_picks；evaluate_v2_picks.py 会把 1d/5d/20d alpha 写入 pick_outcomes。
       </div>`;
     } else {
       // 按 generated_date 分组
       const byDate = {};
       DISCOVERY_HISTORY.forEach(h => {
-        const d = h.generated_date || "未知";
+        const d = h.generated_date || h.run_id || "未知";
         (byDate[d] = byDate[d] || []).push(h);
       });
       const dates = Object.keys(byDate).sort().reverse();  // 倒序
@@ -6723,10 +7364,11 @@ function _computeDiscoveryStats() {
         const meanA5 = a5s.length ? (a5s.reduce((s, v) => s + v, 0) / a5s.length) : null;
         const meanA20 = a20s.length ? (a20s.reduce((s, v) => s + v, 0) / a20s.length) : null;
         const hit5 = a5s.filter(v => v > 5).length;
+        const marketBreakdown = _formatMarketCountsFromRows(recs);
 
         const summary = `<div class="flex items-center gap-3 text-sm">
           <span class="font-bold text-slate-900">${d}</span>
-          <span class="text-slate-500">推荐 ${recs.length} 只</span>
+          <span class="text-slate-500">完整批次 ${recs.length} 只${marketBreakdown ? `（${marketBreakdown}）` : ""}</span>
           <span class="text-slate-400">·</span>
           <span class="text-xs text-slate-600">5d α: ${meanA5 == null ? "—" : (meanA5 >= 0 ? "+" : "") + meanA5.toFixed(2) + "%"}</span>
           <span class="text-xs text-slate-600">20d α: ${meanA20 == null ? "—" : (meanA20 >= 0 ? "+" : "") + meanA20.toFixed(2) + "%"}</span>
@@ -6738,12 +7380,20 @@ function _computeDiscoveryStats() {
           const a5 = _fmtAlpha(r.alpha_5d);
           const a20 = _fmtAlpha(r.alpha_20d);
           const a60 = _fmtAlpha(r.alpha_60d);
+          const score = (r.score != null) ? Number(r.score).toFixed(1)
+            : (r.composite_z != null ? Number(r.composite_z).toFixed(2) : "—");
+          const market = _marketLabel(_candidateMarketCode(r));
           return `<tr class="hover:bg-slate-50">
             <td class="px-2 py-1 font-mono text-xs text-slate-500">#${r.rank}</td>
             <td class="px-2 py-1 font-mono text-xs font-bold">${r.ticker}</td>
-            <td class="px-2 py-1 text-xs text-slate-700 max-w-xs truncate">${r.name || ""}</td>
-            <td class="px-2 py-1 text-xs">${stockPill(r.ticker, {layout: "mini"})}</td>
-            <td class="px-2 py-1 text-right text-xs font-mono">${r.composite_z != null ? (r.composite_z >= 0 ? "+" : "") + r.composite_z.toFixed(2) : "—"}</td>
+            <td class="px-2 py-1 text-xs text-slate-700 max-w-[180px] truncate">${r.name || ""}</td>
+            <td class="px-2 py-1 text-xs whitespace-nowrap">${market}</td>
+            <td class="px-2 py-1 text-xs whitespace-nowrap">${_signalBadge(r)}</td>
+            <td class="px-2 py-1 text-right text-xs font-mono">${score}</td>
+            <td class="px-2 py-1 text-xs min-w-[190px]">${_factorBreakdownHtml(r, true)}</td>
+            <td class="px-2 py-1 text-right text-xs font-mono whitespace-nowrap">${_fmtEntryPrice(r)}</td>
+            <td class="px-2 py-1 text-xs text-slate-700 min-w-[260px] max-w-[360px] whitespace-normal leading-snug">${_esc(_reasonSummary(r))}</td>
+            <td class="px-2 py-1 text-xs min-w-[180px] max-w-[260px] whitespace-normal leading-snug">${_riskSummaryHtml(r, 1)}</td>
             <td class="px-2 py-1 text-right text-xs">${a1}</td>
             <td class="px-2 py-1 text-right text-xs">${a5}</td>
             <td class="px-2 py-1 text-right text-xs">${a20}</td>
@@ -6761,8 +7411,13 @@ function _computeDiscoveryStats() {
                   <th class="px-2 py-1 text-left">排名</th>
                   <th class="px-2 py-1 text-left">代码</th>
                   <th class="px-2 py-1 text-left">名字</th>
-                  <th class="px-2 py-1 text-left">链条</th>
-                  <th class="px-2 py-1 text-right">z 分</th>
+                  <th class="px-2 py-1 text-left">市场</th>
+                  <th class="px-2 py-1 text-left">信号</th>
+                  <th class="px-2 py-1 text-right">分数</th>
+                  <th class="px-2 py-1 text-left">因子拆解</th>
+                  <th class="px-2 py-1 text-right">入选价</th>
+                  <th class="px-2 py-1 text-left">推荐依据</th>
+                  <th class="px-2 py-1 text-left">风险</th>
                   <th class="px-2 py-1 text-right">1d α</th>
                   <th class="px-2 py-1 text-right">5d α</th>
                   <th class="px-2 py-1 text-right">20d α</th>
@@ -7708,37 +8363,61 @@ def _runtime_infra_status() -> dict:
     import time
     out: dict[str, dict] = {}
 
+    uid = os.getuid()
+
+    def launchctl_job(label: str, desc: str) -> dict:
+        plist = os.path.join(os.path.expanduser("~/Library/LaunchAgents"), f"{label}.plist")
+        plist_exists = os.path.exists(plist)
+        try:
+            proc = subprocess.run(
+                ["launchctl", "print", f"gui/{uid}/{label}"],
+                capture_output=True,
+                text=True,
+                timeout=4,
+            )
+        except Exception as e:
+            status = "WARN" if plist_exists else "FAIL"
+            detail = f"{desc} · launchctl 不可读：{type(e).__name__}"
+            if plist_exists:
+                detail += " · plist 存在"
+            return {"status": status, "detail": detail, "loaded": False}
+
+        text = (proc.stdout or "") + "\n" + (proc.stderr or "")
+        if proc.returncode != 0:
+            status = "WARN" if plist_exists else "FAIL"
+            detail = f"{desc} · 未能读取 gui/{uid} user agent"
+            if plist_exists:
+                detail += " · plist 存在，可能是当前进程 launchctl 域不可见"
+            return {"status": status, "detail": detail, "loaded": False}
+
+        state_match = re.search(r"state = ([^\n]+)", text)
+        pid_match = re.search(r"\bpid = (\d+)", text)
+        exit_match = re.search(r"last exit code = ([^\n]+)", text)
+        runs_match = re.search(r"\bruns = (\d+)", text)
+        state = (state_match.group(1).strip() if state_match else "loaded")
+        pid = pid_match.group(1) if pid_match else "-"
+        last_exit = exit_match.group(1).strip() if exit_match else "—"
+        runs = runs_match.group(1) if runs_match else "—"
+        try:
+            exit_code = int(last_exit)
+        except Exception:
+            exit_code = 0 if last_exit in {"—", "-"} else None
+        status = "OK" if exit_code in (0, None) else "FAIL"
+        return {
+            "status": status,
+            "detail": f"{desc} · 已装载 · state={state} · PID {pid} · runs {runs} · last exit {last_exit}",
+            "loaded": True,
+            "state": state,
+        }
+
     # 1) 3 条 launchd 线
     launchd_jobs = [
         ("morning", "com.linearview.stockassistant.daily_refresh", "08:30 早班快线"),
         ("a_share", "com.linearview.stockassistant.a_share_close",  "16:30 A/H 收盘线"),  # 可能未单独装
         ("research", "com.linearview.stockassistant.research_nightly", "21:00 研究线"),
     ]
-    try:
-        proc = subprocess.run(["launchctl", "list"], capture_output=True, text=True, timeout=3)
-        lines = proc.stdout.splitlines()
-    except Exception:
-        lines = []
     for key, label, desc in launchd_jobs:
-        matched = next((ln for ln in lines if label in ln), None)
-        if not matched:
-            out[f"launchd_{key}"] = {"status": "FAIL", "detail": f"{desc} · 未装载（plist 不在 ~/Library/LaunchAgents/ 或未 load）"}
-            continue
-        parts = matched.split()
-        pid = parts[0] if len(parts) >= 1 else "-"
-        last_exit = parts[1] if len(parts) >= 2 else "?"
-        try:
-            exit_code = int(last_exit)
-        except ValueError:
-            exit_code = None
-        if exit_code in (0, None):  # 0 = 上次成功；- = 未跑过/常驻
-            status = "OK"
-        else:
-            status = "FAIL"
-        out[f"launchd_{key}"] = {
-            "status": status,
-            "detail": f"{desc} · 上次退出码 {last_exit} · PID {pid}",
-        }
+        out[f"launchd_{key}"] = launchctl_job(label, desc)
 
     # 2) defense_watcher cron（每 15 分钟跑）
     log_path = os.path.join(_REPO, "data", "defense_watcher.log")
@@ -7753,17 +8432,35 @@ def _runtime_infra_status() -> dict:
     else:
         out["defense_watcher"] = {"status": "WARN", "detail": "data/defense_watcher.log 不存在（cron 可能还没装）"}
 
-    # 3) API 服务（8765 端口）
-    try:
-        import urllib.request
-        with urllib.request.urlopen("http://127.0.0.1:8765/health", timeout=2) as resp:
-            ok = resp.status == 200
+    # 3) API 服务（8765 端口）：装载状态和 /health 响应分开看，避免把瞬时超时误报成"未装载"。
+    api_job = launchctl_job("com.linearview.stockassistant.api", "API launchd")
+    health_ok = False
+    health_error = ""
+    for _ in range(2):
+        try:
+            import urllib.request
+            with urllib.request.urlopen("http://127.0.0.1:8765/health", timeout=5) as resp:
+                health_ok = resp.status == 200
+            if health_ok:
+                break
+        except Exception as e:
+            health_error = type(e).__name__
+            time.sleep(0.3)
+    if health_ok:
         out["api_8765"] = {
-            "status": "OK" if ok else "WARN",
-            "detail": "127.0.0.1:8765 · /health 200 · launchd 常驻",
+            "status": "OK",
+            "detail": f"127.0.0.1:8765 · /health 200 · {api_job.get('detail')}",
         }
-    except Exception as e:
-        out["api_8765"] = {"status": "FAIL", "detail": f"127.0.0.1:8765 不可达：{type(e).__name__}"}
+    elif api_job.get("loaded"):
+        out["api_8765"] = {
+            "status": "WARN",
+            "detail": f"API 已装载，但 /health 未及时响应：{health_error or 'timeout'} · 不阻断离线 dashboard",
+        }
+    else:
+        out["api_8765"] = {
+            "status": "FAIL",
+            "detail": f"API 未装载且 /health 不可达：{health_error or 'unknown'}",
+        }
 
     # 4) snapshots 新鲜度
     import glob
@@ -7908,16 +8605,20 @@ def _runtime_db_stats() -> dict:
             if "pick_outcomes" in tables:
                 rows = con.execute(
                     """
-                    SELECT market, horizon,
+                    SELECT po.market, po.horizon,
                            COUNT(*) AS n_reviewed,
-                           SUM(CASE WHEN is_success THEN 1 ELSE 0 END) AS n_win,
-                           ROUND(AVG(alpha_pct), 2) AS avg_alpha,
-                           ROUND(AVG(return_pct), 2) AS avg_return,
-                           MAX(outcome_date) AS latest_outcome
-                    FROM pick_outcomes
-                    WHERE alpha_pct IS NOT NULL
-                    GROUP BY market, horizon
-                    """
+                           SUM(CASE WHEN po.is_success THEN 1 ELSE 0 END) AS n_win,
+                           ROUND(AVG(po.alpha_pct), 2) AS avg_alpha,
+                           ROUND(AVG(po.return_pct), 2) AS avg_return,
+                           MAX(po.outcome_date) AS latest_outcome
+                    FROM pick_outcomes po
+                    JOIN recommendation_runs rr ON rr.run_id = po.run_id
+                    WHERE po.alpha_pct IS NOT NULL
+                      AND rr.universe_scope = 'system_tech_universe'
+                      AND rr.run_date >= ?
+                    GROUP BY po.market, po.horizon
+                    """,
+                    [PRODUCTION_METRICS_START_DATE],
                 ).fetchall()
                 for market, horizon, n_rev, n_win, avg_alpha, avg_ret, latest in rows:
                     key = str(market).upper()
@@ -8045,43 +8746,331 @@ def _runtime_v2_recommendations(limit: int = 20) -> list[dict]:
             con.close()
             return []
         latest = con.execute(
-            "SELECT run_id FROM recommendation_runs ORDER BY generated_at DESC LIMIT 1"
+            """
+            SELECT run_id
+            FROM recommendation_runs
+            WHERE universe_scope = 'system_tech_universe'
+            ORDER BY generated_at DESC
+            LIMIT 1
+            """
         ).fetchone()
         if not latest:
             con.close()
             return []
-        rows = con.execute(
-            """
-            SELECT market, symbol, name, rank, signal, total_score, factor_scores_json
-            FROM recommendation_picks
-            WHERE run_id = ?
-            ORDER BY rank NULLS LAST, total_score DESC NULLS LAST, market, symbol
-            LIMIT ?
-            """,
-            [latest[0], limit],
-        ).fetchall()
+        if "price_daily" in tables:
+            rows = con.execute(
+                """
+                WITH latest_price AS (
+                    SELECT market, symbol, trade_date, interval, close, prev_close,
+                           currency, market_cap, forward_pe, trailing_pe, peg_ratio,
+                           ytd_pct, one_week_pct, one_month_pct, one_year_pct,
+                           source, source_updated_at, fetched_at
+                    FROM (
+                        SELECT p.*,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY p.market, p.symbol
+                                   ORDER BY p.trade_date DESC, p.fetched_at DESC
+                               ) AS rn
+                        FROM price_daily p
+                    )
+                    WHERE rn = 1
+                )
+                SELECT rp.market, rp.symbol, rp.name, rp.rank, rp.rating, rp.signal,
+                       rp.total_score, rp.factor_scores_json, rp.recommendation_reason,
+                       rp.risk_flags_json, rp.entry_price, rp.entry_currency,
+                       rp.source_origin, lp.market_cap, lp.one_year_pct, lp.forward_pe
+                FROM recommendation_picks rp
+                LEFT JOIN latest_price lp
+                  ON lp.market = rp.market AND lp.symbol = rp.symbol
+                WHERE rp.run_id = ?
+                ORDER BY rp.market, rp.rank NULLS LAST, rp.total_score DESC NULLS LAST, rp.symbol
+                LIMIT ?
+                """,
+                [latest[0], limit],
+            ).fetchall()
+        else:
+            rows = con.execute(
+                """
+                SELECT market, symbol, name, rank, rating, signal, total_score,
+                       factor_scores_json, recommendation_reason, risk_flags_json,
+                       entry_price, entry_currency, source_origin, NULL, NULL, NULL
+                FROM recommendation_picks
+                WHERE run_id = ?
+                ORDER BY market, rank NULLS LAST, total_score DESC NULLS LAST, symbol
+                LIMIT ?
+                """,
+                [latest[0], limit],
+            ).fetchall()
         con.close()
         out = []
-        for market, symbol, name, rank, signal, total_score, factor_json in rows:
-            detail = {}
-            try:
-                detail = json.loads(factor_json) if factor_json else {}
-            except Exception:
-                detail = {}
+        for (
+            market, symbol, name, rank, rating, signal, total_score, factor_json,
+            recommendation_reason, risk_flags_json, entry_price, entry_currency,
+            source_origin, market_cap, one_year_pct, forward_pe
+        ) in rows:
+            factors = _json_value(factor_json, {})
+            if not isinstance(factors, dict):
+                factors = {}
+            risk_flags = _json_value(risk_flags_json, [])
+            if not isinstance(risk_flags, list):
+                risk_flags = [risk_flags]
+            detail = {
+                "fast_pool": True,
+                "pick_total_score": total_score,
+                "momentum_proxy": one_year_pct if one_year_pct is not None else factors.get("momentum"),
+                "growth_proxy": None,
+                "valuation": {"forward_pe": forward_pe},
+                "theme": "科技/AI universe",
+                "factor_scores": factors,
+                "recommendation_reason": recommendation_reason,
+                "risk_flags": risk_flags,
+            }
             out.append({
                 "ticker": symbol,
                 "code": symbol,
                 "name": name or "",
                 "market": market,
                 "rank": rank,
+                "rating": rating,
                 "signal": signal,
                 "composite_z": total_score,
+                "market_cap_usd": market_cap,
+                "momentum_12_1": one_year_pct if one_year_pct is not None else factors.get("momentum"),
+                "f_score": factors.get("f_score"),
+                "analyst_score": factors.get("data_quality"),
+                "valuation_score": _factor_number(factors, "valuation"),
+                "momentum_score": _factor_number(factors, "momentum"),
+                "quality_score": _factor_number(factors, "quality", "data_quality"),
+                "coverage_score": _coverage_pct(factors),
+                "factor_scores": factors,
+                "recommendation_reason": recommendation_reason,
+                "risk_flags": risk_flags,
+                "entry_price": _js_number(entry_price),
+                "entry_currency": entry_currency,
+                "etfs": ["DB_POOL"],
                 "detail": detail,
                 "source": "v2:recommendation_picks",
+                "source_origin": source_origin or "system_pool",
             })
         return out
     except Exception:
         return []
+
+
+def _runtime_v2_latest_batch_meta() -> dict:
+    db_path = _duckdb_path()
+    if not os.path.exists(db_path):
+        return {}
+    try:
+        import duckdb
+        con = duckdb.connect(db_path, read_only=True)
+        tables = {str(r[0]) for r in con.execute("SHOW TABLES").fetchall()}
+        if "recommendation_runs" not in tables or "recommendation_picks" not in tables:
+            con.close()
+            return {}
+        latest = con.execute(
+            """
+            SELECT run_id, run_date, generated_at
+            FROM recommendation_runs
+            WHERE universe_scope = 'system_tech_universe'
+            ORDER BY generated_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if not latest:
+            con.close()
+            return {}
+        run_id, run_date, generated_at = latest
+        rows = con.execute(
+            """
+            SELECT market, signal, COUNT(*)
+            FROM recommendation_picks
+            WHERE run_id = ?
+            GROUP BY market, signal
+            ORDER BY market, signal
+            """,
+            [run_id],
+        ).fetchall()
+        con.close()
+    except Exception:
+        return {}
+
+    market_breakdown: dict[str, dict] = {}
+    total = 0
+    for market, signal, n in rows:
+        key = str(market or "UNKNOWN").upper()
+        bucket = market_breakdown.setdefault(key, {"total": 0, "buy": 0, "watch": 0, "avoid": 0})
+        n_i = int(n or 0)
+        total += n_i
+        bucket["total"] += n_i
+        sig = str(signal or "").lower()
+        if sig in bucket:
+            bucket[sig] += n_i
+    return {
+        "batch_run_id": str(run_id),
+        "batch_run_date": str(run_date)[:10] if run_date is not None else None,
+        "batch_generated_at": str(generated_at) if generated_at is not None else None,
+        "full_batch_count": total,
+        "market_breakdown": market_breakdown,
+    }
+
+
+def _js_number(v):
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(x):
+        return None
+    return x
+
+
+def _json_value(v, fallback):
+    if v is None or v == "":
+        return fallback
+    if isinstance(v, (dict, list)):
+        return v
+    try:
+        return json.loads(v)
+    except Exception:
+        return fallback
+
+
+def _factor_number(factors: dict, *keys: str):
+    for key in keys:
+        value = _js_number((factors or {}).get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _coverage_pct(factors: dict):
+    value = _factor_number(factors, "coverage")
+    if value is None:
+        return None
+    return value * 100.0 if value <= 1.0 else value
+
+
+def _runtime_v2_discovery_history(limit: int = 1200) -> list[dict]:
+    """V2 history for AI 推荐: recommendation_picks + pick_outcomes.
+
+    This replaces the deleted V1 discovery_history/discovery_tracking tables.
+    The dashboard only reads this data; it does not mutate watchlist/holdings.
+    """
+    db_path = _duckdb_path()
+    if not os.path.exists(db_path):
+        return []
+    try:
+        import duckdb
+        con = duckdb.connect(db_path, read_only=True)
+        tables = {str(r[0]) for r in con.execute("SHOW TABLES").fetchall()}
+        required = {"recommendation_runs", "recommendation_picks"}
+        if not required.issubset(tables):
+            con.close()
+            return []
+        has_outcomes = "pick_outcomes" in tables
+        outcome_cte = """
+            WITH outcomes AS (
+                SELECT run_id, market, symbol,
+                       MAX(CASE WHEN horizon='1d' THEN alpha_pct END) AS alpha_1d,
+                       MAX(CASE WHEN horizon='5d' THEN alpha_pct END) AS alpha_5d,
+                       MAX(CASE WHEN horizon='20d' THEN alpha_pct END) AS alpha_20d,
+                       MAX(CASE WHEN horizon='60d' THEN alpha_pct END) AS alpha_60d,
+                       MAX(CASE WHEN horizon='1d' THEN outcome_date END) AS outcome_date_1d,
+                       MAX(CASE WHEN horizon='5d' THEN outcome_date END) AS outcome_date_5d,
+                       MAX(CASE WHEN horizon='20d' THEN outcome_date END) AS outcome_date_20d,
+                       MAX(CASE WHEN horizon='60d' THEN outcome_date END) AS outcome_date_60d
+                FROM pick_outcomes
+                GROUP BY run_id, market, symbol
+            )
+        """ if has_outcomes else """
+            WITH outcomes AS (
+                SELECT NULL::VARCHAR AS run_id, NULL::VARCHAR AS market, NULL::VARCHAR AS symbol,
+                       NULL::DOUBLE AS alpha_1d, NULL::DOUBLE AS alpha_5d,
+                       NULL::DOUBLE AS alpha_20d, NULL::DOUBLE AS alpha_60d,
+                       NULL::DATE AS outcome_date_1d, NULL::DATE AS outcome_date_5d,
+                       NULL::DATE AS outcome_date_20d, NULL::DATE AS outcome_date_60d
+                WHERE FALSE
+            )
+        """
+        rows = con.execute(
+            outcome_cte + """
+            SELECT
+                rr.run_id, rr.run_date, rr.generated_at,
+                rp.market, rp.symbol, rp.name, rp.rank, rp.rating, rp.signal,
+                rp.total_score, rp.factor_scores_json, rp.recommendation_reason,
+                rp.risk_flags_json, rp.entry_price, rp.entry_currency, rp.source_origin,
+                o.alpha_1d, o.alpha_5d, o.alpha_20d, o.alpha_60d,
+                o.outcome_date_1d, o.outcome_date_5d, o.outcome_date_20d, o.outcome_date_60d
+            FROM recommendation_picks rp
+            JOIN recommendation_runs rr ON rr.run_id = rp.run_id
+            LEFT JOIN outcomes o
+              ON o.run_id = rp.run_id AND o.market = rp.market AND o.symbol = rp.symbol
+            WHERE rr.universe_scope = 'system_tech_universe'
+              AND rr.run_date >= ?
+            ORDER BY rr.generated_at DESC, rp.rank NULLS LAST, rp.total_score DESC NULLS LAST, rp.market, rp.symbol
+            LIMIT ?
+            """,
+            [PRODUCTION_METRICS_START_DATE, limit],
+        ).fetchall()
+        con.close()
+    except Exception as e:
+        print(f"  ⚠️ V2 推荐历史加载失败: {e}")
+        return []
+
+    out: list[dict] = []
+    for row in rows:
+        (
+            run_id, run_date, generated_at,
+            market, symbol, name, rank, rating, signal,
+            total_score, factor_json, recommendation_reason, risk_flags_json,
+            entry_price, entry_currency, source_origin,
+            alpha_1d, alpha_5d, alpha_20d, alpha_60d,
+            outcome_date_1d, outcome_date_5d, outcome_date_20d, outcome_date_60d,
+        ) = row
+        score = _js_number(total_score)
+        factors = _json_value(factor_json, {})
+        if not isinstance(factors, dict):
+            factors = {}
+        risk_flags = _json_value(risk_flags_json, [])
+        if not isinstance(risk_flags, list):
+            risk_flags = [risk_flags]
+        generated_s = str(generated_at or run_date or run_id)
+        out.append({
+            "run_id": str(run_id),
+            "generated_date": generated_s[:16],
+            "run_date": str(run_date)[:10] if run_date is not None else None,
+            "market": market,
+            "ticker": symbol,
+            "code": symbol,
+            "name": name or "",
+            "rank": int(rank) if rank is not None else None,
+            "rating": rating,
+            "signal": signal,
+            "score": score,
+            "composite_z": score,
+            "factor_scores": factors,
+            "valuation_score": _factor_number(factors, "valuation"),
+            "momentum_score": _factor_number(factors, "momentum"),
+            "quality_score": _factor_number(factors, "quality", "data_quality"),
+            "coverage_score": _coverage_pct(factors),
+            "f_score": _factor_number(factors, "f_score"),
+            "recommendation_reason": recommendation_reason,
+            "risk_flags": risk_flags,
+            "entry_price": _js_number(entry_price),
+            "entry_currency": entry_currency,
+            "source_origin": source_origin or "system_pool",
+            "alpha_1d": _js_number(alpha_1d),
+            "alpha_5d": _js_number(alpha_5d),
+            "alpha_20d": _js_number(alpha_20d),
+            "alpha_60d": _js_number(alpha_60d),
+            "outcome_date_1d": str(outcome_date_1d)[:10] if outcome_date_1d is not None else None,
+            "outcome_date_5d": str(outcome_date_5d)[:10] if outcome_date_5d is not None else None,
+            "outcome_date_20d": str(outcome_date_20d)[:10] if outcome_date_20d is not None else None,
+            "outcome_date_60d": str(outcome_date_60d)[:10] if outcome_date_60d is not None else None,
+            "source": "v2:recommendation_picks+pick_outcomes",
+        })
+    return out
 
 
 def today_decision_panel_html() -> str:
@@ -8114,13 +9103,13 @@ def today_decision_panel_html() -> str:
     blocking = quality_status == "FAIL" or acceptance_status == "FAIL"
     if blocking:
         overall = "FAIL"
-        overall_text = "今天推荐只能只读观察，先看运行状态里的失败项。"
+        overall_text = "今天推荐只能只读观察，先看系统状态里的失败项。"
     elif quality_status in {"PASS", "OK"} and acceptance_status in {"PASS", "OK"} and discovery_n:
         overall = "OK"
         overall_text = "今天链路可用，可以从 AI 推荐进入买前研究。"
     else:
         overall = "WARN"
-        overall_text = "今天有数据，但部分产物或证据不足，建议先核对运行状态。"
+        overall_text = "今天有数据，但部分产物或证据不足，建议先核对系统状态。"
 
     price_stats = db.get("prices") or {}
     v2 = db.get("v2") or {}
@@ -8194,7 +9183,7 @@ def today_decision_panel_html() -> str:
 """
 
     cards_html = "".join([
-        card("系统可用性", overall, overall_text, "#runtime-status", "查看运行状态"),
+        card("系统可用性", overall, overall_text, "#runtime-status", "查看系统状态"),
         card("AI 推荐", "OK" if discovery_n else "WARN", f"{discovery_n} 只系统池候选；来源不包含手动自选股池。", "#discovery", "打开 AI 推荐"),
         card("AI 组合方案", plan_status, f"{plan_detail}；调仓清单：{trade_text}。", "#backtest", "查看组合方案"),
         card("已拉取股票池", "OK" if pool_total else "WARN", market_line, "#db-explorer", "查看股票池"),
@@ -8234,7 +9223,7 @@ def today_decision_panel_html() -> str:
         <div class="text-xs font-semibold text-violet-700 mb-2">每日入口 · 只汇总，不写库</div>
         <h2 class="text-3xl font-bold text-slate-900">今日决策台</h2>
         <p class="text-sm text-slate-600 mt-2 max-w-3xl">
-          先看系统今天是否可用，再决定去 AI 推荐、AI 组合方案、买前审查还是运行状态。这里不新增股票池，也不会自动写自选股或真实持仓。
+          先看系统今天是否可用，再决定去 AI 推荐、AI 组合方案、买前研究还是系统状态。这里不新增股票池，也不会自动写自选股或真实持仓。
         </p>
       </div>
       <div class="text-right">
@@ -8423,7 +9412,11 @@ def runtime_status_panel_html() -> str:
         success = int(info.get("success") or 0)
         fail = int(info.get("fail") or 0)
         if total <= 0:
-            return "WARN", "暂无市场统计"
+            price_by_market = {"US": us_price, "CN": cn_price, "HK": hk_price}
+            priced = int(price_by_market.get(key) or 0)
+            if priced > 0:
+                return "INFO", f"source_health 未输出分市场统计；price_daily 已有 {priced} 只"
+            return "WARN", "source_health 未输出分市场统计，且 price_daily 暂无本市场行情"
         status = "OK" if fail == 0 and success > 0 else ("FAIL" if success <= 0 else "WARN")
         return status, f"成功 {success} / 总 {total} · 失败 {fail}"
 
@@ -8457,7 +9450,14 @@ def runtime_status_panel_html() -> str:
     runtime_v2_candidates = _runtime_v2_recommendations(limit=20)
     discovery_n = len(runtime_v2_candidates or (discovery.get("candidates") or []))
     evidence_grade = evidence.get("evidence_grade") or "—"
-    overall = "FAIL" if acceptance_status == "FAIL" or quality_status == "FAIL" else ("WARN" if failures else "OK")
+    quality_level = quality_status.upper()
+    acceptance_level = acceptance_status.upper()
+    pipeline_level = pipeline_status.upper()
+    overall = (
+        "FAIL" if acceptance_level == "FAIL" or quality_level == "FAIL" or pipeline_level == "FAIL"
+        else "WARN" if acceptance_level == "WARN" or quality_level == "WARN" or failures
+        else "OK"
+    )
     discovery_status = "OK" if discovery_n and evidence_grade not in {"BLOCKED", "FAIL"} else ("WARN" if discovery_n else "WARN")
     pipeline_run = pipeline.get("started_at") or "尚未记录"
     cards = [
@@ -8477,6 +9477,66 @@ def runtime_status_panel_html() -> str:
 """ for title, status, detail in cards
     )
 
+    def issue_badge(level: str) -> str:
+        level_u = str(level or "INFO").upper()
+        return _runtime_badge(level_u)
+
+    def issue_source_label(source: str) -> str:
+        return {
+            "quality": "质量闸门",
+            "acceptance": "生产验收",
+        }.get(source, source)
+
+    issue_rows = []
+    for source, payload in (("quality", quality), ("acceptance", acceptance)):
+        for item in (payload.get("issues") or []):
+            if not isinstance(item, dict):
+                continue
+            level = str(item.get("level") or "INFO").upper()
+            if level not in {"FAIL", "WARN"}:
+                continue
+            code = str(item.get("code") or "issue")
+            message = str(item.get("message") or "")
+            details = item.get("details")
+            details_s = ""
+            if isinstance(details, dict) and details:
+                detail_bits = []
+                for k, v in list(details.items())[:4]:
+                    detail_bits.append(f"{k}={v}")
+                details_s = " · " + " · ".join(detail_bits)
+            elif details:
+                details_s = " · " + str(details)
+            issue_rows.append(f"""
+      <div class="bg-white rounded-lg border border-amber-200 p-3">
+        <div class="flex items-center gap-2 mb-1">
+          {issue_badge(level)}
+          <span class="text-xs font-semibold text-slate-600">{html_lib.escape(issue_source_label(source))}</span>
+          <span class="text-xs font-mono text-slate-400">{html_lib.escape(code)}</span>
+        </div>
+        <div class="text-sm font-medium text-slate-900">{html_lib.escape(message or code)}</div>
+        {f'<div class="text-xs text-slate-500 mt-1">{html_lib.escape(details_s.lstrip(" · "))}</div>' if details_s else ''}
+      </div>
+""")
+    if issue_rows:
+        issue_html = f"""
+  <div class="rounded-xl border border-amber-300 bg-amber-50 p-4 mb-6">
+    <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
+      <div>
+        <h3 class="font-bold text-amber-950">今日需要注意的问题</h3>
+        <p class="text-xs text-amber-800">只列会影响推荐可信度或组合执行的问题；技术细节在下面折叠。</p>
+      </div>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">{''.join(issue_rows)}</div>
+  </div>
+"""
+    else:
+        issue_html = """
+  <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-4 mb-6">
+    <h3 class="font-bold text-emerald-950">今日没有阻断问题</h3>
+    <p class="text-xs text-emerald-800 mt-1">质量闸门和生产验收没有 FAIL/WARN 级问题。技术运行细节可展开查看。</p>
+  </div>
+"""
+
     def clock_row(item: dict) -> str:
         name = str(item.get("name") or "—")
         planned = str(item.get("planned_time") or "—")
@@ -8494,7 +9554,7 @@ def runtime_status_panel_html() -> str:
 
         last_status = "INFO"
         last_run = "尚未记录"
-        if name == "早盘主线" and mode == "full":
+        if name == "早盘主线" and mode in {"full", "morning"}:
             last_status = pipeline_status
             last_run = str(pipeline.get("started_at") or "尚未记录")[:19]
         elif name == "A/H 收盘线" and mode == "a_share_only":
@@ -8772,44 +9832,56 @@ def runtime_status_panel_html() -> str:
   <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 mb-6">
     <div class="flex items-center justify-between gap-3 flex-wrap mb-4">
       <div>
-        <h3 class="font-bold text-slate-900">今日运行总览</h3>
+        <h3 class="font-bold text-slate-900">今日影响总览</h3>
         <p class="text-xs text-slate-500">最后生成：{html_lib.escape(str(generated_at)[:19])}</p>
       </div>
       <div class="text-xs text-slate-500">推荐是否可交易以“质量闸门 + 生产验收”为准</div>
     </div>
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">{cards_html}</div>
   </div>
-  {data_clock_html}
-  {infra_html}
-  <div class="rounded-xl border border-sky-200 bg-sky-50 p-4 mb-6">
-    <h3 class="font-bold text-sky-950 mb-3">数据落点怎么读</h3>
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-      <div class="bg-white rounded-lg border border-sky-100 p-3">
-        <div class="font-mono font-semibold text-slate-800 mb-1">DuckDB.price_daily</div>
-        <div class="text-slate-600">每日行情快照。看到"股票池/行情拉取"成功，这里就有最新价格、PE、PEG、涨幅、市值。</div>
+  {issue_html}
+  <details class="group rounded-xl border border-slate-200 bg-white hover:bg-slate-50 p-4 [&_summary::-webkit-details-marker]:hidden [&_summary::marker]:hidden">
+    <summary class="cursor-pointer select-none text-sm font-bold text-slate-900 flex items-center gap-2">
+      <span class="inline-block w-4 text-violet-600 transition-transform group-open:rotate-90">▶</span>
+      <span>展开技术诊断详情</span>
+      <span class="text-xs font-normal text-slate-500">数据时钟、自动化、三市场链路、DuckDB 表和最近步骤</span>
+      <span class="ml-auto text-xs font-normal text-violet-600 group-open:hidden">点击展开 ↓</span>
+      <span class="ml-auto text-xs font-normal text-slate-400 hidden group-open:inline">点击收起 ↑</span>
+    </summary>
+    <div class="mt-4">
+      {data_clock_html}
+      {infra_html}
+      <div class="rounded-xl border border-sky-200 bg-sky-50 p-4 mb-6">
+        <h3 class="font-bold text-sky-950 mb-3">数据落点怎么读</h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+          <div class="bg-white rounded-lg border border-sky-100 p-3">
+            <div class="font-mono font-semibold text-slate-800 mb-1">DuckDB.price_daily</div>
+            <div class="text-slate-600">每日行情快照。看到"股票池/行情拉取"成功，这里就有最新价格、PE、PEG、涨幅、市值。</div>
+          </div>
+          <div class="bg-white rounded-lg border border-sky-100 p-3">
+            <div class="font-mono font-semibold text-slate-800 mb-1">DuckDB.recommendation_picks</div>
+            <div class="text-slate-600">AI 评分和入选记录。美股是 <span class="font-mono">v2_us</span>，A 股是 <span class="font-mono">v2_cn</span>，港股是 <span class="font-mono">v2_hk</span>。</div>
+          </div>
+          <div class="bg-white rounded-lg border border-sky-100 p-3">
+            <div class="font-mono font-semibold text-slate-800 mb-1">DuckDB.pick_outcomes</div>
+            <div class="text-slate-600">推荐后的表现跟踪。用来算 1d/5d/20d alpha、胜率，不决定股票属于哪个池子。</div>
+          </div>
+          <div class="bg-white rounded-lg border border-sky-100 p-3">
+            <div class="font-mono font-semibold text-slate-800 mb-1">data/latest/*.json</div>
+            <div class="text-slate-600">给页面和早报读取的最新产物，比如组合方案、调仓清单、质量闸门、风险指标。</div>
+          </div>
+        </div>
       </div>
-      <div class="bg-white rounded-lg border border-sky-100 p-3">
-        <div class="font-mono font-semibold text-slate-800 mb-1">DuckDB.recommendation_picks</div>
-        <div class="text-slate-600">AI 评分和入选记录。美股是 <span class="font-mono">v2_us</span>，A 股是 <span class="font-mono">v2_cn</span>，港股是 <span class="font-mono">v2_hk</span>。</div>
+      <div class="grid grid-cols-1 gap-5">
+        {market_card("🇺🇸 美股链路", us_rows)}
+        {market_card("🇨🇳 A 股链路", cn_rows)}
+        {market_card("🇭🇰 港股链路", hk_rows)}
       </div>
-      <div class="bg-white rounded-lg border border-sky-100 p-3">
-        <div class="font-mono font-semibold text-slate-800 mb-1">DuckDB.pick_outcomes</div>
-        <div class="text-slate-600">推荐后的表现跟踪。用来算 1d/5d/20d alpha、胜率，不决定股票属于哪个池子。</div>
-      </div>
-      <div class="bg-white rounded-lg border border-sky-100 p-3">
-        <div class="font-mono font-semibold text-slate-800 mb-1">data/latest/*.json</div>
-        <div class="text-slate-600">给页面和早报读取的最新产物，比如组合方案、调仓清单、质量闸门、风险指标。</div>
-      </div>
+      {v2_tables_html}
+      {failure_html}
+      {pipeline_steps_html}
     </div>
-  </div>
-  <div class="grid grid-cols-1 gap-5">
-    {market_card("🇺🇸 美股链路", us_rows)}
-    {market_card("🇨🇳 A 股链路", cn_rows)}
-    {market_card("🇭🇰 港股链路", hk_rows)}
-  </div>
-  {v2_tables_html}
-  {failure_html}
-  {pipeline_steps_html}
+  </details>
 """
 
 
@@ -9458,7 +10530,7 @@ def audit_panel_html(snap):
 <section id="audit-panel" class="max-w-7xl mx-auto px-6 py-10 bg-gradient-to-br from-slate-50 to-slate-100 rounded-2xl my-6">
   <div class="flex items-center gap-3 mb-2">
     <span class="text-3xl">🛡</span>
-    <h2 class="text-2xl font-bold text-slate-900">反向审查 · 自我校验</h2>
+    <h2 class="text-2xl font-bold text-slate-900">风险反证 · 买前审查</h2>
   </div>
   <p class="text-slate-600">尚无审查快照。先跑：<code class="bg-slate-200 px-2 py-0.5 rounded">python3 -m stock_research.jobs.audit_picks_v2 --fast</code></p>
 </section>
@@ -9564,15 +10636,15 @@ def audit_panel_html(snap):
         </div>'''
 
     return f'''
-<!-- ============ 反向审查 · 自我校验 ============ -->
+<!-- ============ 风险反证 · 买前审查 ============ -->
 <section id="audit-panel" class="max-w-7xl mx-auto px-6 py-10 bg-gradient-to-br from-violet-50 to-fuchsia-50 rounded-2xl my-6">
   <div class="flex items-center justify-between mb-4">
     <div>
       <div class="flex items-center gap-3 mb-1">
         <span class="text-3xl">🛡</span>
-        <h2 class="text-2xl font-bold text-slate-900">反向审查 · 自我校验</h2>
+        <h2 class="text-2xl font-bold text-slate-900">风险反证 · 买前审查</h2>
       </div>
-      <p class="text-slate-700">用经典金融理论（Risk Parity / Markowitz / 13F / 估值）每日审查 ⭐⭐⭐ 推荐</p>
+      <p class="text-slate-700">用经典金融理论（Risk Parity / Markowitz / 13F / 估值）给推荐做反方检查，帮助你决定是否继续研究。</p>
     </div>
     <div class="text-right">
       <div class="inline-block px-4 py-2 rounded-lg bg-{overall_color}-100 text-{overall_color}-800 font-semibold text-sm">{overall_text}</div>
@@ -10030,25 +11102,55 @@ def build():
     optimization = _load_json("data/latest/optimization_result.json")
     plan_a_v6 = _load_json("data/latest/plan_a_v5.json")
     history_data = _load_json("data/latest/history_data.json")
-    # 优先用 discovery_candidates.json（build_pool_recommendations 写出的富字段版本：
-    # 含 f_score / momentum_12_1 / analyst_score / market_cap_usd 等顶层列）。
-    # clean_v2 模式不再 gate 这个 JSON — 因为 build_pool_recommendations 已 V2-aware。
-    # 仅当 JSON 缺失或空时，才退到 _runtime_v2_recommendations 的 lean shape。
-    discovery = _load_json("data/discovery_candidates.json")
+    # 今日推荐展示必须覆盖最新 V2 批次的完整候选，而不是只展示综合 Top 20。
+    # discovery_candidates.json 只作为富字段补充；候选范围以 DuckDB recommendation_picks 为准。
+    discovery_json = _load_json("data/discovery_candidates.json")
     source_health = _load_json("data/latest/source_health.json")
-    if not (discovery and discovery.get("candidates")):
-        v2_candidates_main = _runtime_v2_recommendations(limit=200)
-        if v2_candidates_main:
-            v2_stats_main = _runtime_db_stats().get("v2") or {}
-            discovery = {
-                "generated_at": datetime.now().isoformat(timespec="seconds"),
-                "source": "v2:recommendation_picks",
-                "universe_scope": "system_tech_universe",
-                "universe_size": v2_stats_main.get("system_universe") or len(v2_candidates_main),
-                "candidates": v2_candidates_main,
-            }
-    elif clean_v2 and not discovery.get("source"):
-        discovery = {**discovery, "source": "v2:discovery_candidates"}
+    batch_meta_main = _runtime_v2_latest_batch_meta()
+    v2_candidates_main = _runtime_v2_recommendations(limit=200)
+    if v2_candidates_main:
+        rich_by_ticker = {
+            str(c.get("ticker") or c.get("code") or "").upper(): c
+            for c in (discovery_json.get("candidates") or [])
+            if isinstance(c, dict)
+        }
+        merged_candidates = []
+        for c in v2_candidates_main:
+            rich = rich_by_ticker.get(str(c.get("ticker") or c.get("code") or "").upper()) or {}
+            item = dict(c)
+            for k in ("sector", "location", "pead"):
+                if rich.get(k) is not None:
+                    item[k] = rich.get(k)
+            if rich.get("detail"):
+                item["detail"] = {
+                    **(item.get("detail") or {}),
+                    **(rich.get("detail") or {}),
+                    "recommendation_reason": item.get("recommendation_reason") or (item.get("detail") or {}).get("recommendation_reason"),
+                    "risk_flags": item.get("risk_flags") or (item.get("detail") or {}).get("risk_flags"),
+                    "factor_scores": item.get("factor_scores") or (item.get("detail") or {}).get("factor_scores") or (rich.get("detail") or {}).get("factor_scores"),
+                }
+            if rich.get("etfs"):
+                item["etfs"] = rich.get("etfs")
+            merged_candidates.append(item)
+        v2_stats_main = _runtime_db_stats().get("v2") or {}
+        discovery = {
+            **discovery_json,
+            "generated_at": batch_meta_main.get("batch_generated_at") or discovery_json.get("generated_at") or datetime.now().isoformat(timespec="seconds"),
+            "source": "v2:recommendation_picks",
+            "universe_scope": "system_tech_universe",
+            "universe_size": v2_stats_main.get("system_universe") or len(merged_candidates),
+            "candidates": merged_candidates,
+        }
+    else:
+        discovery = discovery_json
+        if clean_v2 and discovery and not discovery.get("source"):
+            discovery = {**discovery, "source": "v2:discovery_candidates"}
+    if discovery and batch_meta_main:
+        discovery = {
+            **discovery,
+            **batch_meta_main,
+            "display_count": len(discovery.get("candidates") or []),
+        }
 
     # DuckDB 源
     risk_metrics_db = _load_pipeline_db("risk_metrics")
@@ -10091,6 +11193,7 @@ def build():
     print("[2/3] 渲染 HTML...")
     html = HTML_TEMPLATE
     html = html.replace("{UPDATE_TIME}", datetime.now().strftime("%Y-%m-%d %H:%M"))
+    html = html.replace("{TODAY_DATE}", datetime.now().strftime("%Y-%m-%d"))
     html = html.replace("{HEADLINE}", MY_VIEW["headline"])
     html = html.replace("{SUMMARY}", MY_VIEW["summary"])
     html = html.replace("{TOTAL}", str(len(records)))
@@ -10182,8 +11285,10 @@ def build():
                 print(f"  ⚠️ 链条上下文 overrides 加载失败: {e}")
     html = html.replace("{WATCHLIST_CHAIN_INFO_JSON}", json.dumps(chain_info, ensure_ascii=False))
 
-    # 2026-05-21 V1 cutover：V1 discovery_history 表已删；V2 历史在 pick_outcomes 已覆盖
-    disc_hist: list = []
+    # V2: V1 discovery_history/discovery_tracking 表已删；
+    # AI 推荐历史从 recommendation_picks + pick_outcomes 注入前端。
+    disc_hist = _runtime_v2_discovery_history()
+    print(f"  AI 推荐历史已加载 [V2 pick_outcomes] ({len(disc_hist)} 条)")
     html = html.replace("{DISCOVERY_HISTORY_JSON}", json.dumps(disc_hist, ensure_ascii=False, default=str))
 
     # 2026-05-21 V1 cutover：原 V1 picks + watchlist 自选股 AI 评级查询已删
