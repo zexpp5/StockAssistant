@@ -469,6 +469,9 @@ is_morning_step && run_a_share_steps
 # M — AI 推荐（dashboard 全池排名 + 质量闸门复核 + 证据报告）
 run_step "23/25 全池 AI 推荐（每日）" "scripts/tools/build_pool_recommendations.py"
 
+# benchmark close 灌入 price_daily（SPY/^HSI/000300.SS）— evaluate_v2_picks 算 alpha 的本地数据源
+run_step "23a-pre/25 基准指数行情灌入" "scripts/pipeline/ingest_benchmark_prices.py"
+
 # M — V2 pick alpha 评估（扫过去 70 天 recommendation_runs，每只 pick 算 1d/5d/20d
 # alpha 写 pick_outcomes；已成熟样本不重算，幂等；带网络 yfinance benchmark 但有内存缓存）
 run_step "23a/25 V2 pick alpha 评估" "scripts/tools/evaluate_v2_picks.py"

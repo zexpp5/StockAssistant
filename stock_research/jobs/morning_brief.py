@@ -41,7 +41,7 @@ import requests
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
-PRODUCTION_METRICS_START_DATE = os.environ.get("STOCK_ASSISTANT_METRICS_START_DATE", "2026-05-21")
+PRODUCTION_METRICS_START_DATE = os.environ.get("STOCK_ASSISTANT_METRICS_START_DATE", "2026-05-25")
 
 from stock_research import config
 

@@ -10786,7 +10786,13 @@ def _runtime_row(name: str, status: str, sink: str, detail: str, action: str) ->
 """
 
 
-def _runtime_v2_recommendations(limit: int = 20) -> list[dict]:
+def _runtime_v2_recommendations(limit: int | None = None) -> list[dict]:
+    """返回最新一次 V2 run 的 picks。
+
+    limit:
+        - None（默认）= 该 run 全部 picks（WHERE run_id=? 已物理 cap 在 ≤100 量级）
+        - int        = 全局裁切（注意 ORDER BY market 时 LIMIT 会偏向字母序靠前的 market）
+    """
     db_path = _duckdb_path()
     if not os.path.exists(db_path):
         return []
@@ -10809,9 +10815,12 @@ def _runtime_v2_recommendations(limit: int = 20) -> list[dict]:
         if not latest:
             con.close()
             return []
+        # limit=None 时跳过 LIMIT 子句（WHERE run_id=? 已物理 cap 在 ≤100 量级，
+        # 多余的 LIMIT 反而和 ORDER BY market 撞车会切掉 HK/US picks）。
+        limit_sql = f"LIMIT {int(limit)}" if limit is not None else ""
         if "price_daily" in tables:
             rows = con.execute(
-                """
+                f"""
                 WITH latest_price AS (
                     SELECT market, symbol, trade_date, interval, close, prev_close,
                            currency, market_cap, forward_pe, trailing_pe, peg_ratio,
@@ -10836,22 +10845,22 @@ def _runtime_v2_recommendations(limit: int = 20) -> list[dict]:
                   ON lp.market = rp.market AND lp.symbol = rp.symbol
                 WHERE rp.run_id = ?
                 ORDER BY rp.market, rp.rank NULLS LAST, rp.total_score DESC NULLS LAST, rp.symbol
-                LIMIT ?
+                {limit_sql}
                 """,
-                [latest[0], limit],
+                [latest[0]],
             ).fetchall()
         else:
             rows = con.execute(
-                """
+                f"""
                 SELECT market, symbol, name, rank, rating, signal, total_score,
                        factor_scores_json, recommendation_reason, risk_flags_json,
                        entry_price, entry_currency, source_origin, NULL, NULL, NULL
                 FROM recommendation_picks
                 WHERE run_id = ?
                 ORDER BY market, rank NULLS LAST, total_score DESC NULLS LAST, symbol
-                LIMIT ?
+                {limit_sql}
                 """,
-                [latest[0], limit],
+                [latest[0]],
             ).fetchall()
         con.close()
         out = []
@@ -11338,7 +11347,7 @@ def today_decision_panel_html() -> str:
     evidence = _runtime_load_json("data/latest/recommendation_evidence.json")
     source_health = _runtime_load_json("data/latest/source_health.json")
     discovery = {} if clean_v2 else _runtime_load_json("data/discovery_candidates.json")
-    v2_candidates = _runtime_v2_recommendations(limit=200)
+    v2_candidates = _runtime_v2_recommendations()
     if v2_candidates:
         v2_stats = _runtime_db_stats().get("v2") or {}
         discovery = {
@@ -11353,9 +11362,7 @@ def today_decision_panel_html() -> str:
     quality_status = str(quality.get("status") or "UNKNOWN").upper()
     acceptance_status = str(acceptance.get("status") or "UNKNOWN").upper()
     evidence_grade = str(evidence.get("evidence_grade") or "—")
-    # limit=200 而非 20：recommendation_picks 的 ORDER BY market 让全 CN 占满 LIMIT 20，
-    # HK/US 被切，徽章数字会低估实际推荐数（实际 ~60）。
-    v2_candidates = _runtime_v2_recommendations(limit=200)
+    v2_candidates = _runtime_v2_recommendations()
     discovery_candidates = v2_candidates or (discovery.get("candidates") or [])
     discovery_n = len(discovery_candidates)
     discovery_source = "v2 recommendation_picks" if v2_candidates else ("none" if clean_v2 else "legacy discovery_candidates.json")
@@ -11805,7 +11812,7 @@ def runtime_status_panel_html() -> str:
     ]
 
     # limit=200 而非 20：同 _runtime tab — ORDER BY market 让全 CN 占满 LIMIT 20，HK/US 被切。
-    runtime_v2_candidates = _runtime_v2_recommendations(limit=200)
+    runtime_v2_candidates = _runtime_v2_recommendations()
     discovery_n = len(runtime_v2_candidates or (discovery.get("candidates") or []))
     evidence_grade = evidence.get("evidence_grade") or "—"
     quality_level = quality_status.upper()
@@ -13466,7 +13473,7 @@ def build():
     discovery_json = _load_json("data/discovery_candidates.json")
     source_health = _load_json("data/latest/source_health.json")
     batch_meta_main = _runtime_v2_latest_batch_meta()
-    v2_candidates_main = _runtime_v2_recommendations(limit=200)
+    v2_candidates_main = _runtime_v2_recommendations()
     if v2_candidates_main:
         rich_by_ticker = {
             str(c.get("ticker") or c.get("code") or "").upper(): c

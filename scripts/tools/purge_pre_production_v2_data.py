@@ -22,7 +22,7 @@ sys.path.insert(0, str(REPO / "scripts" / "lib"))
 
 from stock_db import DB_PATH  # noqa: E402
 
-DEFAULT_CUTOFF = os.environ.get("STOCK_ASSISTANT_METRICS_START_DATE", "2026-05-21")
+DEFAULT_CUTOFF = os.environ.get("STOCK_ASSISTANT_METRICS_START_DATE", "2026-05-25")
 OUT_PATH = REPO / "data" / "latest" / "pre_production_purge.json"
 
 

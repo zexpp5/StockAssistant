@@ -37,7 +37,7 @@ from stock_db import DB_PATH  # noqa: E402
 
 OUT_PATH = REPO / "data" / "latest" / "strategy_validation_report.json"
 FACTORS = ("valuation", "momentum", "data_quality", "coverage")
-PRODUCTION_METRICS_START_DATE = os.environ.get("STOCK_ASSISTANT_METRICS_START_DATE", "2026-05-21")
+PRODUCTION_METRICS_START_DATE = os.environ.get("STOCK_ASSISTANT_METRICS_START_DATE", "2026-05-25")
 
 
 def _tables(conn: duckdb.DuckDBPyConnection) -> set[str]:

@@ -32,7 +32,7 @@ HORIZONS = {"1d": 1, "5d": 5, "20d": 20}
 BENCHMARK_BY_MARKET = {"US": "SPY", "HK": "^HSI", "CN": "000300.SS"}
 LOOKBACK_DAYS = 70  # 扫过去 70 天的 run
 PRODUCTION_METRICS_START_DATE = date.fromisoformat(
-    os.environ.get("STOCK_ASSISTANT_METRICS_START_DATE", "2026-05-21")
+    os.environ.get("STOCK_ASSISTANT_METRICS_START_DATE", "2026-05-25")
 )
 
 
@@ -41,30 +41,53 @@ def _benchmark_close_cache() -> dict:
     return {}
 
 
-def _fetch_benchmark_close(cache: dict, benchmark: str, target_date: date) -> float | None:
-    """target_date 落在周末/假日时找最近的下一个交易日 close。"""
+def _fetch_benchmark_close(
+    cache: dict,
+    benchmark: str,
+    target_date: date,
+    conn=None,
+    market: str | None = None,
+) -> float | None:
+    """target_date 落在周末/假日时找最近的下一个交易日 close。
+
+    优先级：price_daily（本地，由 ingest_benchmark_prices 灌入）→ yfinance 在线兜底。
+    跑批环境拿不到 yfinance 时本地仍可工作。
+    """
     key = (benchmark, target_date)
     if key in cache:
         return cache[key]
+
+    # 1) 本地 price_daily 优先
+    if conn is not None and market is not None:
+        row = conn.execute(
+            """
+            SELECT close FROM price_daily
+            WHERE market = ? AND symbol = ? AND trade_date >= ?
+            ORDER BY trade_date ASC LIMIT 1
+            """,
+            [market, benchmark, target_date],
+        ).fetchone()
+        if row and row[0] is not None:
+            cache[key] = float(row[0])
+            return cache[key]
+
+    # 2) yfinance 兜底
     try:
         import yfinance as yf
-        # 拉一个窗口（前后各 7 天）：覆盖周末漏值 + 单 ticker 多窗口缓存
         start = target_date - timedelta(days=10)
         end = target_date + timedelta(days=10)
         df = yf.Ticker(benchmark).history(start=start, end=end, auto_adjust=False)
         if df.empty:
             cache[key] = None
             return None
-        # 按日期升序存入缓存
         dated_closes: list[tuple[date, float]] = []
         for ts, row in df.iterrows():
             d = ts.date() if hasattr(ts, "date") else ts
             cache[(benchmark, d)] = float(row["Close"])
             dated_closes.append((d, float(row["Close"])))
-        # 找 target_date 当天或之后第一个有数据的交易日
         for d, close in sorted(dated_closes):
             if d >= target_date:
-                cache[key] = close  # 周末 target → cache 给它一个近邻值
+                cache[key] = close
                 return close
         cache[key] = None
         return None
@@ -143,8 +166,12 @@ def main() -> int:
                     # 基准
                     benchmark_pct = None
                     if benchmark:
-                        bench_entry = _fetch_benchmark_close(bench_cache, benchmark, run_date)
-                        bench_exit = _fetch_benchmark_close(bench_cache, benchmark, outcome_date)
+                        bench_entry = _fetch_benchmark_close(
+                            bench_cache, benchmark, run_date, conn=conn, market=market,
+                        )
+                        bench_exit = _fetch_benchmark_close(
+                            bench_cache, benchmark, outcome_date, conn=conn, market=market,
+                        )
                         if bench_entry and bench_exit and bench_entry > 0:
                             benchmark_pct = (bench_exit / bench_entry - 1) * 100
                     alpha_pct = (return_pct - benchmark_pct) if benchmark_pct is not None else None

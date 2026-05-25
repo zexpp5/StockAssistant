@@ -19,7 +19,7 @@ sys.path.insert(0, str(REPO / "scripts" / "lib"))
 from stock_db import get_db  # noqa: E402
 
 # 2026-05-21 V1 cutover: V1 production sources 已废
-PRODUCTION_METRICS_START_DATE = os.environ.get("STOCK_ASSISTANT_METRICS_START_DATE", "2026-05-21")
+PRODUCTION_METRICS_START_DATE = os.environ.get("STOCK_ASSISTANT_METRICS_START_DATE", "2026-05-25")
 
 
 def _load_json(rel: str) -> dict | None:
