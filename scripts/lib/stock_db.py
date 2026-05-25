@@ -181,6 +181,23 @@ ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS prev_close DOUBLE
 ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS prev_trade_date VARCHAR;
 ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS day_change_rmb DOUBLE;
 ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS day_change_pct DOUBLE;
+-- 自选股配置 editor 的"行业归类 / 主营业务"以前没字段可落, 现在补上
+ALTER TABLE manual_watchlist ADD COLUMN IF NOT EXISTS industry VARCHAR;
+ALTER TABLE manual_watchlist ADD COLUMN IF NOT EXISTS business VARCHAR;
+
+-- 产业链元数据: 由 daily_picks_v5 rule_classify 自动产出 +「自选股配置」editor 人工 override。
+-- source='manual_override' 优先级高于 'rule_classify'。前端 stockPill 的 chain badge 读这里。
+CREATE TABLE IF NOT EXISTS chain_metadata (
+    market        VARCHAR NOT NULL,
+    symbol        VARCHAR NOT NULL,
+    chain         VARCHAR,
+    chain_tier    VARCHAR,
+    chain_role    VARCHAR,
+    layman_intro  VARCHAR,
+    source        VARCHAR DEFAULT 'rule_classify',
+    classified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (market, symbol)
+);
 """
 
 # user_config 已知 key 的默认值（首次读取或被删除时返回）
@@ -561,7 +578,11 @@ def fetch_manual_watchlist(
     # 注：manual_watchlist.market 用前端展示值（"A股·沪交所" / "美股"），
     # system_universe.market 用 ISO 风格（"CN" / "US" / "HK"），两者不直接相等。
     # symbol 带后缀已全局唯一（NVDA / 605117.SS / 0700.HK），故 JOIN 只按 symbol 匹配。
-    cn_sel = "COALESCE(NULLIF(u.name, mw.symbol), mw.name) AS name" if has_su else "mw.name AS name"
+    # name: 用户手填的 mw.name 优先, 然后 system_universe 的中文官方名兜底
+    cn_sel = "COALESCE(NULLIF(mw.name, ''), NULLIF(u.name, mw.symbol)) AS name" if has_su else "mw.name AS name"
+    # industry/business: 用户手填的 mw 优先, system_universe.industry 兜底
+    industry_sel = "COALESCE(mw.industry, u.industry) AS industry" if has_su else "mw.industry AS industry"
+    business_sel = "mw.business AS business"
     su_join = ("LEFT JOIN system_universe u "
                "  ON u.symbol = mw.symbol") if has_su else ""
     chain_sel = ("cm.chain, cm.chain_tier, cm.chain_role, cm.layman_intro"
@@ -569,7 +590,7 @@ def fetch_manual_watchlist(
     chain_join = ("LEFT JOIN chain_metadata cm "
                   "  ON cm.symbol = mw.symbol") if has_chain else ""
     sql = (
-        f"SELECT mw.market, mw.symbol, {cn_sel}, mw.notes, mw.created_at, mw.updated_at, "
+        f"SELECT mw.market, mw.symbol, {cn_sel}, {industry_sel}, {business_sel}, mw.notes, mw.created_at, mw.updated_at, "
         f"{chain_sel} "
         f"FROM manual_watchlist mw "
         f"{su_join} {chain_join}"
@@ -580,7 +601,7 @@ def fetch_manual_watchlist(
         params.append(market.upper())
     sql += " ORDER BY mw.market, mw.symbol"
     rows = conn.execute(sql, params).fetchall()
-    cols = ["market", "symbol", "name", "notes", "created_at", "updated_at",
+    cols = ["market", "symbol", "name", "industry", "business", "notes", "created_at", "updated_at",
             "chain", "chain_tier", "chain_role", "layman_intro"]
     out = [dict(zip(cols, r)) for r in rows]
     for r in out:
@@ -606,21 +627,99 @@ def upsert_manual_watchlist(
         if not symbol:
             continue
         market = r.get("market") or _infer_market_from_ticker(symbol)
+        industry = (r.get("industry") or "").strip() or None
+        business = (r.get("business") or "").strip() or None
         conn.execute(
             """
-            INSERT INTO manual_watchlist (market, symbol, name, notes, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO manual_watchlist (market, symbol, name, industry, business, notes, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (market, symbol) DO UPDATE SET
-              name = excluded.name,
-              notes = excluded.notes,
+              name       = excluded.name,
+              industry   = excluded.industry,
+              business   = excluded.business,
+              notes      = excluded.notes,
               updated_at = excluded.updated_at
             """,
-            [market, symbol, r.get("name"), r.get("notes"), now, now],
+            [market, symbol, r.get("name"), industry, business, r.get("notes"), now, now],
         )
         n += 1
     if own:
         conn.close()
     return n
+
+
+def upsert_chain_metadata(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> int:
+    """新增 / 更新 chain_metadata（按 (market, symbol) PK）。
+
+    用户在「自选股配置」里编辑的链条信息（chain / chain_tier / chain_role / layman_intro）
+    走这里;source 强制为 'manual_override',覆盖 daily_picks 跑的 'rule_classify'。
+    """
+    own = conn is None
+    if own:
+        conn = get_db()
+    # 兼容老 DB:没建表就先建(DDL 已在模块加载时跑过,这里只是兜底)
+    n = 0
+    now = datetime.now()
+    for r in rows:
+        symbol = r.get("symbol") or r.get("code")
+        if not symbol:
+            continue
+        market = r.get("market") or _infer_market_from_ticker(symbol)
+        chain = (r.get("chain") or "").strip() or None
+        tier = (r.get("chain_tier") or "").strip() or None
+        role = (r.get("chain_role") or "").strip() or None
+        intro = (r.get("layman_intro") or "").strip() or None
+        # 全空就 skip(不插入纯空行)
+        if not any([chain, tier, role, intro]):
+            continue
+        conn.execute(
+            """
+            INSERT INTO chain_metadata (market, symbol, chain, chain_tier, chain_role, layman_intro, source, classified_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'manual_override', ?)
+            ON CONFLICT (market, symbol) DO UPDATE SET
+              chain        = excluded.chain,
+              chain_tier   = excluded.chain_tier,
+              chain_role   = excluded.chain_role,
+              layman_intro = excluded.layman_intro,
+              source       = 'manual_override',
+              classified_at= excluded.classified_at
+            """,
+            [market, symbol, chain, tier, role, intro, now],
+        )
+        n += 1
+    if own:
+        conn.close()
+    return n
+
+
+def fetch_chain_metadata_all(
+    *,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> list[dict]:
+    """全量取 chain_metadata,供前端保存后热更新 WATCHLIST_CHAIN_INFO。"""
+    own = conn is None
+    if own:
+        conn = get_db(read_only=True)
+    out: list[dict] = []
+    try:
+        rows = conn.execute(
+            "SELECT market, symbol, chain, chain_tier, chain_role, layman_intro, source "
+            "FROM chain_metadata WHERE chain IS NOT NULL"
+        ).fetchall()
+        for market, symbol, chain, tier, role, intro, source in rows:
+            out.append({
+                "market": market, "symbol": symbol,
+                "chain": chain, "chain_tier": tier, "chain_role": role,
+                "layman_intro": intro, "source": source,
+            })
+    finally:
+        if own:
+            conn.close()
+    return out
 
 
 def fetch_manual_watchlist_enriched(

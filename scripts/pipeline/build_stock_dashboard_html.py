@@ -2589,7 +2589,24 @@ const WATCHLIST_RATINGS = {WATCHLIST_RATINGS_JSON};  // {code: {rating, total_sc
 const SIMULATION   = {SIMULATION_JSON};
 // 2026-05-11 PM: watchlist 链条定位信息(chain/chain_tier/chain_role/layman_intro)
 // 按 code 索引 → 任何 tab 显示股票时,Stock Pill 都能查到上下文
-const WATCHLIST_CHAIN_INFO = {WATCHLIST_CHAIN_INFO_JSON};
+// 改 let 是为了「自选股配置」保存后能热刷新,无需 rebuild dashboard
+let WATCHLIST_CHAIN_INFO = {WATCHLIST_CHAIN_INFO_JSON};
+
+// 自选股配置保存后调用 → 重拉 chain_metadata + manual_watchlist.name,更新 in-memory map
+async function refreshWatchlistChainInfo() {
+  try {
+    const r = await fetch(WATCHLIST_API_BASE + "/api/chain-metadata");
+    if (!r.ok) return false;
+    const fresh = await r.json();
+    if (fresh && typeof fresh === "object") {
+      WATCHLIST_CHAIN_INFO = fresh;
+      return true;
+    }
+  } catch (e) {
+    console.warn("refreshWatchlistChainInfo failed:", e);
+  }
+  return false;
+}
 // V2: AI 推荐的 point-in-time 历史 + 准确度跟踪(recommendation_picks JOIN pick_outcomes)
 // 数组,每条 = 一次 (run_id, ticker) 推荐 + 它的 alpha 数据
 const DISCOVERY_HISTORY = {DISCOVERY_HISTORY_JSON};
@@ -2839,7 +2856,7 @@ function stockPill(code, opts) {
                    (name ? ` <span class="text-sm text-slate-700">${_esc(name)}</span>` : "");
   const badges = [];
   if (!inWatchlist) {
-    badges.push(`<span class="text-[10px] text-slate-400 cursor-help" title="不在自选股 · 可以加入后标注链条信息">— 待标注</span>`);
+    badges.push(`<span class="text-[10px] text-slate-300 cursor-help opacity-70" title="不在自选股池 · 想在产业链视图里看这只票,把它加进自选股并标注链条信息">— 待标注</span>`);
   } else {
     if (primaryChain) badges.push(`<span class="px-1.5 py-0 rounded text-[10px] bg-slate-100 text-slate-700">${_esc(primaryChain)}</span>`);
     if (tier) {
@@ -3235,6 +3252,13 @@ async function saveWatchlistItem() {
     }
     closeWatchlistEditor();
     await forceReloadWatchlist();
+    // 把刚保存的 chain/tier/role/intro 灌进 in-memory map,这样别的 tab 的 stockPill
+    // 不用 rebuild dashboard 也能立刻看到新 badge
+    await refreshWatchlistChainInfo();
+    // 如果持仓表已经渲染过,重渲染让链条 badge 立刻出现
+    if (typeof renderRealHoldings === "function" && document.getElementById("real-holdings-table")) {
+      try { renderRealHoldings(); } catch (e) {}
+    }
     // 2026-05-14: 新增股票后，POST /api/watchlist 已经自动触发 daily_picks_v5
     // → 这里启动轮询，让列表里的"未评级"自动变"评级中"，跑完再变成具体评级
     if (isNew) _startRatingPolling();
@@ -6099,7 +6123,7 @@ async function renderRealHoldings() {
   return `<tr class="border-t border-slate-100 hover:bg-slate-50 group ${rowBg}">
       <td class="px-3 py-2 font-medium sticky left-0 ${stickyBg} group-hover:bg-slate-50 z-10 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.15)] w-[180px] min-w-[180px] max-w-[180px]">
         ${stockPill(x.code, {nameOverride: name})}
-        <div class="mt-1 text-[11px] text-slate-400 truncate">${_esc(theme)}</div>
+        ${theme && theme !== "-" ? `<div class="mt-1 text-[11px] text-slate-400 truncate">${_esc(theme)}</div>` : `<div class="mt-1 text-[10px] text-slate-300 truncate opacity-70" title="尚无业务主题标注 · 在自选股配置里标记后会显示">—</div>`}
       </td>
       <td class="px-3 py-2 text-center whitespace-nowrap">${_badge(assetMeta, verdict ? verdict.asset_hint : assetMeta.hint)}</td>
       <td class="px-3 py-2 text-center whitespace-nowrap">${_badge(treatmentMeta, treatmentMeta.hint || meta.hint)}</td>

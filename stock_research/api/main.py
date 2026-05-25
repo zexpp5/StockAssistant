@@ -158,11 +158,14 @@ def create_app():
         """V2 manual_watchlist 新增一条（按 (market, symbol) PK upsert）。
 
         入库成功后**异步触发** daily_picks_v5 评级（不阻塞响应）。
+        同时把前端送来的 chain/chain_tier/chain_role/layman_intro 写入 chain_metadata
+        （没传或全空则跳过；source='manual_override'）。
         """
         import stock_db
         if not item.get("code") and not item.get("symbol"):
             raise HTTPException(400, "code/symbol is required")
         n = stock_db.upsert_manual_watchlist([item])
+        chain_n = stock_db.upsert_chain_metadata([item])
         rerun_info: dict[str, Any] = {}
         try:
             rerun_info = _spawn_picks_rerun(trigger=f"watchlist:add:{item.get('code') or item.get('symbol')}")
@@ -172,16 +175,58 @@ def create_app():
             "status": "ok",
             "code": item.get("code") or item.get("symbol"),
             "rows_affected": n,
+            "chain_rows_affected": chain_n,
             "rerun": rerun_info,
         }
 
     @app.put("/api/watchlist/{code}")
     def update_watchlist(code: str, item: dict[str, Any] = Body(...)) -> dict[str, Any]:
-        """V2 manual_watchlist 更新一条（URL code 强制覆盖 body）。"""
+        """V2 manual_watchlist 更新一条（URL code 强制覆盖 body）。
+
+        chain/tier/role/intro 同步写入 chain_metadata（source='manual_override'）。
+        """
         import stock_db
         item["code"] = code
         n = stock_db.upsert_manual_watchlist([item])
-        return {"status": "ok", "code": code, "rows_affected": n}
+        chain_n = stock_db.upsert_chain_metadata([item])
+        return {"status": "ok", "code": code, "rows_affected": n, "chain_rows_affected": chain_n}
+
+    @app.get("/api/chain-metadata")
+    def list_chain_metadata() -> dict[str, Any]:
+        """全量 chain_metadata，供前端编辑后热刷新 WATCHLIST_CHAIN_INFO。
+
+        返回 {symbol: {chain, chain_tier, chain_role, layman_intro, source, name}} 格式,
+        和 build_stock_dashboard 烘进 HTML 时的结构对齐。
+        """
+        import stock_db
+        rows = stock_db.fetch_chain_metadata_all()
+        out: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            out[r["symbol"]] = {
+                "chain": r["chain"],
+                "chain_tier": r["chain_tier"],
+                "chain_role": r["chain_role"],
+                "layman_intro": r["layman_intro"],
+                "source": r["source"],
+            }
+        # 把 manual_watchlist.name / industry / business 也合并进去,
+        # 这样 stockPill 看到 inWatchlist=true 才会渲染 badge, 行业/主营也能立刻显示。
+        try:
+            wl_rows = stock_db.fetch_manual_watchlist()
+            for w in wl_rows:
+                sym = w.get("symbol")
+                if not sym:
+                    continue
+                out.setdefault(sym, {})
+                if w.get("name"):
+                    out[sym]["name"] = w["name"]
+                if w.get("industry"):
+                    out[sym]["industry"] = w["industry"]
+                if w.get("business"):
+                    out[sym]["business"] = w["business"]
+        except Exception:
+            pass
+        return out
 
     @app.delete("/api/watchlist/{code}")
     def delete_watchlist(code: str) -> dict[str, Any]:
