@@ -9709,6 +9709,52 @@ def _runtime_v2_discovery_history(limit: int = 1200) -> list[dict]:
     return out
 
 
+def _stale_acceptance_banner_html(acceptance: dict) -> str:
+    """B 红条：检测 production_acceptance_check.json 是否落后于 data/latest/*.json。
+
+    2026-05-25 事故复盘：手工 retry 某一步后忘了重跑 acceptance check,
+    dashboard 显示满屏过时 FAIL 误报让用户以为系统挂了。这里加 30 分钟阈值,
+    超过就在顶部显示红条 + 修复命令,让用户视觉直接知道"不是真挂"。
+    """
+    acc_at = acceptance.get("generated_at")
+    if not acc_at:
+        return ""
+    try:
+        acc_dt = datetime.fromisoformat(str(acc_at).replace("Z", "").split("+")[0])
+    except Exception:
+        return ""
+    latest_dir = os.path.join(_REPO, "data", "latest")
+    if not os.path.isdir(latest_dir):
+        return ""
+    latest_dt = None
+    for name in os.listdir(latest_dir):
+        if not name.endswith(".json"):
+            continue
+        if name == "production_acceptance_check.json":
+            continue
+        try:
+            mtime = datetime.fromtimestamp(os.path.getmtime(os.path.join(latest_dir, name)))
+        except Exception:
+            continue
+        if latest_dt is None or mtime > latest_dt:
+            latest_dt = mtime
+    if latest_dt is None:
+        return ""
+    delta_min = (latest_dt - acc_dt).total_seconds() / 60
+    if delta_min < 30:
+        return ""
+    return f"""
+  <div class="mb-5 rounded-xl border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-900">
+    <div class="font-semibold mb-1">❗ 生产验收快照已过时 {int(delta_min)} 分钟，下方 FAIL/WARN 可能是误报</div>
+    <div class="text-rose-800">
+      数据文件已比快照新（最新文件 {html_lib.escape(latest_dt.strftime('%m-%d %H:%M'))} · 快照 {html_lib.escape(acc_dt.strftime('%m-%d %H:%M'))}）。
+      手工 retry 某一步后，在仓库根目录跑：
+      <code class="bg-white px-2 py-0.5 rounded font-mono text-xs">python3 scripts/tools/production_acceptance_check.py &amp;&amp; ./build_dashboard.sh</code>
+    </div>
+  </div>
+"""
+
+
 def today_decision_panel_html() -> str:
     clean_v2 = _is_clean_v2_db()
     quality = _runtime_load_json("data/latest/recommendation_quality_gate.json")
@@ -9872,6 +9918,8 @@ def today_decision_panel_html() -> str:
   <div class="grid grid-cols-1 md:grid-cols-4 gap-3 mb-6">
     {cards_html}
   </div>
+
+  {_stale_acceptance_banner_html(acceptance)}
 
   {empty_state_banner}
 

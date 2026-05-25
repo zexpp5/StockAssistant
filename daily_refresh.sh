@@ -87,6 +87,23 @@ notify() {
     osascript -e "display notification \"$msg\" with title \"$title\"" 2>/dev/null
 }
 
+# D' 防止两个 daily_refresh.sh 同时跑（2026-05-25 事故根因：旧 run 残留 + 新 run 启动
+# → 同时持有 DuckDB 写锁 → 整条 pipeline 秒级 FAIL）。必须在 notify 定义之后。
+PID_LOCK="$DIR/.daily_refresh.pid"
+if [ -f "$PID_LOCK" ]; then
+    OLD_PID=$(cat "$PID_LOCK" 2>/dev/null || echo "")
+    if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
+        echo "❌ 另一个 daily_refresh.sh 还在跑（PID $OLD_PID，mode 未知），本轮退出避免 DuckDB 锁冲突。"
+        notify "🚫 daily_refresh 跳过" "PID $OLD_PID 仍在运行"
+        exit 1
+    else
+        echo "⚠️  发现旧 PID 文件 ($OLD_PID 已死)，清理后继续。"
+        rm -f "$PID_LOCK"
+    fi
+fi
+echo $$ > "$PID_LOCK"
+trap 'rm -f "$PID_LOCK"' EXIT
+
 PIPELINE_STATUS_DIR="$DIR/data/latest"
 PIPELINE_STATUS_FILE="$PIPELINE_STATUS_DIR/pipeline_status.json"
 PIPELINE_STATUS_STEPS="$PIPELINE_STATUS_DIR/.pipeline_status_${PIPELINE_RUN_ID}.jsonl"
@@ -236,27 +253,53 @@ run_step() {
     local started_epoch
     local duration_seconds
     local status="OK"
+    local err_log
+    local attempt
+    err_log=$(mktemp -t pipeline_step.XXXXXX)
     started_at=$(date '+%Y-%m-%d %H:%M:%S')
     started_epoch=$(date +%s)
     echo ""
-    echo "[$label] $script ..."
-    # script 以 '-m' 开头 → 当成 python -m module 调用，不传相对脚本名
-    if [[ "$script" == -m* ]]; then
-        if ! $PYTHON $script; then
-            echo "❌ [$label] $script 失败"
+    # D'' 锁感知 retry：最多 3 次。非锁错误立刻 FAIL 不重试；锁冲突 sleep 30s 后再试。
+    # 2026-05-25 事故根因：DuckDB 写锁瞬时冲突让 0c 秒级 FAIL，下游全用旧 universe。
+    for attempt in 1 2 3; do
+        if [ "$attempt" -gt 1 ]; then
+            echo "[$label] $script (attempt $attempt/3 · 锁冲突 retry) ..."
+        else
+            echo "[$label] $script ..."
+        fi
+        # script 以 '-m' 开头 → 当成 python -m module 调用，不传相对脚本名
+        # tee 把 stderr 同时落到 err_log（用于判定是否锁冲突）和原 stderr（用户看得到）
+        if [[ "$script" == -m* ]]; then
+            if $PYTHON $script 2> >(tee "$err_log" >&2); then
+                [ "$attempt" -gt 1 ] && status="OK_RETRY" || status="OK"
+                break
+            fi
+        else
+            # 不能引号化 $script：当 script 形如 "path/x.py --dry-run" 需要 shell 拆词
+            if $PYTHON $script 2> >(tee "$err_log" >&2); then
+                [ "$attempt" -gt 1 ] && status="OK_RETRY" || status="OK"
+                break
+            fi
+        fi
+        # 非锁冲突立刻 FAIL，避免对真正的错误浪费重试时间
+        if ! grep -qiE "Conflicting lock|Could not set lock|database is locked" "$err_log"; then
+            echo "❌ [$label] $script 失败（非锁冲突，不重试）"
             FAILED_STEPS+=("$label/$script")
             notify "📉 股票看板刷新失败" "$label: $script"
             status="FAIL"
+            break
         fi
-    else
-        # 不能引号化 $script：当 script 形如 "path/x.py --dry-run" 需要 shell 拆词
-        if ! $PYTHON $script; then
-            echo "❌ [$label] $script 失败"
+        if [ "$attempt" -lt 3 ]; then
+            echo "🔒 [$label] DuckDB 锁冲突，sleep 30s 后重试..."
+            sleep 30
+        else
+            echo "❌ [$label] $script 锁冲突重试 2 次后仍失败"
             FAILED_STEPS+=("$label/$script")
-            notify "📉 股票看板刷新失败" "$label: $script"
+            notify "📉 股票看板刷新失败（锁持续冲突）" "$label: $script"
             status="FAIL"
         fi
-    fi
+    done
+    rm -f "$err_log"
     ended_at=$(date '+%Y-%m-%d %H:%M:%S')
     duration_seconds=$(($(date +%s) - started_epoch))
     record_pipeline_step "$label" "$script" "$status" "$started_at" "$ended_at" "$duration_seconds"
