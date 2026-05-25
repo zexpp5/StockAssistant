@@ -1287,6 +1287,66 @@ function switchDiscoveryView(view) {
                  class="w-full mt-1 px-3 py-2 border rounded text-sm">
           <div class="mt-1 text-[11px] text-slate-500">保存后会写入 entry_fx_rate 和 cost_rmb_locked；以后成本 RMB 不再随每日汇率漂移。</div>
         </div>
+
+        <!-- 补充信息：行业 / 主营 / 产业链 (可选,留空也能保存) -->
+        <details class="border border-slate-200 rounded">
+          <summary class="cursor-pointer select-none px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50">
+            ▸ 补充信息（行业 / 主营 / 产业链 · 可选）
+          </summary>
+          <div class="px-3 py-3 space-y-3 border-t border-slate-100">
+            <p class="text-[11px] text-slate-500 leading-relaxed">
+              这些字段写入 <span class="font-mono">manual_watchlist</span> 和 <span class="font-mono">chain_metadata</span>，
+              用于「我的持仓」表的主题行、产业链 badge，以及其他 tab 的 stockPill 展示。
+              <strong>非科技股</strong>（消费 / 金融 / 商品类）的「产业链 / 链条层级 / 链条角色」可留空。
+            </p>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="text-xs font-medium text-slate-600">行业归类</label>
+                <input id="real-form-industry" type="text" placeholder="例：消费 / 潮流玩具" maxlength="60"
+                       class="w-full mt-1 px-3 py-2 border rounded text-sm">
+              </div>
+              <div>
+                <label class="text-xs font-medium text-slate-600">主营业务</label>
+                <input id="real-form-business" type="text" placeholder="例：IP 潮玩零售（盲盒、MEGA）" maxlength="100"
+                       class="w-full mt-1 px-3 py-2 border rounded text-sm">
+              </div>
+            </div>
+            <div>
+              <label class="text-xs font-medium text-slate-600">新手一句话解释 <span class="text-slate-400 font-normal">(&lt;60 字)</span></label>
+              <textarea id="real-form-layman-intro" rows="2" maxlength="120" placeholder="例：中国最大潮玩 IP 公司，LABUBU 等爆款驱动全球扩张"
+                        class="w-full mt-1 px-3 py-2 border rounded text-sm"></textarea>
+            </div>
+            <div class="grid grid-cols-3 gap-3">
+              <div>
+                <label class="text-xs font-medium text-slate-600">产业链</label>
+                <input id="real-form-chain" type="text" placeholder="例：AI算力 / HBM / 数据中心电力" maxlength="40"
+                       class="w-full mt-1 px-3 py-2 border rounded text-sm">
+              </div>
+              <div>
+                <label class="text-xs font-medium text-slate-600">链条层级</label>
+                <select id="real-form-chain-tier" class="w-full mt-1 px-3 py-2 border rounded text-sm">
+                  <option value="">—</option>
+                  <option value="L1">L1（核心受益）</option>
+                  <option value="L2">L2（一级供应商）</option>
+                  <option value="L3">L3（二级 / 边缘）</option>
+                  <option value="N/A">N/A（非科技股）</option>
+                </select>
+              </div>
+              <div>
+                <label class="text-xs font-medium text-slate-600">链条角色</label>
+                <select id="real-form-chain-role" class="w-full mt-1 px-3 py-2 border rounded text-sm">
+                  <option value="">—</option>
+                  <option value="核心标的">核心标的</option>
+                  <option value="受益方">受益方</option>
+                  <option value="供应商">供应商</option>
+                  <option value="下游">下游</option>
+                  <option value="替代品">替代品</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </details>
+
         <div class="flex gap-2 pt-1">
           <button onclick="closeHoldingModal()" class="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 py-2 rounded font-medium">取消</button>
           <button onclick="saveRealHolding()" class="flex-1 bg-violet-600 hover:bg-violet-700 text-white py-2 rounded font-medium">保存</button>
@@ -2822,10 +2882,12 @@ function stockPill(code, opts) {
   const name = opts.nameOverride || info.name || "";
   const chain = (info.chain || "").split(",").map(s => s.trim()).filter(Boolean);
   const primaryChain = chain[0] || null;
-  const tier = info.chain_tier;
-  const role = info.chain_role;
+  // 'N/A' 是「非科技股,不适用产业链体系」的占位,前端不该露脸 — 一律按"没填"处理
+  const tier = (info.chain_tier && info.chain_tier !== "N/A") ? info.chain_tier : null;
+  const role = (info.chain_role && info.chain_role !== "N/A") ? info.chain_role : null;
   const intro = info.layman_intro || "";
-  const inWatchlist = !!info.name;
+  // 只要 manual_watchlist 有这只票(name / industry / business 任一非空) 或 chain_metadata 有打标(chain / chain_tier 非空) 就算"在自选股"
+  const inWatchlist = !!(info.name || info.industry || info.business || info.chain || info.chain_tier);
 
   // 紧凑模式:只显示 chain · tier · role 三个 badge,不重复 code/name
   if (layout === "mini") {
@@ -4893,6 +4955,40 @@ function _assetMeta(kind) {
   return _ASSET_META[kind] || _ASSET_META.equity;
 }
 
+// 持仓表股票列名字下方的小字区:行业 / 主营业务 / 一句话解释。
+// 全部从 WATCHLIST_CHAIN_INFO 取(已合并 manual_watchlist.industry/business + chain_metadata.layman_intro)。
+// 设计原则:只显示已填字段;'N/A' 视为未填;全空就一行 hint 提示去编辑。
+function _renderHoldingMetaLines(code, holdingId) {
+  const info = (WATCHLIST_CHAIN_INFO || {})[code] || {};
+  const trunc = (s, n) => {
+    s = String(s || "").trim();
+    return s.length > n ? s.slice(0, n - 1) + "…" : s;
+  };
+  const cleanup = (v) => {
+    const s = String(v || "").trim();
+    return (s && s !== "N/A" && s !== "—") ? s : "";
+  };
+  const industry = cleanup(info.industry);
+  const business = cleanup(info.business);
+  const intro    = cleanup(info.layman_intro);
+  const lines = [];
+  if (industry) {
+    lines.push(`<div class="flex gap-1 leading-tight"><span class="text-slate-400 text-[10px] shrink-0">行业</span><span class="text-slate-700 text-[11px] truncate" title="${_esc(industry)}">${_esc(trunc(industry, 24))}</span></div>`);
+  }
+  if (business) {
+    lines.push(`<div class="flex gap-1 leading-tight"><span class="text-slate-400 text-[10px] shrink-0">主营</span><span class="text-slate-700 text-[11px] truncate" title="${_esc(business)}">${_esc(trunc(business, 24))}</span></div>`);
+  }
+  if (intro) {
+    lines.push(`<div class="flex gap-1 leading-tight"><span class="text-slate-400 text-[10px] shrink-0">简介</span><span class="text-slate-600 text-[11px] truncate" title="${_esc(intro)}">${_esc(trunc(intro, 24))}</span></div>`);
+  }
+  if (!lines.length) {
+    // 全空:一行细弱 hint,点击直接打开编辑器
+    const editAttr = holdingId ? `onclick="editRealHolding(${holdingId})" class="cursor-pointer text-slate-300 hover:text-violet-500 text-[10px] mt-1 italic"` : 'class="text-slate-300 text-[10px] mt-1 italic"';
+    return `<div ${editAttr} title="点编辑展开「补充信息」填行业 / 主营业务 / 一句话">✏️ 点编辑补充行业 / 主营</div>`;
+  }
+  return `<div class="mt-1 space-y-0.5">${lines.join("")}</div>`;
+}
+
 function _assetClassForRow(x, verdict) {
   if (verdict && verdict.asset_class) return verdict.asset_class;
   if (verdict && verdict.coverage_class === "tracking_only") return "fund_etf";
@@ -5626,7 +5722,8 @@ function resetRealHoldingForm() {
   const list = document.getElementById("real-form-code-list");
   if (list) list.innerHTML = RECORDS.map(r => `<option value="${r.code}">${r.name}</option>`).join("");
   const today = new Date().toISOString().split("T")[0];
-  ["id", "code", "name", "price", "shares", "entry-fx-rate"].forEach(k => {
+  ["id", "code", "name", "price", "shares", "entry-fx-rate",
+   "industry", "business", "layman-intro", "chain", "chain-tier", "chain-role"].forEach(k => {
     const el = document.getElementById("real-form-" + k);
     if (el) el.value = "";
   });
@@ -5747,6 +5844,35 @@ async function saveRealHolding() {
     alert("保存真实持仓失败: " + e.message);
     return;
   }
+  // 把补充信息(行业 / 主营 / 产业链 / 一句话)路由到 /api/watchlist
+  // 保存失败不阻塞主流程,持仓表本身已写好
+  const chainPayload = {
+    code,
+    name: name || null,   // 同步 manual_watchlist.name 跟持仓表名字一致
+    industry:     (document.getElementById("real-form-industry")?.value || "").trim() || null,
+    business:     (document.getElementById("real-form-business")?.value || "").trim() || null,
+    layman_intro: (document.getElementById("real-form-layman-intro")?.value || "").trim() || null,
+    chain:        (document.getElementById("real-form-chain")?.value || "").trim() || null,
+    chain_tier:   document.getElementById("real-form-chain-tier")?.value || null,
+    chain_role:   document.getElementById("real-form-chain-role")?.value || null,
+  };
+  // 只在至少有一个字段非空时调用,避免新建一只仅有 ticker 的空 watchlist 行
+  const hasChainData = Object.entries(chainPayload).some(([k, v]) => k !== "code" && v);
+  if (hasChainData) {
+    try {
+      await fetch(WATCHLIST_API_BASE + "/api/watchlist/" + encodeURIComponent(code), {
+        method: "PUT",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(chainPayload),
+      });
+      // 热刷新 WATCHLIST_CHAIN_INFO,这样持仓表的主题行 / chain badge 立刻更新
+      if (typeof refreshWatchlistChainInfo === "function") {
+        await refreshWatchlistChainInfo();
+      }
+    } catch (e) {
+      console.warn("补充信息保存失败(主持仓已写入):", e);
+    }
+  }
   closeHoldingModal();
   resetRealHoldingForm();
   await refreshHoldingsAndRender();
@@ -5779,6 +5905,27 @@ function editRealHolding(id) {
   const hint = document.getElementById("real-form-price-currency-hint");
   if (hint) hint.textContent = `（按 ${document.getElementById("real-form-currency").value} 填）`;
   _renderRealFormLookupHint(h.code || h.symbol);
+
+  // 异步回填补充信息(行业 / 主营 / 产业链 / 一句话) — 从 /api/watchlist/{code} 拉
+  _loadRealFormChainFields(h.code || h.symbol);
+}
+
+async function _loadRealFormChainFields(code) {
+  if (!code) return;
+  const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ""; };
+  try {
+    const r = await fetch(WATCHLIST_API_BASE + "/api/watchlist/" + encodeURIComponent(code));
+    if (!r.ok) return;  // 该 ticker 不在 manual_watchlist 也 OK,留空让用户填
+    const d = await r.json();
+    setVal("real-form-industry",     d.industry);
+    setVal("real-form-business",     d.business);
+    setVal("real-form-layman-intro", d.layman_intro);
+    setVal("real-form-chain",        d.chain);
+    setVal("real-form-chain-tier",   d.chain_tier);
+    setVal("real-form-chain-role",   d.chain_role);
+  } catch (e) {
+    console.warn("_loadRealFormChainFields:", e);
+  }
 }
 
 async function deleteRealHolding(id) {
@@ -5909,7 +6056,10 @@ async function renderRealHoldings() {
     }
     const userName = h.name ? String(h.name).trim() : "";
     const name = userName || (rec ? rec.name : "") || code;
-    const theme = rec ? (rec.theme || rec.industry || "-") : "-";
+    // 主题行优先用「自选股配置」editor 里填的 industry / business（热刷新无需 rebuild）
+    const chainInfo = WATCHLIST_CHAIN_INFO[code] || {};
+    const liveIndustry = chainInfo.industry || chainInfo.business || "";
+    const theme = liveIndustry || (rec ? (rec.theme || rec.industry || "-") : "-");
     realThemeAlloc[theme] = (realThemeAlloc[theme] || 0) + valueRmb;
     realStockAlloc.push({ name, value: valueRmb });
     return { h, code, rec, cur, costRmb, valueRmb, pnlRmb, pnlPct, dayChangeRmb, dayChangePct, reviewItem };
@@ -6121,9 +6271,9 @@ async function renderRealHoldings() {
     : `<span class="text-slate-400">无行情</span>
        <div class="text-[11px] text-amber-700">市值用成本估算</div>`;
   return `<tr class="border-t border-slate-100 hover:bg-slate-50 group ${rowBg}">
-      <td class="px-3 py-2 font-medium sticky left-0 ${stickyBg} group-hover:bg-slate-50 z-10 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.15)] w-[180px] min-w-[180px] max-w-[180px]">
+      <td class="px-3 py-2 font-medium sticky left-0 ${stickyBg} group-hover:bg-slate-50 z-10 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.15)] w-[200px] min-w-[200px] max-w-[200px]">
         ${stockPill(x.code, {nameOverride: name})}
-        ${theme && theme !== "-" ? `<div class="mt-1 text-[11px] text-slate-400 truncate">${_esc(theme)}</div>` : `<div class="mt-1 text-[10px] text-slate-300 truncate opacity-70" title="尚无业务主题标注 · 在自选股配置里标记后会显示">—</div>`}
+        ${_renderHoldingMetaLines(x.code, x.h && x.h.id)}
       </td>
       <td class="px-3 py-2 text-center whitespace-nowrap">${_badge(assetMeta, verdict ? verdict.asset_hint : assetMeta.hint)}</td>
       <td class="px-3 py-2 text-center whitespace-nowrap">${_badge(treatmentMeta, treatmentMeta.hint || meta.hint)}</td>
@@ -12486,6 +12636,8 @@ def build():
 
     # Stock Pill 链条上下文：V2 chain_metadata 表优先（rule_classify + manual_override），
     # data/stock_chain_overrides.json 仅做未入库前的本地兜底
+    # ALSO: manual_watchlist 的 name / industry / business 也合并进来 —— 这样用户在
+    # 「我的持仓 → 编辑」里填的行业 / 主营业务,F5 刷新页面也能看到（不依赖热刷新）
     chain_info: dict = {}
     try:
         import duckdb as _duckdb
@@ -12494,8 +12646,9 @@ def build():
         if "chain_metadata" in _chain_tables:
             for market, symbol, chain, tier, role, intro, source in _chain_conn.execute("""
                 SELECT market, symbol, chain, chain_tier, chain_role, layman_intro, source
-                FROM chain_metadata WHERE chain IS NOT NULL
+                FROM chain_metadata
             """).fetchall():
+                # 即使 chain 为 NULL 也保留(用户可能只填了 tier='N/A')
                 chain_info[symbol] = {
                     "chain": chain,
                     "chain_tier": tier,
@@ -12504,6 +12657,20 @@ def build():
                     "source": source,
                 }
             print(f"  Stock Pill 链条上下文已加载 [chain_metadata]({len(chain_info)} 条)")
+        if "manual_watchlist" in _chain_tables:
+            # 合并 manual_watchlist 的 name / industry / business
+            _mw_cols = {r[0] for r in _chain_conn.execute("DESCRIBE manual_watchlist").fetchall()}
+            ind_sel = "industry" if "industry" in _mw_cols else "NULL"
+            bus_sel = "business" if "business" in _mw_cols else "NULL"
+            for symbol, name, industry, business in _chain_conn.execute(
+                f"SELECT symbol, name, {ind_sel}, {bus_sel} FROM manual_watchlist"
+            ).fetchall():
+                if symbol not in chain_info:
+                    chain_info[symbol] = {}
+                if name:     chain_info[symbol]["name"]     = name
+                if industry: chain_info[symbol]["industry"] = industry
+                if business: chain_info[symbol]["business"] = business
+            print(f"  Stock Pill 链条上下文已合并 [manual_watchlist name/industry/business]")
         _chain_conn.close()
     except Exception as e:
         print(f"  ⚠️ 链条上下文 DB 加载失败，回退 overrides.json: {e}")
