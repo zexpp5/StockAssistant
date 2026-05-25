@@ -46,13 +46,32 @@ def _score_lower_better(value: Any, good: float, bad: float, missing: float = 45
     return _clip(95.0 - (x - good) / (bad - good) * 75.0)
 
 
+def _score_one_year_momentum(value: Any) -> float:
+    # 驼峰评分：50%-150% 区间最优，>200% 反向扣分（追高惩罚）。
+    # 参考 stock_research.jobs.calibrate_pick_weights._score_trend_inline 的 IC 实证分档。
+    try:
+        x = float(value)
+    except Exception:
+        return 45.0
+    if x >= 400:
+        return 20.0
+    if x >= 200:
+        return 50.0
+    if x >= 50:
+        return 100.0
+    if x >= 0:
+        return 75.0
+    if x >= -35:
+        return 50.0
+    return 25.0
+
+
 def _score_momentum(row: dict[str, Any]) -> float:
     parts = []
     for key, weight, lo, hi in (
         ("one_week_pct", 0.20, -8.0, 8.0),
         ("one_month_pct", 0.25, -15.0, 20.0),
         ("ytd_pct", 0.25, -25.0, 60.0),
-        ("one_year_pct", 0.30, -35.0, 120.0),
     ):
         value = row.get(key)
         try:
@@ -61,7 +80,16 @@ def _score_momentum(row: dict[str, Any]) -> float:
             parts.append((45.0, weight))
             continue
         parts.append((_clip((x - lo) / (hi - lo) * 100.0), weight))
-    return sum(score * weight for score, weight in parts)
+    parts.append((_score_one_year_momentum(row.get("one_year_pct")), 0.30))
+    momentum = sum(score * weight for score, weight in parts)
+    # 追高一票封顶：1Y > 300% 时，短期动量也多半是情绪驱动，整体动量分压到 40。
+    try:
+        y1 = float(row.get("one_year_pct"))
+        if y1 > 300:
+            momentum = min(momentum, 40.0)
+    except Exception:
+        pass
+    return momentum
 
 
 def _factor_scores(row: dict[str, Any]) -> dict[str, float]:
@@ -121,6 +149,16 @@ def _same_day(a: Any, b: Any) -> bool:
 
 def _quality_flags(row: dict[str, Any]) -> list[dict[str, Any]]:
     flags: list[dict[str, Any]] = []
+    try:
+        y1 = float(row.get("one_year_pct"))
+    except (TypeError, ValueError):
+        y1 = None
+    if y1 is not None and y1 > 200:
+        flags.append({
+            "code": "OVERHEATED_1Y",
+            "severity": "high" if y1 > 300 else "medium",
+            "message": f"1Y 涨幅 {y1:.0f}%（>200% 历史前向收益走弱，已对动量分追高扣分）",
+        })
     if not row.get("momentum_trade_date"):
         flags.append({
             "code": "MOMENTUM_MISSING",
@@ -278,7 +316,7 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
     now = datetime.now()
     run_id = f"rec_{now.strftime('%Y%m%d_%H%M%S')}_system_tech"
     strategy_version = "tech_ai_v1"
-    model_version = "v2_rule_factor_2026_05"
+    model_version = "v2_rule_factor_2026_05_overheat"
     scored: list[dict[str, Any]] = []
     for row in candidates:
         scores = _factor_scores(row)
