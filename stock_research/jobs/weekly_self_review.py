@@ -189,6 +189,55 @@ def _latest_prices_by_symbol(conn, symbols: list[str]) -> dict[str, dict[str, An
     return out
 
 
+def _trailing_returns_by_symbol(
+    conn, symbols: list[str], *, lookback_trade_days: int = 5,
+) -> dict[str, dict[str, Any]]:
+    """每只 symbol 的过去 N 个交易日 trailing 累计涨跌幅，直接从 price_daily 算。
+
+    与 pick_outcomes 不同：这是市场回报口径（lookback 窗口固定 = N 个交易日），
+    不依赖 pick 时点，picks 当天就有值。N 由 price_daily 实际行数封顶 —— 数据
+    不足时退化为「目前能看到的最长窗口」并把实际跨度写进 lookback_trade_days。
+    """
+    if not symbols:
+        return {}
+    placeholders = ",".join(["?"] * len(symbols))
+    baseline_rn = lookback_trade_days + 1
+    rows = conn.execute(
+        f"""
+        SELECT symbol, rn, close, trade_date FROM (
+          SELECT symbol, close, trade_date,
+                 ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY trade_date DESC) AS rn
+          FROM price_daily
+          WHERE symbol IN ({placeholders}) AND interval = '1d' AND close IS NOT NULL
+        ) t
+        WHERE rn <= ?
+        """,
+        [*symbols, baseline_rn],
+    ).fetchall()
+    by_sym: dict[str, list[tuple[int, float, Any]]] = {}
+    for sym, rn, close, td in rows:
+        by_sym.setdefault(str(sym), []).append((int(rn), float(close), td))
+    out: dict[str, dict[str, Any]] = {}
+    for sym, items in by_sym.items():
+        items.sort(key=lambda x: x[0])
+        if len(items) < 2:
+            continue
+        latest_rn, latest_close, latest_td = items[0]
+        baseline_rn_actual, baseline_close, baseline_td = items[-1]
+        if baseline_close <= 0 or baseline_rn_actual == latest_rn:
+            continue
+        pct = (latest_close - baseline_close) / baseline_close * 100.0
+        out[sym] = {
+            "trailing_pct": pct,
+            "lookback_trade_days": baseline_rn_actual - 1,
+            "latest_close": latest_close,
+            "latest_date": latest_td.isoformat() if hasattr(latest_td, "isoformat") else str(latest_td)[:10],
+            "baseline_close": baseline_close,
+            "baseline_date": baseline_td.isoformat() if hasattr(baseline_td, "isoformat") else str(baseline_td)[:10],
+        }
+    return out
+
+
 def _lookup_symbol_info(conn, symbols: list[str]) -> dict[str, dict[str, str]]:
     if not symbols:
         return {}
@@ -222,6 +271,7 @@ def _enrich_row_display(
     prices: dict[str, dict[str, Any]],
     info: dict[str, dict[str, str]],
     model_meta: dict[str, Any] | None = None,
+    trailing: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     sym = str(row.get("symbol") or "")
     meta = model_meta or {}
@@ -240,6 +290,14 @@ def _enrich_row_display(
         "price_trade_date": px.get("trade_date"),
         "current_price_display": _format_price(close, currency, market_code),
     })
+    tr = (trailing or {}).get(sym) or {}
+    if tr:
+        row.update({
+            "trailing_5d_pct": tr.get("trailing_pct"),
+            "trailing_lookback_days": tr.get("lookback_trade_days"),
+            "trailing_baseline_date": tr.get("baseline_date"),
+            "trailing_baseline_close": tr.get("baseline_close"),
+        })
     return row
 
 
@@ -454,6 +512,7 @@ def build_weekly_self_review(
                     all_symbols.add(str(row["symbol"]))
         prices = _latest_prices_by_symbol(conn, sorted(all_symbols))
         info = _lookup_symbol_info(conn, sorted(all_symbols))
+        trailing = _trailing_returns_by_symbol(conn, sorted(all_symbols), lookback_trade_days=5)
 
         def _apply_enrich(bucket: list[dict]) -> list[dict]:
             out: list[dict] = []
@@ -465,6 +524,7 @@ def build_weekly_self_review(
                         prices=prices,
                         info=info,
                         model_meta=model_by_sym.get(sym),
+                        trailing=trailing,
                     )
                 )
             return out
@@ -529,15 +589,20 @@ def _markdown_report(payload: dict[str, Any]) -> str:
             lines.append("_（无）_")
             lines.append("")
             return
-        lines.append("| 代码 | 说明 | 5d% | run |")
-        lines.append("| --- | --- | --- | --- |")
+        lines.append("| 代码 | 名称 | 市场 | 说明 | 近N日% | 窗口 | run |")
+        lines.append("| --- | --- | --- | --- | --- | --- | --- |")
         for r in rows[:10]:
             sym = r.get("symbol", "")
+            name = r.get("name") or "—"
+            mkt = r.get("market_label") or r.get("market") or "—"
             note = r.get("note", "")
-            ret = r.get("return_5d_pct")
+            trail = r.get("trailing_5d_pct")
+            ret = trail if trail is not None else r.get("return_5d_pct")
             ret_s = f"{float(ret):+.1f}%" if ret is not None else "—"
+            lookback = r.get("trailing_lookback_days")
+            window_s = f"{int(lookback)}d" if lookback else "—"
             run = r.get("first_run_id") or r.get("review_action") or "—"
-            lines.append(f"| {sym} | {note} | {ret_s} | `{run}` |")
+            lines.append(f"| {sym} | {name} | {mkt} | {note} | {ret_s} | {window_s} | `{run}` |")
         lines.append("")
 
     _section("错过", payload.get("missed") or [])
@@ -560,10 +625,20 @@ def _build_feishu_card(payload: dict[str, Any]) -> dict:
         lines.append(f"**{title}**")
         for r in rows[:5]:
             sym = r.get("symbol", "")
-            ret = r.get("return_5d_pct")
-            ret_s = f" · 5d {float(ret):+.1f}%" if ret is not None else ""
+            name = (r.get("name") or "").strip()
+            mkt = (r.get("market_label") or r.get("market") or "").strip()
+            head = name or sym
+            tag = f"{sym} · {mkt}" if mkt else sym
+            trail = r.get("trailing_5d_pct")
+            ret = trail if trail is not None else r.get("return_5d_pct")
+            if ret is not None:
+                lookback = r.get("trailing_lookback_days") if trail is not None else None
+                label = f"近{int(lookback)}日" if lookback else "5d"
+                ret_s = f" · {label} {float(ret):+.1f}%"
+            else:
+                ret_s = ""
             extra = r.get("review_action") or f"Top{r.get('model_rank', '?')}"
-            lines.append(f"- {sym} ({extra}){ret_s}")
+            lines.append(f"- **{head}** ({tag} · {extra}){ret_s}")
         lines.append("")
 
     content = "\n".join(lines).strip() or "本周无模型推荐样本或持仓无变化。"

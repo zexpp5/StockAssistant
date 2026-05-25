@@ -5692,11 +5692,14 @@ function _assetMeta(kind) {
   return _ASSET_META[kind] || _ASSET_META.equity;
 }
 
-// 板块热度一行: XLK 60d +30.1% · 板块偏强（来自 real_holding_review.industry_heat）
+// 板块热度一行: 科技 60d +30.1% · 板块偏强（来自 real_holding_review.industry_heat）
+// 中文板块名取自 h.etf_name（形如"必需消费 (Consumer Staples)"），剥掉括号留中文；ETF 代码移到 hover tooltip。
 function _industryHeatMetaLine(reviewItem) {
   const h = reviewItem && reviewItem.industry_heat;
   if (!h || !h.industry_heat_badge || h.industry_heat_badge === "unknown") return "";
   const etf = h.etf_ticker || "—";
+  const etfName = String(h.etf_name || "").trim();
+  const cnName = etfName ? etfName.replace(/\s*[（(].*$/, "").trim() : etf;
   const ret = h.sector_return_60d_pct;
   const retS = ret == null ? "—" : `${Number(ret) >= 0 ? "+" : ""}${Number(ret).toFixed(1)}%`;
   const label = h.industry_heat_badge === "hot" ? "板块偏强" : h.industry_heat_badge === "cold" ? "板块偏弱" : "板块中性";
@@ -5705,7 +5708,10 @@ function _industryHeatMetaLine(reviewItem) {
     : h.industry_heat_badge === "cold"
       ? "text-sky-700 font-semibold"
       : "text-slate-600";
-  return `<div class="text-[10px] font-mono ${cls} leading-tight" title="${_esc(h.hint || "")}">${_esc(etf)} 60d ${_esc(retS)} · ${_esc(label)}</div>`;
+  const hintParts = [`对照 ETF：${etf}`];
+  if (h.hint) hintParts.push(String(h.hint));
+  const tip = hintParts.join(" · ");
+  return `<div class="text-[10px] ${cls} leading-tight" title="${_esc(tip)}">${_esc(cnName)} 60d ${_esc(retS)} · ${_esc(label)}</div>`;
 }
 
 function _mergeReviewHeatFromEmbedded(payload) {
@@ -6072,11 +6078,12 @@ function _industryHeatCell(item) {
   const ret = h.sector_return_60d_pct;
   const retS = ret == null ? "—" : `${Number(ret) >= 0 ? "+" : ""}${Number(ret).toFixed(1)}%`;
   const label = badge === "hot" ? "偏强" : badge === "cold" ? "偏弱" : "中性";
-  const etfName = (h.etf_name || "").split("(")[0].trim();
-  return `<td class="px-3 py-2 text-center whitespace-nowrap" title="${_esc(h.hint || "")}">
-    <div class="text-[10px] font-mono text-slate-600">${_esc(etf)}</div>
-    <div class="inline-flex mt-0.5 px-1.5 py-0.5 rounded text-[11px] font-semibold border ${cls}">${_esc(retS)} · ${_esc(label)}</div>
-    <div class="text-[10px] text-slate-500 mt-0.5 max-w-[110px] truncate" title="${_esc(etfName)}">${_esc(etfName || "")}</div>
+  const etfName = (h.etf_name || "").split("(")[0].trim() || etf;
+  const tipParts = [`对照 ETF：${etf}`];
+  if (h.hint) tipParts.push(String(h.hint));
+  return `<td class="px-3 py-2 text-center whitespace-nowrap" title="${_esc(tipParts.join(" · "))}">
+    <div class="inline-flex px-1.5 py-0.5 rounded text-[11px] font-semibold border ${cls}">${_esc(retS)} · ${_esc(label)}</div>
+    <div class="text-[10px] text-slate-500 mt-0.5 max-w-[110px] truncate">${_esc(etfName)}</div>
   </td>`;
 }
 
@@ -11315,10 +11322,31 @@ def _weekly_self_review_panel_html() -> str:
     for title, key in (("错过", "missed"), ("没听话", "disobeyed")):
         for r in (wr.get(key) or [])[:3]:
             sym = html_lib.escape(str(r.get("symbol") or ""))
+            name = html_lib.escape(str(r.get("name") or "").strip())
+            mkt = html_lib.escape(str(r.get("market_label") or r.get("market") or "").strip())
+            head_parts: list[str] = []
+            if name and name != "—":
+                head_parts.append(f"<strong>{name}</strong>")
+            head_parts.append(f"<span class='text-slate-500'>{sym}</span>")
+            if mkt:
+                head_parts.append(f"<span class='text-[10px] px-1 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200'>{mkt}</span>")
+            head = " ".join(head_parts)
             note = html_lib.escape(str(r.get("note") or "")[:40])
-            ret = r.get("return_5d_pct")
-            ret_s = f" · 5d {float(ret):+.1f}%" if ret is not None else ""
-            rows.append(f"<li class='text-xs text-slate-700'><strong>{sym}</strong> {note}{html_lib.escape(ret_s)}</li>")
+            trail = r.get("trailing_5d_pct")
+            ret_event = r.get("return_5d_pct")
+            ret_val = trail if trail is not None else ret_event
+            if ret_val is not None:
+                val = float(ret_val)
+                tone = "text-rose-600" if val > 0 else ("text-emerald-700" if val < 0 else "text-slate-500")
+                if trail is not None:
+                    lookback_days = r.get("trailing_lookback_days") or 5
+                    label = f"近{int(lookback_days)}交易日"
+                else:
+                    label = "5d"
+                ret_html = f" · <span class='{tone} font-mono'>{label} {val:+.1f}%</span>"
+            else:
+                ret_html = ""
+            rows.append(f"<li class='text-xs text-slate-700'>{head} · {note}{ret_html}</li>")
     sample = "".join(rows) if rows else "<li class='text-xs text-slate-500'>本周无典型错过/没听话样本</li>"
     md_path = html_lib.escape(f"docs/letters/weekly_self_review_{wr.get('week_label', '')}.md")
     return f"""
