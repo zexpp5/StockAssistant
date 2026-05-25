@@ -34,11 +34,16 @@ def _clip(value: float, lo: float = 0.0, hi: float = 100.0) -> float:
     return max(lo, min(hi, value))
 
 
-def _score_lower_better(value: Any, good: float, bad: float, missing: float = 45.0) -> float:
+_NEGATIVE_VALUATION_SCORE = 27.5  # loss / earnings decline: not "cheap"
+
+
+def _score_lower_better(value: Any, good: float, bad: float, missing: float = 30.0) -> float:
     try:
         x = float(value)
     except Exception:
         return missing
+    if x < 0:
+        return _NEGATIVE_VALUATION_SCORE
     if x <= good:
         return 95.0
     if x >= bad:
