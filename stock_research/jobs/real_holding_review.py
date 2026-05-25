@@ -30,6 +30,8 @@ from stock_research.core.hk_scoring import (
     score_hk_entries,
 )
 from stock_research.core.us_risk_flags import build_us_equity_risk_flags_from_fundamental
+from stock_research.core.industry_heat import _load_sector_rotation, resolve_industry_heat
+from stock_research.core.portfolio_constraints import kelly_cap
 from stock_research.jobs.morning_brief import compute_holdings_verdict
 
 
@@ -532,6 +534,99 @@ def _bounded_score(value: float | None) -> float | None:
     return max(0.0, min(100.0, round(float(value), 1)))
 
 
+def _suggest_size_advisory(
+    *,
+    rules: dict[str, Any],
+    action: str,
+    symbol: str,
+    shares: float,
+    current_price: float | None,
+    fx: float,
+    current_value_rmb: float,
+    current_weight: float | None,
+    target_weight: float | None,
+    total_capital: float,
+    treatment_class: str,
+) -> dict[str, Any] | None:
+    """把 verdict 转成可参考的规模提示（advisory，不自动下单）。"""
+    if treatment_class in {"data_blocked", "risk_only"} and action in {"补数据", "仅风控跟踪"}:
+        if current_weight is not None and current_weight >= float(rules.get("hard_single_cap_pct", 0.25)):
+            hard = float(rules.get("hard_single_cap_pct", 0.25))
+            trim_rmb = max(0.0, current_value_rmb - hard * total_capital)
+            return {
+                "advisory_only": True,
+                "direction": "trim",
+                "suggested_action_rmb": round(trim_rmb, 2) if trim_rmb > 0 else None,
+                "suggested_shares": None,
+                "suggested_batches": int(rules.get("suggested_batches", 3)),
+                "suggested_batch_note": f"可考虑分{int(rules.get('suggested_batches', 3))}批减仓，每批不超过建议变动额的 1/3",
+                "kelly_cap_pct": None,
+                "hard_cap_pct": hard,
+                "over_hard_cap": True,
+            }
+        return None
+
+    if current_price is None or current_price <= 0 or total_capital <= 0:
+        return None
+
+    kelly_fraction = float(rules.get("kelly_fraction", 0.5))
+    max_single = float(rules.get("max_single_pct", 0.15))
+    hard_cap = float(rules.get("hard_single_cap_pct", 0.25))
+    kelly_pct = max_single * kelly_fraction
+    batches = int(rules.get("suggested_batches", 3))
+    batch_note = f"可考虑分{batches}批，每批不超过建议变动额的 1/3"
+    price_rmb = current_price * fx
+    over_hard = current_weight is not None and current_weight >= hard_cap
+
+    advisory: dict[str, Any] = {
+        "advisory_only": True,
+        "kelly_cap_pct": round(kelly_pct, 4),
+        "hard_cap_pct": hard_cap,
+        "over_hard_cap": over_hard,
+        "suggested_batches": batches,
+        "suggested_batch_note": batch_note,
+    }
+
+    if over_hard or action in {"风险复查", "减仓观察"}:
+        trim_to = min(hard_cap, kelly_pct) if target_weight is None else min(
+            hard_cap, max(target_weight, kelly_pct)
+        )
+        target_val = trim_to * total_capital
+        trim_rmb = max(0.0, current_value_rmb - target_val)
+        trim_shares = int(trim_rmb / price_rmb) if trim_rmb > 0 else 0
+        advisory.update({
+            "direction": "trim",
+            "suggested_action_rmb": round(trim_rmb, 2) if trim_rmb > 0 else None,
+            "suggested_shares": trim_shares if trim_shares > 0 else None,
+        })
+        return advisory
+
+    if action == "关注加仓" and target_weight is not None and current_weight is not None:
+        capped = kelly_cap({symbol: target_weight}, max_single_pct=max_single, kelly_fraction=kelly_fraction)
+        eff_target = capped.get(symbol, target_weight)
+        target_val = eff_target * total_capital
+        add_rmb = max(0.0, target_val - current_value_rmb)
+        if add_rmb < price_rmb * 0.5:
+            return None
+        add_shares = int(add_rmb / price_rmb)
+        if add_shares < 1:
+            return None
+        advisory.update({
+            "direction": "add",
+            "suggested_action_rmb": round(add_rmb, 2),
+            "suggested_shares": add_shares,
+        })
+        return advisory
+
+    if action == "持有观察" and target_weight is not None and current_weight is not None:
+        gap = target_weight - (current_weight or 0.0)
+        if abs(gap) < 0.005:
+            advisory.update({"direction": "hold", "suggested_action_rmb": None, "suggested_shares": None})
+            return advisory
+
+    return None
+
+
 def _build_item(
     holding: dict,
     *,
@@ -541,6 +636,7 @@ def _build_item(
     verdict: dict | None,
     total_capital: float,
     target_weights: dict[str, float],
+    industry_heat: dict | None = None,
 ) -> dict:
     rules = rules or _default_rules()
     symbol = str(holding.get("symbol") or holding.get("code"))
@@ -670,6 +766,33 @@ def _build_item(
     if pnl_pct is not None and pnl_pct <= float(rules["loss_review_pct"]):
         risk_flags.append(f"浮亏超过 {abs(float(rules['loss_review_pct'])):.0f}%,优先风险复查")
 
+    size_advisory = _suggest_size_advisory(
+        rules=rules,
+        action=action,
+        symbol=symbol,
+        shares=shares,
+        current_price=current_price,
+        fx=fx,
+        current_value_rmb=current_value_rmb,
+        current_weight=current_weight,
+        target_weight=target_weight,
+        total_capital=total_capital,
+        treatment_class=treatment_class,
+    )
+    if size_advisory and size_advisory.get("over_hard_cap") and not any("25%" in f for f in risk_flags):
+        risk_flags.append("单一持仓超过总资产 25%（建议规模已按红线折算）")
+
+    if industry_heat and industry_heat.get("industry_heat_badge") == "hot":
+        etf = industry_heat.get("etf_ticker", "")
+        ret = industry_heat.get("sector_return_60d_pct")
+        if ret is not None:
+            reasons.append(f"所属板块 {etf} 60d {float(ret):+.1f}%（偏强）")
+    elif industry_heat and industry_heat.get("industry_heat_badge") == "cold":
+        etf = industry_heat.get("etf_ticker", "")
+        ret = industry_heat.get("sector_return_60d_pct")
+        if ret is not None:
+            reasons.append(f"所属板块 {etf} 60d {float(ret):+.1f}%（偏弱）")
+
     return {
         "account": holding.get("account") or "default",
         "market": holding.get("market") or stock_db._infer_market_from_ticker(symbol),
@@ -698,6 +821,8 @@ def _build_item(
         "reasons": reasons[:8],
         "risk_flags": risk_flags[:8],
         "data_flags": data_flags,
+        "size_advisory": size_advisory,
+        "industry_heat": industry_heat,
     }
 
 
@@ -732,18 +857,31 @@ def build_real_holding_review(*, persist: bool = True) -> dict[str, Any]:
         )
         verdict_by_code = {v.get("code"): v for v in verdict.get("holdings", [])}
 
-        items = [
-            _build_item(
-                h,
-                rules=rules,
-                price=prices.get(str(h.get("symbol") or h.get("code"))),
-                pick=picks.get(str(h.get("symbol") or h.get("code"))),
-                verdict=verdict_by_code.get(str(h.get("symbol") or h.get("code"))),
-                total_capital=total_capital,
-                target_weights=target_weights,
+        sector_rotation = _load_sector_rotation()
+        items = []
+        for h in holdings:
+            sym = str(h.get("symbol") or h.get("code"))
+            mkt = str(h.get("market") or stock_db._infer_market_from_ticker(sym))
+            v = verdict_by_code.get(sym) or {}
+            heat = resolve_industry_heat(
+                conn,
+                sym,
+                mkt,
+                rotation=sector_rotation,
+                asset_class=v.get("asset_class") or h.get("asset_class"),
             )
-            for h in holdings
-        ]
+            items.append(
+                _build_item(
+                    h,
+                    rules=rules,
+                    price=prices.get(sym),
+                    pick=picks.get(sym),
+                    verdict=verdict_by_code.get(sym),
+                    total_capital=total_capital,
+                    target_weights=target_weights,
+                    industry_heat=heat,
+                )
+            )
 
         today = date.today().isoformat()
         review_run_id = "realhold_" + datetime.now().strftime("%Y%m%d_%H%M%S")

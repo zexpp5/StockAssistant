@@ -132,6 +132,7 @@ pipeline_sink_for_label() {
         *"OpenBB"*) echo "data/snapshots/audit/openbb_intel_*.json + docs/letters/*" ;;
         *"IPO"*) echo "data/ipo_calendar.json + data/reports/ipo_daily_*.md" ;;
         *"事件日历"*) echo "data/event_calendar.json" ;;
+        *"次新股+解禁雷达"*) echo "data/latest/junior_stock_radar.json" ;;
         *"政策"*) echo "data/policy_events.json" ;;
         *"全池 AI 推荐"*) echo "data/discovery_candidates.json + DuckDB.recommendation_runs/picks" ;;
         *"推荐准确度"*) echo "DuckDB.pick_outcomes" ;;
@@ -457,6 +458,7 @@ is_research_step && run_step "17/25 OpenBB 综合情报" "-m stock_research.jobs
 # R — A 股事件层（IPO / 解禁 / 政策；19 比较慢）
 is_research_step && run_step "18/25 IPO 打新日历" "-m stock_research.jobs.ipo_daily"
 is_research_step && run_step "19/25 事件日历（解禁/减持/财报）" "-m stock_research.jobs.event_calendar_daily"
+is_research_step && run_step "19b/25 次新股+解禁雷达（IPO & 次新股 tab 数据源）" "-m stock_research.jobs.junior_stock_watcher"
 is_research_step && run_step "20/25 产业政策事件扫描" "-m stock_research.jobs.policy_scan_daily"
 
 # v9.0 A 股选股闭环（仅 morning + full 兜底；A 股 picks 主路径走 --a-share-only 16:30 单独跑）
@@ -513,6 +515,14 @@ if is_morning_step; then
     fi
     # 2026-05-21 DB 出仓后，用户状态由 state_backup/*.json 持久化（DuckDB 是衍生物）
     run_step "28 用户状态备份 → state_backup/state_YYYY-MM-DD.json" "scripts/tools/backup_state_to_json.py"
+fi
+
+# 周日：周末复盘（模型推 vs 你做）· 飞书需配置 FEISHU_WEEKLY_WEBHOOK 或 FEISHU_BRIEF_WEBHOOK
+if [ "$DOW" = "7" ]; then
+    run_step "29 周末复盘（动作 vs 信号）" "-m stock_research.jobs.weekly_self_review --push"
+else
+    echo ""
+    echo "[29 周末复盘] 跳过 — 仅周日执行（今天 weekday=$DOW，7=Sun）"
 fi
 
 DONE_TS=$(date '+%Y-%m-%d %H:%M:%S')

@@ -396,6 +396,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <div class="text-base font-bold text-slate-800 mb-2 px-2">🔬 深度研究</div>
       <a href="#buy-research" data-tab="buy-research" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🛡 买前研究</a>
       <a href="#chain" data-tab="chain" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🌳 产业链地图</a>
+      <a href="#ipo-junior" data-tab="ipo-junior" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">📅 IPO & 次新股</a>
     </div>
 
     <hr class="my-4 border-slate-200">
@@ -457,18 +458,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <!-- ============ 今日决策台 ============ -->
 <section id="today-decision" class="max-w-7xl mx-auto px-6 py-10">
   {TODAY_DECISION_PANEL}
-  <!-- 💼 我的持仓体检 · 前端动态(/api/real-holdings/daily-verdict)·
-       不入静态 TODAY_DECISION_PANEL,因为它依赖用户当前 holdings,build 时还没有 -->
-  <div id="today-holdings-checkup" class="mt-4 bg-white rounded-xl border border-slate-200 p-4" style="display:none">
-    <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
-      <div>
-        <h3 class="text-sm font-bold text-slate-800">💼 我的持仓体检</h3>
-        <p class="text-[11px] text-slate-500 mt-0.5">对你已买入的真钱仓位 7 档判断 · advisory</p>
-      </div>
-      <a href="#real-holdings" class="text-xs font-medium text-violet-700 hover:text-violet-900">看详情 →</a>
-    </div>
-    <div id="today-holdings-checkup-body" class="text-sm text-slate-700"></div>
-  </div>
 </section>
 
 <!-- ============ 💀 压力测试：崩盘期表现（诚实暴露）============ -->
@@ -1184,13 +1173,15 @@ function switchDiscoveryView(view) {
           <th class="px-3 py-2 text-left whitespace-nowrap sticky left-0 bg-slate-100 z-20 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.15)] w-[180px] min-w-[180px]">股票</th>
           <th class="px-3 py-2 text-center whitespace-nowrap w-[120px]" title="按市面常见口径归类:股票/ETF/基金/商品/债券/现金">资产类别</th>
           <th class="px-3 py-2 text-center whitespace-nowrap w-[145px]" title="这只股票用哪种方式分析：有没有美股组合建议、算不算因子分、还是只看仓位盈亏">分析方式</th>
+          <th class="px-3 py-2 text-center whitespace-nowrap w-[118px]" title="GICS 板块 ETF 近 60 日涨跌 · 来自 openbb_intel 行业轮动">板块热度</th>
           <th class="px-3 py-2 text-right whitespace-nowrap w-[150px]">成本/数量</th>
-          <th class="px-3 py-2 text-left whitespace-nowrap w-[130px]">买入/汇率</th>
           <th class="px-3 py-2 text-right whitespace-nowrap w-[150px]">现价/市值</th>
+          <th class="px-3 py-2 text-left whitespace-nowrap w-[130px]">买入/汇率</th>
           <th class="px-3 py-2 text-right whitespace-nowrap w-[120px]" title="今日盈亏 = 最近一次有效收盘 vs 前一日收盘 · 与本地日历日无关">今日盈亏</th>
           <th class="px-3 py-2 text-right whitespace-nowrap w-[120px]" title="自买入以来累计盈亏 = 现市值 − 锁定成本">累计盈亏</th>
           <th class="px-3 py-2 text-right whitespace-nowrap w-[90px]" title="这只股票市值占你总本金（默认50万）的百分之几">你现在占比</th>
           <th class="px-3 py-2 text-right whitespace-nowrap w-[155px]" title="来自「AI组合方案」：若按模型买，这只应占百分之几；下一行是你现在比建议多还是少几个百分点">模型建议仓位</th>
+          <th class="px-3 py-2 text-right whitespace-nowrap w-[140px]" title="仅供参考：按目标仓位差与半Kelly上限估算，不构成交易指令">建议规模</th>
           <th class="px-3 py-2 text-center whitespace-nowrap w-[230px]">
             <span class="inline-flex items-center justify-center gap-1">
               今日建议
@@ -1203,7 +1194,7 @@ function switchDiscoveryView(view) {
         </tr>
       </thead>
       <tbody id="real-holdings-table">
-        <tr><td colspan="12" class="text-center text-slate-500 py-8">暂无持仓 · 点击右上角「+ 录入持仓」添加</td></tr>
+        <tr><td colspan="14" class="text-center text-slate-500 py-8">暂无持仓 · 点击右上角「+ 录入持仓」添加</td></tr>
       </tbody>
     </table>
   </div>
@@ -1842,6 +1833,115 @@ function switchDiscoveryView(view) {
   <div id="chain-summary" class="mb-4 flex flex-wrap gap-2"></div>
 
   <div id="chain-cards-container" class="space-y-6"></div>
+</section>
+
+<!-- ============ 📅 IPO & 次新股（数据来自 data/latest/junior_stock_radar.json） ============ -->
+<section id="ipo-junior" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
+  <div class="mb-6">
+    <div class="flex items-center gap-3 mb-1">
+      <span class="text-3xl">📅</span>
+      <h1 class="text-2xl font-bold text-slate-900">IPO & 次新股</h1>
+    </div>
+    <p class="text-sm text-slate-600 max-w-3xl">
+      三件事：① 即将申购 / 已申购未上市 / 近 30 日上市的新股；
+      ② 未来 90 天解禁压力雷达；
+      ③ 上市 6–24 月、跌破发行价的次新股「底部观察池」。
+      <span class="text-violet-700">所有数据每日刷新，仅供研究观察，不构成买入建议。</span>
+    </p>
+    <p id="ipo-junior-meta" class="text-xs text-slate-500 mt-2"></p>
+  </div>
+
+  <!-- 市场切换（一级 tab）-->
+  <div class="mb-5 flex flex-wrap gap-2">
+    <button onclick="switchIpoMarket('cn')" id="ipo-market-cn"
+            class="ipo-market-btn px-4 py-1.5 text-sm font-medium rounded-lg border border-slate-300 bg-white text-slate-700 hover:border-violet-500 transition">
+      🇨🇳 A 股
+    </button>
+    <button onclick="switchIpoMarket('us')" id="ipo-market-us"
+            class="ipo-market-btn px-4 py-1.5 text-sm font-medium rounded-lg border border-slate-300 bg-white text-slate-700 hover:border-violet-500 transition">
+      🇺🇸 美股
+    </button>
+    <button onclick="switchIpoMarket('hk')" id="ipo-market-hk"
+            class="ipo-market-btn px-4 py-1.5 text-sm font-medium rounded-lg border border-slate-300 bg-white text-slate-500 hover:border-violet-500 transition">
+      🇭🇰 港股 (暂未接入)
+    </button>
+    <span id="ipo-market-hint" class="ml-2 text-xs text-slate-500 self-center"></span>
+  </div>
+
+  <!-- 二级 tab 栏 -->
+  <div class="border-b border-slate-200 flex gap-1 mb-6">
+    <button onclick="switchIpoJuniorSub('ipo')" id="ipo-sub-btn-ipo"
+            class="ipo-sub-btn px-4 py-2 text-sm font-medium border-b-2 transition">
+      🆕 IPO 日历
+    </button>
+    <button onclick="switchIpoJuniorSub('unlock')" id="ipo-sub-btn-unlock"
+            class="ipo-sub-btn px-4 py-2 text-sm font-medium border-b-2 transition">
+      ⏰ 解禁雷达（90 天）
+    </button>
+    <button onclick="switchIpoJuniorSub('junior')" id="ipo-sub-btn-junior"
+            class="ipo-sub-btn px-4 py-2 text-sm font-medium border-b-2 transition">
+      🎯 次新股底部观察池
+    </button>
+  </div>
+
+  <!-- 子区 1: IPO 日历 -->
+  <div id="ipo-sub-ipo" class="space-y-6">
+    <div class="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-900">
+      <strong>科普:</strong> A 股网上申购需持仓市值 ≥ 1 万，中签率万分之几；港股一人一户都可申购，破发率约 40-50%；
+      美股散户拿不到 IPO 配售，只能上市当天去二级市场买。
+    </div>
+    <div>
+      <h3 class="text-lg font-bold text-slate-900 mb-3">🚀 即将申购</h3>
+      <div id="ipo-upcoming" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3"></div>
+    </div>
+    <div>
+      <h3 class="text-lg font-bold text-slate-900 mb-3">⏳ 已申购未上市</h3>
+      <div id="ipo-awaiting" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3"></div>
+    </div>
+    <div>
+      <h3 class="text-lg font-bold text-slate-900 mb-3">📊 近 30 日上市</h3>
+      <div id="ipo-recent" class="bg-white rounded-xl border border-slate-200 overflow-x-auto"></div>
+    </div>
+  </div>
+
+  <!-- 子区 2: 解禁雷达 -->
+  <div id="ipo-sub-unlock" class="space-y-4" style="display:none">
+    <div class="bg-sky-50 border border-sky-200 rounded-xl px-4 py-3 text-sm text-sky-900">
+      <strong>怎么读:</strong> 「占流通市值比例」是最关键的信号 —
+      占比 &gt; 50% 几乎必然带来抛压；首发原股东限售股份解禁（12 个月期满）是典型大额风险事件。
+      已标注你的持仓 / 自选股，遇到 <span class="text-rose-700 font-semibold">压力分 &gt; 70</span> 且在你池子里的标的，
+      建议提前查看是否需要降仓。
+    </div>
+    <div class="flex flex-wrap gap-2 items-center">
+      <label class="text-xs text-slate-600">筛选:</label>
+      <button onclick="filterUnlock('all')" id="unlock-filter-all" class="unlock-filter-btn px-3 py-1 text-xs rounded border border-slate-300 bg-white text-slate-700 hover:border-violet-500">全部</button>
+      <button onclick="filterUnlock('pool')" id="unlock-filter-pool" class="unlock-filter-btn px-3 py-1 text-xs rounded border border-slate-300 bg-white text-slate-700 hover:border-violet-500">仅我的池子</button>
+      <button onclick="filterUnlock('high')" id="unlock-filter-high" class="unlock-filter-btn px-3 py-1 text-xs rounded border border-slate-300 bg-white text-slate-700 hover:border-violet-500">高压力 (&gt;70)</button>
+      <button onclick="filterUnlock('week')" id="unlock-filter-week" class="unlock-filter-btn px-3 py-1 text-xs rounded border border-slate-300 bg-white text-slate-700 hover:border-violet-500">7 日内</button>
+      <span id="unlock-count" class="ml-auto text-xs text-slate-500"></span>
+    </div>
+    <div id="ipo-unlock-table" class="bg-white rounded-xl border border-slate-200 overflow-x-auto"></div>
+  </div>
+
+  <!-- 子区 3: 次新股底部观察池 -->
+  <div id="ipo-sub-junior" class="space-y-4" style="display:none">
+    <div class="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 text-sm text-emerald-900">
+      <strong>策略说明:</strong> 新股上市后典型走势是「爆炒 → 解禁砸盘 → 一路阴跌 → 1-2 年后筑底」。
+      本池筛选上市 <strong>6-24 个月</strong> 的标的，按四维打分（折发行价 / 时间衰减 / 首日溢价 / 较首日跌幅）排序，
+      分数越高越接近"被遗忘 + 已破发"的潜在底部位置。
+      <br><span class="text-rose-700">⚠️ 高分不等于值得买；这只是"研究起点"，仍需你做基本面 + 行业 + 技术面三重判断。</span>
+    </div>
+    <div class="flex flex-wrap gap-2 items-center">
+      <label class="text-xs text-slate-600">筛选:</label>
+      <button onclick="filterJunior('all')" id="junior-filter-all" class="junior-filter-btn px-3 py-1 text-xs rounded border border-slate-300 bg-white text-slate-700 hover:border-violet-500">全部</button>
+      <button onclick="filterJunior('broken')" id="junior-filter-broken" class="junior-filter-btn px-3 py-1 text-xs rounded border border-slate-300 bg-white text-slate-700 hover:border-violet-500">仅已破发</button>
+      <button onclick="filterJunior('star')" id="junior-filter-star" class="junior-filter-btn px-3 py-1 text-xs rounded border border-slate-300 bg-white text-slate-700 hover:border-violet-500">科创板</button>
+      <button onclick="filterJunior('chinext')" id="junior-filter-chinext" class="junior-filter-btn px-3 py-1 text-xs rounded border border-slate-300 bg-white text-slate-700 hover:border-violet-500">创业板</button>
+      <button onclick="filterJunior('main')" id="junior-filter-main" class="junior-filter-btn px-3 py-1 text-xs rounded border border-slate-300 bg-white text-slate-700 hover:border-violet-500">沪深主板</button>
+      <span id="junior-count" class="ml-auto text-xs text-slate-500"></span>
+    </div>
+    <div id="ipo-junior-table" class="bg-white rounded-xl border border-slate-200 overflow-x-auto"></div>
+  </div>
 </section>
 
 <!-- ============ ⚙️ 配置（父 tab · 顶部二级切换 投资方案 / 自选股配置）============ -->
@@ -2682,6 +2782,8 @@ const _DYNAMIC     = {PLAN_DYNAMIC_JSON_DB};
 // ============ Watchlist CRUD（调本地 FastAPI · DuckDB 是权威）============
 const WATCHLIST_API_BASE = "http://127.0.0.1:8765";
 const DB_EXPLORER_EMBEDDED = {DB_EXPLORER_JSON};
+// 真实持仓体检：build 时从 data/latest/real_holding_review.json 注入，避免 API 未重启时缺 industry_heat / size_advisory
+const REAL_HOLDING_REVIEW_EMBEDDED = {REAL_HOLDING_REVIEW_JSON};
 let _watchlistCache = [];
 let _watchlistEditCode = null;  // null = 新增模式；非空 = 编辑该 code
 // 2026-05-14: 自动评级状态
@@ -4607,6 +4709,8 @@ const TAB_SECTIONS = {
   valuation: ["valuation", "audit-panel"],
   // chain = 「产业链地图」· 取代原 themes + chain-overview（主题分组已退役）
   chain: ["chain-header", "chain-overview"],
+  // ipo-junior = 「📅 IPO & 次新股」· 三子区：IPO 日历 / 解禁雷达 / 次新股底部观察池
+  "ipo-junior": ["ipo-junior"],
   backtest: ["backtest"],
   professional: ["professional"],
   "db-explorer": ["db-explorer"],
@@ -4691,6 +4795,7 @@ function switchTab(tab) {
   if (tab === "professional") setTimeout(renderProfessional, 50);
   if (tab === "db-explorer") setTimeout(loadDbExplorer, 50);
   if (tab === "chain") setTimeout(loadChainOverview, 50);
+  if (tab === "ipo-junior") setTimeout(renderJuniorRadar, 50);
   if (tab === "init-config") switchInitSub(_initSubCurrent);
 }
 
@@ -4711,7 +4816,515 @@ function getTabFromHash() {
   return TAB_SECTIONS[h] ? h : "today";
 }
 window.addEventListener("hashchange", () => switchTab(getTabFromHash()));
-window.addEventListener("DOMContentLoaded", () => switchTab(getTabFromHash()));
+window.addEventListener("DOMContentLoaded", () => {
+  switchTab(getTabFromHash());
+  document.querySelectorAll(".tab-link[data-tab]").forEach(a => {
+    a.addEventListener("click", (e) => {
+      const tab = a.dataset.tab;
+      if (!tab) return;
+      const href = (a.getAttribute("href") || "").replace(/^#/, "");
+      const hash = tab === "init-config" ? (href || "watchlist-edit") : tab;
+      if (location.hash.replace("#", "") !== hash) location.hash = hash;
+      else switchTab(getTabFromHash());
+      e.preventDefault();
+    });
+  });
+});
+
+// ============ 📅 IPO & 次新股 雷达（数据由 build_stock_dashboard_html.py 注入） ============
+const JUNIOR_RADAR = {JUNIOR_RADAR_JSON};
+let _ipoMarket = "cn";  // cn / us / hk
+let _ipoJuniorSub = "ipo";
+let _unlockFilter = "all";
+let _juniorFilter = "all";
+
+function _ipoCurrentMarket() {
+  return (JUNIOR_RADAR.markets || {})[_ipoMarket] || {};
+}
+
+function _ipoBoardLabel(b) {
+  return { main: "沪深主板", star: "科创板", chinext: "创业板", bse: "北交所", other: "其他" }[b] || (b || "—");
+}
+
+function _ipoStressBadge(score) {
+  if (score >= 80) return `<span class="px-2 py-0.5 rounded text-xs font-semibold bg-rose-100 text-rose-700">${score}</span>`;
+  if (score >= 60) return `<span class="px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-700">${score}</span>`;
+  if (score >= 40) return `<span class="px-2 py-0.5 rounded text-xs font-semibold bg-sky-100 text-sky-700">${score}</span>`;
+  return `<span class="px-2 py-0.5 rounded text-xs font-semibold bg-slate-100 text-slate-600">${score}</span>`;
+}
+
+function _ipoJuniorScoreBadge(score) {
+  if (score >= 70) return `<span class="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-700">${score}</span>`;
+  if (score >= 50) return `<span class="px-2 py-0.5 rounded text-xs font-semibold bg-sky-100 text-sky-700">${score}</span>`;
+  if (score >= 30) return `<span class="px-2 py-0.5 rounded text-xs font-semibold bg-slate-100 text-slate-600">${score}</span>`;
+  return `<span class="px-2 py-0.5 rounded text-xs font-semibold bg-slate-50 text-slate-400">${score}</span>`;
+}
+
+function _ipoCard(e) {
+  const dDays = e.days_to_subscribe;
+  const dTag = dDays === null ? "" : (dDays === 0 ? `<span class="text-rose-600 font-semibold">今日</span>` :
+                                       dDays > 0 ? `<span class="text-amber-700">${dDays} 天后</span>` :
+                                                   `<span class="text-slate-400">${-dDays} 天前</span>`);
+  const aiFlag = (e.ai_relevance || 0) >= 2 ? `<span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-violet-100 text-violet-700">AI</span>` : "";
+  return `<div class="bg-white rounded-xl border border-slate-200 p-3">
+    <div class="flex items-start justify-between gap-2">
+      <div>
+        <div class="font-bold text-slate-900 text-sm">${_esc(e.name || "—")} <span class="font-mono text-xs text-slate-500">${_esc(e.code || "")}</span></div>
+        <div class="text-xs text-slate-500 mt-0.5">${_ipoBoardLabel(e.board)} · ${_esc(e.theme || "")}</div>
+      </div>
+      <div class="text-right">${aiFlag}</div>
+    </div>
+    <div class="mt-2 flex items-center justify-between text-xs">
+      <div class="text-slate-600">申购 ${_esc(e.subscribe_date || "—")} ${dTag}</div>
+      <div class="text-slate-700 font-mono">${e.issue_price ? "¥" + e.issue_price : ""}${e.pe_ratio ? " · PE " + e.pe_ratio : ""}</div>
+    </div>
+  </div>`;
+}
+
+function _usFiledCard(e) {
+  const v = e.expected_value_usd ? "$" + (e.expected_value_usd / 1e6).toFixed(1) + "M" : "—";
+  const d = e.days_since_filed;
+  const dTag = (d === undefined || d === null) ? "" :
+               (d === 0 ? `<span class="text-rose-600 font-semibold">今日</span>` :
+                d > 0 ? `<span class="text-slate-500">${d} 天前</span>` : "");
+  return `<div class="bg-white rounded-xl border border-slate-200 p-3">
+    <div class="font-bold text-slate-900 text-sm">${_esc(e.name || "—")} <span class="font-mono text-xs text-slate-500">${_esc(e.symbol || "")}</span></div>
+    <div class="text-xs text-slate-500 mt-0.5">${_esc(e.exchange || "未定交易所")} · 申报融资 ${v}</div>
+    <div class="mt-2 text-xs text-slate-600">申报 ${_esc(e.filed_date || "—")} ${dTag}</div>
+  </div>`;
+}
+
+function _usPricedCard(e) {
+  const v = e.deal_value_usd ? "$" + (e.deal_value_usd / 1e6).toFixed(1) + "M" : "—";
+  const ip = e.issue_price ? "$" + e.issue_price : "—";
+  const sh = e.shares_offered ? (e.shares_offered / 1e6).toFixed(1) + "M" : "—";
+  const d = e.days_since_priced;
+  const dTag = (d === undefined || d === null) ? "" :
+               (d === 0 ? `<span class="text-emerald-700 font-semibold">今日定价</span>` :
+                d > 0 ? `<span class="text-slate-500">${d} 天前定价</span>` : "");
+  return `<div class="bg-white rounded-xl border border-slate-200 p-3">
+    <div class="font-bold text-slate-900 text-sm">${_esc(e.name || "—")} <span class="font-mono text-xs text-slate-500">${_esc(e.symbol || "")}</span></div>
+    <div class="text-xs text-slate-500 mt-0.5">${_esc(e.exchange || "")} · 发行 ${ip} · ${sh} · ${v}</div>
+    <div class="mt-2 text-xs text-slate-600">${_esc(e.priced_date || "—")} ${dTag}</div>
+  </div>`;
+}
+
+function _renderIpoSection_CN() {
+  const m = _ipoCurrentMarket();
+  const cal = m.ipo_calendar || {};
+  const upcoming = cal.upcoming_subscription || [];
+  const awaiting = cal.awaiting_listing || [];
+  const recent = cal.recently_listed || [];
+
+  const upEl = document.getElementById("ipo-upcoming");
+  if (upEl) upEl.innerHTML = upcoming.length
+    ? upcoming.map(_ipoCard).join("")
+    : `<div class="col-span-full bg-slate-50 rounded-xl border border-slate-200 p-4 text-sm text-slate-500">暂无即将申购的新股。</div>`;
+
+  const awEl = document.getElementById("ipo-awaiting");
+  if (awEl) awEl.innerHTML = awaiting.length
+    ? awaiting.map(_ipoCard).join("")
+    : `<div class="col-span-full bg-slate-50 rounded-xl border border-slate-200 p-4 text-sm text-slate-500">暂无已申购未上市标的。</div>`;
+
+  const rcEl = document.getElementById("ipo-recent");
+  if (rcEl) {
+    if (!recent.length) {
+      rcEl.innerHTML = `<div class="p-4 text-sm text-slate-500">近 30 日无新股上市。</div>`;
+    } else {
+      const rows = recent.map(e => `<tr class="border-b border-slate-100 last:border-0">
+        <td class="py-2 px-3 font-mono font-bold text-slate-900">${_esc(e.code || "")}</td>
+        <td class="py-2 px-3 text-slate-800">${_esc(e.name || "")}</td>
+        <td class="py-2 px-3 text-xs text-slate-500">${_ipoBoardLabel(e.board)}</td>
+        <td class="py-2 px-3 text-xs text-slate-600">${_esc(e.listing_date || "—")}</td>
+        <td class="py-2 px-3 text-right font-mono text-slate-700">${e.issue_price ? "¥" + e.issue_price : "—"}</td>
+        <td class="py-2 px-3 text-right font-mono text-slate-600">${e.pe_ratio !== null && e.pe_ratio !== undefined ? e.pe_ratio : "—"}</td>
+        <td class="py-2 px-3 text-xs text-slate-600">${_esc(e.theme || "")}</td>
+      </tr>`).join("");
+      rcEl.innerHTML = `<table class="w-full text-sm">
+        <thead class="text-xs text-slate-500 bg-slate-50 border-b border-slate-200">
+          <tr>
+            <th class="py-2 px-3 text-left">代码</th>
+            <th class="py-2 px-3 text-left">名称</th>
+            <th class="py-2 px-3 text-left">板块</th>
+            <th class="py-2 px-3 text-left">上市日</th>
+            <th class="py-2 px-3 text-right">发行价</th>
+            <th class="py-2 px-3 text-right">PE</th>
+            <th class="py-2 px-3 text-left">主题</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+    }
+  }
+}
+
+function _renderIpoSection_US() {
+  const m = _ipoCurrentMarket();
+  const cal = m.ipo_calendar || {};
+  const filed = cal.upcoming_filing || [];
+  const awaiting = cal.awaiting_listing || [];
+  const recent = cal.recently_listed || [];
+
+  const upEl = document.getElementById("ipo-upcoming");
+  if (upEl) upEl.innerHTML = filed.length
+    ? filed.slice(0, 12).map(_usFiledCard).join("")
+    : `<div class="col-span-full bg-slate-50 rounded-xl border border-slate-200 p-4 text-sm text-slate-500">近 60 天内 NASDAQ 暂无新 S-1 申报。</div>`;
+
+  const awEl = document.getElementById("ipo-awaiting");
+  if (awEl) awEl.innerHTML = awaiting.length
+    ? awaiting.slice(0, 12).map(_usPricedCard).join("")
+    : `<div class="col-span-full bg-slate-50 rounded-xl border border-slate-200 p-4 text-sm text-slate-500">近 7 天 NASDAQ 暂无新定价。</div>`;
+
+  const rcEl = document.getElementById("ipo-recent");
+  if (rcEl) {
+    if (!recent.length) {
+      rcEl.innerHTML = `<div class="p-4 text-sm text-slate-500">近 30 日 NASDAQ 暂无上市记录。</div>`;
+    } else {
+      const rows = recent.map(e => {
+        const v = e.deal_value_usd ? "$" + (e.deal_value_usd / 1e6).toFixed(1) + "M" : "—";
+        return `<tr class="border-b border-slate-100 last:border-0">
+          <td class="py-2 px-3 font-mono font-bold text-slate-900">${_esc(e.symbol || "")}</td>
+          <td class="py-2 px-3 text-slate-800">${_esc(e.name || "")}</td>
+          <td class="py-2 px-3 text-xs text-slate-500">${_esc(e.exchange || "")}</td>
+          <td class="py-2 px-3 text-xs text-slate-600">${_esc(e.priced_date || "—")} <span class="text-slate-400">(${e.days_since_priced || 0}天前)</span></td>
+          <td class="py-2 px-3 text-right font-mono text-slate-700">${e.issue_price ? "$" + e.issue_price : "—"}</td>
+          <td class="py-2 px-3 text-right font-mono text-slate-600">${e.shares_offered ? (e.shares_offered / 1e6).toFixed(1) + "M" : "—"}</td>
+          <td class="py-2 px-3 text-right font-mono text-slate-600">${v}</td>
+        </tr>`;
+      }).join("");
+      rcEl.innerHTML = `<table class="w-full text-sm">
+        <thead class="text-xs text-slate-500 bg-slate-50 border-b border-slate-200">
+          <tr>
+            <th class="py-2 px-3 text-left">代码</th>
+            <th class="py-2 px-3 text-left">名称</th>
+            <th class="py-2 px-3 text-left">交易所</th>
+            <th class="py-2 px-3 text-left">定价日</th>
+            <th class="py-2 px-3 text-right">发行价</th>
+            <th class="py-2 px-3 text-right">股数</th>
+            <th class="py-2 px-3 text-right">融资额</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+    }
+  }
+}
+
+function _renderIpoSection_HK() {
+  const m = _ipoCurrentMarket();
+  const note = m.note || "港股数据源受限。";
+  const links = m.external_links || [];
+  const linksHtml = links.map(x => `<a href="${_esc(x.url)}" target="_blank" class="inline-block px-3 py-1.5 text-sm rounded border border-violet-300 text-violet-700 hover:bg-violet-50 mr-2 mt-1">${_esc(x.label)} ↗</a>`).join("");
+  const html = `<div class="col-span-full bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-900">
+    <div class="font-semibold mb-2">⚠️ 港股 IPO/解禁/次新股数据暂未接入</div>
+    <div class="mb-3">${_esc(note)}</div>
+    <div>${linksHtml}</div>
+  </div>`;
+  const upEl = document.getElementById("ipo-upcoming");
+  const awEl = document.getElementById("ipo-awaiting");
+  const rcEl = document.getElementById("ipo-recent");
+  if (upEl) upEl.innerHTML = html;
+  if (awEl) awEl.innerHTML = "";
+  if (rcEl) rcEl.innerHTML = "";
+}
+
+function _renderIpoSection() {
+  if (_ipoMarket === "us") _renderIpoSection_US();
+  else if (_ipoMarket === "hk") _renderIpoSection_HK();
+  else _renderIpoSection_CN();
+}
+
+function _renderUnlockTable() {
+  const m = _ipoCurrentMarket();
+  const all = m.unlock_radar || [];
+  const el = document.getElementById("ipo-unlock-table");
+
+  if (_ipoMarket === "us") {
+    if (el) el.innerHTML = `<div class="p-6 text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-xl">
+      <strong>美股解禁数据暂未接入。</strong><br>
+      美股 IPO lockup 通常 90-180 天，相关数据需付费源解析 S-1 招股书。
+      可外部查：<a href="https://www.nasdaq.com/market-activity/lockup-expirations" target="_blank" class="text-violet-700 hover:underline">NASDAQ Lockup Expirations</a>
+    </div>`;
+    const ctEl = document.getElementById("unlock-count");
+    if (ctEl) ctEl.textContent = "（美股数据未接入）";
+    return;
+  }
+  if (_ipoMarket === "hk") {
+    if (el) el.innerHTML = `<div class="p-6 text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-xl">
+      <strong>港股解禁数据暂未接入。</strong><br>
+      可外部查：<a href="https://www.hkexnews.hk/" target="_blank" class="text-violet-700 hover:underline">HKEXnews disclosure</a>
+    </div>`;
+    const ctEl = document.getElementById("unlock-count");
+    if (ctEl) ctEl.textContent = "（港股数据未接入）";
+    return;
+  }
+
+  let list = all;
+  if (_unlockFilter === "pool") list = all.filter(x => x.in_holdings || x.in_watchlist);
+  else if (_unlockFilter === "high") list = all.filter(x => x.stress_score >= 70);
+  else if (_unlockFilter === "week") list = all.filter(x => x.days_to_unlock <= 7);
+
+  const ctEl = document.getElementById("unlock-count");
+  if (ctEl) ctEl.textContent = `${list.length} / ${all.length} 条`;
+
+  ["all","pool","high","week"].forEach(k => {
+    const b = document.getElementById("unlock-filter-" + k);
+    if (b) {
+      b.classList.toggle("border-violet-500", k === _unlockFilter);
+      b.classList.toggle("bg-violet-50", k === _unlockFilter);
+      b.classList.toggle("text-violet-700", k === _unlockFilter);
+    }
+  });
+
+  if (!el) return;
+  if (!list.length) {
+    el.innerHTML = `<div class="p-6 text-center text-sm text-slate-500">当前筛选条件下无解禁事件。</div>`;
+    return;
+  }
+  const rows = list.slice(0, 200).map(x => {
+    const poolTag = x.in_holdings
+      ? `<span class="px-1.5 py-0.5 rounded text-[10px] bg-rose-100 text-rose-700">持仓</span>`
+      : x.in_watchlist ? `<span class="px-1.5 py-0.5 rounded text-[10px] bg-amber-100 text-amber-700">自选</span>` : "";
+    return `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50">
+      <td class="py-2 px-3 font-mono font-bold text-slate-900">${_esc(x.code)}</td>
+      <td class="py-2 px-3 text-slate-800">${_esc(x.name || "")} ${poolTag}</td>
+      <td class="py-2 px-3 text-xs text-slate-500">${_ipoBoardLabel(x.board)}</td>
+      <td class="py-2 px-3 text-xs text-slate-600">${_esc(x.unlock_date)}</td>
+      <td class="py-2 px-3 text-right text-xs ${x.days_to_unlock <= 7 ? "text-rose-700 font-semibold" : "text-slate-600"}">${x.days_to_unlock} 天</td>
+      <td class="py-2 px-3 text-right font-mono text-slate-700">${x.market_value_yi}亿</td>
+      <td class="py-2 px-3 text-right font-mono text-slate-700">${x.pct_of_float}%</td>
+      <td class="py-2 px-3 text-center">${_ipoStressBadge(x.stress_score)}</td>
+      <td class="py-2 px-3 text-xs text-slate-500">${_esc(x.category || "")}</td>
+    </tr>`;
+  }).join("");
+  el.innerHTML = `<table class="w-full text-sm">
+    <thead class="text-xs text-slate-500 bg-slate-50 border-b border-slate-200">
+      <tr>
+        <th class="py-2 px-3 text-left">代码</th>
+        <th class="py-2 px-3 text-left">名称</th>
+        <th class="py-2 px-3 text-left">板块</th>
+        <th class="py-2 px-3 text-left">解禁日</th>
+        <th class="py-2 px-3 text-right">距今</th>
+        <th class="py-2 px-3 text-right">市值</th>
+        <th class="py-2 px-3 text-right">占流通</th>
+        <th class="py-2 px-3 text-center" title="压力分 = 占流通比例 × 80 + log10(市值) × 5">压力</th>
+        <th class="py-2 px-3 text-left">类型</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>${list.length > 200 ? `<div class="text-xs text-slate-500 px-3 py-2 border-t border-slate-100">仅显示前 200 条（共 ${list.length} 条）</div>` : ""}`;
+}
+
+function _renderJuniorTable_US() {
+  const m = _ipoCurrentMarket();
+  const all = m.junior_pool || [];
+  const el = document.getElementById("ipo-junior-table");
+  // 美股专属筛选(只支持 broken / all,板块按交易所不分)
+  let list = all;
+  if (_juniorFilter === "broken") list = all.filter(x => (x.vs_issue_pct || 0) < 0);
+  const ctEl = document.getElementById("junior-count");
+  if (ctEl) ctEl.textContent = `${list.length} / ${all.length} 只 (NASDAQ 24 月 priced,已剔除 SPAC)`;
+
+  if (!el) return;
+  if (!list.length) {
+    el.innerHTML = `<div class="p-6 text-sm text-slate-500">当前筛选下无候选标的。</div>`;
+    return;
+  }
+  const rows = list.slice(0, 200).map(x => {
+    const poolTag = x.in_holdings ? `<span class="px-1.5 py-0.5 rounded text-[10px] bg-rose-100 text-rose-700">持仓</span>` :
+                    x.in_watchlist ? `<span class="px-1.5 py-0.5 rounded text-[10px] bg-amber-100 text-amber-700">自选</span>` : "";
+    const tags = (x.tags || []).map(t => `<span class="px-1.5 py-0.5 rounded text-[10px] bg-slate-100 text-slate-600 mr-1">${_esc(t)}</span>`).join("");
+    const vsClass = x.vs_issue_pct === null ? "text-slate-400" :
+                     x.vs_issue_pct < -50 ? "text-rose-700 font-semibold" :
+                     x.vs_issue_pct < 0 ? "text-rose-600" : "text-emerald-700";
+    const vsText = x.vs_issue_pct === null ? "—" : (x.vs_issue_pct > 0 ? "+" : "") + x.vs_issue_pct + "%";
+    const bd = x.score_breakdown || {};
+    const tooltip = `折发行 ${bd.discount_to_issue || 0} + 时间衰减 ${bd.time_decay || 0} + 流动性 ${bd.liquidity || 0} + 池子 ${bd.in_your_pool || 0}`;
+    const deal = x.deal_value_usd ? "$" + (x.deal_value_usd / 1e6).toFixed(0) + "M" : "—";
+    return `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50">
+      <td class="py-2 px-3 font-mono font-bold text-slate-900">${_esc(x.symbol)}</td>
+      <td class="py-2 px-3 text-slate-800">${_esc(x.name || "")} ${poolTag}</td>
+      <td class="py-2 px-3 text-xs text-slate-500">${_esc(x.exchange || "")}</td>
+      <td class="py-2 px-3 text-xs text-slate-600">${_esc(x.ipo_date)} <span class="text-slate-400">(${x.months_listed}月)</span></td>
+      <td class="py-2 px-3 text-right font-mono text-slate-700">$${x.issue_price}</td>
+      <td class="py-2 px-3 text-right font-mono text-slate-700">${x.current_price ? "$" + x.current_price : "—"}</td>
+      <td class="py-2 px-3 text-right font-mono ${vsClass}">${vsText}</td>
+      <td class="py-2 px-3 text-right font-mono text-slate-500">${deal}</td>
+      <td class="py-2 px-3 text-center" title="${tooltip}">${_ipoJuniorScoreBadge(x.score)}</td>
+      <td class="py-2 px-3 text-xs">${tags}</td>
+    </tr>`;
+  }).join("");
+  el.innerHTML = `<table class="w-full text-sm">
+    <thead class="text-xs text-slate-500 bg-slate-50 border-b border-slate-200">
+      <tr>
+        <th class="py-2 px-3 text-left">代码</th>
+        <th class="py-2 px-3 text-left">名称</th>
+        <th class="py-2 px-3 text-left">交易所</th>
+        <th class="py-2 px-3 text-left">上市日</th>
+        <th class="py-2 px-3 text-right">发行价</th>
+        <th class="py-2 px-3 text-right">最新价</th>
+        <th class="py-2 px-3 text-right">vs 发行</th>
+        <th class="py-2 px-3 text-right">融资额</th>
+        <th class="py-2 px-3 text-center" title="0..100,4 维加权">底部分</th>
+        <th class="py-2 px-3 text-left">标签</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>${list.length > 200 ? `<div class="text-xs text-slate-500 px-3 py-2 border-t border-slate-100">仅显示前 200 条(共 ${list.length} 只)</div>` : ""}`;
+}
+
+function _renderJuniorTable_HK() {
+  const el = document.getElementById("ipo-junior-table");
+  const ctEl = document.getElementById("junior-count");
+  if (ctEl) ctEl.textContent = "（港股数据未接入）";
+  if (el) el.innerHTML = `<div class="p-6 text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-xl">
+    <strong>港股次新股池暂未接入。</strong><br>
+    可外部查：<a href="http://www.aastocks.com/sc/stocks/market/ipo/aftermarket/companysummary" target="_blank" class="text-violet-700 hover:underline">AAStocks 新上市公司</a>
+    · <a href="https://www.hkexnews.hk/listedco/listconews/newlist/sehknewlist.htm" target="_blank" class="text-violet-700 hover:underline">HKEX 新上市</a>
+  </div>`;
+}
+
+function _renderJuniorTable() {
+  if (_ipoMarket === "us") return _renderJuniorTable_US();
+  if (_ipoMarket === "hk") return _renderJuniorTable_HK();
+  const m = _ipoCurrentMarket();
+  const all = m.junior_pool || [];
+  let list = all;
+  if (_juniorFilter === "broken") list = all.filter(x => x.broken_issue);
+  else if (_juniorFilter === "star") list = all.filter(x => x.board === "star");
+  else if (_juniorFilter === "chinext") list = all.filter(x => x.board === "chinext");
+  else if (_juniorFilter === "main") list = all.filter(x => x.board === "main");
+
+  const ctEl = document.getElementById("junior-count");
+  if (ctEl) ctEl.textContent = `${list.length} / ${all.length} 只`;
+
+  ["all","broken","star","chinext","main"].forEach(k => {
+    const b = document.getElementById("junior-filter-" + k);
+    if (b) {
+      b.classList.toggle("border-violet-500", k === _juniorFilter);
+      b.classList.toggle("bg-violet-50", k === _juniorFilter);
+      b.classList.toggle("text-violet-700", k === _juniorFilter);
+    }
+  });
+
+  const el = document.getElementById("ipo-junior-table");
+  if (!el) return;
+  if (!list.length) {
+    el.innerHTML = `<div class="p-6 text-center text-sm text-slate-500">当前筛选条件下无候选标的。</div>`;
+    return;
+  }
+  const rows = list.slice(0, 200).map(x => {
+    const tags = (x.tags || []).map(t => `<span class="px-1.5 py-0.5 rounded text-[10px] bg-slate-100 text-slate-600 mr-1">${_esc(t)}</span>`).join("");
+    const vsIssueClass = x.vs_issue_pct < -20 ? "text-rose-700 font-semibold" : x.vs_issue_pct < 0 ? "text-rose-600" : "text-emerald-700";
+    const breakdown = x.score_breakdown || {};
+    const tooltip = `折发行 ${breakdown.discount_to_issue || 0} + 时间衰减 ${breakdown.time_decay || 0} + 首日溢价 ${breakdown.first_day_premium || 0} + 较首日 ${breakdown.vs_first_close || 0}`;
+    return `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50">
+      <td class="py-2 px-3 font-mono font-bold text-slate-900">${_esc(x.code)}</td>
+      <td class="py-2 px-3 text-slate-800">${_esc(x.name || "")}</td>
+      <td class="py-2 px-3 text-xs text-slate-500">${_ipoBoardLabel(x.board)}</td>
+      <td class="py-2 px-3 text-xs text-slate-600">${_esc(x.list_date)} <span class="text-slate-400">(${x.months_listed}月)</span></td>
+      <td class="py-2 px-3 text-right font-mono text-slate-700">¥${x.issue_price}</td>
+      <td class="py-2 px-3 text-right font-mono text-slate-700">¥${x.current_price}</td>
+      <td class="py-2 px-3 text-right font-mono ${vsIssueClass}">${x.vs_issue_pct > 0 ? "+" : ""}${x.vs_issue_pct}%</td>
+      <td class="py-2 px-3 text-right font-mono text-slate-600">${x.vs_first_close_pct !== null ? (x.vs_first_close_pct > 0 ? "+" : "") + x.vs_first_close_pct + "%" : "—"}</td>
+      <td class="py-2 px-3 text-center" title="${tooltip}">${_ipoJuniorScoreBadge(x.score)}</td>
+      <td class="py-2 px-3 text-xs">${tags}</td>
+    </tr>`;
+  }).join("");
+  el.innerHTML = `<table class="w-full text-sm">
+    <thead class="text-xs text-slate-500 bg-slate-50 border-b border-slate-200">
+      <tr>
+        <th class="py-2 px-3 text-left">代码</th>
+        <th class="py-2 px-3 text-left">名称</th>
+        <th class="py-2 px-3 text-left">板块</th>
+        <th class="py-2 px-3 text-left">上市日</th>
+        <th class="py-2 px-3 text-right">发行价</th>
+        <th class="py-2 px-3 text-right">最新价</th>
+        <th class="py-2 px-3 text-right">vs 发行</th>
+        <th class="py-2 px-3 text-right">vs 首日收盘</th>
+        <th class="py-2 px-3 text-center" title="0..100，四维加权">底部分</th>
+        <th class="py-2 px-3 text-left">标签</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>${list.length > 200 ? `<div class="text-xs text-slate-500 px-3 py-2 border-t border-slate-100">仅显示前 200 条（共 ${list.length} 只）</div>` : ""}`;
+}
+
+function switchIpoJuniorSub(sub) {
+  _ipoJuniorSub = sub;
+  ["ipo","unlock","junior"].forEach(k => {
+    const b = document.getElementById("ipo-sub-btn-" + k);
+    const p = document.getElementById("ipo-sub-" + k);
+    if (b) {
+      b.classList.toggle("border-violet-500", k === sub);
+      b.classList.toggle("text-violet-700", k === sub);
+      b.classList.toggle("border-transparent", k !== sub);
+      b.classList.toggle("text-slate-500", k !== sub);
+    }
+    if (p) p.style.display = (k === sub) ? "" : "none";
+  });
+  if (sub === "ipo") _renderIpoSection();
+  else if (sub === "unlock") _renderUnlockTable();
+  else if (sub === "junior") _renderJuniorTable();
+}
+
+function filterUnlock(k) { _unlockFilter = k; _renderUnlockTable(); }
+function filterJunior(k) { _juniorFilter = k; _renderJuniorTable(); }
+
+function switchIpoMarket(market) {
+  _ipoMarket = market;
+  ["cn", "us", "hk"].forEach(k => {
+    const b = document.getElementById("ipo-market-" + k);
+    if (b) {
+      const active = k === market;
+      b.classList.toggle("border-violet-500", active);
+      b.classList.toggle("bg-violet-50", active);
+      b.classList.toggle("text-violet-700", active);
+      b.classList.toggle("font-semibold", active);
+    }
+  });
+  // 重置过滤器 + 隐藏 A 股专属过滤按钮
+  _unlockFilter = "all";
+  _juniorFilter = "all";
+  const isCN = market === "cn";
+  document.querySelectorAll(".unlock-filter-btn, .junior-filter-btn").forEach(el => {
+    el.style.display = isCN ? "" : "none";
+  });
+  const hint = document.getElementById("ipo-market-hint");
+  if (hint) {
+    if (market === "us") hint.textContent = "美股：IPO 日历 ✓ · 解禁数据未接入 · 次新股池仅 system_universe 范围";
+    else if (market === "hk") hint.textContent = "港股：开源数据源受限，仅显示外链入口";
+    else hint.textContent = "A 股：数据最全（IPO/解禁/次新股三件齐备）";
+  }
+  // 重新渲染当前子区
+  if (_ipoJuniorSub === "ipo") _renderIpoSection();
+  else if (_ipoJuniorSub === "unlock") _renderUnlockTable();
+  else if (_ipoJuniorSub === "junior") _renderJuniorTable();
+  _updateIpoMeta();
+}
+
+function _updateIpoMeta() {
+  const meta = document.getElementById("ipo-junior-meta");
+  if (!meta || !JUNIOR_RADAR || !JUNIOR_RADAR.generated_at) return;
+  const gen = String(JUNIOR_RADAR.generated_at).slice(0, 19);
+  const m = _ipoCurrentMarket();
+  let info = "";
+  if (_ipoMarket === "cn") {
+    const ip = m.ipo_calendar || {};
+    info = `IPO 申购 ${(ip.upcoming_subscription || []).length} / 待上市 ${(ip.awaiting_listing || []).length} / 近上市 ${(ip.recently_listed || []).length} · 解禁 ${(m.unlock_radar || []).length} 条 · 次新股 ${(m.junior_pool || []).length} 只`;
+  } else if (_ipoMarket === "us") {
+    const ip = m.ipo_calendar || {};
+    info = `即将申报 ${(ip.upcoming_filing || []).length} / 已定价未上市 ${(ip.awaiting_listing || []).length} / 近 30 日上市 ${(ip.recently_listed || []).length} · 次新股 ${(m.junior_pool || []).length} 只 (NASDAQ priced 24 月)`;
+  } else {
+    info = "数据源受限（详见页面说明）";
+  }
+  meta.textContent = `生成于 ${gen} · ${info}`;
+}
+
+function renderJuniorRadar() {
+  switchIpoMarket(_ipoMarket);
+  switchIpoJuniorSub(_ipoJuniorSub);
+}
 
 // ============ 持仓管理（DuckDB · real_holdings / model_sim_holdings 两本账） ============
 const STORAGE_KEY = "ai_portfolio_holdings_v1";  // 仅用于首次启动检测+一次性导入到 DuckDB,导入完清空
@@ -4929,7 +5542,9 @@ let FX_AS_OF = "{FX_RATES_AS_OF}";
 // ───────── 持仓判断/每日体检渲染 ─────────
 // 单一数据源:后端 compute_holdings_verdict + real_holding_review。前端只渲染,不重算业务规则。
 let _holdingsVerdictCache = null;
-let _realHoldingReviewCache = null;
+let _realHoldingReviewCache = (
+  REAL_HOLDING_REVIEW_EMBEDDED && REAL_HOLDING_REVIEW_EMBEDDED.items && REAL_HOLDING_REVIEW_EMBEDDED.items.length
+) ? _mergeReviewHeatFromEmbedded(REAL_HOLDING_REVIEW_EMBEDDED) : null;
 let _realHoldingReviewHistoryCache = null;  // {symbol: [{as_of_date, action_label, action_priority, pnl_pct, ...}]}
 let _realHoldingAssetFilter = "all";
 
@@ -4955,10 +5570,45 @@ function _assetMeta(kind) {
   return _ASSET_META[kind] || _ASSET_META.equity;
 }
 
-// 持仓表股票列名字下方的小字区:行业 / 主营业务 / 一句话解释。
-// 全部从 WATCHLIST_CHAIN_INFO 取(已合并 manual_watchlist.industry/business + chain_metadata.layman_intro)。
-// 设计原则:只显示已填字段;'N/A' 视为未填;全空就一行 hint 提示去编辑。
-function _renderHoldingMetaLines(code, holdingId) {
+// 板块热度一行: XLK 60d +30.1% · 板块偏强（来自 real_holding_review.industry_heat）
+function _industryHeatMetaLine(reviewItem) {
+  const h = reviewItem && reviewItem.industry_heat;
+  if (!h || !h.industry_heat_badge || h.industry_heat_badge === "unknown") return "";
+  const etf = h.etf_ticker || "—";
+  const ret = h.sector_return_60d_pct;
+  const retS = ret == null ? "—" : `${Number(ret) >= 0 ? "+" : ""}${Number(ret).toFixed(1)}%`;
+  const label = h.industry_heat_badge === "hot" ? "板块偏强" : h.industry_heat_badge === "cold" ? "板块偏弱" : "板块中性";
+  const cls = h.industry_heat_badge === "hot"
+    ? "text-orange-700 font-semibold"
+    : h.industry_heat_badge === "cold"
+      ? "text-sky-700 font-semibold"
+      : "text-slate-600";
+  return `<div class="text-[10px] font-mono ${cls} leading-tight" title="${_esc(h.hint || "")}">${_esc(etf)} 60d ${_esc(retS)} · ${_esc(label)}</div>`;
+}
+
+function _mergeReviewHeatFromEmbedded(payload) {
+  const emb = REAL_HOLDING_REVIEW_EMBEDDED;
+  if (!payload || !payload.items || !emb || !emb.items || !_reviewPayloadHasHeat(emb)) return payload;
+  const heatBy = {};
+  for (const it of emb.items) {
+    if (!_reviewItemHasHeat(it)) continue;
+    for (const alias of _holdingCodeAliases(it.code || it.symbol)) heatBy[alias] = it.industry_heat;
+  }
+  if (!Object.keys(heatBy).length) return payload;
+  payload.items = payload.items.map(it => {
+    if (_reviewItemHasHeat(it)) return it;
+    for (const alias of _holdingCodeAliases(it.code || it.symbol)) {
+      if (heatBy[alias]) return Object.assign({}, it, {industry_heat: heatBy[alias]});
+    }
+    return it;
+  });
+  return payload;
+}
+
+// 持仓表股票列名字下方的小字区:板块热度 + 行业 / 主营业务 / 一句话解释。
+// 行业/主营/简介从 WATCHLIST_CHAIN_INFO 取;板块热度从每日体检快照取。
+function _renderHoldingMetaLines(code, holdingId, reviewItem) {
+  const heatLine = _industryHeatMetaLine(reviewItem || _lookupReviewItem(code));
   const info = (WATCHLIST_CHAIN_INFO || {})[code] || {};
   const trunc = (s, n) => {
     s = String(s || "").trim();
@@ -4981,12 +5631,13 @@ function _renderHoldingMetaLines(code, holdingId) {
   if (intro) {
     lines.push(`<div class="flex gap-1 leading-tight"><span class="text-slate-400 text-[10px] shrink-0">简介</span><span class="text-slate-600 text-[11px] truncate" title="${_esc(intro)}">${_esc(trunc(intro, 24))}</span></div>`);
   }
-  if (!lines.length) {
+  if (!lines.length && !heatLine) {
     // 全空:一行细弱 hint,点击直接打开编辑器
     const editAttr = holdingId ? `onclick="editRealHolding(${holdingId})" class="cursor-pointer text-slate-300 hover:text-violet-500 text-[10px] mt-1 italic"` : 'class="text-slate-300 text-[10px] mt-1 italic"';
     return `<div ${editAttr} title="点编辑展开「补充信息」填行业 / 主营业务 / 一句话">✏️ 点编辑补充行业 / 主营</div>`;
   }
-  return `<div class="mt-1 space-y-0.5">${lines.join("")}</div>`;
+  const body = lines.length ? `<div class="mt-1 space-y-0.5">${lines.join("")}</div>` : "";
+  return `${heatLine}${body}`;
 }
 
 function _assetClassForRow(x, verdict) {
@@ -5014,13 +5665,34 @@ async function _loadHoldingsVerdict() {
   } catch (e) { _holdingsVerdictCache = null; return null; }
 }
 
+function _reviewItemHasHeat(item) {
+  const h = item && item.industry_heat;
+  return !!(h && h.industry_heat_badge && h.industry_heat_badge !== "unknown");
+}
+
+function _reviewPayloadHasHeat(payload) {
+  return !!(payload && payload.items && payload.items.some(_reviewItemHasHeat));
+}
+
 async function _loadRealHoldingReview() {
+  const embedded = (REAL_HOLDING_REVIEW_EMBEDDED && REAL_HOLDING_REVIEW_EMBEDDED.items && REAL_HOLDING_REVIEW_EMBEDDED.items.length)
+    ? REAL_HOLDING_REVIEW_EMBEDDED : null;
+  if (embedded) _realHoldingReviewCache = _mergeReviewHeatFromEmbedded(embedded);
   try {
     const r = await fetch(WATCHLIST_API_BASE + "/api/real-holdings/daily-review/latest");
-    if (!r.ok) { _realHoldingReviewCache = null; return null; }
-    _realHoldingReviewCache = await r.json();
+    if (!r.ok) return _realHoldingReviewCache;
+    const api = await r.json();
+    if (!api || !api.items || !api.items.length) return _realHoldingReviewCache;
+    // 旧版 API 进程可能未带 industry_heat：有嵌入数据时优先嵌入，除非 API 已含完整字段
+    if (_reviewPayloadHasHeat(api) || !embedded) {
+      _realHoldingReviewCache = _mergeReviewHeatFromEmbedded(api);
+    } else {
+      _realHoldingReviewCache = _mergeReviewHeatFromEmbedded(_realHoldingReviewCache);
+    }
     return _realHoldingReviewCache;
-  } catch (e) { _realHoldingReviewCache = null; return null; }
+  } catch (e) {
+    return _realHoldingReviewCache;
+  }
 }
 
 // 历史轨迹 (近 14 日) — 用于回答「这只票今天 action 为什么变了」。
@@ -5263,6 +5935,54 @@ function _hintIcon(title) {
     title="${_esc(title || "查看说明")}">?</span>`;
 }
 
+function _industryHeatCell(item) {
+  const h = item && item.industry_heat;
+  if (!h || !h.industry_heat_badge || h.industry_heat_badge === "unknown") {
+    return `<td class="px-3 py-2 text-center text-[11px] text-slate-400 whitespace-nowrap" title="需先跑 real_holding_review 且 openbb 行业轮动可用">—</td>`;
+  }
+  const badge = h.industry_heat_badge;
+  const cls = badge === "hot"
+    ? "bg-orange-100 text-orange-800 border-orange-200"
+    : badge === "cold"
+      ? "bg-sky-100 text-sky-800 border-sky-200"
+      : "bg-slate-100 text-slate-600 border-slate-200";
+  const etf = h.etf_ticker || "—";
+  const ret = h.sector_return_60d_pct;
+  const retS = ret == null ? "—" : `${Number(ret) >= 0 ? "+" : ""}${Number(ret).toFixed(1)}%`;
+  const label = badge === "hot" ? "偏强" : badge === "cold" ? "偏弱" : "中性";
+  const etfName = (h.etf_name || "").split("(")[0].trim();
+  return `<td class="px-3 py-2 text-center whitespace-nowrap" title="${_esc(h.hint || "")}">
+    <div class="text-[10px] font-mono text-slate-600">${_esc(etf)}</div>
+    <div class="inline-flex mt-0.5 px-1.5 py-0.5 rounded text-[11px] font-semibold border ${cls}">${_esc(retS)} · ${_esc(label)}</div>
+    <div class="text-[10px] text-slate-500 mt-0.5 max-w-[110px] truncate" title="${_esc(etfName)}">${_esc(etfName || "")}</div>
+  </td>`;
+}
+
+function _suggestedSizeCell(item) {
+  const adv = item.size_advisory;
+  if (!adv || typeof adv !== "object") {
+    return `<td class="px-3 py-2 text-right text-[11px] text-slate-400 whitespace-nowrap" title="暂无规模建议（需行情+目标仓位）"><div>—</div></td>`;
+  }
+  const dir = adv.direction || "hold";
+  const dirLabel = dir === "add" ? "可考虑加仓" : dir === "trim" ? "可考虑减仓" : "暂不调";
+  const shares = adv.suggested_shares;
+  const rmb = adv.suggested_action_rmb;
+  const batches = adv.suggested_batches || 3;
+  const note = adv.suggested_batch_note || `可考虑分${batches}批`;
+  const capLine = adv.over_hard_cap
+    ? `<div class="text-[10px] text-rose-600">超25%红线</div>`
+    : (adv.kelly_cap_pct != null ? `<div class="text-[10px] text-slate-400">Kelly上限 ${(adv.kelly_cap_pct * 100).toFixed(1)}%</div>` : "");
+  const sizeLine = shares != null
+    ? `<div class="font-mono text-slate-800">≈ ${shares} 股</div>`
+    : (rmb != null ? `<div class="font-mono text-slate-800">≈ ${Math.round(rmb).toLocaleString()} RMB</div>` : `<div class="text-slate-500">${_esc(dirLabel)}</div>`);
+  return `<td class="px-3 py-2 text-right whitespace-nowrap" title="${_esc(note)} · advisory only">
+    <div class="text-[10px] text-violet-600">${_esc(dirLabel)}</div>
+    ${sizeLine}
+    <div class="text-[10px] text-slate-500">${_esc(note)}</div>
+    ${capLine}
+  </td>`;
+}
+
 function _reviewCell(item) {
   const action = item.action_label || "未评估";
   const meta = _REVIEW_ACTION_META[action] || {cls: "bg-slate-50 text-slate-600 border-slate-200"};
@@ -5434,40 +6154,6 @@ function _renderVerdictAggregateCard() {
               </div>`;
     }).join("");
   }
-}
-
-function _renderTodayHoldingsCheckup() {
-  const box = document.getElementById("today-holdings-checkup");
-  const body = document.getElementById("today-holdings-checkup-body");
-  if (!box || !body) return;
-  box.style.display = "";  // 始终显示,空态也保留位置让用户知道决策台有这块
-  const v = _holdingsVerdictCache;
-  if (!v || !v.holdings || !v.holdings.length) {
-    body.innerHTML = '<span class="text-slate-500 italic">暂无真实持仓 · 去「我的持仓」录入后,这里会显示 7 档判断总览</span>';
-    return;
-  }
-  const s = v.summary || {};
-  const n = v.holdings.length;
-  const assetParts = _ASSET_ORDER
-    .filter(k => k !== "cash" && (s["asset_" + k] || 0) > 0)
-    .map(k => `${_assetMeta(k).emoji}${_assetMeta(k).text}${s["asset_" + k]}`);
-  const assetLine = assetParts.length ? ` · ${assetParts.join(" · ")}` : "";
-  const issues = (s.stoploss_breached||0) + (s.stoploss_watched||0) + (s.model_weakened||0)
-               + (s.near_event||0) + (s.weight_off||0);
-  const needsFix = s.coverage_needs_fix || 0;
-  if (issues === 0) {
-    const fixText = needsFix ? ` · <span class="text-rose-700">⚠️ ${needsFix} 只代码/行情待修正</span>` : "";
-    body.innerHTML = `持仓 <strong>${n}</strong> 只${assetLine} · <span class="text-emerald-700">🟢 无主动告警</span>${fixText}`;
-    return;
-  }
-  const parts = [];
-  if (s.stoploss_breached) parts.push(`<span class="text-rose-700">🔴 ${s.stoploss_breached} 需复查</span>`);
-  if (s.stoploss_watched)  parts.push(`<span class="text-amber-700">🟡 ${s.stoploss_watched} 接近止损</span>`);
-  if (s.model_weakened)    parts.push(`<span class="text-orange-700">⚠️ ${s.model_weakened} 模型转弱</span>`);
-  if (s.near_event)        parts.push(`<span class="text-sky-700">📅 ${s.near_event} 临近事件</span>`);
-  if (s.weight_off)        parts.push(`<span class="text-violet-700">🎯 ${s.weight_off} 偏离目标</span>`);
-  if (needsFix)            parts.push(`<span class="text-rose-700">⚠️ ${needsFix} 待修正</span>`);
-  body.innerHTML = `持仓 <strong>${n}</strong> 只${assetLine} · ` + parts.join(" · ");
 }
 
 function getCurrentPriceRMB(code) {
@@ -5970,7 +6656,6 @@ async function renderRealHoldings() {
   const holdingsFetchFailed = !hRes || !hRes.ok;
   try { if (hRes && hRes.ok) _realHoldingsCache = await hRes.json(); } catch (e) {}
   _renderVerdictAggregateCard();
-  _renderTodayHoldingsCheckup();
   _holdingsCache = _realHoldingsCache.concat(_simHoldingsCache.map(h => ({...h, source: "ai_plan"})));
   const list = document.getElementById("real-form-code-list");
   if (list && !list.innerHTML) list.innerHTML = RECORDS.map(r => `<option value="${r.code}">${r.name}</option>`).join("");
@@ -6016,7 +6701,7 @@ async function renderRealHoldings() {
           ? "无法读取持仓：DuckDB 正被 daily_refresh 等脚本占用，请稍后再点刷新。"
           : "无法连接本地 API；登录后应由 launchd 自动启动（com.linearview.stockassistant.api）。")
       : "暂无持仓 · 点击右上角「+ 录入持仓」添加";
-    tbody.innerHTML = `<tr><td colspan="12" class="text-center ${holdingsFetchFailed ? "text-amber-800" : "text-slate-500"} py-8">${emptyMsg}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="14" class="text-center ${holdingsFetchFailed ? "text-amber-800" : "text-slate-500"} py-8">${emptyMsg}</td></tr>`;
     const realAlloc = document.getElementById("chart-real-allocation");
     const realTheme = document.getElementById("chart-real-theme");
     if (realAlloc) realAlloc.innerHTML = '<div class="text-sm text-slate-400 p-6">暂无持仓分布</div>';
@@ -6217,13 +6902,13 @@ async function renderRealHoldings() {
     if (!items || items.length === 0) return [];
     const meta = _assetMeta(asset);
     const subHeader = `<tr class="bg-slate-50 border-t-2 border-slate-200">
-      <td colspan="12" class="px-3 py-2 text-[13px] font-semibold text-slate-800">
+      <td colspan="14" class="px-3 py-2 text-[13px] font-semibold text-slate-800">
         ${meta.emoji} ${meta.text} · <span class="text-slate-500 font-normal">${items.length} 只 · ${meta.hint}</span>
       </td>
     </tr>`;
     return [subHeader, ...items.map(x => _renderHoldingRow(x, x._verdict, x._cls, CLASS_META[x._cls], x._reviewItem || _lookupReviewItem(x.code)))];
   }).join("");
-  tbody.innerHTML = rendered || '<tr><td colspan="12" class="text-center text-slate-500 py-8">这个类别暂无持仓</td></tr>';
+  tbody.innerHTML = rendered || '<tr><td colspan="14" class="text-center text-slate-500 py-8">这个类别暂无持仓</td></tr>';
 
   function _renderHoldingRow(x, verdict, cls, meta, reviewItem) {
   // 优先级: 用户手填的 holding.name > watchlist record.name > ticker fallback
@@ -6248,6 +6933,7 @@ async function renderRealHoldings() {
   const costTitle = `买入日汇率 ${entryFx.toFixed(4)}${fxAsOf ? " · " + fxAsOf : ""} · ${fxSource}`;
 
   const planWeightCell = _plainPlanWeightCell(cls, x);
+  const sizeCell = reviewItem ? _suggestedSizeCell(reviewItem) : `<td class="px-3 py-2 text-right text-[11px] text-slate-300">—</td>`;
   const verdictCell = reviewItem ? _reviewCell(reviewItem) : _fallbackVerdictCell(verdict, cls);
 
   // 买入日期 + 持有天数
@@ -6273,21 +6959,22 @@ async function renderRealHoldings() {
   return `<tr class="border-t border-slate-100 hover:bg-slate-50 group ${rowBg}">
       <td class="px-3 py-2 font-medium sticky left-0 ${stickyBg} group-hover:bg-slate-50 z-10 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.15)] w-[200px] min-w-[200px] max-w-[200px]">
         ${stockPill(x.code, {nameOverride: name})}
-        ${_renderHoldingMetaLines(x.code, x.h && x.h.id)}
+        ${_renderHoldingMetaLines(x.code, x.h && x.h.id, reviewItem)}
       </td>
       <td class="px-3 py-2 text-center whitespace-nowrap">${_badge(assetMeta, verdict ? verdict.asset_hint : assetMeta.hint)}</td>
       <td class="px-3 py-2 text-center whitespace-nowrap">${_badge(treatmentMeta, treatmentMeta.hint || meta.hint)}</td>
+      ${reviewItem ? _industryHeatCell(reviewItem) : `<td class="px-3 py-2 text-center text-[11px] text-slate-300">—</td>`}
       <td class="px-3 py-2 text-right font-mono whitespace-nowrap">
         ${Number(x.h.entry_price || 0).toFixed(2)} <span class="text-[10px] text-slate-400">${_esc(x.h.currency || _currencyForTicker(x.code))}</span>
         <div class="text-[11px] text-slate-500">${Number(x.h.shares || 0)} 股</div>
         <div class="text-[10px] text-slate-400">成本 ${x.costRmb.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
       </td>
+      <td class="px-3 py-2 text-right font-mono whitespace-nowrap">${valueCell}</td>
       <td class="px-3 py-2 text-left font-mono whitespace-nowrap">
         <div>${_esc(entryDate || "—")}</div>
         <div class="text-[11px] text-slate-500">${holdDaysText}</div>
         <div class="text-[10px] text-slate-400" title="${_esc(costTitle)}">FX ${entryFx.toFixed(4)}</div>
       </td>
-      <td class="px-3 py-2 text-right font-mono whitespace-nowrap">${valueCell}</td>
       ${x.dayChangeRmb != null
         ? `<td class="px-3 py-2 text-right font-mono whitespace-nowrap ${x.dayChangeRmb > 0 ? "text-emerald-600" : x.dayChangeRmb < 0 ? "text-rose-600" : "text-slate-500"}">
              ${x.dayChangeRmb >= 0 ? "+" : ""}${x.dayChangeRmb.toLocaleString(undefined, {maximumFractionDigits:0})} <span class="text-[10px] text-slate-400">RMB</span>
@@ -6300,6 +6987,7 @@ async function renderRealHoldings() {
       </td>
       <td class="px-3 py-2 text-right font-mono" title="占你总本金（默认50万）的比例">${(x.currentWeight * 100).toFixed(1)}%</td>
       ${planWeightCell}
+      ${sizeCell}
       ${verdictCell}
       <td class="px-3 py-2 text-center whitespace-nowrap">
         <button onclick="editRealHolding(${x.h.id})" class="text-violet-600 text-xs">编辑</button>
@@ -6679,12 +7367,8 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 });
 
-// 启动时先拉一次持仓 verdict — 让今日决策台「我的持仓体检」小卡先有数据,
-// 即使用户没进过持仓页(2026-05-22 Part 2)
 window.addEventListener("DOMContentLoaded", async () => {
   await _loadHoldingsVerdict();
-  _renderTodayHoldingsCheckup();
-  // 持仓页聚合卡片此时可能 DOM 还没切到 tab,渲染也无害(display:none 时不显示)
   _renderVerdictAggregateCard();
 });
 
@@ -10448,6 +11132,46 @@ def _stale_acceptance_banner_html(acceptance: dict) -> str:
 """
 
 
+def _weekly_self_review_panel_html() -> str:
+    """周末复盘摘要（静态嵌入，读 weekly_self_review_latest.json）。"""
+    wr = _runtime_load_json("data/latest/weekly_self_review_latest.json")
+    if not wr or not wr.get("summary"):
+        return ""
+    s = wr.get("summary") or {}
+    week_label = html_lib.escape(str(wr.get("week_label") or ""))
+    missed = int(s.get("missed") or 0)
+    disobeyed = int(s.get("disobeyed") or 0)
+    aligned = int(s.get("aligned") or 0)
+    lucky = int(s.get("lucky_disobey") or 0)
+    rows = []
+    for title, key in (("错过", "missed"), ("没听话", "disobeyed")):
+        for r in (wr.get(key) or [])[:3]:
+            sym = html_lib.escape(str(r.get("symbol") or ""))
+            note = html_lib.escape(str(r.get("note") or "")[:40])
+            ret = r.get("return_5d_pct")
+            ret_s = f" · 5d {float(ret):+.1f}%" if ret is not None else ""
+            rows.append(f"<li class='text-xs text-slate-700'><strong>{sym}</strong> {note}{html_lib.escape(ret_s)}</li>")
+    sample = "".join(rows) if rows else "<li class='text-xs text-slate-500'>本周无典型错过/没听话样本</li>"
+    md_path = html_lib.escape(f"docs/letters/weekly_self_review_{wr.get('week_label', '')}.md")
+    return f"""
+  <div class="mb-6 bg-gradient-to-r from-violet-50 to-slate-50 rounded-xl border border-violet-200 p-4">
+    <div class="flex items-start justify-between gap-3 flex-wrap">
+      <div>
+        <h3 class="text-sm font-bold text-violet-900">📋 上周复盘 · 动作 vs 信号</h3>
+        <p class="text-[11px] text-slate-600 mt-0.5">{week_label} · advisory · 详见 <code class="text-[10px]">{md_path}</code></p>
+      </div>
+      <div class="flex gap-3 text-xs font-mono">
+        <span class="px-2 py-1 rounded bg-white border border-slate-200">错过 <strong>{missed}</strong></span>
+        <span class="px-2 py-1 rounded bg-white border border-amber-200 text-amber-900">没听话 <strong>{disobeyed}</strong></span>
+        <span class="px-2 py-1 rounded bg-white border border-emerald-200 text-emerald-800">对齐 <strong>{aligned}</strong></span>
+        <span class="px-2 py-1 rounded bg-white border border-slate-200 text-slate-500">逆势 {lucky}</span>
+      </div>
+    </div>
+    <ul class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-1 list-disc list-inside">{sample}</ul>
+  </div>
+"""
+
+
 def today_decision_panel_html() -> str:
     clean_v2 = _is_clean_v2_db()
     quality = _runtime_load_json("data/latest/recommendation_quality_gate.json")
@@ -10564,6 +11288,91 @@ def today_decision_panel_html() -> str:
         card("已拉取股票池", "OK" if pool_total else "WARN", market_line, "#db-explorer", "查看股票池"),
     ])
 
+    # 📅 本周市场事件 — 来自 junior_stock_radar.json（三市场聚合）
+    radar = _runtime_load_json("data/latest/junior_stock_radar.json") or {}
+    summary = radar.get("summary_week") or {}
+    cn_s = summary.get("cn") or {}
+    us_s = summary.get("us") or {}
+    cn_sub_n = int(cn_s.get("subscribe_count") or 0)
+    cn_lis_n = int(cn_s.get("listing_count") or 0)
+    cn_unl_n = int(cn_s.get("unlock_count") or 0)
+    cn_unl_pool_n = int(cn_s.get("unlock_in_pool_count") or 0)
+    cn_pool_items = cn_s.get("unlock_in_pool_codes") or []
+    cn_junior_top = cn_s.get("junior_top3") or []
+    us_priced_n = int(us_s.get("priced_7d_count") or 0)
+    us_filed_n = int(us_s.get("filed_7d_count") or 0)
+    us_junior_n = int(us_s.get("junior_count") or 0)
+    us_broken_n = int(us_s.get("broken_count") or 0)
+    us_ipo_top = us_s.get("ipo_top3") or []
+    us_junior_top = us_s.get("junior_top3") or []
+    radar_generated = str(radar.get("generated_at") or "")[:19] if radar else ""
+
+    cn_pool_line = ""
+    if cn_pool_items:
+        bits = [f"{html_lib.escape(x.get('name') or '')} ({html_lib.escape(x.get('code') or '')}, {html_lib.escape(str(x.get('date') or ''))})"
+                for x in cn_pool_items[:3]]
+        cn_pool_line = f"<div class='text-xs text-rose-700 mt-2'>⚠️ A 股池子内本周解禁: {' · '.join(bits)}</div>"
+    elif cn_unl_n > 0:
+        cn_pool_line = "<div class='text-xs text-emerald-700 mt-2'>✓ A 股本周解禁未触及你的持仓 / 自选股。</div>"
+
+    cn_junior_line = ""
+    if cn_junior_top:
+        bits = [f"{html_lib.escape(x.get('name') or '')} ({html_lib.escape(x.get('code') or '')}, 分 {x.get('score', 0)})"
+                for x in cn_junior_top[:3]]
+        cn_junior_line = f"<div class='text-xs text-slate-600 mt-1'>🎯 A 股 Top 次新: {' · '.join(bits)}</div>"
+
+    us_ipo_line = ""
+    if us_ipo_top:
+        bits = [f"{html_lib.escape(x.get('symbol') or '')} ({html_lib.escape(str(x.get('date') or ''))})"
+                for x in us_ipo_top[:3]]
+        us_ipo_line = f"<div class='text-xs text-slate-600 mt-1'>🇺🇸 美股本周新上市: {' · '.join(bits)}</div>"
+    us_junior_line = ""
+    if us_junior_top:
+        bits = [f"{html_lib.escape(x.get('symbol') or '')} ({x.get('vs_issue_pct', 0)}%, 分 {x.get('score', 0)})"
+                for x in us_junior_top[:3]]
+        us_junior_line = f"<div class='text-xs text-slate-600 mt-1'>🎯 美股 Top 次新: {' · '.join(bits)}</div>"
+
+    if radar:
+        market_events_html = f"""
+  <div class="mt-6 bg-white rounded-xl border border-slate-200 p-4">
+    <div class="flex items-start justify-between gap-3 flex-wrap">
+      <div class="flex-1">
+        <div class="flex items-center gap-2 mb-1">
+          <span>📅</span>
+          <h3 class="font-bold text-slate-900">本周市场事件</h3>
+          <span class="text-[10px] text-slate-400">{html_lib.escape(radar_generated)}</span>
+        </div>
+        <div class="text-sm text-slate-700">
+          <span class="font-semibold text-slate-900">🇨🇳 A 股</span>:
+          申购 <span class="font-semibold text-violet-700">{cn_sub_n}</span> ·
+          上市 <span class="font-semibold text-violet-700">{cn_lis_n}</span> ·
+          解禁 <span class="font-semibold {'text-rose-700' if cn_unl_pool_n else 'text-slate-700'}">{cn_unl_n}</span> 只
+          {f'<span class="text-rose-700">(池子内 {cn_unl_pool_n})</span>' if cn_unl_pool_n else ''}
+          &nbsp;·&nbsp;
+          <span class="font-semibold text-slate-900">🇺🇸 美股</span>:
+          定价 <span class="font-semibold text-violet-700">{us_priced_n}</span> ·
+          申报 <span class="font-semibold text-violet-700">{us_filed_n}</span> ·
+          次新池 <span class="font-semibold text-violet-700">{us_junior_n}</span>(破发 {us_broken_n})
+          &nbsp;·&nbsp;
+          <span class="font-semibold text-slate-900">🇭🇰 港股</span>:
+          <span class="text-slate-400">数据未接入</span>
+        </div>
+        {cn_pool_line}
+        {us_ipo_line}
+        {us_junior_line}
+        {cn_junior_line}
+      </div>
+      <a href="#ipo-junior" class="text-xs font-medium text-violet-700 hover:text-violet-900 whitespace-nowrap">打开 IPO & 次新股 →</a>
+    </div>
+  </div>
+"""
+    else:
+        market_events_html = """
+  <div class="mt-6 bg-white rounded-xl border border-slate-200 p-4 text-sm text-slate-500">
+    📅 本周市场事件：暂无数据；请先运行 <code class="text-xs bg-slate-100 px-1 rounded">junior_stock_watcher</code>。
+  </div>
+"""
+
     empty_state_banner = ""
     if blocking or not discovery_n or not pool_total:
         banner_detail = (
@@ -10611,6 +11420,8 @@ def today_decision_panel_html() -> str:
   <div class="grid grid-cols-1 md:grid-cols-4 gap-3 mb-6">
     {cards_html}
   </div>
+
+  {_weekly_self_review_panel_html()}
 
   {_stale_acceptance_banner_html(acceptance)}
 
@@ -10666,6 +11477,8 @@ def today_decision_panel_html() -> str:
       </div>
     </div>
   </div>
+
+  {market_events_html}
 """
 
 
@@ -12578,6 +13391,10 @@ def build():
     html = HTML_TEMPLATE
     html = html.replace("{UPDATE_TIME}", datetime.now().strftime("%Y-%m-%d %H:%M"))
     html = html.replace("{TODAY_DATE}", datetime.now().strftime("%Y-%m-%d"))
+    junior_radar = _runtime_load_json("data/latest/junior_stock_radar.json") or {
+        "generated_at": None, "ipo_calendar": {}, "unlock_radar": [], "junior_pool": [], "summary_week": {},
+    }
+    html = html.replace("{JUNIOR_RADAR_JSON}", json.dumps(junior_radar, ensure_ascii=False, default=str))
     fx_payload = fx_rates.get_fx_payload()
     html = html.replace("{FX_RATES_JSON}", json.dumps(fx_payload.get("rates") or fx_rates.FALLBACK_FX_TO_RMB, ensure_ascii=False))
     html = html.replace("{FX_RATES_AS_OF}", str(fx_payload.get("as_of") or "fallback"))
@@ -12709,6 +13526,31 @@ def build():
     html = html.replace("{PLAN_A_V6_JSON_DB}", json.dumps(plan_a_v6_runtime, ensure_ascii=False))
     html = html.replace("{DISCOVERY_JSON}", json.dumps(discovery, ensure_ascii=False))
     html = html.replace("{DB_EXPLORER_JSON}", json.dumps(db_explorer_snapshot, ensure_ascii=False))
+
+    review_embed_path = os.path.join(_REPO, "data", "latest", "real_holding_review.json")
+    review_embed = {}
+    if os.path.exists(review_embed_path):
+        try:
+            with open(review_embed_path, encoding="utf-8") as f:
+                review_embed = json.load(f)
+            n = len(review_embed.get("items") or [])
+            heat_n = sum(
+                1 for i in (review_embed.get("items") or [])
+                if (i.get("industry_heat") or {}).get("industry_heat_badge")
+            )
+            print(f"  真实持仓体检嵌入看板: {n} 只 · 板块热度 {heat_n} 只")
+        except Exception as e:
+            print(f"  ⚠️  real_holding_review.json 读取失败: {e}")
+    else:
+        try:
+            sys.path.insert(0, os.path.join(_REPO, "scripts", "lib"))
+            import stock_db as _sdb
+            review_embed = _sdb.fetch_latest_real_holding_review() or {}
+            if review_embed:
+                print(f"  真实持仓体检嵌入看板: 来自 DuckDB ({len(review_embed.get('items') or [])} 只)")
+        except Exception as e:
+            print(f"  ⚠️  真实持仓体检嵌入跳过: {e}")
+    html = html.replace("{REAL_HOLDING_REVIEW_JSON}", json.dumps(review_embed, ensure_ascii=False, default=str))
 
     # AI 组合方案 — Static (A 类: buy-and-hold from inception) — DuckDB 优先，fallback JSON
     plan_for_bt = plan_a_v6_runtime or plan_a_v6

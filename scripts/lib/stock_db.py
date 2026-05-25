@@ -181,6 +181,8 @@ ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS prev_close DOUBLE
 ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS prev_trade_date VARCHAR;
 ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS day_change_rmb DOUBLE;
 ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS day_change_pct DOUBLE;
+ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS size_advisory_json VARCHAR;
+ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS industry_heat_json VARCHAR;
 -- 自选股配置 editor 的"行业归类 / 主营业务"以前没字段可落, 现在补上
 ALTER TABLE manual_watchlist ADD COLUMN IF NOT EXISTS industry VARCHAR;
 ALTER TABLE manual_watchlist ADD COLUMN IF NOT EXISTS business VARCHAR;
@@ -223,6 +225,10 @@ USER_CONFIG_DEFAULTS = {
         "coverage_price": 0.30,
         "coverage_model_score": 0.30,
         "coverage_target_or_tracking": 0.20,
+        "kelly_fraction": 0.5,
+        "max_single_pct": 0.15,
+        "hard_single_cap_pct": 0.25,
+        "suggested_batches": 3,
     },
 }
 
@@ -952,6 +958,129 @@ def fetch_latest_recommendation_picks(
     return out
 
 
+def fetch_recommendation_runs_between(
+    start_date: date,
+    end_date: date,
+    *,
+    universe_scope: str = "system_tech_universe",
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> list[dict[str, Any]]:
+    """按 run_date 区间读取 recommendation_runs（PIT 复盘用）。"""
+    own = conn is None
+    if own:
+        conn = get_db(read_only=True)
+    rows = conn.execute(
+        """
+        SELECT run_id, run_date, strategy_version, model_version, universe_scope,
+               data_cutoff_at, generated_at, status, notes
+        FROM recommendation_runs
+        WHERE universe_scope = ?
+          AND run_date >= ? AND run_date <= ?
+          AND status = 'generated'
+        ORDER BY run_date ASC, generated_at ASC
+        """,
+        [universe_scope, start_date, end_date],
+    ).fetchall()
+    cols = [
+        "run_id", "run_date", "strategy_version", "model_version", "universe_scope",
+        "data_cutoff_at", "generated_at", "status", "notes",
+    ]
+    out = [_rowdict(cols, r) for r in rows]
+    if own:
+        conn.close()
+    return out
+
+
+def fetch_recommendation_picks_for_run(
+    run_id: str,
+    *,
+    top_n: int | None = None,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> list[dict[str, Any]]:
+    """读取某次 run 的 recommendation_picks（按 rank 排序）。"""
+    own = conn is None
+    if own:
+        conn = get_db(read_only=True)
+    sql = """
+        SELECT market, symbol, name, rank, rating, signal, total_score,
+               factor_scores_json, entry_price, universe_scope, source_origin
+        FROM recommendation_picks
+        WHERE run_id = ?
+        ORDER BY rank
+    """
+    params: list[Any] = [run_id]
+    if top_n is not None and top_n > 0:
+        sql += " LIMIT ?"
+        params.append(int(top_n))
+    rows = conn.execute(sql, params).fetchall()
+    import json as _json
+    out = []
+    for r in rows:
+        market, symbol, name, rank, rating, signal, total_score, fs_json, entry_price, scope, origin = r
+        try:
+            fs = _json.loads(fs_json) if fs_json else {}
+        except Exception:
+            fs = {}
+        out.append({
+            "market": market,
+            "symbol": symbol,
+            "code": symbol,
+            "name": name,
+            "rank": rank,
+            "rating": rating,
+            "signal": signal,
+            "total_score": total_score,
+            "factor_scores": fs,
+            "entry_price": entry_price,
+            "universe_scope": scope,
+            "source_origin": origin,
+            "run_id": run_id,
+        })
+    if own:
+        conn.close()
+    return out
+
+
+def fetch_pick_outcomes_for_symbols(
+    symbols: list[str],
+    *,
+    horizon: str = "5d",
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> dict[str, dict[str, Any]]:
+    """每只 symbol 取最近一次 pick_outcomes（按 outcome_date 降序）。"""
+    if not symbols:
+        return {}
+    own = conn is None
+    if own:
+        conn = get_db(read_only=True)
+    placeholders = ",".join(["?"] * len(symbols))
+    rows = conn.execute(
+        f"""
+        SELECT run_id, market, symbol, horizon, outcome_date, return_pct,
+               benchmark_pct, alpha_pct, is_success
+        FROM (
+          SELECT *, ROW_NUMBER() OVER (
+            PARTITION BY symbol ORDER BY outcome_date DESC
+          ) AS rn
+          FROM pick_outcomes
+          WHERE symbol IN ({placeholders}) AND horizon = ?
+        ) t WHERE rn = 1
+        """,
+        [*symbols, horizon],
+    ).fetchall()
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        d = _rowdict(
+            ["run_id", "market", "symbol", "horizon", "outcome_date",
+             "return_pct", "benchmark_pct", "alpha_pct", "is_success"],
+            r,
+        )
+        out[str(d["symbol"])] = d
+    if own:
+        conn.close()
+    return out
+
+
 # ============================================================
 # Holdings (2026-05-20: V2 schema (market, symbol) replaces V1 `code`)
 # 兼容：fetch_* 返回字典里仍提供 code=symbol 别名给老调用方（risk_metrics 等）。
@@ -980,6 +1109,8 @@ REAL_HOLDING_REVIEW_ITEM_COLS = [
     "pnl_rmb", "pnl_pct", "current_weight", "target_weight", "weight_gap_pt",
     "reasons_json", "risk_flags_json", "data_flags_json",
     "prev_close", "prev_trade_date", "day_change_rmb", "day_change_pct",
+    "size_advisory_json",
+    "industry_heat_json",
 ]
 REAL_HOLDING_REVIEW_ITEM_FULL_COLS = REAL_HOLDING_REVIEW_ITEM_COLS + ["created_at"]
 
@@ -1326,6 +1457,8 @@ def save_real_holding_review(
             item.get("prev_trade_date"),
             item.get("day_change_rmb"),
             item.get("day_change_pct"),
+            _dump_json_field(item.get("size_advisory")),
+            _dump_json_field(item.get("industry_heat")),
         ]
         conn.execute(
             f"INSERT INTO real_holding_review_items ({','.join(REAL_HOLDING_REVIEW_ITEM_COLS)}) "
@@ -1430,6 +1563,8 @@ def fetch_latest_real_holding_review(
         d["reasons"] = _load_json_field(d.pop("reasons_json", None), [])
         d["risk_flags"] = _load_json_field(d.pop("risk_flags_json", None), [])
         d["data_flags"] = _load_json_field(d.pop("data_flags_json", None), [])
+        d["size_advisory"] = _load_json_field(d.pop("size_advisory_json", None), None)
+        d["industry_heat"] = _load_json_field(d.pop("industry_heat_json", None), None)
         items.append(d)
 
     if own:

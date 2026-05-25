@@ -1,8 +1,9 @@
-"""触发式 Alert watcher — 每 15 min 跑一次市场层防御信号，severity 升档时即时推送飞书。
+"""触发式 Alert watcher — 每 15 min 跑市场层防御 + 持仓日内回撤，升档/新触发时推飞书。
 
 设计：
-  - 仅查市场层（VIX + SPY/200MA + 宏观 + PCR），不查 picks 止损（picks 日级粒度，
-    intraday 不变；省下 feishu API 调用，cron 也跑得起 96 次/天）。
+  - 市场层：VIX + SPY/200MA + 宏观 + PCR。
+  - 持仓层（轻量）：单票日内 ≤-5%（最近收盘 vs 前收）或组合加权日内 ≤-1.5%。
+  - picks 止损仍日级，不在此重复。
   - 状态文件 data/defense_watcher_state.json 记录上次 severity
   - 严重度排序: NONE(0) < LOW(1) < HIGH(2) < CRITICAL(3)
   - 仅升档时推送（降档静默，避免噪音和"刚升又降"的来回打扰）
@@ -30,6 +31,7 @@ import requests
 
 _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO))
+sys.path.insert(0, str(_REPO / "scripts" / "lib"))
 
 
 def _load_dotenv(path: Path) -> None:
@@ -71,6 +73,113 @@ def _load_state() -> dict:
 def _save_state(state: dict) -> None:
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _holding_intraday_alerts() -> list[dict]:
+    """真实持仓日内波动（用 price_daily 最近两收，非 tick）。"""
+    try:
+        import fx_rates  # type: ignore
+        import stock_db  # type: ignore
+    except Exception as exc:
+        logger.warning("持仓日内检查跳过: %s", exc)
+        return []
+
+    alerts: list[dict] = []
+    conn = stock_db.get_db()
+    try:
+        holdings = stock_db.fetch_all_real_holdings(conn=conn)
+        if not holdings:
+            return []
+        symbols = [str(h.get("symbol") or h.get("code")) for h in holdings if h.get("symbol") or h.get("code")]
+        if not symbols:
+            return []
+        placeholders = ",".join(["?"] * len(symbols))
+        rows = conn.execute(
+            f"""
+            WITH ranked AS (
+              SELECT market, symbol, close, trade_date,
+                     LAG(close) OVER (PARTITION BY market, symbol ORDER BY trade_date) AS prev_close,
+                     ROW_NUMBER() OVER (PARTITION BY market, symbol ORDER BY trade_date DESC) AS rn
+              FROM price_daily
+              WHERE symbol IN ({placeholders}) AND interval = '1d'
+            )
+            SELECT symbol, close, prev_close FROM ranked WHERE rn = 1
+            """,
+            symbols,
+        ).fetchall()
+        px = {str(r[0]): (r[1], r[2]) for r in rows}
+
+        total_val = 0.0
+        weighted_chg = 0.0
+        for h in holdings:
+            sym = str(h.get("symbol") or h.get("code"))
+            shares = float(h.get("shares") or 0)
+            if shares <= 0 or sym not in px:
+                continue
+            close, prev = px[sym]
+            if close is None or prev is None or prev <= 0:
+                continue
+            day_pct = (float(close) / float(prev) - 1.0) * 100.0
+            ccy = h.get("currency") or fx_rates.infer_currency_from_ticker(sym)
+            fx = fx_rates.get_fx_to_rmb(ccy)
+            val = float(close) * shares * fx
+            total_val += val
+            weighted_chg += val * day_pct
+            if day_pct <= -5.0:
+                alerts.append({
+                    "type": "holding_flash",
+                    "severity": "HIGH",
+                    "symbol": sym,
+                    "trigger": f"日内约 {day_pct:+.1f}%（收盘口径）",
+                    "suggested_action": "建议复查是否止损/减仓（advisory）",
+                })
+        if total_val > 0:
+            port_pct = weighted_chg / total_val
+            if port_pct <= -1.5:
+                alerts.append({
+                    "type": "portfolio_day",
+                    "severity": "HIGH",
+                    "symbol": "PORTFOLIO",
+                    "trigger": f"持仓组合加权日内约 {port_pct:+.1f}%",
+                    "suggested_action": "整体偏逆风，新开仓宜谨慎（advisory）",
+                })
+    finally:
+        conn.close()
+    return alerts
+
+
+def _holding_alert_fingerprint(alerts: list[dict]) -> str:
+    if not alerts:
+        return ""
+    parts = sorted(
+        f"{a.get('symbol')}:{a.get('trigger')}" for a in alerts if a.get("symbol")
+    )
+    return "|".join(parts)
+
+
+def _build_holding_alert_card(alerts: list[dict]) -> dict:
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    lines = ["**持仓日内告警**（收盘 vs 前收，非 tick）\n"]
+    for a in alerts[:8]:
+        lines.append(f"• **{a.get('symbol')}**: {a.get('trigger')} — {a.get('suggested_action', '')}")
+    return {
+        "msg_type": "interactive",
+        "card": {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": f"💼 持仓日内 · {now_str}"},
+                "subtitle": {"tag": "plain_text", "content": "advisory · 不构成交易指令"},
+                "template": "orange",
+            },
+            "elements": [
+                {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}},
+                {"tag": "note", "elements": [{
+                    "tag": "plain_text",
+                    "content": "单票 ≤-5% 或组合加权 ≤-1.5% 触发；与大盘橙卡分开读",
+                }]},
+            ],
+        },
+    }
 
 
 def _market_severity() -> tuple[str, list[dict]]:
@@ -210,6 +319,18 @@ def main() -> int:
     state["last_severity"] = curr
     state["last_check_at"] = datetime.now().isoformat(timespec="seconds")
     state["last_alert_count"] = len(alerts)
+
+    hold_alerts = _holding_intraday_alerts()
+    hold_fp = _holding_alert_fingerprint(hold_alerts)
+    prev_hold_fp = state.get("holding_alert_fingerprint", "")
+    if hold_alerts and (args.force or hold_fp != prev_hold_fp):
+        logger.info("💼 持仓日内告警 %d 条（fp 变化）", len(hold_alerts))
+        ok_h = _push(_build_holding_alert_card(hold_alerts))
+        state["last_holding_alert_at"] = datetime.now().isoformat(timespec="seconds")
+        state["last_holding_alert_ok"] = ok_h
+        state["holding_alert_fingerprint"] = hold_fp
+    state["holding_alert_count"] = len(hold_alerts)
+
     _save_state(state)
     return 0
 

@@ -19,6 +19,7 @@ from stock_research.jobs.real_holding_review import (  # type: ignore
     _hk_watchlist_score_fallbacks,
     _manual_watchlist_score_fallbacks,
     _normalize_treatment_class,
+    _suggest_size_advisory,
 )
 
 
@@ -70,6 +71,42 @@ class RealHoldingReviewTest(unittest.TestCase):
         self.assertIsNone(item["prev_close"])
         self.assertIsNone(item["day_change_rmb"])
         self.assertIsNone(item["day_change_pct"])
+
+    def test_underweight_add_has_size_advisory(self):
+        rules = _default_rules()
+        item = _build_item(
+            {"symbol": "MCD", "market": "US", "entry_price": 280, "shares": 10,
+             "currency": "USD", "entry_fx_rate": 7.1},
+            rules=rules,
+            price={"close": 280, "currency": "USD", "trade_date": "2026-05-22"},
+            pick={"total_score": 75, "rating": "⭐⭐"},
+            verdict={"coverage_class": "ai_portfolio", "treatment_class": "portfolio_model",
+                     "asset_class": "equity"},
+            total_capital=500000,
+            target_weights={"MCD": 0.10},
+        )
+        self.assertEqual(item["action_label"], "关注加仓")
+        adv = item.get("size_advisory")
+        self.assertIsNotNone(adv)
+        self.assertEqual(adv.get("direction"), "add")
+        self.assertTrue(adv.get("advisory_only"))
+
+    def test_over_25pct_has_trim_advisory(self):
+        rules = _default_rules()
+        item = _build_item(
+            {"symbol": "MCD", "market": "US", "entry_price": 280, "shares": 500,
+             "currency": "USD", "entry_fx_rate": 7.1},
+            rules=rules,
+            price={"close": 280, "currency": "USD", "trade_date": "2026-05-22"},
+            pick={"total_score": 80, "rating": "⭐⭐⭐"},
+            verdict={"coverage_class": "ai_portfolio", "treatment_class": "portfolio_model",
+                     "asset_class": "equity"},
+            total_capital=500000,
+            target_weights={"MCD": 0.08},
+        )
+        adv = item.get("size_advisory")
+        self.assertIsNotNone(adv)
+        self.assertTrue(adv.get("over_hard_cap") or item["current_weight"] >= 0.25)
 
     def test_tracking_asset_is_not_forced_into_stock_score(self):
         item = _build_item(
