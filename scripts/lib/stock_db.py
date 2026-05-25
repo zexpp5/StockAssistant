@@ -183,9 +183,10 @@ ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS day_change_rmb DO
 ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS day_change_pct DOUBLE;
 ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS size_advisory_json VARCHAR;
 ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS industry_heat_json VARCHAR;
--- 自选股配置 editor 的"行业归类 / 主营业务"以前没字段可落, 现在补上
-ALTER TABLE manual_watchlist ADD COLUMN IF NOT EXISTS industry VARCHAR;
-ALTER TABLE manual_watchlist ADD COLUMN IF NOT EXISTS business VARCHAR;
+-- 注：manual_watchlist 的 industry / business 字段升级 ALTER 已从这里移除，
+-- 因为 manual_watchlist 表由 init_stock_db_v2.py 建（已含这两列）。
+-- 在不跑 init_stock_db_v2 的新 DB（test/临时）上，ALTER 不存在的表会 crash。
+-- 老 DB 兼容 ALTER 移到 _ensure_manual_watchlist_columns（带 try-except 兜底）。
 
 -- 产业链元数据: 由 daily_picks_v5 rule_classify 自动产出 +「自选股配置」editor 人工 override。
 -- source='manual_override' 优先级高于 'rule_classify'。前端 stockPill 的 chain badge 读这里。
@@ -252,7 +253,25 @@ def get_db(path: str = DB_PATH, *, read_only: bool = False,
         ensure_schema = not read_only
     if ensure_schema:
         conn.execute(SCHEMA_SQL)
+        _ensure_manual_watchlist_columns(conn)
     return conn
+
+
+def _ensure_manual_watchlist_columns(conn: duckdb.DuckDBPyConnection) -> None:
+    """老 DB 兼容：manual_watchlist 的 industry/business 字段升级 ALTER。
+
+    新 DB 由 init_stock_db_v2.py 建表时直接含这两列；老 DB 没有。
+    表本身若不存在（test 临时 DB / 没跑 init_stock_db_v2），静默跳过——
+    后续 init_stock_db_v2 / API 写入会自然建表。
+    """
+    for stmt in (
+        "ALTER TABLE manual_watchlist ADD COLUMN IF NOT EXISTS industry VARCHAR",
+        "ALTER TABLE manual_watchlist ADD COLUMN IF NOT EXISTS business VARCHAR",
+    ):
+        try:
+            conn.execute(stmt)
+        except duckdb.CatalogException:
+            return  # 表不存在 → 老 DB 兼容路径 N/A，直接跳过
 
 
 # ============================================================
@@ -1007,23 +1026,41 @@ def fetch_recommendation_picks_for_run(
     run_id: str,
     *,
     top_n: int | None = None,
+    per_market_top_n: int | None = None,
     conn: duckdb.DuckDBPyConnection | None = None,
 ) -> list[dict[str, Any]]:
-    """读取某次 run 的 recommendation_picks（按 rank 排序）。"""
+    """读取某次 run 的 recommendation_picks（按 rank 排序）。
+
+    top_n: 全局裁切。注意 build_v2_recommendations 写入 rank 时按 market 分段
+        （CN=1..20、HK=21..40、US=41..60），所以全局 LIMIT 10 会只剩 CN。
+    per_market_top_n: 每个市场各取前 N（用 DuckDB QUALIFY + ROW_NUMBER 实现）。
+        给 weekly_self_review / 多市场复盘场景用，避免 global rank 误判。
+    """
     own = conn is None
     if own:
         conn = get_db(read_only=True)
-    sql = """
-        SELECT market, symbol, name, rank, rating, signal, total_score,
-               factor_scores_json, entry_price, universe_scope, source_origin
-        FROM recommendation_picks
-        WHERE run_id = ?
-        ORDER BY rank
-    """
     params: list[Any] = [run_id]
-    if top_n is not None and top_n > 0:
-        sql += " LIMIT ?"
-        params.append(int(top_n))
+    if per_market_top_n is not None and per_market_top_n > 0:
+        sql = """
+            SELECT market, symbol, name, rank, rating, signal, total_score,
+                   factor_scores_json, entry_price, universe_scope, source_origin
+            FROM recommendation_picks
+            WHERE run_id = ?
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY market ORDER BY rank) <= ?
+            ORDER BY rank
+        """
+        params.append(int(per_market_top_n))
+    else:
+        sql = """
+            SELECT market, symbol, name, rank, rating, signal, total_score,
+                   factor_scores_json, entry_price, universe_scope, source_origin
+            FROM recommendation_picks
+            WHERE run_id = ?
+            ORDER BY rank
+        """
+        if top_n is not None and top_n > 0:
+            sql += " LIMIT ?"
+            params.append(int(top_n))
     rows = conn.execute(sql, params).fetchall()
     import json as _json
     out = []

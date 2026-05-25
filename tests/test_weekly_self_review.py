@@ -223,6 +223,75 @@ class LookupSymbolInfoSQLTest(unittest.TestCase):
             conn.close()
 
 
+class PerMarketTopNSQLTest(unittest.TestCase):
+    """fetch_recommendation_picks_for_run(per_market_top_n=N) 必须每市场各取前 N。
+
+    防回归：build_v2_recommendations 写 rank 时按 market 分段（CN=1..20、HK=21..40、
+    US=41..60），全局 LIMIT 10 会只剩 CN。weekly_self_review 必须走 QUALIFY 分组裁切。
+    """
+
+    def _setup_db(self) -> "duckdb.DuckDBPyConnection":
+        conn = duckdb.connect(":memory:")
+        conn.execute(
+            """
+            CREATE TABLE recommendation_picks (
+                run_id VARCHAR, market VARCHAR, symbol VARCHAR, name VARCHAR,
+                rank INTEGER, rating VARCHAR, signal VARCHAR, total_score DOUBLE,
+                factor_scores_json VARCHAR, entry_price DOUBLE,
+                entry_currency VARCHAR, universe_scope VARCHAR,
+                source_origin VARCHAR, recommendation_reason VARCHAR,
+                risk_flags_json VARCHAR, created_at TIMESTAMP
+            )
+            """
+        )
+        # 模拟 build_v2_recommendations 写入：CN rank 1..3、HK rank 4..6、US rank 7..9
+        rows = [
+            ("r1", "CN", "002463.SZ", "沪电股份", 1, "buy", "buy", 92.0),
+            ("r1", "CN", "002709.SZ", "天赐材料", 2, "buy", "buy", 90.0),
+            ("r1", "CN", "300037.SZ", "新宙邦", 3, "buy", "buy", 88.0),
+            ("r1", "HK", "0992.HK", "联想集团", 4, "buy", "buy", 85.0),
+            ("r1", "HK", "1347.HK", "华虹半导体", 5, "buy", "buy", 83.0),
+            ("r1", "HK", "2382.HK", "舜宇光学", 6, "buy", "buy", 81.0),
+            ("r1", "US", "DELL", "Dell", 7, "buy", "buy", 78.0),
+            ("r1", "US", "MU", "Micron", 8, "buy", "buy", 76.0),
+            ("r1", "US", "NXPI", "NXP", 9, "buy", "buy", 74.0),
+        ]
+        for r in rows:
+            conn.execute(
+                "INSERT INTO recommendation_picks (run_id, market, symbol, name, rank, rating, signal, total_score) VALUES (?,?,?,?,?,?,?,?)",
+                r,
+            )
+        return conn
+
+    def test_global_top_n_returns_only_cn(self):
+        """top_n=3 全局裁切 → 只剩 CN（这是 bug 现象的回归测试）。"""
+        import sys
+        sys.path.insert(0, str(REPO / "scripts" / "lib"))
+        import stock_db  # type: ignore
+        conn = self._setup_db()
+        try:
+            picks = stock_db.fetch_recommendation_picks_for_run("r1", top_n=3, conn=conn)
+        finally:
+            conn.close()
+        self.assertEqual(len(picks), 3)
+        self.assertTrue(all(p["market"] == "CN" for p in picks))
+
+    def test_per_market_top_n_balances_three_markets(self):
+        """per_market_top_n=2 → CN 2 + HK 2 + US 2 = 6 行（防 bug 再发）。"""
+        import sys
+        sys.path.insert(0, str(REPO / "scripts" / "lib"))
+        import stock_db  # type: ignore
+        conn = self._setup_db()
+        try:
+            picks = stock_db.fetch_recommendation_picks_for_run("r1", per_market_top_n=2, conn=conn)
+        finally:
+            conn.close()
+        markets = [p["market"] for p in picks]
+        self.assertEqual(markets.count("CN"), 2)
+        self.assertEqual(markets.count("HK"), 2)
+        self.assertEqual(markets.count("US"), 2)
+
+
 class DisobedientActionsConsistencyTest(unittest.TestCase):
     """DISOBEDIENT_ACTIONS 必须与 real_holding_review._review_action 实际产出的 label 对齐。"""
 

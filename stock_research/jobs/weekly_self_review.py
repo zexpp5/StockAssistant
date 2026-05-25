@@ -253,8 +253,10 @@ def _collect_weekly_model_picks(
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """返回 (symbol -> meta, runs 列表)。
 
-    universe_scope=None 表示扫所有 scope（兼容未来 HK/US picks 接入 PIT 表）；
-    当前 recommendation_runs 仅写入 A 股 system_tech_universe，HK/US 单独建议补写。
+    universe_scope=None 表示扫所有 scope（兼容未来 HK/US picks 接入独立 PIT scope）。
+    rank 处理：build_v2_recommendations 写入 picks 时 rank 是 global market-segmented
+    （CN=1..20、HK=21..40、US=41..60）。这里取 per_market_top_n 后，在 Python 里把
+    rank 重算为 per-market（CN=1..N、HK=1..N、US=1..N），best_rank 因此对三市场可比。
     """
     runs = stock_db.fetch_recommendation_runs_between(
         week_start, week_end, universe_scope=universe_scope, conn=conn,
@@ -267,27 +269,33 @@ def _collect_weekly_model_picks(
             run_date_s = run_date.isoformat()
         else:
             run_date_s = str(run_date)[:10]
-        picks = stock_db.fetch_recommendation_picks_for_run(run_id, top_n=top_n, conn=conn)
+        picks = stock_db.fetch_recommendation_picks_for_run(
+            run_id, per_market_top_n=top_n, conn=conn,
+        )
+        # QUALIFY 已按 market 分组 + global rank 升序返回。组内 enumerate 即得 per-market rank。
+        market_counters: dict[str, int] = {}
         for p in picks:
+            mkt = str(p.get("market") or "")
+            market_counters[mkt] = market_counters.get(mkt, 0) + 1
             sym = str(p.get("symbol") or p.get("code") or "")
             if not sym:
                 continue
-            rank = int(p.get("rank") or 999)
+            market_rank = market_counters[mkt]
             slot = by_symbol.setdefault(sym, {
                 "symbol": sym,
                 "name": p.get("name"),
-                "market": p.get("market"),
+                "market": mkt,
                 "first_run_id": run_id,
                 "first_run_date": run_date_s,
-                "best_rank": rank,
+                "best_rank": market_rank,
                 "appearances": 0,
                 "run_ids": [],
             })
             slot["appearances"] += 1
             if run_id not in slot["run_ids"]:
                 slot["run_ids"].append(run_id)
-            if rank < slot["best_rank"]:
-                slot["best_rank"] = rank
+            if market_rank < slot["best_rank"]:
+                slot["best_rank"] = market_rank
                 slot["first_run_id"] = run_id
                 slot["first_run_date"] = run_date_s
     return by_symbol, runs
@@ -368,7 +376,12 @@ def build_weekly_self_review(
         rows_aligned: list[dict] = []
         rows_lucky: list[dict] = []
 
-        for sym in sorted(model_by_sym.keys()):
+        # 按 (best_rank, market) 排序：让 CN/HK/US 三市场的高排名 pick 都能挤进 missed 前 15。
+        # 若纯按 symbol 字母序：002463.SZ < 0763.HK < AAPL，US picks 永远被切。
+        def _pick_sort_key(s: str) -> tuple[int, str, str]:
+            meta = model_by_sym[s]
+            return (int(meta.get("best_rank") or 999), str(meta.get("market") or ""), s)
+        for sym in sorted(model_by_sym.keys(), key=_pick_sort_key):
             meta = model_by_sym[sym]
             held_end = week_end_shares.get(sym, 0) > 1e-6
             increased = _had_increase_during_week(
