@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS real_holdings (
     account     VARCHAR   DEFAULT 'default',
     market      VARCHAR   NOT NULL,
     symbol      VARCHAR   NOT NULL,
+    name        VARCHAR,           -- 用户录入时填的中文名/备注名（系统不会自动覆盖）
     entry_price DOUBLE    NOT NULL,
     shares      DOUBLE    NOT NULL,
     entry_date  DATE,
@@ -102,6 +103,7 @@ ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS entry_fx_rate DOUBLE;
 ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS entry_fx_as_of DATE;
 ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS entry_fx_source VARCHAR;
 ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS cost_rmb_locked DOUBLE;
+ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS name VARCHAR;
 
 -- 模型模拟仓：只承载 AI 组合方案推演，不代表真实成交。
 CREATE SEQUENCE IF NOT EXISTS model_sim_holdings_id_seq;
@@ -168,9 +170,17 @@ CREATE TABLE IF NOT EXISTS real_holding_review_items (
     reasons_json       VARCHAR,
     risk_flags_json    VARCHAR,
     data_flags_json    VARCHAR,
+    prev_close         DOUBLE,
+    prev_trade_date    VARCHAR,
+    day_change_rmb     DOUBLE,
+    day_change_pct     DOUBLE,
     created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (review_run_id, symbol)
 );
+ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS prev_close DOUBLE;
+ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS prev_trade_date VARCHAR;
+ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS day_change_rmb DOUBLE;
+ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS day_change_pct DOUBLE;
 """
 
 # user_config 已知 key 的默认值（首次读取或被删除时返回）
@@ -191,6 +201,7 @@ USER_CONFIG_DEFAULTS = {
         "weak_score_threshold": 55.0,
         "add_watch_min_score": 70.0,
         "underweight_add_gap_pt": -2.5,
+        "score_snapshot_max_age_days": 3.0,
         "coverage_base": 0.20,
         "coverage_price": 0.30,
         "coverage_model_score": 0.30,
@@ -850,7 +861,7 @@ def fetch_latest_recommendation_picks(
 HOLDINGS_COLS = ["market", "symbol", "entry_price", "shares", "entry_date", "source", "notes", "currency"]
 HOLDINGS_FULL_COLS = ["id"] + HOLDINGS_COLS + ["created_at", "updated_at"]
 REAL_HOLDINGS_COLS = [
-    "account", "market", "symbol", "entry_price", "shares", "entry_date", "currency",
+    "account", "market", "symbol", "name", "entry_price", "shares", "entry_date", "currency",
     "entry_fx_rate", "entry_fx_as_of", "entry_fx_source", "cost_rmb_locked", "notes",
 ]
 REAL_HOLDINGS_FULL_COLS = ["id"] + REAL_HOLDINGS_COLS + ["created_at", "updated_at"]
@@ -869,6 +880,7 @@ REAL_HOLDING_REVIEW_ITEM_COLS = [
     "current_price", "current_currency", "current_value_rmb", "cost_rmb_locked",
     "pnl_rmb", "pnl_pct", "current_weight", "target_weight", "weight_gap_pt",
     "reasons_json", "risk_flags_json", "data_flags_json",
+    "prev_close", "prev_trade_date", "day_change_rmb", "day_change_pct",
 ]
 REAL_HOLDING_REVIEW_ITEM_FULL_COLS = REAL_HOLDING_REVIEW_ITEM_COLS + ["created_at"]
 
@@ -942,10 +954,14 @@ def _normalize_real_holding(item: Mapping[str, Any]) -> list:
         entry_price=entry_price,
         shares=shares,
     )
+    name = item.get("name")
+    if name is not None:
+        name = str(name).strip() or None
     return [
         item.get("account") or "default",
         market,
         symbol,
+        name,
         entry_price,
         shares,
         entry_date,
@@ -1207,6 +1223,10 @@ def save_real_holding_review(
             _dump_json_field(item.get("reasons")),
             _dump_json_field(item.get("risk_flags")),
             _dump_json_field(item.get("data_flags")),
+            item.get("prev_close"),
+            item.get("prev_trade_date"),
+            item.get("day_change_rmb"),
+            item.get("day_change_pct"),
         ]
         conn.execute(
             f"INSERT INTO real_holding_review_items ({','.join(REAL_HOLDING_REVIEW_ITEM_COLS)}) "
@@ -1218,6 +1238,66 @@ def save_real_holding_review(
     if own:
         conn.close()
     return n
+
+
+def fetch_real_holding_review_history(
+    *,
+    symbols: list[str] | None = None,
+    days: int = 14,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """每只持仓近 N 日体检轨迹 (按 as_of_date 升序)。
+
+    回答「这只票上周还是仅跟踪、今天为什么变风险复查」——是历史时间线视图,
+    不替代 fetch_latest_real_holding_review。同一 as_of_date 有多次 run 时取最新 run。
+    """
+    own = conn is None
+    if own:
+        conn = get_db(read_only=True)
+
+    days = max(1, min(int(days), 365))
+    params: list[Any] = []
+    sql = f"""
+    SELECT as_of_date, symbol, action_label, action_priority,
+           pnl_pct, current_weight, score, treatment_class, rating
+    FROM (
+      SELECT r.as_of_date, i.symbol, i.action_label, i.action_priority,
+             i.pnl_pct, i.current_weight, i.score, i.treatment_class, i.rating,
+             ROW_NUMBER() OVER (
+               PARTITION BY i.symbol, r.as_of_date
+               ORDER BY r.generated_at DESC
+             ) AS rn
+      FROM real_holding_review_items i
+      JOIN real_holding_review_runs r ON i.review_run_id = r.review_run_id
+      WHERE r.as_of_date >= CURRENT_DATE - {days}
+    """
+    if symbols:
+        placeholders = ",".join(["?"] * len(symbols))
+        sql += f"  AND i.symbol IN ({placeholders})\n"
+        params.extend(symbols)
+    sql += """
+    )
+    WHERE rn = 1
+    ORDER BY symbol, as_of_date ASC
+    """
+
+    rows = conn.execute(sql, params).fetchall()
+    out: dict[str, list[dict[str, Any]]] = {}
+    for as_of_date, symbol, action_label, action_priority, pnl_pct, current_weight, score, treatment_class, rating in rows:
+        out.setdefault(str(symbol), []).append({
+            "as_of_date": as_of_date.isoformat() if hasattr(as_of_date, "isoformat") else as_of_date,
+            "action_label": action_label,
+            "action_priority": action_priority,
+            "pnl_pct": pnl_pct,
+            "current_weight": current_weight,
+            "score": score,
+            "treatment_class": treatment_class,
+            "rating": rating,
+        })
+
+    if own:
+        conn.close()
+    return out
 
 
 def fetch_latest_real_holding_review(

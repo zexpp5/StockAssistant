@@ -49,24 +49,17 @@ from stock_research.core.south_flow_signals import (
     fetch_aggregate_south_flow,
     fetch_components_snapshot,
 )
+from stock_research.core.hk_scoring import (
+    HK_FACTOR_WEIGHTS as FACTOR_WEIGHTS,
+    hk_grade_label,
+    score_hk_entries,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 HK_FACTOR_CACHE = _REPO / "data" / "latest" / "hk_factor_cache.json"
 
 
-FACTOR_WEIGHTS = {
-    "f_score":   0.40,   # Piotroski 财务质量（akshare 港股年报）
-    "momentum":  0.35,   # 12-1 月动量
-    "reversal":  0.25,   # 1 月反转
-    # south_flow 临时降到 0 — 五审第五轮发现：聚合信号是 market-level（所有港股
-    # 拿同一 score），个股截面 API stock_hk_ggt_components_em 返回的列不含持股 %，
-    # individual_rank 永远 fallback 0.5 → 因子对横截面 alpha 贡献 = 0。
-    # 修复方向：换 stock_hsgt_hold_stock_em(market='港股通沪')（cols 含"占流通股比"，
-    # 但 121 页 paginated ~5 分钟，需要 daily prefetch cache 才能用）。
-    # 待 cache 方案落地后恢复 0.15。
-    "south_flow": 0.00,
-}
 assert abs(sum(FACTOR_WEIGHTS.values()) - 1.0) < 1e-9
 
 
@@ -111,56 +104,6 @@ def fetch_hk_candidates() -> list[dict]:
          "source": "manual_watchlist"}
         for r in wl_records if _is_hk_code(r.get("code", ""))
     ]
-
-
-def _winsorize_rank(values: list[float | None]) -> list[float | None]:
-    """[1%, 99%] winsorize + percent-rank → [0,1]，缺失保留 None。"""
-    valid = sorted([v for v in values if isinstance(v, (int, float))])
-    n = len(valid)
-    if n < 4:
-        return [0.5 if isinstance(v, (int, float)) else None for v in values]
-    lo_idx = max(0, int(0.01 * (n - 1)))
-    hi_idx = min(n - 1, int(0.99 * (n - 1)))
-    lo, hi = valid[lo_idx], valid[hi_idx]
-    pool = sorted(max(lo, min(hi, v)) for v in valid)
-    pn = len(pool)
-    out = []
-    for v in values:
-        if not isinstance(v, (int, float)):
-            out.append(None); continue
-        clipped = max(lo, min(hi, v))
-        below = sum(1 for x in pool if x < clipped)
-        eq = sum(1 for x in pool if x == clipped)
-        out.append((below + 0.5 * eq) / pn)
-    return out
-
-
-def _quantile(values: list[float], q: float) -> float:
-    if not values:
-        return 0.0
-    s = sorted(values)
-    idx = int(q * (len(s) - 1))
-    return s[idx]
-
-
-def _apply_sector_cap(entries: list[HKPickEntry], cutoff: float, top_k: int,
-                      max_sector_frac: float = 0.35) -> tuple[list[HKPickEntry], list[str]]:
-    """按综合分排序后加行业上限，避免港股 top 全挤在同一赛道。"""
-    max_per_sector = max(1, int(top_k * max_sector_frac))
-    selected: list[HKPickEntry] = []
-    counts: dict[str, int] = {}
-    skipped: list[str] = []
-    eligible = [e for e in entries if e.data_quality != "fail" and e.composite >= cutoff]
-    for e in eligible:
-        sector = e.sector or "未分类"
-        if counts.get(sector, 0) >= max_per_sector:
-            skipped.append(f"{e.code}({sector})")
-            continue
-        selected.append(e)
-        counts[sector] = counts.get(sector, 0) + 1
-        if len(selected) >= top_k:
-            break
-    return selected, skipped
 
 
 def _load_hk_factor_cache() -> dict:
@@ -350,55 +293,18 @@ def run_hk_picks(top_k: int = 12, mode: str = "tertile", dry_run: bool = False,
     if cache_dirty:
         _save_hk_factor_cache(factor_cache)
 
-    # 3. 横截面归一化 momentum / reversal
-    moms = [e.momentum_12_1 for e in entries]
-    revs = [e.reversal_1m for e in entries]
-    mom_ranks = _winsorize_rank(moms)
-    rev_ranks = _winsorize_rank(revs)
-    for i, e in enumerate(entries):
-        e.momentum_norm = mom_ranks[i]
-        e.reversal_norm = rev_ranks[i]
-
-    # 4. 合成 composite + 决策
+    # 3. 合成 composite + 决策（与真实持仓港股评分共用同一个 helper）
     print(f"\n[3/4] 合成综合分（{len(entries)} 只）...")
-    for e in entries:
-        factors = {
-            "f_score": e.f_score_norm,
-            "momentum": e.momentum_norm,
-            "reversal": e.reversal_norm,
-            "south_flow": e.south_score if FACTOR_WEIGHTS.get("south_flow", 0) > 0 else None,
-        }
-        active = {k: w for k, w in FACTOR_WEIGHTS.items() if w > 0}
-        total_w = sum(active.values()) or 1.0
-        covered_w = sum(w for k, w in active.items() if factors.get(k) is not None)
-        e.coverage_score = round(covered_w / total_w, 4)
-        missing = [k for k in active if factors.get(k) is None]
-        e.missing_factors = ",".join(missing)
-        if covered_w <= 0:
-            e.composite = -0.25
-        else:
-            raw = sum(active[k] * float(factors[k]) for k in active if factors.get(k) is not None) / covered_w
-            penalty = max(0.0, 0.50 - e.coverage_score) / 0.50 * 0.25
-            e.composite = round(raw * e.coverage_score - penalty, 4)
-
-    entries.sort(key=lambda e: -e.composite)
+    entries, selected, cutoff, sector_skipped = score_hk_entries(
+        entries,
+        mode=mode,
+        top_k=top_k,
+        factor_weights=FACTOR_WEIGHTS,
+    )
     valid_composites = [e.composite for e in entries if e.data_quality != "fail"]
     if not valid_composites:
         print("  ⚠️ 无有效因子数据 — 所有候选 fail")
         return 0
-    cutoff_map = {
-        "quartile": _quantile(valid_composites, 0.75),
-        "tertile":  _quantile(valid_composites, 2/3),
-        "median":   _quantile(valid_composites, 0.50),
-    }
-    cutoff = cutoff_map[mode]
-    for i, e in enumerate(entries, 1):
-        e.rank = i
-        e.recommended = False
-
-    selected, sector_skipped = _apply_sector_cap(entries, cutoff, top_k)
-    for e in selected:
-        e.recommended = True
 
     print(f"\n  cutoff = {cutoff:.3f} (mode={mode})")
     print(f"  推荐 {len(selected)} / 有效 {len(valid_composites)} / 总 {len(entries)}")
@@ -463,13 +369,7 @@ def run_hk_picks(top_k: int = 12, mode: str = "tertile", dry_run: bool = False,
     # 写 DuckDB picks（让 dashboard #picks tab 自动展示港股）
     db_rows = []
     for e in selected:
-        # 评级（基于 composite 分位；港股 composite ∈ [0,1]，跟美股 z-score 量纲不同 → 自有阈值）
-        if e.composite >= 0.75:
-            grade_label = "⭐⭐⭐ 强烈推荐（综合 ≥0.75）"
-        elif e.composite >= 0.60:
-            grade_label = "⭐⭐ 推荐（综合 ≥0.60）"
-        else:
-            grade_label = "⭐ 关注"
+        grade_label = hk_grade_label(e)
         db_rows.append({
             "code": e.code,
             "name": e.name,

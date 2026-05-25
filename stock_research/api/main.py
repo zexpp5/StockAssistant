@@ -61,18 +61,32 @@ def create_app():
     # ────────── 健康检查 ──────────
     @app.get("/health")
     def health():
+        """进程存活探活：始终 HTTP 200，避免 DuckDB 被流水线占锁时前端误判「API 未启动」。
+
+        db=ok 时附带表行数；db=locked/error 时仅报告原因，不抛 500。
+        """
         from .. import config as _c
-        import stock_db
-        # 2026-05-21 V1 cutover：health 报告 V2 三表行数（manual_watchlist 用户自选股 / system_universe 系统池 / pool_membership）
-        mw_n = len(stock_db.fetch_manual_watchlist())
-        u_n = len(stock_db.fetch_universe_for_ai_recommendations())
-        return {
+        payload: dict[str, Any] = {
             "status": "ok",
+            "api": "up",
             "investors_tracked": len(_c.INVESTORS_13F),
-            "manual_watchlist_rows": mw_n,
-            "system_universe_rows": u_n,
-            "data_source": "V2 DuckDB",
         }
+        try:
+            import stock_db
+            mw_n = len(stock_db.fetch_manual_watchlist())
+            u_n = len(stock_db.fetch_universe_for_ai_recommendations())
+            payload.update({
+                "db": "ok",
+                "manual_watchlist_rows": mw_n,
+                "system_universe_rows": u_n,
+                "data_source": "V2 DuckDB",
+            })
+        except Exception as exc:
+            msg = str(exc)
+            locked = "Could not set lock" in msg or "Conflicting lock" in msg
+            payload["db"] = "locked" if locked else "error"
+            payload["db_detail"] = msg[:240]
+        return payload
 
     # ────────── 汇率（单一来源，前端读这里替代两份 JS 硬编码 FX_TO_RMB） ──────────
     @app.get("/api/fx-rates")
@@ -1168,6 +1182,26 @@ _sys.exit(rc)
         """手动重算并落库真实持仓每日体检。"""
         from stock_research.jobs.real_holding_review import build_real_holding_review
         return _json_any(build_real_holding_review(persist=True))
+
+    @app.get("/api/real-holdings/daily-review/history")
+    def real_holdings_daily_review_history(
+        symbol: str | None = None,
+        days: int = 14,
+    ) -> dict[str, Any]:
+        """真实持仓体检历史轨迹 (按日期升序)。
+
+        无 symbol → 返回近 N 日所有持仓的轨迹 dict {symbol: [snapshots...]}；
+        带 symbol → 只返回这一只的轨迹。dashboard 用前者批量拉,详情页用后者。
+        """
+        import stock_db
+        days_clamped = max(1, min(int(days), 365))
+        symbols = [symbol] if symbol else None
+        history = stock_db.fetch_real_holding_review_history(symbols=symbols, days=days_clamped)
+        return _json_any({
+            "days": days_clamped,
+            "symbol": symbol,
+            "history": history,
+        })
 
     @app.get("/api/model-sim-holdings")
     def list_model_sim_holdings() -> list[dict[str, Any]]:

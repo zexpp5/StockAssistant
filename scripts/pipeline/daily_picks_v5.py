@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.join(_REPO, "scripts", "lib"))  # 2026-05-11 lib 迁�
 sys.path.insert(0, os.path.join(_REPO, "scripts", "pipeline"))  # sibling: daily_picks
 import json
 import argparse
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import pandas as pd
@@ -43,29 +44,63 @@ from stock_db import fetch_manual_watchlist_enriched as fetch_watchlist  # V2 ma
 # 2026-05-21 V1 cutover：picks 表已删，daily_picks_v5 不再写库；factor_scores_today.json 是唯一持久产物
 # from stock_db import upsert_picks  # removed
 from stock_research.core import fundamental_deep  # Altman Z / Beneish M 软红旗
+from stock_research.core.us_risk_flags import build_us_equity_risk_flags as _build_risk_flags
 
 
 # 美股代码识别（yfinance 财报齐全的市场）
 def is_us_ticker(code):
-    return code.isalpha() and 1 <= len(code) <= 5
+    code = (code or "").strip().upper()
+    # 普通美股 + 类股：MCD / BRK-B / BRK.B。排除 9992.HK 这类带交易所后缀的港/A 股。
+    return bool(re.fullmatch(r"[A-Z]{1,5}([-.][A-Z])?", code))
 
 
-def _build_risk_flags(altman: dict | None, beneish: dict | None) -> list[str]:
-    """Altman Z / Beneish M 生成软红旗清单（参考二审意见：不淘汰，只标注）。
+def _safe_int(value, default=0):
+    try:
+        if pd.isna(value):
+            return default
+        return int(value)
+    except Exception:
+        return default
 
-    Beneish 优先用 m_score_adjusted（已 growth-adjusted）规避高增长伪阳性。
-    A 股 / 港股 FMP 无数据时 altman/beneish 含 error，本函数返回空列表。
+
+def _write_factor_cache(
+    cache_file: str,
+    *,
+    today: str,
+    factor_results: list,
+    signal_results: list,
+    fundamentals_results: list,
+    watchlist_scores: list[dict] | None = None,
+    factor_weights: dict | None = None,
+    mode: str | None = None,
+    cutoff: float | None = None,
+    dry_run: bool | None = None,
+) -> None:
+    """Persist manual-watchlist factor cache plus the final scored rows.
+
+    `real_holding_review` consumes `watchlist_scores` directly so it never
+    re-computes scores with a different factor-weight regime.
     """
-    flags: list[str] = []
-    if altman and not altman.get("error"):
-        z = altman.get("z_score")
-        if z is not None and z < 1.81:
-            flags.append(f"🚨 Altman Z={z:.2f}<1.81 破产警示")
-    if beneish and not beneish.get("error"):
-        if beneish.get("risk_level") == "high":
-            m_adj = beneish.get("m_score_adjusted")
-            flags.append(f"🚨 Beneish M={m_adj:.2f}>-1.78 造假风险")
-    return flags
+    os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+    payload = {
+        "date": today,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "factors": factor_results,
+        "signals": signal_results,
+        "fundamentals": fundamentals_results,
+    }
+    if watchlist_scores is not None:
+        payload["watchlist_scores"] = watchlist_scores
+    if factor_weights is not None:
+        payload["factor_weights_used"] = factor_weights
+    if mode is not None:
+        payload["mode"] = mode
+    if cutoff is not None:
+        payload["cutoff"] = float(cutoff)
+    if dry_run is not None:
+        payload["dry_run"] = bool(dry_run)
+    with open(cache_file, "w", encoding="utf-8") as cf:
+        json.dump(payload, cf, ensure_ascii=False, indent=2, default=str)
 
 
 def _load_entry_prices(codes: list[str]) -> dict[str, dict]:
@@ -230,9 +265,17 @@ def main():
         # watchlist 空时也刷新 cache 为「今日 + 空」，避免旧 cache（如 NVDA-only 残留）误导下游
         cache_file = os.path.join(_REPO, args.cache)
         today = datetime.now().strftime("%Y-%m-%d")
-        with open(cache_file, "w", encoding="utf-8") as cf:
-            json.dump({"date": today, "factors": [], "signals": [], "fundamentals": []},
-                      cf, ensure_ascii=False, indent=2, default=str)
+        _write_factor_cache(
+            cache_file,
+            today=today,
+            factor_results=[],
+            signal_results=[],
+            fundamentals_results=[],
+            watchlist_scores=[],
+            factor_weights=factor_weights,
+            mode=args.mode,
+            dry_run=args.dry_run,
+        )
         print(f"  watchlist 为空或无美股标的；写空 cache → {cache_file}（避免旧数据残留）。")
         return
 
@@ -297,11 +340,17 @@ def main():
                     f"Z={z_val if z_val is not None else '-'} M={m_val if m_val is not None else '-'}"
                 )
 
-        # 写缓存（增加 fundamentals 字段，旧版可向后兼容读取）
-        with open(cache_file, "w", encoding="utf-8") as cf:
-            json.dump({"date": today, "factors": factor_results, "signals": signal_results,
-                       "fundamentals": fundamentals_results},
-                     cf, ensure_ascii=False, indent=2, default=str)
+        # 写原始因子缓存（评分结果会在 combine 后补写 watchlist_scores）
+        _write_factor_cache(
+            cache_file,
+            today=today,
+            factor_results=factor_results,
+            signal_results=signal_results,
+            fundamentals_results=fundamentals_results,
+            factor_weights=factor_weights,
+            mode=args.mode,
+            dry_run=args.dry_run,
+        )
 
         try:
             from stock_research.core import fmp_client
@@ -373,13 +422,14 @@ def main():
         m_str = f"{r['momentum']:+.0f}%" if pd.notna(r['momentum']) else "N/A"
         rv_str = f"{r['reversal']:+.1f}%" if pd.notna(r['reversal']) else "N/A"
         ins_score = insider_scores.get(tk, 0)
+        analyst_score = _safe_int(r.get("analyst"), 0)
         rec = bool(r["recommended"])
         z = float(r["composite"]) if pd.notna(r["composite"]) else 0.0
         is_neg = z <= NEG_CUTOFF
         is_watchlist = tk in watchlist_codes
         flag = "✅" if rec else ("⛔" if is_neg else " ")
         print(f"  {int(r['rank']):<3}{name[:18]:<22}{f_str:>3}{m_str:>8}{rv_str:>8}"
-              f"{int(r['analyst']):>7}{ins_score:>7}{r['composite']:>+7.2f}    {flag}")
+              f"{analyst_score:>7}{ins_score:>7}{r['composite']:>+7.2f}    {flag}")
 
         # picks 表既承载"今日 AI 优选"，也给 dashboard 的 watchlist AI 评级列供数。
         # 因此：生产推荐保留 top/neg-top 限流，但 watchlist 自选股必须全量写入当前评级。
@@ -395,7 +445,7 @@ def main():
                 "f_score": int(r["f_score"]) if pd.notna(r["f_score"]) else None,
                 "momentum_12_1": float(r["momentum"]) if pd.notna(r["momentum"]) else None,
                 "reversal_1m": float(r["reversal"]) if pd.notna(r["reversal"]) else None,
-                "analyst_score": int(r["analyst"]),
+                "analyst_score": analyst_score,
                 "insider_score": int(ins_score),
                 "composite_z": z,
                 "coverage_score": float(r.get("coverage_score", 0.0)),
@@ -436,16 +486,8 @@ def main():
               ", ".join(f"{x['code']}({x['composite_z']:+.2f})" for x in watchlist_neutral[:20]) +
               (" ..." if len(watchlist_neutral) > 20 else ""))
 
-    if args.dry_run:
-        print(
-            f"\n[Dry-Run] 不写 DuckDB。"
-            f"正向 {len(selected)} + 负向 {len(negatives)} + 观察 {len(watchlist_neutral)} = "
-            f"{len(selected) + len(negatives) + len(watchlist_neutral)} 行"
-        )
-        return
-
     # ============================================================
-    # 4-5. 写 DuckDB picks (2026-05-11 PM 第二轮:飞书 100% 退役)
+    # 4-5. 写最终评分产物 (2026-05-11 PM 第二轮:飞书 100% 退役)
     # ============================================================
     db_rows = []
     success = 0
@@ -511,8 +553,30 @@ def main():
             "coverage_score": coverage,
             "missing_factors": s.get("missing_factors"),
             "factor_weights_used": s.get("factor_weights_used"),
+            "risk_flags": s.get("risk_flags") or [],
         })
         success += 1
+
+    _write_factor_cache(
+        cache_file,
+        today=today,
+        factor_results=factor_results,
+        signal_results=signal_results,
+        fundamentals_results=fundamentals_results,
+        watchlist_scores=db_rows,
+        factor_weights=factor_weights,
+        mode=args.mode,
+        cutoff=cutoff,
+        dry_run=args.dry_run,
+    )
+
+    if args.dry_run:
+        print(
+            f"\n[Dry-Run] 已写 factor_scores_today.json 最终评分快照；不写生产推荐。"
+            f"正向 {len(selected)} + 负向 {len(negatives)} + 观察 {len(watchlist_neutral)} = "
+            f"{len(selected) + len(negatives) + len(watchlist_neutral)} 行"
+        )
+        return
 
     # 2026-05-21 V1 cutover：原 [4/5] 写 V1 DuckDB picks 已删；
     # daily_picks_v5 现在只写 factor_scores_today.json 给 optimize_portfolio 用

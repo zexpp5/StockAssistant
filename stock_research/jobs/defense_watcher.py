@@ -93,9 +93,23 @@ def _build_alert_card(prev: str, curr: str, alerts: list[dict]) -> dict:
     prev_icon = ICON_MAP.get(prev, "⚪")
     curr_icon = ICON_MAP.get(curr, "⚪")
     advice = {
-        "LOW": "👉 **留意但别加仓**，单笔不超 5% 仓位",
-        "HIGH": "👉 **减仓 30-50%，停止买入**，可换防御标的（KO / MCD 等）",
-        "CRITICAL": "👉 **清仓 sit out** — 崩盘期历史 alpha = -9.77%，等灯转回 LOW 再回来",
+        "LOW": (
+            "👉 **大盘风控 · 留意档**（不是个股买卖单）\n"
+            "市场略偏谨慎：别加仓，单笔新开仓控制在约 5% 以内。"
+        ),
+        "HIGH": (
+            "👉 **大盘风控 · 偏高风险档**（不是个股买卖单）\n\n"
+            "**市场在说什么**：触发明细里的指标（常见是 SPY 期权 Put/Call 比 PCR）"
+            "显示整体看跌情绪偏强。\n\n"
+            "**系统模板建议**：整体减仓约 30–50%、暂停新开仓；"
+            "可考虑防御型蓝筹（如 KO、MCD）——仅作风格参考。\n\n"
+            "**不要和这些混读**：① AI 推荐买哪只 ② AI 组合调仓 ③「我的持仓」里每只股的体检结论。"
+        ),
+        "CRITICAL": (
+            "👉 **大盘风控 · 极高风险档**（不是个股买卖单）\n"
+            "建议大幅降仓或观望；历史压力测试显示崩盘期策略可能明显跑输 SPY。"
+            "等档位回落到 LOW 以下再考虑恢复正常仓位。"
+        ),
     }.get(curr, "")
 
     elements: list[dict] = [{
@@ -121,8 +135,9 @@ def _build_alert_card(prev: str, curr: str, alerts: list[dict]) -> dict:
 
     elements.append({"tag": "note", "elements": [
         {"tag": "plain_text", "content": (
-            "📖 4 档对照：🟢 NONE 正常 ｜ 🟡 LOW 留意 ｜ 🟠 HIGH 减仓 ｜ 🔴 CRITICAL 清仓 · "
-            "本卡片仅在 severity 升档时推送 · ⚠️ 不构成投资建议"
+            "📖 这是什么：defense_watcher 每 15 分钟扫大盘（VIX/200MA/宏观/PCR），"
+            "只在档位变差时推飞书 · 不是 AI 荐股也不是持仓体检 · "
+            "🟢正常 🟡留意 🟠减仓 🔴清仓 · ⚠️ 不构成投资建议"
         )},
     ]})
 

@@ -12,6 +12,7 @@ import math
 import sys
 from datetime import date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 REPO = Path(__file__).resolve().parents[2]
@@ -20,6 +21,15 @@ sys.path.insert(0, str(REPO / "scripts" / "lib"))
 
 import fx_rates  # type: ignore
 import stock_db  # type: ignore
+from early_signals import score_analyst  # type: ignore
+from factor_model import combine_factors  # type: ignore
+from stock_research.core.hk_scoring import (
+    HK_FACTOR_WEIGHTS,
+    HK_RECOMMEND_THRESHOLD,
+    hk_grade_label,
+    score_hk_entries,
+)
+from stock_research.core.us_risk_flags import build_us_equity_risk_flags_from_fundamental
 from stock_research.jobs.morning_brief import compute_holdings_verdict
 
 
@@ -105,32 +115,38 @@ def _latest_prices_by_symbol(conn, symbols: list[str]) -> dict[str, dict]:
     if not symbols:
         return {}
     placeholders = ",".join(["?"] * len(symbols))
+    # 取每只票的最近两条 close,用于计算"今日盈亏"(latest vs prev)。
+    # row_num=1 是 latest,row_num=2 是 prev_close;只有一条历史时 prev_close 缺失。
     rows = conn.execute(
         f"""
-        WITH latest AS (
-          SELECT symbol, MAX(trade_date) AS trade_date
+        SELECT market, symbol, trade_date, close, currency, source, fetched_at, row_num
+        FROM (
+          SELECT market, symbol, trade_date, close, currency, source, fetched_at,
+                 ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY trade_date DESC) AS row_num
           FROM price_daily
           WHERE symbol IN ({placeholders})
-          GROUP BY symbol
         )
-        SELECT p.market, p.symbol, p.trade_date, p.close, p.currency, p.source, p.fetched_at
-        FROM price_daily p
-        JOIN latest l ON p.symbol = l.symbol AND p.trade_date = l.trade_date
-        ORDER BY p.symbol
+        WHERE row_num <= 2
+        ORDER BY symbol, row_num
         """,
         symbols,
     ).fetchall()
     out: dict[str, dict] = {}
-    for market, symbol, trade_date, close, currency, source, fetched_at in rows:
-        out[str(symbol)] = {
-            "market": market,
-            "symbol": symbol,
-            "trade_date": trade_date,
-            "close": close,
-            "currency": currency,
-            "source": source,
-            "fetched_at": fetched_at,
-        }
+    for market, symbol, trade_date, close, currency, source, fetched_at, row_num in rows:
+        key = str(symbol)
+        if row_num == 1:
+            out[key] = {
+                "market": market,
+                "symbol": symbol,
+                "trade_date": trade_date,
+                "close": close,
+                "currency": currency,
+                "source": source,
+                "fetched_at": fetched_at,
+            }
+        elif row_num == 2 and key in out:
+            out[key]["prev_close"] = close
+            out[key]["prev_trade_date"] = trade_date
     return out
 
 
@@ -183,6 +199,277 @@ def _latest_picks_by_symbol(conn, symbols: list[str]) -> dict[str, dict]:
     return out
 
 
+def _symbol_aliases(symbol: str) -> set[str]:
+    s = str(symbol or "").strip()
+    aliases = {s}
+    if "-" in s:
+        aliases.add(s.replace("-", "."))
+    if "." in s:
+        aliases.add(s.replace(".", "-"))
+    return {x for x in aliases if x}
+
+
+def _us_watchlist_rating(z: float, coverage: float, cutoff: float) -> tuple[str, str]:
+    neg_cutoff = -0.5
+    if coverage < 0.50:
+        return f"⭐ 观察（数据覆盖 {coverage:.0%} < 50%，不进 buy）", "watch"
+    if z >= 1.0:
+        return "⭐⭐⭐ 强烈推荐（z ≥ 1）", "buy"
+    if z >= 0.5:
+        return "⭐⭐ 推荐（z ≥ 0.5）", "buy"
+    if z <= neg_cutoff:
+        return f"⛔ 不建议（z ≤ {neg_cutoff}）", "avoid"
+    if z >= cutoff:
+        return f"⭐ 关注（z ≥ {cutoff:.2f}）", "buy"
+    return f"⭐ 观察（-0.5 < z < {cutoff:.2f}）", "watch"
+
+
+def _factor_weights_from_cache(cache: dict) -> dict[str, float] | None:
+    raw = cache.get("factor_weights_used")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = None
+    if not isinstance(raw, dict):
+        return None
+    out: dict[str, float] = {}
+    for key, value in raw.items():
+        v = _as_float(value)
+        if v is not None:
+            out[str(key)] = v
+    return out or None
+
+
+def _pick_from_watchlist_score_row(row: dict, *, matched_symbol: str, cache: dict) -> dict:
+    score = _as_float(row.get("total_score"))
+    z = _as_float(row.get("composite_z"))
+    if z is None and score is not None:
+        z = score / 100.0
+    coverage = _as_float(row.get("coverage_score")) or 0.0
+    cutoff = _as_float(cache.get("cutoff")) or 0.0
+    rating = row.get("rating")
+    signal = row.get("signal")
+    if not rating or not signal:
+        rating, signal = _us_watchlist_rating(z or 0.0, coverage, cutoff)
+    risk_flags = row.get("risk_flags") or []
+    if isinstance(risk_flags, str):
+        risk_flags = [risk_flags] if risk_flags else []
+    return {
+        "market": row.get("market") or stock_db._infer_market_from_ticker(matched_symbol),
+        "symbol": matched_symbol,
+        "name": row.get("name") or matched_symbol,
+        "rating": rating,
+        "signal": signal,
+        "total_score": round(score, 2) if score is not None else (round((z or 0.0) * 100, 2) if z is not None else None),
+        "recommendation_reason": "由 daily_picks 自选股评分快照兜底，与主路径同公式",
+        "risk_flags": risk_flags,
+        "universe_scope": "manual_watchlist",
+        "run_id": "factor_scores_today",
+        "run_date": cache.get("date"),
+        "generated_at": cache.get("generated_at") or cache.get("date"),
+        "coverage_score": coverage,
+        "missing_factors": row.get("missing_factors"),
+        "factor_weights_used": row.get("factor_weights_used") or cache.get("factor_weights_used"),
+    }
+
+
+def _manual_watchlist_score_fallbacks(symbols: list[str]) -> dict[str, dict]:
+    """Fallback for real holdings that are not in system-universe recommendation_picks.
+
+    `daily_picks_v5.py` writes factor_scores_today.json for manual watchlist ratings,
+    while real_holding_review needs a pick-like shape. This keeps real holdings from
+    showing "no score" when the manual-watchlist factor cache already has enough data.
+    """
+    needed: dict[str, str] = {}
+    for sym in symbols:
+        for alias in _symbol_aliases(sym):
+            needed[alias.upper()] = sym
+    if not needed:
+        return {}
+
+    cache = _load_json(REPO / "data" / "latest" / "factor_scores_today.json")
+    scored_rows = cache.get("watchlist_scores") if isinstance(cache, dict) else None
+    if isinstance(scored_rows, list):
+        out: dict[str, dict] = {}
+        for row in scored_rows:
+            if not isinstance(row, dict):
+                continue
+            tk = str(row.get("code") or row.get("symbol") or row.get("ticker") or "")
+            matched = None
+            for alias in _symbol_aliases(tk):
+                matched = needed.get(alias.upper())
+                if matched:
+                    break
+            if not matched:
+                continue
+            exact_match = tk.upper() == matched.upper()
+            if matched in out and not exact_match:
+                continue
+            out[matched] = _pick_from_watchlist_score_row(row, matched_symbol=matched, cache=cache)
+        return out
+
+    factors = cache.get("factors") if isinstance(cache, dict) else None
+    signals = cache.get("signals") if isinstance(cache, dict) else None
+    fundamentals = cache.get("fundamentals") if isinstance(cache, dict) else None
+    if not isinstance(factors, list) or not factors:
+        return {}
+
+    try:
+        signal_by_ticker = {str(s.get("ticker")): s for s in (signals or []) if isinstance(s, dict)}
+        analyst_scores = {}
+        for tk, sig in signal_by_ticker.items():
+            analyst = sig.get("analyst") or {}
+            if isinstance(analyst, dict) and "error" not in analyst:
+                analyst_scores[tk] = score_analyst(analyst)[0]
+            else:
+                analyst_scores[tk] = None
+        df = combine_factors(
+            factors,
+            analyst_signals=analyst_scores,
+            include_reversal=True,
+            factor_weights=_factor_weights_from_cache(cache),
+        )
+    except Exception as exc:
+        logger.warning("factor_scores_today fallback 评分失败: %s", exc)
+        return {}
+
+    out: dict[str, dict] = {}
+    fundamental_by_code = {
+        str(x.get("ticker")): x
+        for x in (fundamentals or [])
+        if isinstance(x, dict) and x.get("ticker")
+    }
+    try:
+        cutoff = float(df["composite"].quantile(2 / 3))
+    except Exception:
+        cutoff = 0.0
+    for _, row in df.iterrows():
+        tk = str(row.get("ticker") or "")
+        matched = None
+        for alias in _symbol_aliases(tk):
+            matched = needed.get(alias.upper())
+            if matched:
+                break
+        if not matched:
+            continue
+        z = _as_float(row.get("composite")) or 0.0
+        coverage = _as_float(row.get("coverage_score")) or 0.0
+        rating, signal = _us_watchlist_rating(z, coverage, cutoff)
+        risk_flags = build_us_equity_risk_flags_from_fundamental(fundamental_by_code.get(tk))
+        if risk_flags:
+            rating = rating + " · " + "｜".join(risk_flags)
+        out[matched] = {
+            "market": stock_db._infer_market_from_ticker(matched),
+            "symbol": matched,
+            "name": matched,
+            "rating": rating,
+            "signal": signal,
+            "total_score": round(z * 100, 2),
+            "recommendation_reason": "由 daily_picks 自选股因子缓存兜底打分，与主路径同公式",
+            "risk_flags": risk_flags,
+            "universe_scope": "manual_watchlist",
+            "run_id": "factor_scores_today",
+            "run_date": cache.get("date"),
+            "generated_at": cache.get("date"),
+            "coverage_score": coverage,
+            "missing_factors": row.get("missing_factors"),
+            "factor_weights_used": row.get("factor_weights_used") or cache.get("factor_weights_used"),
+        }
+    return out
+
+
+def _parse_iso_date(value: Any) -> date | None:
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except Exception:
+        return None
+
+
+def _hk_watchlist_score_fallbacks(symbols: list[str], *, max_age_days: float = 3.0) -> dict[str, dict]:
+    """Fallback HK manual-watchlist scoring from hk_factor_cache.json.
+
+    `hk_picks.py` may be forced to dry-run by production audit gates, but it
+    still refreshes factor cache. Real holding review can use that cache for an
+    advisory stock score without writing production recommendations. The scoring
+    formula is shared with hk_picks via `stock_research.core.hk_scoring`.
+    """
+    hk_symbols = [s for s in symbols if str(s or "").upper().endswith(".HK")]
+    if not hk_symbols:
+        return {}
+    cache = _load_json(REPO / "data" / "latest" / "hk_factor_cache.json")
+    items = cache.get("items") if isinstance(cache, dict) else None
+    if not isinstance(items, dict):
+        return {}
+
+    today = date.today()
+    entries: list[SimpleNamespace] = []
+    item_by_symbol: dict[str, dict] = {}
+    for sym in hk_symbols:
+        item = items.get(sym)
+        factor = item.get("factor") if isinstance(item, dict) else None
+        item_date = _parse_iso_date(item.get("date") if isinstance(item, dict) else None)
+        if not isinstance(factor, dict) or item_date is None:
+            continue
+        age_days = (today - item_date).days
+        if age_days < 0 or age_days > max_age_days:
+            continue
+        piotroski = factor.get("piotroski") or {}
+        momentum = factor.get("momentum") or {}
+        f_score = _as_float(piotroski.get("f_score"))
+        data_quality = str(piotroski.get("data_quality") or "partial")
+        entries.append(SimpleNamespace(
+            code=sym,
+            name=sym,
+            market="港股",
+            sector="",
+            f_score=int(f_score) if f_score is not None else None,
+            f_score_norm=(f_score / 9.0) if f_score is not None else None,
+            momentum_12_1=_as_float(momentum.get("momentum_12_1")),
+            reversal_1m=_as_float(momentum.get("reversal_1m")),
+            south_pct=None,
+            south_rank=None,
+            south_score=0.5,
+            data_quality=data_quality,
+            notes=[],
+        ))
+        item_by_symbol[sym] = item
+    if not entries:
+        return {}
+
+    entries, _selected, _cutoff, _sector_skipped = score_hk_entries(
+        entries,
+        mode="tertile",
+        top_k=max(1, len(entries)),
+        factor_weights=HK_FACTOR_WEIGHTS,
+    )
+
+    out: dict[str, dict] = {}
+    for e in entries:
+        sym = e.code
+        composite = float(getattr(e, "composite", 0.0) or 0.0)
+        item = item_by_symbol.get(sym) or {}
+        item_date = str(item.get("date") or "")
+        out[sym] = {
+            "market": "HK",
+            "symbol": sym,
+            "name": sym,
+            "rating": hk_grade_label(e),
+            "signal": "buy" if composite >= HK_RECOMMEND_THRESHOLD else "watch",
+            "total_score": round(composite * 100, 2),
+            "recommendation_reason": "由 hk_picks 因子缓存兜底打分，与主路径同公式",
+            "risk_flags": [],
+            "universe_scope": "manual_watchlist",
+            "run_id": "hk_factor_cache",
+            "run_date": item_date,
+            "generated_at": cache.get("updated_at") or item_date,
+            "coverage_score": float(getattr(e, "coverage_score", 0.0) or 0.0),
+            "missing_factors": getattr(e, "missing_factors", ""),
+            "factor_weights_used": json.dumps(HK_FACTOR_WEIGHTS, ensure_ascii=False, sort_keys=True),
+        }
+    return out
+
+
 def _target_weights_from_plan() -> dict[str, float]:
     plan = _load_json(REPO / "data" / "latest" / "plan_a_v5.json")
     rows = plan.get("plan_v6") or plan.get("plan_v5") or plan.get("plan") or []
@@ -210,8 +497,12 @@ def _review_action(
     if treatment_class == "data_blocked" or missing_price:
         return "补数据"
     if treatment_class == "risk_only":
+        if label_kind == "stop_breach":
+            return "风险复查"
         if pnl_pct is not None and pnl_pct <= float(rules["tracking_loss_review_pct"]):
             return "风险复查"
+        if label_kind == "stop_watch":
+            return "减仓观察"
         return "仅风控跟踪"
     if score is None:
         return "补数据"
@@ -270,8 +561,18 @@ def _build_item(
     current_value_rmb = cost_rmb if missing_price else current_price * shares * fx
     pnl_rmb = current_value_rmb - cost_rmb
     pnl_pct = (pnl_rmb / cost_rmb * 100.0) if cost_rmb else None
+    # 今日盈亏: 最近收盘 vs 前一日收盘,统一口径而不按本地日历日。
+    prev_close = _as_float((price or {}).get("prev_close"))
+    prev_trade_date = (price or {}).get("prev_trade_date")
+    day_change_rmb = None
+    day_change_pct = None
+    if not missing_price and prev_close is not None and prev_close > 0:
+        day_change_rmb = (current_price - prev_close) * shares * fx
+        day_change_pct = (current_price / prev_close - 1.0) * 100.0
     current_weight = (current_value_rmb / total_capital) if total_capital > 0 else None
     target_weight = target_weights.get(symbol)
+    if treatment_class == "risk_only":
+        target_weight = None
     weight_gap_pt = None
     if current_weight is not None and target_weight is not None:
         weight_gap_pt = (current_weight - target_weight) * 100.0
@@ -298,7 +599,8 @@ def _build_item(
     coverage_score = float(rules["coverage_base"])
     if not missing_price:
         coverage_score += float(rules["coverage_price"])
-    if pick and raw_score is not None:
+    has_model_score = bool(pick and raw_score is not None and treatment_class != "risk_only")
+    if has_model_score:
         coverage_score += float(rules["coverage_model_score"])
     if target_weight is not None:
         coverage_score += float(rules["coverage_target_or_tracking"])
@@ -322,8 +624,11 @@ def _build_item(
 
     if treatment_class == "risk_only":
         reasons.append("这类资产不适用股票因子模型,只做市值、盈亏和风控跟踪")
-    if pick and raw_score is not None:
-        reasons.append(f"最新股票评分 {raw_score:.1f} · 评级 {pick.get('rating') or '-'}")
+    if has_model_score and score is not None:
+        score_line = f"最新股票评分 {score:.1f}"
+        if raw_score is not None and raw_score > score + 1e-6:
+            score_line += f"（原始 {raw_score:.1f}，展示封顶 100）"
+        reasons.append(f"{score_line} · 评级 {pick.get('rating') or '-'}")
     elif treatment_class not in {"risk_only", "data_blocked"}:
         reasons.append("暂无当日股票评分,结论降级为观察")
         data_flags.append("no_model_score")
@@ -336,7 +641,21 @@ def _build_item(
         reasons.append(f"当前盈亏 {pnl_pct:+.2f}%")
     if weight_gap_pt is not None:
         reasons.append(f"当前仓位 vs AI目标差 {weight_gap_pt:+.1f}pt")
+    if treatment_class == "risk_only":
+        if current_weight is not None:
+            reasons.append(f"当前仓位 {current_weight * 100:.1f}%（不与 AI 目标比较）")
+        threshold = float(rules["tracking_loss_review_pct"])
+        if pnl_pct is not None:
+            margin = pnl_pct - threshold  # threshold 为负数；margin>=0 即仍在风控线上方
+            if margin >= 0:
+                reasons.append(f"距 {threshold:+.0f}% 风控线还有 {margin:.1f}pt 缓冲")
+            else:
+                reasons.append(f"已跌破 {threshold:+.0f}% 风控线 {abs(margin):.1f}pt")
     for r in (verdict or {}).get("reasons") or []:
+        # compute_holdings_verdict 的 weight_off 仍是早报用的简化口径；体检页
+        # 已在上面用 RMB 锁定成本/汇率重新计算，避免同一行出现两个差距。
+        if r.get("kind") == "weight_off":
+            continue
         txt = r.get("text")
         if txt:
             reasons.append(txt)
@@ -360,7 +679,7 @@ def _build_item(
         "treatment_class": treatment_class,
         "score": score,
         "coverage_score": coverage_score,
-        "rating": (pick or {}).get("rating") or ("tracking" if treatment_class == "risk_only" else "unrated"),
+        "rating": "tracking" if treatment_class == "risk_only" else ((pick or {}).get("rating") or "unrated"),
         "action_label": action,
         "action_priority": ACTION_PRIORITY.get(action, 99),
         "current_price": current_price,
@@ -369,6 +688,10 @@ def _build_item(
         "cost_rmb_locked": round(cost_rmb, 4),
         "pnl_rmb": round(pnl_rmb, 4),
         "pnl_pct": round(pnl_pct, 4) if pnl_pct is not None else None,
+        "prev_close": prev_close,
+        "prev_trade_date": prev_trade_date,
+        "day_change_rmb": round(day_change_rmb, 4) if day_change_rmb is not None else None,
+        "day_change_pct": round(day_change_pct, 4) if day_change_pct is not None else None,
         "current_weight": round(current_weight, 6) if current_weight is not None else None,
         "target_weight": target_weight,
         "weight_gap_pt": round(weight_gap_pt, 4) if weight_gap_pt is not None else None,
@@ -385,10 +708,15 @@ def build_real_holding_review(*, persist: bool = True) -> dict[str, Any]:
         symbols = [str(h.get("symbol") or h.get("code")) for h in holdings if h.get("symbol") or h.get("code")]
         prices = _latest_prices_by_symbol(conn, symbols)
         picks = _latest_picks_by_symbol(conn, symbols)
+        rules = _load_review_rules(conn)
+        for sym, pick in _manual_watchlist_score_fallbacks(symbols).items():
+            picks.setdefault(sym, pick)
+        max_age = float(rules.get("score_snapshot_max_age_days", 3.0) or 3.0)
+        for sym, pick in _hk_watchlist_score_fallbacks(symbols, max_age_days=max_age).items():
+            picks.setdefault(sym, pick)
         universe = stock_db.fetch_universe_for_ai_recommendations(conn=conn)
         target_weights = _target_weights_from_plan()
         total_capital = float(stock_db.get_config("total_capital", conn=conn) or 500000)
-        rules = _load_review_rules(conn)
 
         history_doc = _load_json(REPO / "data" / "latest" / "history_data.json")
         history = history_doc.get("tickers") if isinstance(history_doc, dict) else {}
