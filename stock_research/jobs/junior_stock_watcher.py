@@ -527,6 +527,7 @@ def _enrich_with_price(items: list[dict], hist_cache: dict, meta_cache: dict) ->
             "current_price": round(cur, 2) if cur else None,
             "vs_issue_pct": vs_issue,
             "sector": m.get("sector"),
+            "industry": m.get("industry"),
             "market_cap_m": round(m.get("market_cap") / 1e6, 1) if m.get("market_cap") else None,
         })
     return out
@@ -742,13 +743,12 @@ def fetch_us_junior_pool(holdings: set[str], watchlist: set[str],
         else:
             s_rebound = 0.0
         # 科技股识别 (Technology + Communication Services 都算,后者含 GOOG/META 类)
+        # 注: 仅用于标签 + 前端 filter,不计入打分 — 打分保持客观,用户偏好走筛选
         is_tech = sector in {"Technology", "Communication Services"}
-        # tech_bonus (5): 用户偏好,科技股优先
-        s_tech = 5.0 if is_tech else 0.0
         # in_your_pool (10)
         s_pool = 10.0 if (sym in holdings or sym in watchlist) else 0.0
 
-        total = round(s_discount + s_time + s_liquid + s_rebound + s_tech + s_pool, 1)
+        total = round(s_discount + s_time + s_liquid + s_rebound + s_pool, 1)
 
         tags = []
         if is_tech:
@@ -792,7 +792,6 @@ def fetch_us_junior_pool(holdings: set[str], watchlist: set[str],
                 "time_decay": round(s_time, 1),
                 "liquidity": round(s_liquid, 1),
                 "rebound_bonus": round(s_rebound, 1),
-                "tech_bonus": round(s_tech, 1),
                 "in_your_pool": round(s_pool, 1),
             },
             "tags": tags,

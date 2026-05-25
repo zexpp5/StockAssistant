@@ -41,7 +41,7 @@ except ImportError as _exc:
 # 2026-05-11 PM 第二轮:飞书 100% 退役 — 不再从 Bitable 拉数据
 # 旧版 records / picks 口径已退场；v2 页面摘要优先读 DuckDB(system_universe + price_daily + recommendation_picks)
 OUTPUT = os.path.join(_REPO, "stock_dashboard.html")
-PRODUCTION_METRICS_START_DATE = os.environ.get("STOCK_ASSISTANT_METRICS_START_DATE", "2026-05-21")
+PRODUCTION_METRICS_START_DATE = os.environ.get("STOCK_ASSISTANT_METRICS_START_DATE", "2026-05-25")
 
 
 def _duckdb_path() -> str:
@@ -965,7 +965,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       💡 <strong>怎么用</strong>: 这是科技/AI 股票池横向排名。未在自选的标的可去自选股管理页调研后加入；
       已在自选的标的可回到详情页复核它为什么排在这里。
       <strong class="text-violet-700">α 列</strong>显示推荐后 5/20 交易日相对各市场基准的超额收益,
-      数据来自 <code class="text-xs bg-slate-100 px-1 rounded">recommendation_picks + pick_outcomes</code>（V2，每日刷新；生产统计从 2026-05-21 起）。
+      数据来自 <code class="text-xs bg-slate-100 px-1 rounded">recommendation_picks + pick_outcomes</code>（V2，每日刷新；生产统计从 2026-05-25 12:10 起 — 在此之前的推荐打分公式仍在调整，历史数据已清除避免误导）。
     </p>
   </div>
 
@@ -5064,7 +5064,10 @@ function _renderIpoSection_US() {
         return `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50">
           <td class="py-2 px-3 font-mono font-bold text-slate-900">${_esc(e.symbol || "")}</td>
           <td class="py-2 px-3 text-slate-800">${_esc(e.name || "")}</td>
-          <td class="py-2 px-3 text-xs text-slate-500">${_esc(e.sector || "—")}</td>
+          <td class="py-2 px-3 text-xs">
+            <div class="text-slate-700">${_esc(e.sector || "—")}</div>
+            ${e.industry ? `<div class="text-[10px] text-slate-400 mt-0.5">${_esc(e.industry)}</div>` : ""}
+          </td>
           <td class="py-2 px-3 text-xs text-slate-500">${_esc(e.exchange || "")}</td>
           <td class="py-2 px-3 text-xs text-slate-600">${_esc(e.priced_date || "—")} ${_ageTag(e.days_since_priced)}</td>
           <td class="py-2 px-3 text-right font-mono text-slate-700">${e.issue_price ? "$" + e.issue_price : "—"}</td>
@@ -5250,11 +5253,14 @@ function _renderJuniorTable_US() {
                          x.rebound_pct >= 5 ? "text-emerald-600" : "text-slate-500";
     const reboundText = x.rebound_pct === null ? "—" : "+" + x.rebound_pct + "%";
     const bd = x.score_breakdown || {};
-    const tooltip = `折发行 ${bd.discount_to_issue || 0} + 时间衰减 ${bd.time_decay || 0} + 流动性 ${bd.liquidity || 0} + 反弹奖励 ${bd.rebound_bonus || 0} + 科技 ${bd.tech_bonus || 0} + 池子 ${bd.in_your_pool || 0}`;
+    const tooltip = `折发行 ${bd.discount_to_issue || 0} + 时间衰减 ${bd.time_decay || 0} + 流动性 ${bd.liquidity || 0} + 反弹奖励 ${bd.rebound_bonus || 0} + 池子 ${bd.in_your_pool || 0}`;
     return `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50">
       <td class="py-2 px-3 font-mono font-bold text-slate-900">${_esc(x.symbol)}</td>
       <td class="py-2 px-3 text-slate-800">${_esc(x.name || "")} ${poolTag}</td>
-      <td class="py-2 px-3 text-xs ${x.is_tech ? 'text-violet-700 font-semibold' : 'text-slate-500'}">${x.is_tech ? '🔬 ' : ''}${_esc(x.sector || "—")}</td>
+      <td class="py-2 px-3 text-xs">
+        <div class="${x.is_tech ? 'text-violet-700 font-semibold' : 'text-slate-700'}">${x.is_tech ? '🔬 ' : ''}${_esc(x.sector || "—")}</div>
+        ${x.industry ? `<div class="text-[10px] text-slate-400 mt-0.5">${_esc(x.industry)}</div>` : ""}
+      </td>
       <td class="py-2 px-3 text-right font-mono text-xs text-slate-600">${_mcap(x.market_cap_m)}</td>
       <td class="py-2 px-3 text-xs text-slate-600">${_esc(x.ipo_date)} <span class="text-slate-400">(${x.months_listed}m)</span></td>
       <td class="py-2 px-3 text-right font-mono text-slate-700">$${x.issue_price}</td>
@@ -9408,11 +9414,12 @@ function _reasonSummary(row) {
           <span class="text-xs text-slate-600">${twentyDayBlock}</span>
         </div>`;
 
+        const _alphaBadge = v => (v == null) ? "" : (v > 5 ? "🚀 " : (v < -5 ? "⚠️ " : ""));
         const rows = recs.map(r => {
-          const a1 = _fmtAlpha(r.alpha_1d);
-          const a5 = _fmtAlpha(r.alpha_5d);
-          const a20 = _fmtAlpha(r.alpha_20d);
-          const a60 = _fmtAlpha(r.alpha_60d);
+          const a1 = _alphaBadge(r.alpha_1d) + _fmtAlpha(r.alpha_1d);
+          const a5 = _alphaBadge(r.alpha_5d) + _fmtAlpha(r.alpha_5d);
+          const a20 = _alphaBadge(r.alpha_20d) + _fmtAlpha(r.alpha_20d);
+          const a60 = _alphaBadge(r.alpha_60d) + _fmtAlpha(r.alpha_60d);
           const score = (r.score != null) ? Number(r.score).toFixed(1)
             : (r.composite_z != null ? Number(r.composite_z).toFixed(2) : "—");
           const market = _marketLabel(_candidateMarketCode(r));
@@ -9451,10 +9458,10 @@ function _reasonSummary(row) {
                   <th class="px-2 py-1 text-right">入选价</th>
                   <th class="px-2 py-1 text-left">推荐依据</th>
                   <th class="px-2 py-1 text-left">风险</th>
-                  <th class="px-2 py-1 text-right">1d α</th>
-                  <th class="px-2 py-1 text-right">5d α</th>
-                  <th class="px-2 py-1 text-right">20d α</th>
-                  <th class="px-2 py-1 text-right">60d α</th>
+                  <th class="px-2 py-1 text-right" title="α > +5% 大涨命中 🚀 · α < -5% 大跌掉队 ⚠️">1d α</th>
+                  <th class="px-2 py-1 text-right" title="α > +5% 大涨命中 🚀 · α < -5% 大跌掉队 ⚠️">5d α</th>
+                  <th class="px-2 py-1 text-right" title="α > +5% 大涨命中 🚀 · α < -5% 大跌掉队 ⚠️">20d α</th>
+                  <th class="px-2 py-1 text-right" title="α > +5% 大涨命中 🚀 · α < -5% 大跌掉队 ⚠️">60d α</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-slate-100">${rows}</tbody>
@@ -11346,7 +11353,9 @@ def today_decision_panel_html() -> str:
     quality_status = str(quality.get("status") or "UNKNOWN").upper()
     acceptance_status = str(acceptance.get("status") or "UNKNOWN").upper()
     evidence_grade = str(evidence.get("evidence_grade") or "—")
-    v2_candidates = _runtime_v2_recommendations(limit=20)
+    # limit=200 而非 20：recommendation_picks 的 ORDER BY market 让全 CN 占满 LIMIT 20，
+    # HK/US 被切，徽章数字会低估实际推荐数（实际 ~60）。
+    v2_candidates = _runtime_v2_recommendations(limit=200)
     discovery_candidates = v2_candidates or (discovery.get("candidates") or [])
     discovery_n = len(discovery_candidates)
     discovery_source = "v2 recommendation_picks" if v2_candidates else ("none" if clean_v2 else "legacy discovery_candidates.json")
@@ -11795,7 +11804,8 @@ def runtime_status_panel_html() -> str:
         artifact_row("港股调仓差额", "data/latest/trade_delta_hk.json", "data/latest/trade_delta_hk.json", "目标 - 持仓差额清单", "重跑 trade_delta.py --market hk"),
     ]
 
-    runtime_v2_candidates = _runtime_v2_recommendations(limit=20)
+    # limit=200 而非 20：同 _runtime tab — ORDER BY market 让全 CN 占满 LIMIT 20，HK/US 被切。
+    runtime_v2_candidates = _runtime_v2_recommendations(limit=200)
     discovery_n = len(runtime_v2_candidates or (discovery.get("candidates") or []))
     evidence_grade = evidence.get("evidence_grade") or "—"
     quality_level = quality_status.upper()
