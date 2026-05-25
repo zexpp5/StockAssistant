@@ -1853,13 +1853,13 @@ function switchDiscoveryView(view) {
 
   <!-- 市场切换（一级 tab）-->
   <div class="mb-5 flex flex-wrap gap-2">
-    <button onclick="switchIpoMarket('cn')" id="ipo-market-cn"
-            class="ipo-market-btn px-4 py-1.5 text-sm font-medium rounded-lg border border-slate-300 bg-white text-slate-700 hover:border-violet-500 transition">
-      🇨🇳 A 股
-    </button>
     <button onclick="switchIpoMarket('us')" id="ipo-market-us"
             class="ipo-market-btn px-4 py-1.5 text-sm font-medium rounded-lg border border-slate-300 bg-white text-slate-700 hover:border-violet-500 transition">
       🇺🇸 美股
+    </button>
+    <button onclick="switchIpoMarket('cn')" id="ipo-market-cn"
+            class="ipo-market-btn px-4 py-1.5 text-sm font-medium rounded-lg border border-slate-300 bg-white text-slate-700 hover:border-violet-500 transition">
+      🇨🇳 A 股
     </button>
     <button onclick="switchIpoMarket('hk')" id="ipo-market-hk"
             class="ipo-market-btn px-4 py-1.5 text-sm font-medium rounded-lg border border-slate-300 bg-white text-slate-500 hover:border-violet-500 transition">
@@ -1892,11 +1892,11 @@ function switchDiscoveryView(view) {
     </div>
     <div>
       <h3 class="text-lg font-bold text-slate-900 mb-3">🚀 即将申购</h3>
-      <div id="ipo-upcoming" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3"></div>
+      <div id="ipo-upcoming" class="bg-white rounded-xl border border-slate-200 overflow-x-auto"></div>
     </div>
     <div>
       <h3 class="text-lg font-bold text-slate-900 mb-3">⏳ 已申购未上市</h3>
-      <div id="ipo-awaiting" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3"></div>
+      <div id="ipo-awaiting" class="bg-white rounded-xl border border-slate-200 overflow-x-auto"></div>
     </div>
     <div>
       <h3 class="text-lg font-bold text-slate-900 mb-3">📊 近 30 日上市</h3>
@@ -1934,6 +1934,7 @@ function switchDiscoveryView(view) {
     <div class="flex flex-wrap gap-2 items-center">
       <label class="text-xs text-slate-600">筛选:</label>
       <button onclick="filterJunior('all')" id="junior-filter-all" class="junior-filter-btn px-3 py-1 text-xs rounded border border-slate-300 bg-white text-slate-700 hover:border-violet-500">全部</button>
+      <button onclick="filterJunior('tech')" id="junior-filter-tech" class="junior-filter-btn px-3 py-1 text-xs rounded border border-violet-300 bg-violet-50 text-violet-700 hover:border-violet-500">🔬 仅科技</button>
       <button onclick="filterJunior('broken')" id="junior-filter-broken" class="junior-filter-btn px-3 py-1 text-xs rounded border border-slate-300 bg-white text-slate-700 hover:border-violet-500">仅已破发</button>
       <button onclick="filterJunior('star')" id="junior-filter-star" class="junior-filter-btn px-3 py-1 text-xs rounded border border-slate-300 bg-white text-slate-700 hover:border-violet-500">科创板</button>
       <button onclick="filterJunior('chinext')" id="junior-filter-chinext" class="junior-filter-btn px-3 py-1 text-xs rounded border border-slate-300 bg-white text-slate-700 hover:border-violet-500">创业板</button>
@@ -4833,7 +4834,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
 // ============ 📅 IPO & 次新股 雷达（数据由 build_stock_dashboard_html.py 注入） ============
 const JUNIOR_RADAR = {JUNIOR_RADAR_JSON};
-let _ipoMarket = "cn";  // cn / us / hk
+let _ipoMarket = "us";  // us / cn / hk — 默认美股(用户 2026-05-25 偏好)
 let _ipoJuniorSub = "ipo";
 let _unlockFilter = "all";
 let _juniorFilter = "all";
@@ -4860,55 +4861,6 @@ function _ipoJuniorScoreBadge(score) {
   return `<span class="px-2 py-0.5 rounded text-xs font-semibold bg-slate-50 text-slate-400">${score}</span>`;
 }
 
-function _ipoCard(e) {
-  const dDays = e.days_to_subscribe;
-  const dTag = dDays === null ? "" : (dDays === 0 ? `<span class="text-rose-600 font-semibold">今日</span>` :
-                                       dDays > 0 ? `<span class="text-amber-700">${dDays} 天后</span>` :
-                                                   `<span class="text-slate-400">${-dDays} 天前</span>`);
-  const aiFlag = (e.ai_relevance || 0) >= 2 ? `<span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-violet-100 text-violet-700">AI</span>` : "";
-  return `<div class="bg-white rounded-xl border border-slate-200 p-3">
-    <div class="flex items-start justify-between gap-2">
-      <div>
-        <div class="font-bold text-slate-900 text-sm">${_esc(e.name || "—")} <span class="font-mono text-xs text-slate-500">${_esc(e.code || "")}</span></div>
-        <div class="text-xs text-slate-500 mt-0.5">${_ipoBoardLabel(e.board)} · ${_esc(e.theme || "")}</div>
-      </div>
-      <div class="text-right">${aiFlag}</div>
-    </div>
-    <div class="mt-2 flex items-center justify-between text-xs">
-      <div class="text-slate-600">申购 ${_esc(e.subscribe_date || "—")} ${dTag}</div>
-      <div class="text-slate-700 font-mono">${e.issue_price ? "¥" + e.issue_price : ""}${e.pe_ratio ? " · PE " + e.pe_ratio : ""}</div>
-    </div>
-  </div>`;
-}
-
-function _usFiledCard(e) {
-  const v = e.expected_value_usd ? "$" + (e.expected_value_usd / 1e6).toFixed(1) + "M" : "—";
-  const d = e.days_since_filed;
-  const dTag = (d === undefined || d === null) ? "" :
-               (d === 0 ? `<span class="text-rose-600 font-semibold">今日</span>` :
-                d > 0 ? `<span class="text-slate-500">${d} 天前</span>` : "");
-  return `<div class="bg-white rounded-xl border border-slate-200 p-3">
-    <div class="font-bold text-slate-900 text-sm">${_esc(e.name || "—")} <span class="font-mono text-xs text-slate-500">${_esc(e.symbol || "")}</span></div>
-    <div class="text-xs text-slate-500 mt-0.5">${_esc(e.exchange || "未定交易所")} · 申报融资 ${v}</div>
-    <div class="mt-2 text-xs text-slate-600">申报 ${_esc(e.filed_date || "—")} ${dTag}</div>
-  </div>`;
-}
-
-function _usPricedCard(e) {
-  const v = e.deal_value_usd ? "$" + (e.deal_value_usd / 1e6).toFixed(1) + "M" : "—";
-  const ip = e.issue_price ? "$" + e.issue_price : "—";
-  const sh = e.shares_offered ? (e.shares_offered / 1e6).toFixed(1) + "M" : "—";
-  const d = e.days_since_priced;
-  const dTag = (d === undefined || d === null) ? "" :
-               (d === 0 ? `<span class="text-emerald-700 font-semibold">今日定价</span>` :
-                d > 0 ? `<span class="text-slate-500">${d} 天前定价</span>` : "");
-  return `<div class="bg-white rounded-xl border border-slate-200 p-3">
-    <div class="font-bold text-slate-900 text-sm">${_esc(e.name || "—")} <span class="font-mono text-xs text-slate-500">${_esc(e.symbol || "")}</span></div>
-    <div class="text-xs text-slate-500 mt-0.5">${_esc(e.exchange || "")} · 发行 ${ip} · ${sh} · ${v}</div>
-    <div class="mt-2 text-xs text-slate-600">${_esc(e.priced_date || "—")} ${dTag}</div>
-  </div>`;
-}
-
 function _renderIpoSection_CN() {
   const m = _ipoCurrentMarket();
   const cal = m.ipo_calendar || {};
@@ -4916,22 +4868,87 @@ function _renderIpoSection_CN() {
   const awaiting = cal.awaiting_listing || [];
   const recent = cal.recently_listed || [];
 
+  // 工具: 申购倒计时 badge
+  const _dCountdown = (d) => {
+    if (d === null || d === undefined) return "";
+    if (d === 0) return `<span class="text-rose-600 font-semibold">今日</span>`;
+    if (d > 0) return `<span class="text-amber-700">${d} 天后</span>`;
+    return `<span class="text-slate-400">${-d} 天前</span>`;
+  };
+  const _aiBadge = (lvl) => (lvl || 0) >= 2
+    ? `<span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-violet-100 text-violet-700 mr-1">AI</span>` : "";
+
+  // 即将申购
   const upEl = document.getElementById("ipo-upcoming");
-  if (upEl) upEl.innerHTML = upcoming.length
-    ? upcoming.map(_ipoCard).join("")
-    : `<div class="col-span-full bg-slate-50 rounded-xl border border-slate-200 p-4 text-sm text-slate-500">暂无即将申购的新股。</div>`;
+  if (upEl) {
+    if (!upcoming.length) {
+      upEl.innerHTML = `<div class="p-4 text-sm text-slate-500">暂无即将申购的新股。</div>`;
+    } else {
+      const rows = upcoming.map(e => `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50">
+        <td class="py-2 px-3 font-mono font-bold text-slate-900">${_esc(e.code || "")}</td>
+        <td class="py-2 px-3 text-slate-800">${_aiBadge(e.ai_relevance)}${_esc(e.name || "")}</td>
+        <td class="py-2 px-3 text-xs text-slate-500">${_ipoBoardLabel(e.board)}</td>
+        <td class="py-2 px-3 text-xs text-slate-600">${_esc(e.subscribe_date || "—")} ${_dCountdown(e.days_to_subscribe)}</td>
+        <td class="py-2 px-3 text-right font-mono text-slate-700">${e.issue_price ? "¥" + e.issue_price : "—"}</td>
+        <td class="py-2 px-3 text-right font-mono text-slate-600">${e.pe_ratio !== null && e.pe_ratio !== undefined ? e.pe_ratio : "—"}</td>
+        <td class="py-2 px-3 text-xs text-slate-600">${_esc(e.theme || "")}</td>
+      </tr>`).join("");
+      upEl.innerHTML = `<table class="w-full text-sm">
+        <thead class="text-xs text-slate-500 bg-slate-50 border-b border-slate-200">
+          <tr>
+            <th class="py-2 px-3 text-left">代码</th>
+            <th class="py-2 px-3 text-left">名称</th>
+            <th class="py-2 px-3 text-left">板块</th>
+            <th class="py-2 px-3 text-left">申购日</th>
+            <th class="py-2 px-3 text-right">发行价</th>
+            <th class="py-2 px-3 text-right">PE</th>
+            <th class="py-2 px-3 text-left">主题</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+    }
+  }
 
+  // 已申购未上市
   const awEl = document.getElementById("ipo-awaiting");
-  if (awEl) awEl.innerHTML = awaiting.length
-    ? awaiting.map(_ipoCard).join("")
-    : `<div class="col-span-full bg-slate-50 rounded-xl border border-slate-200 p-4 text-sm text-slate-500">暂无已申购未上市标的。</div>`;
+  if (awEl) {
+    if (!awaiting.length) {
+      awEl.innerHTML = `<div class="p-4 text-sm text-slate-500">暂无已申购未上市标的。</div>`;
+    } else {
+      const rows = awaiting.map(e => `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50">
+        <td class="py-2 px-3 font-mono font-bold text-slate-900">${_esc(e.code || "")}</td>
+        <td class="py-2 px-3 text-slate-800">${_aiBadge(e.ai_relevance)}${_esc(e.name || "")}</td>
+        <td class="py-2 px-3 text-xs text-slate-500">${_ipoBoardLabel(e.board)}</td>
+        <td class="py-2 px-3 text-xs text-slate-600">${_esc(e.subscribe_date || "—")}</td>
+        <td class="py-2 px-3 text-right font-mono text-slate-700">${e.issue_price ? "¥" + e.issue_price : "—"}</td>
+        <td class="py-2 px-3 text-right font-mono text-slate-600">${e.pe_ratio !== null && e.pe_ratio !== undefined ? e.pe_ratio : "—"}</td>
+        <td class="py-2 px-3 text-xs text-slate-600">${_esc(e.theme || "")}</td>
+      </tr>`).join("");
+      awEl.innerHTML = `<table class="w-full text-sm">
+        <thead class="text-xs text-slate-500 bg-slate-50 border-b border-slate-200">
+          <tr>
+            <th class="py-2 px-3 text-left">代码</th>
+            <th class="py-2 px-3 text-left">名称</th>
+            <th class="py-2 px-3 text-left">板块</th>
+            <th class="py-2 px-3 text-left">申购日</th>
+            <th class="py-2 px-3 text-right">发行价</th>
+            <th class="py-2 px-3 text-right">PE</th>
+            <th class="py-2 px-3 text-left">主题</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+    }
+  }
 
+  // 近 30 日上市
   const rcEl = document.getElementById("ipo-recent");
   if (rcEl) {
     if (!recent.length) {
       rcEl.innerHTML = `<div class="p-4 text-sm text-slate-500">近 30 日无新股上市。</div>`;
     } else {
-      const rows = recent.map(e => `<tr class="border-b border-slate-100 last:border-0">
+      const rows = recent.map(e => `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50">
         <td class="py-2 px-3 font-mono font-bold text-slate-900">${_esc(e.code || "")}</td>
         <td class="py-2 px-3 text-slate-800">${_esc(e.name || "")}</td>
         <td class="py-2 px-3 text-xs text-slate-500">${_ipoBoardLabel(e.board)}</td>
@@ -4965,34 +4982,56 @@ function _renderIpoSection_US() {
   const awaiting = cal.awaiting_listing || [];
   const recent = cal.recently_listed || [];
 
+  const _ageTag = (d, suffix) => (d === null || d === undefined) ? "" :
+    (d === 0 ? `<span class="text-rose-600 font-semibold">今日</span>` :
+     d > 0 ? `<span class="text-slate-400">${d} 天前</span>` : "");
+  const _mn = (v) => v ? "$" + (v / 1e6).toFixed(1) + "M" : "—";
+  const _sh = (v) => v ? (v / 1e6).toFixed(1) + "M" : "—";
+
+  // 即将申报 (S-1 filed)
   const upEl = document.getElementById("ipo-upcoming");
-  if (upEl) upEl.innerHTML = filed.length
-    ? filed.slice(0, 12).map(_usFiledCard).join("")
-    : `<div class="col-span-full bg-slate-50 rounded-xl border border-slate-200 p-4 text-sm text-slate-500">近 60 天内 NASDAQ 暂无新 S-1 申报。</div>`;
-
-  const awEl = document.getElementById("ipo-awaiting");
-  if (awEl) awEl.innerHTML = awaiting.length
-    ? awaiting.slice(0, 12).map(_usPricedCard).join("")
-    : `<div class="col-span-full bg-slate-50 rounded-xl border border-slate-200 p-4 text-sm text-slate-500">近 7 天 NASDAQ 暂无新定价。</div>`;
-
-  const rcEl = document.getElementById("ipo-recent");
-  if (rcEl) {
-    if (!recent.length) {
-      rcEl.innerHTML = `<div class="p-4 text-sm text-slate-500">近 30 日 NASDAQ 暂无上市记录。</div>`;
+  if (upEl) {
+    if (!filed.length) {
+      upEl.innerHTML = `<div class="p-4 text-sm text-slate-500">近 60 天内 NASDAQ 暂无新 S-1 申报。</div>`;
     } else {
-      const rows = recent.map(e => {
-        const v = e.deal_value_usd ? "$" + (e.deal_value_usd / 1e6).toFixed(1) + "M" : "—";
-        return `<tr class="border-b border-slate-100 last:border-0">
-          <td class="py-2 px-3 font-mono font-bold text-slate-900">${_esc(e.symbol || "")}</td>
-          <td class="py-2 px-3 text-slate-800">${_esc(e.name || "")}</td>
-          <td class="py-2 px-3 text-xs text-slate-500">${_esc(e.exchange || "")}</td>
-          <td class="py-2 px-3 text-xs text-slate-600">${_esc(e.priced_date || "—")} <span class="text-slate-400">(${e.days_since_priced || 0}天前)</span></td>
-          <td class="py-2 px-3 text-right font-mono text-slate-700">${e.issue_price ? "$" + e.issue_price : "—"}</td>
-          <td class="py-2 px-3 text-right font-mono text-slate-600">${e.shares_offered ? (e.shares_offered / 1e6).toFixed(1) + "M" : "—"}</td>
-          <td class="py-2 px-3 text-right font-mono text-slate-600">${v}</td>
-        </tr>`;
-      }).join("");
-      rcEl.innerHTML = `<table class="w-full text-sm">
+      const rows = filed.map(e => `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50">
+        <td class="py-2 px-3 font-mono font-bold text-slate-900">${_esc(e.symbol || "—")}</td>
+        <td class="py-2 px-3 text-slate-800">${_esc(e.name || "")}</td>
+        <td class="py-2 px-3 text-xs text-slate-500">${_esc(e.exchange || "未定")}</td>
+        <td class="py-2 px-3 text-xs text-slate-600">${_esc(e.filed_date || "—")} ${_ageTag(e.days_since_filed)}</td>
+        <td class="py-2 px-3 text-right font-mono text-slate-600">${_mn(e.expected_value_usd)}</td>
+      </tr>`).join("");
+      upEl.innerHTML = `<table class="w-full text-sm">
+        <thead class="text-xs text-slate-500 bg-slate-50 border-b border-slate-200">
+          <tr>
+            <th class="py-2 px-3 text-left">代码</th>
+            <th class="py-2 px-3 text-left">名称</th>
+            <th class="py-2 px-3 text-left">交易所</th>
+            <th class="py-2 px-3 text-left">申报日</th>
+            <th class="py-2 px-3 text-right">申报融资</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+    }
+  }
+
+  // 已定价未上市 (priced, last 7 days)
+  const awEl = document.getElementById("ipo-awaiting");
+  if (awEl) {
+    if (!awaiting.length) {
+      awEl.innerHTML = `<div class="p-4 text-sm text-slate-500">近 7 天 NASDAQ 暂无新定价。</div>`;
+    } else {
+      const rows = awaiting.map(e => `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50">
+        <td class="py-2 px-3 font-mono font-bold text-slate-900">${_esc(e.symbol || "—")}</td>
+        <td class="py-2 px-3 text-slate-800">${_esc(e.name || "")}</td>
+        <td class="py-2 px-3 text-xs text-slate-500">${_esc(e.exchange || "")}</td>
+        <td class="py-2 px-3 text-xs text-slate-600">${_esc(e.priced_date || "—")} ${_ageTag(e.days_since_priced)}</td>
+        <td class="py-2 px-3 text-right font-mono text-slate-700">${e.issue_price ? "$" + e.issue_price : "—"}</td>
+        <td class="py-2 px-3 text-right font-mono text-slate-600">${_sh(e.shares_offered)}</td>
+        <td class="py-2 px-3 text-right font-mono text-slate-600">${_mn(e.deal_value_usd)}</td>
+      </tr>`).join("");
+      awEl.innerHTML = `<table class="w-full text-sm">
         <thead class="text-xs text-slate-500 bg-slate-50 border-b border-slate-200">
           <tr>
             <th class="py-2 px-3 text-left">代码</th>
@@ -5001,6 +5040,52 @@ function _renderIpoSection_US() {
             <th class="py-2 px-3 text-left">定价日</th>
             <th class="py-2 px-3 text-right">发行价</th>
             <th class="py-2 px-3 text-right">股数</th>
+            <th class="py-2 px-3 text-right">融资额</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+    }
+  }
+
+  // 近 30 日上市 (含 enriched: sector / current_price / vs_issue / market_cap)
+  const rcEl = document.getElementById("ipo-recent");
+  if (rcEl) {
+    if (!recent.length) {
+      rcEl.innerHTML = `<div class="p-4 text-sm text-slate-500">近 30 日 NASDAQ 暂无上市记录。</div>`;
+    } else {
+      const _mcap2 = (m) => !m ? "—" : (m >= 1000 ? "$" + (m/1000).toFixed(1) + "B" : "$" + Math.round(m) + "M");
+      const rows = recent.map(e => {
+        const vsClass = e.vs_issue_pct === null || e.vs_issue_pct === undefined ? "text-slate-400" :
+                         e.vs_issue_pct < -20 ? "text-rose-700 font-semibold" :
+                         e.vs_issue_pct < 0 ? "text-rose-600" : "text-emerald-700";
+        const vsText = e.vs_issue_pct === null || e.vs_issue_pct === undefined ? "—" :
+                       (e.vs_issue_pct > 0 ? "+" : "") + e.vs_issue_pct + "%";
+        return `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50">
+          <td class="py-2 px-3 font-mono font-bold text-slate-900">${_esc(e.symbol || "")}</td>
+          <td class="py-2 px-3 text-slate-800">${_esc(e.name || "")}</td>
+          <td class="py-2 px-3 text-xs text-slate-500">${_esc(e.sector || "—")}</td>
+          <td class="py-2 px-3 text-xs text-slate-500">${_esc(e.exchange || "")}</td>
+          <td class="py-2 px-3 text-xs text-slate-600">${_esc(e.priced_date || "—")} ${_ageTag(e.days_since_priced)}</td>
+          <td class="py-2 px-3 text-right font-mono text-slate-700">${e.issue_price ? "$" + e.issue_price : "—"}</td>
+          <td class="py-2 px-3 text-right font-mono text-slate-700">${e.current_price ? "$" + e.current_price : "—"}</td>
+          <td class="py-2 px-3 text-right font-mono ${vsClass}">${vsText}</td>
+          <td class="py-2 px-3 text-right font-mono text-xs text-slate-500">${_mcap2(e.market_cap_m)}</td>
+          <td class="py-2 px-3 text-right font-mono text-slate-600">${_mn(e.deal_value_usd)}</td>
+        </tr>`;
+      }).join("");
+      rcEl.innerHTML = `<table class="w-full text-sm">
+        <thead class="text-xs text-slate-500 bg-slate-50 border-b border-slate-200">
+          <tr>
+            <th class="py-2 px-3 text-left">代码</th>
+            <th class="py-2 px-3 text-left">名称</th>
+            <th class="py-2 px-3 text-left">行业</th>
+            <th class="py-2 px-3 text-left">交易所</th>
+            <th class="py-2 px-3 text-left">定价日</th>
+            <th class="py-2 px-3 text-right">发行价</th>
+            <th class="py-2 px-3 text-right">最新价</th>
+            <th class="py-2 px-3 text-right">vs 发行</th>
+            <th class="py-2 px-3 text-right">市值</th>
             <th class="py-2 px-3 text-right">融资额</th>
           </tr>
         </thead>
@@ -5119,17 +5204,39 @@ function _renderJuniorTable_US() {
   const m = _ipoCurrentMarket();
   const all = m.junior_pool || [];
   const el = document.getElementById("ipo-junior-table");
-  // 美股专属筛选(只支持 broken / all,板块按交易所不分)
+  // 筛选: tech / broken (board 类是 A 股专属,US 跳过)
   let list = all;
-  if (_juniorFilter === "broken") list = all.filter(x => (x.vs_issue_pct || 0) < 0);
+  if (_juniorFilter === "tech") list = all.filter(x => x.is_tech);
+  else if (_juniorFilter === "broken") list = all.filter(x => (x.vs_issue_pct || 0) < 0);
+  // 高亮活动 filter 按钮
+  ["all","tech","broken","star","chinext","main"].forEach(k => {
+    const b = document.getElementById("junior-filter-" + k);
+    if (b) {
+      const active = k === _juniorFilter;
+      b.classList.toggle("border-violet-500", active);
+      b.classList.toggle("bg-violet-50", active);
+      b.classList.toggle("text-violet-700", active);
+    }
+  });
   const ctEl = document.getElementById("junior-count");
-  if (ctEl) ctEl.textContent = `${list.length} / ${all.length} 只 (NASDAQ 24 月 priced,已剔除 SPAC)`;
+  if (ctEl) ctEl.textContent = `${list.length} / ${all.length} 只 (NASDAQ 24 月 priced,已剔除 SPAC + 仙股 + 微盘)`;
 
   if (!el) return;
   if (!list.length) {
     el.innerHTML = `<div class="p-6 text-sm text-slate-500">当前筛选下无候选标的。</div>`;
     return;
   }
+  const _mcap = (m) => {
+    if (!m) return "—";
+    if (m >= 1000) return "$" + (m / 1000).toFixed(1) + "B";
+    return "$" + Math.round(m) + "M";
+  };
+  const _vol = (v) => {
+    if (!v) return "—";
+    if (v >= 1e6) return (v / 1e6).toFixed(1) + "M";
+    if (v >= 1e3) return Math.round(v / 1e3) + "K";
+    return String(v);
+  };
   const rows = list.slice(0, 200).map(x => {
     const poolTag = x.in_holdings ? `<span class="px-1.5 py-0.5 rounded text-[10px] bg-rose-100 text-rose-700">持仓</span>` :
                     x.in_watchlist ? `<span class="px-1.5 py-0.5 rounded text-[10px] bg-amber-100 text-amber-700">自选</span>` : "";
@@ -5138,18 +5245,24 @@ function _renderJuniorTable_US() {
                      x.vs_issue_pct < -50 ? "text-rose-700 font-semibold" :
                      x.vs_issue_pct < 0 ? "text-rose-600" : "text-emerald-700";
     const vsText = x.vs_issue_pct === null ? "—" : (x.vs_issue_pct > 0 ? "+" : "") + x.vs_issue_pct + "%";
+    const reboundClass = x.rebound_pct === null ? "text-slate-400" :
+                         x.rebound_pct >= 20 ? "text-emerald-700" :
+                         x.rebound_pct >= 5 ? "text-emerald-600" : "text-slate-500";
+    const reboundText = x.rebound_pct === null ? "—" : "+" + x.rebound_pct + "%";
     const bd = x.score_breakdown || {};
-    const tooltip = `折发行 ${bd.discount_to_issue || 0} + 时间衰减 ${bd.time_decay || 0} + 流动性 ${bd.liquidity || 0} + 池子 ${bd.in_your_pool || 0}`;
-    const deal = x.deal_value_usd ? "$" + (x.deal_value_usd / 1e6).toFixed(0) + "M" : "—";
+    const tooltip = `折发行 ${bd.discount_to_issue || 0} + 时间衰减 ${bd.time_decay || 0} + 流动性 ${bd.liquidity || 0} + 反弹奖励 ${bd.rebound_bonus || 0} + 科技 ${bd.tech_bonus || 0} + 池子 ${bd.in_your_pool || 0}`;
     return `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50">
       <td class="py-2 px-3 font-mono font-bold text-slate-900">${_esc(x.symbol)}</td>
       <td class="py-2 px-3 text-slate-800">${_esc(x.name || "")} ${poolTag}</td>
-      <td class="py-2 px-3 text-xs text-slate-500">${_esc(x.exchange || "")}</td>
-      <td class="py-2 px-3 text-xs text-slate-600">${_esc(x.ipo_date)} <span class="text-slate-400">(${x.months_listed}月)</span></td>
+      <td class="py-2 px-3 text-xs ${x.is_tech ? 'text-violet-700 font-semibold' : 'text-slate-500'}">${x.is_tech ? '🔬 ' : ''}${_esc(x.sector || "—")}</td>
+      <td class="py-2 px-3 text-right font-mono text-xs text-slate-600">${_mcap(x.market_cap_m)}</td>
+      <td class="py-2 px-3 text-xs text-slate-600">${_esc(x.ipo_date)} <span class="text-slate-400">(${x.months_listed}m)</span></td>
       <td class="py-2 px-3 text-right font-mono text-slate-700">$${x.issue_price}</td>
       <td class="py-2 px-3 text-right font-mono text-slate-700">${x.current_price ? "$" + x.current_price : "—"}</td>
       <td class="py-2 px-3 text-right font-mono ${vsClass}">${vsText}</td>
-      <td class="py-2 px-3 text-right font-mono text-slate-500">${deal}</td>
+      <td class="py-2 px-3 text-right font-mono text-xs text-slate-500" title="${x.low_date ? '最低于 ' + x.low_date : ''}">${x.low_since_ipo ? "$" + x.low_since_ipo : "—"}</td>
+      <td class="py-2 px-3 text-right font-mono ${reboundClass}">${reboundText}</td>
+      <td class="py-2 px-3 text-right font-mono text-xs text-slate-500">${_vol(x.avg_volume_30d)}</td>
       <td class="py-2 px-3 text-center" title="${tooltip}">${_ipoJuniorScoreBadge(x.score)}</td>
       <td class="py-2 px-3 text-xs">${tags}</td>
     </tr>`;
@@ -5159,13 +5272,16 @@ function _renderJuniorTable_US() {
       <tr>
         <th class="py-2 px-3 text-left">代码</th>
         <th class="py-2 px-3 text-left">名称</th>
-        <th class="py-2 px-3 text-left">交易所</th>
+        <th class="py-2 px-3 text-left">行业</th>
+        <th class="py-2 px-3 text-right">市值</th>
         <th class="py-2 px-3 text-left">上市日</th>
         <th class="py-2 px-3 text-right">发行价</th>
         <th class="py-2 px-3 text-right">最新价</th>
         <th class="py-2 px-3 text-right">vs 发行</th>
-        <th class="py-2 px-3 text-right">融资额</th>
-        <th class="py-2 px-3 text-center" title="0..100,4 维加权">底部分</th>
+        <th class="py-2 px-3 text-right" title="上市以来最低价">最低价</th>
+        <th class="py-2 px-3 text-right" title="当前价 vs 最低价的反弹幅度">反弹</th>
+        <th class="py-2 px-3 text-right" title="近 30 日均成交量">日均量</th>
+        <th class="py-2 px-3 text-center" title="0..100,5 维加权">底部分</th>
         <th class="py-2 px-3 text-left">标签</th>
       </tr>
     </thead>
@@ -5273,7 +5389,7 @@ function filterJunior(k) { _juniorFilter = k; _renderJuniorTable(); }
 
 function switchIpoMarket(market) {
   _ipoMarket = market;
-  ["cn", "us", "hk"].forEach(k => {
+  ["us", "cn", "hk"].forEach(k => {
     const b = document.getElementById("ipo-market-" + k);
     if (b) {
       const active = k === market;
@@ -9239,21 +9355,57 @@ function _reasonSummary(row) {
       historyEl.innerHTML = dates.map(d => {
         const recs = byDate[d];
         recs.sort((a, b) => (a.rank || 0) - (b.rank || 0));
-        // 当日均 alpha
-        const a5s = recs.map(r => r.alpha_5d).filter(v => v != null);
-        const a20s = recs.map(r => r.alpha_20d).filter(v => v != null);
-        const meanA5 = a5s.length ? (a5s.reduce((s, v) => s + v, 0) / a5s.length) : null;
-        const meanA20 = a20s.length ? (a20s.reduce((s, v) => s + v, 0) / a20s.length) : null;
-        const hit5 = a5s.filter(v => v > 5).length;
+        // 当日均 alpha + 分布
+        const a1s = recs.map(r => r.alpha_1d).filter(v => v != null).sort((a, b) => a - b);
+        const a5s = recs.map(r => r.alpha_5d).filter(v => v != null).sort((a, b) => a - b);
+        const a20s = recs.map(r => r.alpha_20d).filter(v => v != null).sort((a, b) => a - b);
+        const _mean = arr => arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : null;
+        const _median = arr => !arr.length ? null
+          : (arr.length % 2 ? arr[(arr.length - 1) / 2] : (arr[arr.length / 2 - 1] + arr[arr.length / 2]) / 2);
+        const meanA1 = _mean(a1s), medianA1 = _median(a1s);
+        const meanA5 = _mean(a5s);
+        const meanA20 = _mean(a20s);
+        const win1d = a1s.filter(v => v > 0).length;        // alpha > 0 = 跑赢基准
+        const drop1d = a1s.filter(v => v < -5).length;      // <-5% = 1d 内大跌掉队
+        const hit5 = a5s.filter(v => v > 5).length;         // >+5% = 5d 大涨命中
+        const miss5 = a5s.filter(v => v < -5).length;       // <-5% = 5d 大跌掉队
+        const winPct1d = a1s.length ? Math.round(win1d / a1s.length * 100) : null;
         const marketBreakdown = _formatMarketCountsFromRows(recs);
 
-        const summary = `<div class="flex items-center gap-3 text-sm">
+        // 估算 5d/20d 成熟日期（5 交易日 ≈ 7 自然日；20 交易日 ≈ 28 自然日）
+        const runDate = (recs[0] && recs[0].run_date) || null;
+        let due5d = "5 个交易日后", due20d = "20 个交易日后";
+        if (runDate) {
+          try {
+            const base = new Date(runDate + "T00:00:00");
+            const addDays = (dt, n) => { const x = new Date(dt); x.setDate(x.getDate() + n); return x; };
+            const fmt = dt => `${dt.getMonth() + 1}-${String(dt.getDate()).padStart(2, "0")}`;
+            due5d = fmt(addDays(base, 7));
+            due20d = fmt(addDays(base, 28));
+          } catch (e) { /* keep defaults */ }
+        }
+
+        const _fmtA = v => v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(2) + "%";
+        const a1Tip = a1s.length
+          ? `中位 ${_fmtA(medianA1)} · 最佳 ${_fmtA(a1s[a1s.length - 1])} · 最差 ${_fmtA(a1s[0])}`
+          : "次日（T+1）alpha 还未成熟";
+        const oneDayBlock = a1s.length
+          ? `<span class="text-slate-700">1d α</span>: <strong>${_fmtA(meanA1)}</strong> · 跑赢基准 ${winPct1d}% (${win1d}/${a1s.length})${drop1d > 0 ? ` · <span class="text-rose-600">大跌 ${drop1d}</span>` : ""}`
+          : `<span class="text-slate-700">1d α</span>: <span class="text-slate-400">⏳ 等次日成熟</span>`;
+        const fiveDayBlock = a5s.length
+          ? `<span class="text-slate-700">5d α</span>: <strong>${_fmtA(meanA5)}</strong> · 大涨 ${hit5}${miss5 > 0 ? ` · 大跌 ${miss5}` : ""}`
+          : `<span class="text-slate-700">5d α</span>: <span class="text-slate-400">⏳ 等 ${due5d}</span>`;
+        const twentyDayBlock = a20s.length
+          ? `<span class="text-slate-700">20d α</span>: <strong>${_fmtA(meanA20)}</strong>`
+          : `<span class="text-slate-700">20d α</span>: <span class="text-slate-400">⏳ 等 ${due20d}</span>`;
+
+        const summary = `<div class="flex items-center gap-3 text-sm flex-wrap">
           <span class="font-bold text-slate-900">${d}</span>
           <span class="text-slate-500">完整批次 ${recs.length} 只${marketBreakdown ? `（${marketBreakdown}）` : ""}</span>
           <span class="text-slate-400">·</span>
-          <span class="text-xs text-slate-600">5d α: ${meanA5 == null ? "—" : (meanA5 >= 0 ? "+" : "") + meanA5.toFixed(2) + "%"}</span>
-          <span class="text-xs text-slate-600">20d α: ${meanA20 == null ? "—" : (meanA20 >= 0 ? "+" : "") + meanA20.toFixed(2) + "%"}</span>
-          <span class="text-xs text-slate-600">大涨命中: ${hit5}/${a5s.length || "—"}</span>
+          <span class="text-xs text-slate-600" title="${a1Tip}">${oneDayBlock}</span>
+          <span class="text-xs text-slate-600">${fiveDayBlock}</span>
+          <span class="text-xs text-slate-600">${twentyDayBlock}</span>
         </div>`;
 
         const rows = recs.map(r => {
