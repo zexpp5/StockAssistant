@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS manual_watchlist (
     market      VARCHAR NOT NULL,
     symbol      VARCHAR NOT NULL,
     name        VARCHAR,
+    industry    VARCHAR,   -- 用户在「自选股配置」editor 手填的行业归类
+    business    VARCHAR,   -- 用户手填的主营业务描述
     notes       VARCHAR,
     created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
