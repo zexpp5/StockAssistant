@@ -4948,7 +4948,7 @@ function _renderIpoSection_CN() {
     if (!recent.length) {
       rcEl.innerHTML = `<div class="p-4 text-sm text-slate-500">近 30 日无新股上市。</div>`;
     } else {
-      const rows = recent.map(e => `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50">
+      const rows = recent.map(e => `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50 cursor-pointer" data-code="${_esc(e.code || "")}" data-name="${_esc(e.name || "")}" onclick="openStockDetail(this.dataset.code, this.dataset.name)">
         <td class="py-2 px-3 font-mono font-bold text-slate-900">${_esc(e.code || "")}</td>
         <td class="py-2 px-3 text-slate-800">${_esc(e.name || "")}</td>
         <td class="py-2 px-3 text-xs text-slate-500">${_ipoBoardLabel(e.board)}</td>
@@ -5061,7 +5061,7 @@ function _renderIpoSection_US() {
                          e.vs_issue_pct < 0 ? "text-rose-600" : "text-emerald-700";
         const vsText = e.vs_issue_pct === null || e.vs_issue_pct === undefined ? "—" :
                        (e.vs_issue_pct > 0 ? "+" : "") + e.vs_issue_pct + "%";
-        return `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50">
+        return `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50 cursor-pointer" data-code="${_esc(e.symbol || "")}" data-name="${_esc(e.name || "")}" onclick="openStockDetail(this.dataset.code, this.dataset.name)">
           <td class="py-2 px-3 font-mono font-bold text-slate-900">${_esc(e.symbol || "")}</td>
           <td class="py-2 px-3 text-slate-800">${_esc(e.name || "")}</td>
           <td class="py-2 px-3 text-xs">
@@ -5173,7 +5173,7 @@ function _renderUnlockTable() {
     const poolTag = x.in_holdings
       ? `<span class="px-1.5 py-0.5 rounded text-[10px] bg-rose-100 text-rose-700">持仓</span>`
       : x.in_watchlist ? `<span class="px-1.5 py-0.5 rounded text-[10px] bg-amber-100 text-amber-700">自选</span>` : "";
-    return `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50">
+    return `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50 cursor-pointer" data-code="${_esc(x.code)}" data-name="${_esc(x.name || "")}" onclick="openStockDetail(this.dataset.code, this.dataset.name)">
       <td class="py-2 px-3 font-mono font-bold text-slate-900">${_esc(x.code)}</td>
       <td class="py-2 px-3 text-slate-800">${_esc(x.name || "")} ${poolTag}</td>
       <td class="py-2 px-3 text-xs text-slate-500">${_ipoBoardLabel(x.board)}</td>
@@ -5254,7 +5254,7 @@ function _renderJuniorTable_US() {
     const reboundText = x.rebound_pct === null ? "—" : "+" + x.rebound_pct + "%";
     const bd = x.score_breakdown || {};
     const tooltip = `折发行 ${bd.discount_to_issue || 0} + 时间衰减 ${bd.time_decay || 0} + 流动性 ${bd.liquidity || 0} + 反弹奖励 ${bd.rebound_bonus || 0} + 池子 ${bd.in_your_pool || 0}`;
-    return `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50">
+    return `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50 cursor-pointer" data-code="${_esc(x.symbol)}" data-name="${_esc(x.name || "")}" onclick="openStockDetail(this.dataset.code, this.dataset.name)">
       <td class="py-2 px-3 font-mono font-bold text-slate-900">${_esc(x.symbol)}</td>
       <td class="py-2 px-3 text-slate-800">${_esc(x.name || "")} ${poolTag}</td>
       <td class="py-2 px-3 text-xs">
@@ -5340,7 +5340,7 @@ function _renderJuniorTable() {
     const vsIssueClass = x.vs_issue_pct < -20 ? "text-rose-700 font-semibold" : x.vs_issue_pct < 0 ? "text-rose-600" : "text-emerald-700";
     const breakdown = x.score_breakdown || {};
     const tooltip = `折发行 ${breakdown.discount_to_issue || 0} + 时间衰减 ${breakdown.time_decay || 0} + 首日溢价 ${breakdown.first_day_premium || 0} + 较首日 ${breakdown.vs_first_close || 0}`;
-    return `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50">
+    return `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50 cursor-pointer" data-code="${_esc(x.code)}" data-name="${_esc(x.name || "")}" onclick="openStockDetail(this.dataset.code, this.dataset.name)">
       <td class="py-2 px-3 font-mono font-bold text-slate-900">${_esc(x.code)}</td>
       <td class="py-2 px-3 text-slate-800">${_esc(x.name || "")}</td>
       <td class="py-2 px-3 text-xs text-slate-500">${_ipoBoardLabel(x.board)}</td>
@@ -5412,6 +5412,11 @@ function switchIpoMarket(market) {
   document.querySelectorAll(".unlock-filter-btn, .junior-filter-btn").forEach(el => {
     el.style.display = isCN ? "" : "none";
   });
+  // 「🔬 仅科技」A 股不显示：fetch_cn_junior_pool 不返回 is_tech，
+  // A 股 _renderJuniorTable 也未处理 tech 筛选 — 留按钮会让点击无反应。
+  // 补字段 = 定义"什么算科技股"的口径，是产品决策不应程序员私改。
+  const techBtn = document.getElementById("junior-filter-tech");
+  if (techBtn && isCN) techBtn.style.display = "none";
   const hint = document.getElementById("ipo-market-hint");
   if (hint) {
     if (market === "us") hint.textContent = "美股：IPO 日历 ✓ · 解禁数据未接入 · 次新股池仅 system_universe 范围";
@@ -5427,7 +5432,11 @@ function switchIpoMarket(market) {
 
 function _updateIpoMeta() {
   const meta = document.getElementById("ipo-junior-meta");
-  if (!meta || !JUNIOR_RADAR || !JUNIOR_RADAR.generated_at) return;
+  if (!meta) return;
+  if (!JUNIOR_RADAR || !JUNIOR_RADAR.generated_at) {
+    meta.innerHTML = `<span class="text-rose-700 font-semibold">⚠️ 未找到 junior_stock_radar.json</span> · 数据源缺失,请运行 <code class="bg-slate-100 px-1.5 py-0.5 rounded">python3 -m stock_research.jobs.ipo_daily && python3 -m stock_research.jobs.junior_stock_watcher</code> 后重建看板。`;
+    return;
+  }
   const gen = String(JUNIOR_RADAR.generated_at).slice(0, 19);
   const m = _ipoCurrentMarket();
   let info = "";
@@ -5440,7 +5449,17 @@ function _updateIpoMeta() {
   } else {
     info = "数据源受限（详见页面说明）";
   }
-  meta.textContent = `生成于 ${gen} · ${info}`;
+  // 计算数据新鲜度: 30h 内绿色, 30-48h 黄色警告, >48h 红色 + 修复命令
+  // 阈值 30h 是因为夜班 22:00 跑完后,次日早班 8:30 看是 10.5h,过周末 (周五夜班 → 周一早班) 是 ~58h,所以工作日 30h 是合理上限
+  const genTime = new Date(gen.replace(" ", "T") + "+08:00").getTime();
+  const hoursOld = isFinite(genTime) ? (Date.now() - genTime) / 3600000 : 0;
+  let badge = "";
+  if (hoursOld > 48) {
+    badge = `<span class="text-rose-700 font-semibold">⚠️ 数据已过期 ${hoursOld.toFixed(0)}h</span> · 建议跑 <code class="bg-slate-100 px-1.5 py-0.5 rounded">./daily_refresh.sh --research</code> 刷新 · `;
+  } else if (hoursOld > 30) {
+    badge = `<span class="text-amber-700">⏳ 数据 ${hoursOld.toFixed(0)}h 前生成（夜班可能未跑）</span> · `;
+  }
+  meta.innerHTML = `${badge}生成于 ${gen} · ${info}`;
 }
 
 function renderJuniorRadar() {
@@ -11347,7 +11366,7 @@ def _weekly_self_review_panel_html() -> str:
             else:
                 ret_html = ""
             rows.append(f"<li class='text-xs text-slate-700'>{head} · {note}{ret_html}</li>")
-    sample = "".join(rows) if rows else "<li class='text-xs text-slate-500'>本周无典型错过/没听话样本</li>"
+    sample = "".join(rows) if rows else "<li class='text-xs text-slate-500'>上周无典型错过/没听话样本（5-25 之前数据已清，下周一起会有内容）</li>"
     md_path = html_lib.escape(f"docs/letters/weekly_self_review_{wr.get('week_label', '')}.md")
     return f"""
   <div class="mb-6 bg-gradient-to-r from-violet-50 to-slate-50 rounded-xl border border-violet-200 p-4">

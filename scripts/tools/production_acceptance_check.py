@@ -59,6 +59,13 @@ CN_LATEST_JSON = (
     "data/latest/trade_delta_cn.json",
 )
 
+# IPO & 次新股 tab 数据源（dashboard 用）
+# WARN 级而非 FAIL：IPO 数据滞后不影响 v2 主推荐的生产正确性，
+# 但页面会空/旧，应该提示同事而不是阻断 pipeline
+IPO_LATEST_JSON = (
+    "data/latest/junior_stock_radar.json",
+)
+
 
 def _issue(level: str, code: str, message: str, details: Any = None) -> dict[str, Any]:
     item = {"level": level, "code": code, "message": message}
@@ -415,6 +422,10 @@ def _surface_artifact_checks(
     """Checks that final user-visible artifacts are fresh and internally labeled."""
     artifact_summary: dict[str, Any] = {}
     artifact_summary.update(_latest_json_checks(issues, CORE_LATEST_JSON, max_age_days=max_age_days))
+    # IPO tab 数据源放宽到 2 天 + WARN：早班加跑后通常 <24h，给周末/失败一点 buffer
+    artifact_summary.update(_latest_json_checks(
+        issues, IPO_LATEST_JSON, max_age_days=max(max_age_days, 2), level="WARN"
+    ))
     summary["artifacts"] = artifact_summary
 
     qgate, _ = _json_load("data/latest/recommendation_quality_gate.json")
@@ -1137,6 +1148,9 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
 
     artifact_summary: dict[str, Any] = {}
     artifact_summary.update(_latest_json_checks(issues, CORE_LATEST_JSON, max_age_days=max_age_days))
+    artifact_summary.update(_latest_json_checks(
+        issues, IPO_LATEST_JSON, max_age_days=max(max_age_days, 2), level="WARN"
+    ))
     if watchlist_markets["hk"]:
         artifact_summary.update(_latest_json_checks(issues, HK_LATEST_JSON, max_age_days=max_age_days))
     if _a_share_ready(now) and (a_weights_ok or not allow_a_share_disabled):

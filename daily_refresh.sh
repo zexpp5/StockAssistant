@@ -47,6 +47,12 @@ is_research_step() {
 is_morning_step() {
     [ "$MODE" = "full" ] || [ "$MODE" = "morning" ]
 }
+# needs_ipo_data：IPO & 次新股 tab 数据源（step 18 + 19b），早班/夜班/full 都跑
+# 早班 8:30 看「今日可申购」必须有最新数据；A 股收盘单独闭环（--a-share-only）跳过
+# 实测 19b 全量 ~15s（美股缓存命中、A 股次新股池 77 只逐个拉），早班可接受
+needs_ipo_data() {
+    [ "$MODE" = "full" ] || [ "$MODE" = "research" ] || [ "$MODE" = "morning" ]
+}
 
 # 默认值可以被环境变量覆盖；部署时 export DIR=/your/path
 DIR="${DIR:-$(cd "$(dirname "$0")" && pwd)}"
@@ -456,9 +462,9 @@ run_step "16/25 实盘防御检查" "-m stock_research.jobs.realtime_defense"
 is_research_step && run_step "17/25 OpenBB 综合情报" "-m stock_research.jobs.openbb_intelligence --quick"
 
 # R — A 股事件层（IPO / 解禁 / 政策；19 比较慢）
-is_research_step && run_step "18/25 IPO 打新日历" "-m stock_research.jobs.ipo_daily"
+needs_ipo_data && run_step "18/25 IPO 打新日历" "-m stock_research.jobs.ipo_daily"
 is_research_step && run_step "19/25 事件日历（解禁/减持/财报）" "-m stock_research.jobs.event_calendar_daily"
-is_research_step && run_step "19b/25 次新股+解禁雷达（IPO & 次新股 tab 数据源）" "-m stock_research.jobs.junior_stock_watcher"
+needs_ipo_data && run_step "19b/25 次新股+解禁雷达（IPO & 次新股 tab 数据源）" "-m stock_research.jobs.junior_stock_watcher"
 is_research_step && run_step "20/25 产业政策事件扫描" "-m stock_research.jobs.policy_scan_daily"
 
 # v9.0 A 股选股闭环（仅 morning + full 兜底；A 股 picks 主路径走 --a-share-only 16:30 单独跑）
