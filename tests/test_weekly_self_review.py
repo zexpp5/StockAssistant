@@ -7,12 +7,16 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
+import duckdb
+
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
 from stock_research.jobs.weekly_self_review import (  # type: ignore
+    DISOBEDIENT_ACTIONS,
     _calendar_week_bounds,
     _had_increase_during_week,
+    _lookup_symbol_info,
     _markdown_report,
     build_weekly_self_review,
 )
@@ -110,6 +114,124 @@ class SuggestSizeAdvisoryTest(unittest.TestCase):
         self.assertIsNotNone(adv)
         self.assertTrue(adv.get("over_hard_cap"))
         self.assertEqual(adv.get("direction"), "trim")
+
+    def test_a_share_add_rounds_to_lot_100(self):
+        """A 股建议加仓必须按 100 股向下取整，且缺口不足 1 手时不出建议。"""
+        rules = _default_rules()
+        # 加 ¥10000 / ¥15.0 ≈ 666 股 → 应取整到 600 股
+        adv = _suggest_size_advisory(
+            rules=rules,
+            action="关注加仓",
+            symbol="002463.SZ",
+            shares=0,
+            current_price=15.0,
+            fx=1.0,
+            current_value_rmb=0.0,
+            current_weight=0.0,
+            target_weight=0.04,
+            total_capital=500000,
+            treatment_class="stock_score",
+        )
+        self.assertIsNotNone(adv)
+        self.assertEqual(adv.get("lot_size"), 100)
+        sug = adv.get("suggested_shares") or 0
+        self.assertGreater(sug, 0)
+        self.assertEqual(sug % 100, 0, "A 股建议股数必须是 100 的倍数")
+
+    def test_a_share_skips_when_add_below_one_lot(self):
+        """缺口 < 1 手金额时不出加仓建议（avoid '加 30 股 A 股' footgun）。"""
+        rules = _default_rules()
+        # 缺 ¥500 / ¥15 ≈ 33 股 < 100 股一手 → 不应出建议
+        adv = _suggest_size_advisory(
+            rules=rules,
+            action="关注加仓",
+            symbol="002463.SZ",
+            shares=100,
+            current_price=15.0,
+            fx=1.0,
+            current_value_rmb=1500.0,
+            current_weight=0.003,
+            target_weight=0.004,
+            total_capital=500000,
+            treatment_class="stock_score",
+        )
+        self.assertIsNone(adv)
+
+    def test_us_add_keeps_single_share(self):
+        """美股 lot=1，单股建议仍然有效（向后兼容）。"""
+        rules = _default_rules()
+        adv = _suggest_size_advisory(
+            rules=rules,
+            action="关注加仓",
+            symbol="MCD",
+            shares=10,
+            current_price=280.0,
+            fx=7.1,
+            current_value_rmb=19880.0,
+            current_weight=0.04,
+            target_weight=0.08,
+            total_capital=500000,
+            treatment_class="portfolio_model",
+        )
+        self.assertIsNotNone(adv)
+        self.assertEqual(adv.get("lot_size"), 1)
+        self.assertGreater(adv.get("suggested_shares") or 0, 0)
+
+
+class LookupSymbolInfoSQLTest(unittest.TestCase):
+    """_lookup_symbol_info 是 _ 私有 SQL，必须用真 DuckDB 喂一遍。
+
+    这条 test 防回归：之前 SQL 缺了一对括号导致 parser 失败，
+    上层全 mock 的 build_weekly_self_review test 抓不到。
+    """
+
+    def _setup_db(self) -> "duckdb.DuckDBPyConnection":
+        conn = duckdb.connect(":memory:")
+        conn.execute(
+            """
+            CREATE TABLE system_universe (
+                symbol VARCHAR, name VARCHAR, market VARCHAR, active BOOLEAN
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE manual_watchlist (
+                symbol VARCHAR, name VARCHAR, market VARCHAR
+            )
+            """
+        )
+        conn.execute("INSERT INTO system_universe VALUES ('002463.SZ', '沪电股份', 'CN', TRUE)")
+        conn.execute("INSERT INTO manual_watchlist VALUES ('NVDA', 'NVIDIA', 'US')")
+        return conn
+
+    def test_sql_parses_and_aggregates_two_sources(self):
+        conn = self._setup_db()
+        try:
+            info = _lookup_symbol_info(conn, ["002463.SZ", "NVDA", "MISSING.SS"])
+        finally:
+            conn.close()
+        self.assertEqual(info.get("002463.SZ", {}).get("name"), "沪电股份")
+        self.assertEqual(info.get("NVDA", {}).get("name"), "NVIDIA")
+        self.assertEqual(info.get("002463.SZ", {}).get("market"), "CN")
+
+    def test_empty_symbols_returns_empty(self):
+        conn = self._setup_db()
+        try:
+            self.assertEqual(_lookup_symbol_info(conn, []), {})
+        finally:
+            conn.close()
+
+
+class DisobedientActionsConsistencyTest(unittest.TestCase):
+    """DISOBEDIENT_ACTIONS 必须与 real_holding_review._review_action 实际产出的 label 对齐。"""
+
+    def test_constant_is_subset_of_known_labels(self):
+        from stock_research.jobs.real_holding_review import DISOBEDIENT_ACTIONS as src
+        self.assertIs(DISOBEDIENT_ACTIONS, src, "weekly 和 real_holding_review 必须复用同一常量")
+        # 这两个 label 实际由 _review_action 在多个分支返回
+        self.assertIn("风险复查", DISOBEDIENT_ACTIONS)
+        self.assertIn("减仓观察", DISOBEDIENT_ACTIONS)
 
 
 if __name__ == "__main__":

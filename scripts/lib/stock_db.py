@@ -962,25 +962,37 @@ def fetch_recommendation_runs_between(
     start_date: date,
     end_date: date,
     *,
-    universe_scope: str = "system_tech_universe",
+    universe_scope: str | list[str] | None = "system_tech_universe",
     conn: duckdb.DuckDBPyConnection | None = None,
 ) -> list[dict[str, Any]]:
-    """按 run_date 区间读取 recommendation_runs（PIT 复盘用）。"""
+    """按 run_date 区间读取 recommendation_runs（PIT 复盘用）。
+
+    universe_scope:
+        - str: 单 scope（向后兼容）
+        - list[str]: 多 scope IN (...)
+        - None: 不过滤 scope（取所有；周末复盘默认此项以兼容未来 HK/US 接入 PIT 表）
+    """
     own = conn is None
     if own:
         conn = get_db(read_only=True)
-    rows = conn.execute(
-        """
+    sql = """
         SELECT run_id, run_date, strategy_version, model_version, universe_scope,
                data_cutoff_at, generated_at, status, notes
         FROM recommendation_runs
-        WHERE universe_scope = ?
-          AND run_date >= ? AND run_date <= ?
+        WHERE run_date >= ? AND run_date <= ?
           AND status = 'generated'
-        ORDER BY run_date ASC, generated_at ASC
-        """,
-        [universe_scope, start_date, end_date],
-    ).fetchall()
+    """
+    params: list[Any] = [start_date, end_date]
+    if isinstance(universe_scope, str):
+        sql += " AND universe_scope = ?"
+        params.append(universe_scope)
+    elif isinstance(universe_scope, (list, tuple, set)) and universe_scope:
+        placeholders = ",".join(["?"] * len(universe_scope))
+        sql += f" AND universe_scope IN ({placeholders})"
+        params.extend(list(universe_scope))
+    # universe_scope is None → no scope filter
+    sql += " ORDER BY run_date ASC, generated_at ASC"
+    rows = conn.execute(sql, params).fetchall()
     cols = [
         "run_id", "run_date", "strategy_version", "model_version", "universe_scope",
         "data_cutoff_at", "generated_at", "status", "notes",

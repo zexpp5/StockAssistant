@@ -21,6 +21,7 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "scripts" / "lib"))
 
 import stock_db  # type: ignore
+from stock_research.jobs.real_holding_review import DISOBEDIENT_ACTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,6 @@ OUT_DIR = REPO / "data" / "latest"
 LETTERS_DIR = REPO / "docs" / "letters"
 STATE_BACKUP_DIR = REPO / "state_backup"
 
-DISOBEDIENT_ACTIONS = frozenset({"风险复查", "减仓观察"})
 DEFAULT_TOP_N = 10
 
 
@@ -88,16 +88,29 @@ def _holdings_from_backup(path: Path) -> dict[str, float]:
     return out
 
 
-def _backup_snapshots_between(start: date, end: date) -> list[tuple[date, dict[str, float]]]:
+def _backup_snapshots_between(
+    start: date,
+    end: date,
+    *,
+    baseline_lookback_days: int = 3,
+) -> list[tuple[date, dict[str, float]]]:
+    """收集 [start - baseline_lookback, end] 内的所有持仓快照（按日期升序）。
+
+    Why baseline_lookback：state_backup 文件在每日 morning 流程末尾才生成；
+    周日跑复盘时，"本周一开盘前"的基线快照实际落在上周六/日（start - 1 ~ 2）。
+    严格按 [start, end] 取窗会把基线漏掉，导致 week_start_shares == week_end_shares，
+    所有"增持/减持"判定恒等空。窗口前移 3 天兜底周末/节假日缺数据。
+    """
     snaps: list[tuple[date, dict[str, float]]] = []
     if not STATE_BACKUP_DIR.is_dir():
         return snaps
+    earliest = start - timedelta(days=max(0, int(baseline_lookback_days)))
     for p in sorted(STATE_BACKUP_DIR.glob("state_*.json")):
         try:
             d = date.fromisoformat(p.stem.replace("state_", "")[:10])
         except ValueError:
             continue
-        if start <= d <= end:
+        if earliest <= d <= end:
             snaps.append((d, _holdings_from_backup(p)))
     return snaps
 
@@ -184,8 +197,8 @@ def _lookup_symbol_info(conn, symbols: list[str]) -> dict[str, dict[str, str]]:
     rows = conn.execute(
         f"""
         SELECT symbol,
-               COALESCE(MAX(NULLIF(TRIM(name), ''), '') AS name,
-               COALESCE(MAX(NULLIF(TRIM(market), ''), '') AS market
+               COALESCE(MAX(NULLIF(TRIM(name), '')), '') AS name,
+               COALESCE(MAX(NULLIF(TRIM(market), '')), '') AS market
         FROM (
           SELECT symbol, name, market FROM system_universe
           WHERE symbol IN ({placeholders}) AND active = TRUE
@@ -236,9 +249,13 @@ def _collect_weekly_model_picks(
     week_end: date,
     *,
     top_n: int,
-    universe_scope: str,
+    universe_scope: str | list[str] | None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """返回 (symbol -> meta, runs 列表)。"""
+    """返回 (symbol -> meta, runs 列表)。
+
+    universe_scope=None 表示扫所有 scope（兼容未来 HK/US picks 接入 PIT 表）；
+    当前 recommendation_runs 仅写入 A 股 system_tech_universe，HK/US 单独建议补写。
+    """
     runs = stock_db.fetch_recommendation_runs_between(
         week_start, week_end, universe_scope=universe_scope, conn=conn,
     )
@@ -323,7 +340,7 @@ def build_weekly_self_review(
     *,
     ref_date: date | None = None,
     top_n: int = DEFAULT_TOP_N,
-    universe_scope: str = "system_tech_universe",
+    universe_scope: str | list[str] | None = None,
 ) -> dict[str, Any]:
     week_start, week_end = _calendar_week_bounds(ref_date)
     week_label = _iso_week_label(week_end)

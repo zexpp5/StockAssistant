@@ -534,6 +534,31 @@ def _bounded_score(value: float | None) -> float | None:
     return max(0.0, min(100.0, round(float(value), 1)))
 
 
+# Disobedient action labels — 模型反对你仍加仓时算"没听话"，
+# 给 weekly_self_review 等下游 import 用，避免 magic string 两处 drift。
+DISOBEDIENT_ACTIONS: frozenset[str] = frozenset({"风险复查", "减仓观察"})
+
+
+def _market_lot_size(symbol: str) -> int:
+    """最小交易单位（一手）。A 股 100；港股保守默认 100（实际 lot 因股而异 50-1000）；
+    其他 1。advisory 性质，宁可少建议也不建议下不了单的散股。"""
+    s = (symbol or "").upper().strip()
+    if s.endswith((".SS", ".SZ", ".SH", ".BJ")):
+        return 100
+    if s.endswith(".HK"):
+        return 100
+    return 1
+
+
+def _round_shares_down_to_lot(shares_float: float, lot: int) -> int:
+    if shares_float <= 0:
+        return 0
+    n = int(shares_float)
+    if lot <= 1:
+        return n
+    return (n // lot) * lot
+
+
 def _suggest_size_advisory(
     *,
     rules: dict[str, Any],
@@ -577,6 +602,7 @@ def _suggest_size_advisory(
     batch_note = f"可考虑分{batches}批，每批不超过建议变动额的 1/3"
     price_rmb = current_price * fx
     over_hard = current_weight is not None and current_weight >= hard_cap
+    lot = _market_lot_size(symbol)
 
     advisory: dict[str, Any] = {
         "advisory_only": True,
@@ -585,15 +611,18 @@ def _suggest_size_advisory(
         "over_hard_cap": over_hard,
         "suggested_batches": batches,
         "suggested_batch_note": batch_note,
+        "lot_size": lot,
     }
 
-    if over_hard or action in {"风险复查", "减仓观察"}:
+    if over_hard or action in DISOBEDIENT_ACTIONS:
         trim_to = min(hard_cap, kelly_pct) if target_weight is None else min(
             hard_cap, max(target_weight, kelly_pct)
         )
         target_val = trim_to * total_capital
         trim_rmb = max(0.0, current_value_rmb - target_val)
-        trim_shares = int(trim_rmb / price_rmb) if trim_rmb > 0 else 0
+        # 减仓建议不能超过当前持有股数；按市场最小一手向下取整
+        raw_trim_shares = trim_rmb / price_rmb if trim_rmb > 0 else 0.0
+        trim_shares = min(int(shares), _round_shares_down_to_lot(raw_trim_shares, lot))
         advisory.update({
             "direction": "trim",
             "suggested_action_rmb": round(trim_rmb, 2) if trim_rmb > 0 else None,
@@ -606,10 +635,12 @@ def _suggest_size_advisory(
         eff_target = capped.get(symbol, target_weight)
         target_val = eff_target * total_capital
         add_rmb = max(0.0, target_val - current_value_rmb)
-        if add_rmb < price_rmb * 0.5:
+        # 缺口不足一手就不出建议（避免推"加仓 30 股 A 股"这种下不了的单）
+        min_meaningful_rmb = max(price_rmb * 0.5, price_rmb * lot)
+        if add_rmb < min_meaningful_rmb:
             return None
-        add_shares = int(add_rmb / price_rmb)
-        if add_shares < 1:
+        add_shares = _round_shares_down_to_lot(add_rmb / price_rmb, lot)
+        if add_shares < lot:
             return None
         advisory.update({
             "direction": "add",
