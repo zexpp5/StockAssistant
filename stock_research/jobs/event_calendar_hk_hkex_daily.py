@@ -210,14 +210,65 @@ _CUSTOMER_KEYWORDS = [
 ]
 
 
-def _fetch_pdf_summary(session, file_link: str) -> str:
+def _pdf_cache_db():
+    """打开 PDF summary 缓存 DuckDB（位于 data/cache/hkex_pdf_cache.duckdb）。"""
+    try:
+        import duckdb
+    except ImportError:
+        return None
+    cache_db = REPO / "data" / "cache" / "hkex_pdf_cache.duckdb"
+    cache_db.parent.mkdir(parents=True, exist_ok=True)
+    con = duckdb.connect(str(cache_db))
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS pdf_summary (
+            news_id VARCHAR PRIMARY KEY,
+            file_link VARCHAR,
+            ticker VARCHAR,
+            event_date DATE,
+            summary VARCHAR,
+            fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    return con
+
+
+def _pdf_cache_get(con, news_id: str) -> str | None:
+    if not con or not news_id:
+        return None
+    try:
+        row = con.execute("SELECT summary FROM pdf_summary WHERE news_id = ?", [news_id]).fetchone()
+        return row[0] if row else None
+    except Exception:
+        return None
+
+
+def _pdf_cache_set(con, news_id: str, file_link: str, ticker: str, event_date: str, summary: str) -> None:
+    if not con or not news_id:
+        return
+    try:
+        con.execute(
+            "INSERT OR REPLACE INTO pdf_summary (news_id, file_link, ticker, event_date, summary) VALUES (?, ?, ?, ?, ?)",
+            [news_id, file_link, ticker, event_date, summary],
+        )
+    except Exception as e:
+        logger.debug("pdf cache write fail: %s", e)
+
+
+def _fetch_pdf_summary(session, file_link: str, cache_con=None, news_id: str = "",
+                       ticker: str = "", event_date: str = "") -> str:
     """拉 HKEX 公告 PDF，提取第一页前 400 字作为摘要。失败返回空。
 
     HKEX file_link 格式：/listedco/listconews/sehk/YYYY/MMDD/YYYYMMDDNNNNN_c.pdf
     完整 URL: https://www1.hkexnews.hk{file_link}
+
+    cache_con: DuckDB connection — 命中 cache 直接返回，避免重拉同一份 PDF。
     """
     if not file_link or not file_link.endswith(".pdf"):
         return ""
+    # 1. 查缓存
+    cached = _pdf_cache_get(cache_con, news_id)
+    if cached is not None:
+        return cached
     try:
         from pypdf import PdfReader
     except ImportError:
@@ -256,7 +307,10 @@ def _fetch_pdf_summary(session, file_link: str) -> str:
                     text = text[p + len(sep):].lstrip()
                     break
             break
-    return text[:400]
+    summary = text[:400]
+    # 2. 写缓存
+    _pdf_cache_set(cache_con, news_id, file_link, ticker, event_date, summary)
+    return summary
 
 
 def _extract_customer(text: str, self_name: str = "") -> str:
@@ -418,6 +472,7 @@ def main() -> int:
     from_dt = today - timedelta(days=60)
 
     session = requests.Session()
+    pdf_cache = _pdf_cache_db()  # 持久化 PDF 摘要，避免每天重拉
     events: list[dict] = []
     hit, miss, errored = 0, [], []
 
@@ -464,7 +519,14 @@ def main() -> int:
                 if customer:
                     entry["customer"] = customer
                 # 拉 PDF 首页摘要（可能含合同期限/起止日期/cap 等关键细节）
-                pdf_summary = _fetch_pdf_summary(session, a.get("FILE_LINK", ""))
+                # 用 cache 避免重拉（同一份公告的 news_id 唯一）
+                pdf_summary = _fetch_pdf_summary(
+                    session, a.get("FILE_LINK", ""),
+                    cache_con=pdf_cache,
+                    news_id=a.get("NEWS_ID", ""),
+                    ticker=ticker,
+                    event_date=event_date,
+                )
                 if pdf_summary:
                     entry["context_summary"] = pdf_summary
                     # 如果 title 没抽到金额/客户，尝试从 summary 抽
@@ -510,6 +572,13 @@ def main() -> int:
     print(f"   announcements: {len(events)}")
     for t, n in type_counts.most_common():
         print(f"   {t:24s} {n}")
+    if pdf_cache:
+        try:
+            n_cached = pdf_cache.execute("SELECT COUNT(*) FROM pdf_summary").fetchone()[0]
+            print(f"   pdf cache: {n_cached} 条记录（避免重拉同一份公告）")
+            pdf_cache.close()
+        except Exception:
+            pass
     return 0 if hit > 0 else 2
 
 

@@ -266,6 +266,52 @@ def _is_sfc_noise(title: str) -> bool:
     return any(p in title for p in _SFC_NOISE_PATTERNS)
 
 
+def fetch_hkex_news(limit: int = 30) -> list[dict]:
+    """HKEX (港交所) 新闻发布 — 港股市场结构 / 产品发布 / 团队任命 / 监管协作。
+
+    页面 server-side render 嵌入 HTML，用 regex 解析 a 标签拿到 URL + 标题。
+    URL 形如 /News/News-Release/YYYY/YYMMDDNnews?sc_lang=en，从 URL 抽日期。
+    """
+    try:
+        import requests
+    except ImportError:
+        return []
+    import re as _re
+    url = "https://www.hkex.com.hk/News/News-Release?sc_lang=en"
+    try:
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0 LinearV"}, timeout=10)
+        if r.status_code != 200:
+            return []
+        html = r.text
+    except Exception as e:
+        logger.warning("HKEX news fetch err: %s", e)
+        return []
+
+    # 抓 SSR 嵌入的 news links：/News/News-Release/YYYY/YYMMDD*news
+    pat = _re.compile(
+        r'<a\s+[^>]*href="(/News/News-Release/(\d{4})/(\d{2})(\d{2})(\d{2})[a-z0-9]*news[^"]*)"[^>]*>([^<]{10,200})</a>'
+    )
+    out: list[dict] = []
+    seen: set[str] = set()
+    for href, yyyy, yy, mm, dd, title in pat.findall(html)[:limit * 2]:
+        if href in seen:
+            continue
+        seen.add(href)
+        try:
+            d = date(int(yyyy), int(mm), int(dd))
+        except Exception:
+            continue
+        out.append({
+            "date": d,
+            "title": title.strip(),
+            "content": "",
+            "source": "hkex.com.hk/news",
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
 def fetch_sfc_news(limit: int = 30) -> list[dict]:
     """香港证监会 (SFC) news — 港股监管 / 执法。
 
@@ -451,6 +497,9 @@ def scan_recent_policies(days: int = 7, min_score: int = 2) -> list[PolicyEvent]
 
     # 4. 香港证监会 (SFC) news — 港股监管 / 执法
     all_news.extend(fetch_sfc_news(limit=30))
+
+    # 5. 港交所 (HKEX) news — 港股市场结构 / 产品 / 团队
+    all_news.extend(fetch_hkex_news(limit=20))
 
     events = detect_policy_events(all_news, min_score=min_score)
     # 按日期降序 + 相关性降序

@@ -189,8 +189,8 @@ def get_catalyst(ticker: str, *, lookback_days: int = LOOKBACK_DAYS, today: date
         return _catalyst_from_cn_yjbb(_events_cn().get(code) or [], today, lookback_days)
 
     # 美股（裸 ticker）— 四段优先级链
-    # 1. SEC 13D/13G (max_priority=1) 收购信号最强
-    strong = _catalyst_from_sec(_events_us_sec().get(tk_upper) or [], today, lookback_days, max_priority=1)
+    # 1. SEC 强催化 (max_priority=2) — 含 13D/13G + 8-K 强 Items (1.01 重大协议 / 5.02 高管变动 / 1.03 破产 / 2.01 收购 / 3.01 退市)
+    strong = _catalyst_from_sec(_events_us_sec().get(tk_upper) or [], today, lookback_days, max_priority=2)
     if strong:
         return strong
     # 2. Form 4 内部人净买入/卖出（已经按 |净额|≥$1M 过滤）
@@ -201,7 +201,7 @@ def get_catalyst(ticker: str, *, lookback_days: int = LOOKBACK_DAYS, today: date
     eps = _catalyst_from_earnings_dates(_events_us().get(tk_upper) or [], today, lookback_days)
     if eps:
         return eps
-    # 4. SEC 弱催化兜底（8-K material_event + DEF 14A）
+    # 4. SEC 弱催化兜底（8-K 弱 Item priority 3-5 / DEF 14A）
     return _catalyst_from_sec(_events_us_sec().get(tk_upper) or [], today, lookback_days, max_priority=9)
 
 
@@ -333,6 +333,28 @@ def _catalyst_from_sec(events: list[dict], today: date, lookback_days: int, max_
             "proxy":                  "🗳️ 股东大会",
         }
         label = label_map.get(etype, f"📄 {form}")
+    # 8-K 有 item_summaries 时拼一段摘要（取主标 item 对应的段落）
+    summary = ""
+    if etype == "material_event" and isinstance(e.get("item_summaries"), dict):
+        sums = e["item_summaries"]
+        primary_item = e.get("primary_item") or ""
+        # 优先取主标对应段落，没有则按 priority 顺序回退
+        if primary_item and primary_item in sums and sums[primary_item]:
+            txt = sums[primary_item]
+        else:
+            # 回退：取 dict 第一个非空段落
+            txt = ""
+            for it, t in sums.items():
+                if t:
+                    txt = t
+                    break
+        if txt:
+            # 截 90 字预览（够看出主要意思,catalyst 行不要太长）
+            summary = txt[:90].strip()
+            if len(txt) > 90:
+                summary += "…"
+    if summary:
+        return f"{ed.strftime('%-m/%-d')} {label}（{days_ago}d 前）— {summary}"
     return f"{ed.strftime('%-m/%-d')} {label}（{days_ago}d 前）"
 
 

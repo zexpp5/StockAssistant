@@ -103,37 +103,85 @@ def _load_ticker_to_cik(session) -> dict[str, int]:
         return {}
 
 
-_ITEM_RE = __import__("re").compile(r"Item\s+(\d+\.\d+)", __import__("re").IGNORECASE)
+_re_mod = __import__("re")
+_ITEM_RE = _re_mod.compile(r"Item\s+(\d+\.\d+)", _re_mod.IGNORECASE)
+# 匹配 8-K section header："Item N.NN. <Title>." / "Item N.NN <Title>." — 后面跟 title 然后段落
+_ITEM_SECTION_RE = _re_mod.compile(
+    r"Item\s+(\d+\.\d+)[\s.]+([A-Z][^.]{5,120}\.?)\s*",
+    _re_mod.IGNORECASE,
+)
+_TAG_RE = _re_mod.compile(r"<[^>]+>")
+_ENT_RE = _re_mod.compile(r"&#?[a-zA-Z0-9]+;")
 
 
-def _fetch_8k_items(session, url: str) -> list[str]:
-    """拉 8-K HTML 解析含哪些 Items。返回排序后的 Item 编号列表。"""
+def _strip_html(html: str) -> str:
+    """HTML → 纯文本（清洗标签 + 折叠空白 + 解码常见 entity）。"""
+    s = _TAG_RE.sub(" ", html or "")
+    # 简单 entity 解码：仅处理常见的
+    replacements = {
+        "&nbsp;": " ", "&#160;": " ", "&amp;": "&",
+        "&#8217;": "'", "&#8220;": '"', "&#8221;": '"',
+        "&#8211;": "-", "&#8212;": "—", "&lt;": "<", "&gt;": ">",
+    }
+    for k, v in replacements.items():
+        s = s.replace(k, v)
+    # 其他 entity 删掉
+    s = _ENT_RE.sub("", s)
+    s = _re_mod.sub(r"\s+", " ", s)
+    return s.strip()
+
+
+def _fetch_8k_items(session, url: str) -> tuple[list[str], dict[str, str]]:
+    """拉 8-K HTML：返回 (items 列表, items → 段落摘要 dict)。
+    段落是 Item header 后面 250 字（用于 catalyst 句子补强）。
+    """
     if not url:
-        return []
+        return ([], {})
     try:
         r = session.get(url, headers={"User-Agent": USER_AGENT}, timeout=10)
         if r.status_code != 200:
-            return []
-        # 8-K HTML 里 "Item 1.01" / "Item 5.02" 等会在 section header 重复出现
-        items = set(_ITEM_RE.findall(r.text))
-        return sorted(items)
+            return ([], {})
+        html = r.text
+        # 1. 拿 Item 编号列表（去重）
+        items = sorted(set(_ITEM_RE.findall(html)))
+        # 2. 清洗后按 Item header 切段
+        clean = _strip_html(html)
+        # 找每个 Item section 起点 (首次出现 + 后面跟着 Title)
+        item_to_summary: dict[str, str] = {}
+        # 拿所有 "Item N.NN [.\s]" 起点
+        section_starts: list[tuple[int, str]] = []
+        for m in _ITEM_SECTION_RE.finditer(clean):
+            section_starts.append((m.start(), m.group(1)))
+        # 每个 Item 只记录首次出现
+        seen_items: set[str] = set()
+        for i, (pos, item) in enumerate(section_starts):
+            if item in seen_items:
+                continue
+            seen_items.add(item)
+            # 段落终点 = 下一个 section_starts 的位置（或 +600）
+            end_pos = section_starts[i + 1][0] if i + 1 < len(section_starts) else pos + 800
+            seg = clean[pos:end_pos]
+            # 去掉 "Item N.NN. Title." 前缀，留正文
+            m_title = _re_mod.match(r"Item\s+\d+\.\d+[\s.]+([^.]{5,200}\.?)\s*", seg, _re_mod.IGNORECASE)
+            if m_title:
+                body = seg[m_title.end():].strip()
+            else:
+                body = seg.strip()
+            # 截 250 字
+            item_to_summary[item] = body[:250].strip()
+        return (items, item_to_summary)
     except Exception:
-        return []
+        return ([], {})
 
 
-def _8k_best_item_label(items: list[str]) -> tuple[str, int]:
+def _8k_best_item_label(items: list[str]) -> tuple[str, int, str]:
     """从 8-K items 列表里挑 priority 最强的 1-2 个组合显示。
 
-    例：[1.01, 5.02, 9.01] → "📜 重大协议 + 👤 高管变动" (priority=1)
-        [5.07, 9.01]      → "🗳️ 股东表决结果" (priority=4)
-
-    规则：
-      · 取 priority 最小的（最强）那条为主标
-      · 如果有另外一条 priority ≤ 主标 priority + 1，合并显示（"+ 副标")
-      · 财报附件 (9.01) / 章程修订 (5.03) 这种 priority ≥ 4 的辅助项不进合并
+    返回 (label, priority, primary_item_num)
+    primary_item_num 让下游能查对应段落（catalyst.py 拿主标段落用）。
     """
     if not items:
-        return ("", 9)
+        return ("", 9, "")
     # 按优先级排序，priority 小 = 强
     ranked = sorted(
         [(ITEM_8K_LABELS.get(it, (f"Item {it}", 6))[1],
@@ -141,15 +189,15 @@ def _8k_best_item_label(items: list[str]) -> tuple[str, int]:
          for it in items],
         key=lambda x: x[0],
     )
-    primary_prio, primary_label, _ = ranked[0]
+    primary_prio, primary_label, primary_item = ranked[0]
     # 找一个值得"+ 副标"的（priority 接近主标 + 不是噪音类）
     secondaries = [
         lbl for prio, lbl, _ in ranked[1:]
         if prio <= primary_prio + 1 and prio < 4 and lbl != primary_label
     ]
     if secondaries:
-        return (f"{primary_label} + {secondaries[0]}", primary_prio)
-    return (primary_label, primary_prio)
+        return (f"{primary_label} + {secondaries[0]}", primary_prio, primary_item)
+    return (primary_label, primary_prio, primary_item)
 
 
 def _fetch_filings(session, cik: int, lookback_days: int = 60) -> list[dict]:
@@ -279,14 +327,19 @@ def main() -> int:
             f["name"] = name
             f["cik"] = cik
             f["source"] = "sec.gov/submissions"
-            # 8-K 拉详情解析 Item 编号
+            # 8-K 拉详情解析 Item 编号 + 段落摘要
             if f.get("form") in ("8-K", "8-K/A"):
-                items = _fetch_8k_items(session, f.get("filing_url", ""))
+                items, item_summaries = _fetch_8k_items(session, f.get("filing_url", ""))
                 if items:
                     f["items"] = items
-                    label, prio = _8k_best_item_label(items)
+                    label, prio, primary_item = _8k_best_item_label(items)
                     f["item_label"] = label
                     f["item_priority"] = prio
+                    f["primary_item"] = primary_item  # catalyst 取段落用
+                if item_summaries:
+                    # 只存 priority 强的 item 段落（避免 9.01 财报附件这种 generic 段落污染）
+                    strong_items = [it for it in items if ITEM_8K_LABELS.get(it, (None, 9))[1] < 4]
+                    f["item_summaries"] = {it: item_summaries[it] for it in strong_items if it in item_summaries}
                 time.sleep(0.12)
             events.append(f)
         hit += 1
