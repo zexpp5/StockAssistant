@@ -5392,20 +5392,24 @@ function _renderJuniorTable_US() {
     const tooltip = `折发行 ${bd.discount_to_issue || 0} + 时间衰减 ${bd.time_decay || 0} + 流动性 ${bd.liquidity || 0} + 反弹奖励 ${bd.rebound_bonus || 0} + 池子 ${bd.in_your_pool || 0}`;
     const sectorLine = `<div class="text-[10px] ${x.is_tech ? 'text-violet-700 font-semibold' : 'text-slate-500'}">${x.is_tech ? '🔬 ' : ''}${_esc(x.sector || "—")}${x.industry ? ' / ' + _esc(x.industry) : ''}</div>`;
     const pctStr = (x.percentile !== undefined && x.percentile !== null) ? ` · <span class="text-violet-700 font-semibold">前 ${x.percentile}%</span>` : "";
-    const rankLine = `<div class="text-[11px] text-slate-600 mt-1"><span class="text-slate-500">#${rank}/${totalAll}</span>${pctStr} · <span class="text-slate-700">底部分 ${x.score}</span></div>`;
-    const verdictLine = _juniorVerdictCell(x);
+    const rankLine = `<div class="text-[11px] text-slate-600 mt-1"><span class="text-slate-500">#${rank}/${totalAll}</span>${pctStr}</div>`;
+    const rlInline = _juniorRedLinesInline(x);
     const rowClass = x.tier === "可小仓试探" ? "bg-emerald-50/40"
                      : x.tier === "可研究"     ? "bg-amber-50/30"
                      : x.tier === "不碰"       ? "bg-rose-50/40"
                      : "";
     return `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50 cursor-pointer ${rowClass}" data-code="${_esc(x.symbol)}" data-name="${_esc(x.name || "")}" onclick="openStockDetail(this.dataset.code, this.dataset.name)">
-      <td class="py-2 px-3 font-mono font-bold text-slate-900 align-top">${_esc(x.symbol)}</td>
-      <td class="py-2 px-3 align-top">
-        <div class="text-slate-800">${_esc(x.name || "")} ${poolTag}</div>
+      <td class="py-2 px-3 align-top ${_STICKY_CELL_CLS}" style="min-width:280px;max-width:300px">
+        <div class="flex items-baseline gap-2">
+          <span class="font-mono font-bold text-slate-900">${_esc(x.symbol)}</span>
+          <span class="text-slate-800 text-sm truncate" title="${_esc(x.name || "")}">${_esc(x.name || "")}</span>
+          ${poolTag}
+        </div>
         ${sectorLine}
         ${rankLine}
-        ${verdictLine}
+        ${rlInline}
       </td>
+      <td class="py-2 px-3 text-center align-top">${_juniorTierBadge(x)}</td>
       <td class="py-2 px-3 text-center align-top" title="${tooltip}">${_ipoJuniorScoreBadge(x.score)}</td>
       <td class="py-2 px-3 text-right font-mono text-xs text-slate-600 align-top">${_mcap(x.market_cap_m)}</td>
       <td class="py-2 px-3 text-xs text-slate-600 align-top">${_esc(x.ipo_date)} <span class="text-slate-400">(${x.months_listed}m)</span></td>
@@ -5418,11 +5422,11 @@ function _renderJuniorTable_US() {
       <td class="py-2 px-3 text-xs align-top">${tags}</td>
     </tr>`;
   }).join("");
-  el.innerHTML = `<table class="w-full text-sm">
+  el.innerHTML = `<table class="text-sm border-collapse" style="min-width:1320px">
     <thead class="text-xs text-slate-500 bg-slate-50 border-b border-slate-200">
       <tr>
-        <th class="py-2 px-3 text-left">代码</th>
-        <th class="py-2 px-3 text-left">名称 · 行业 · 排名/底部分</th>
+        <th class="py-2 px-3 text-left ${_STICKY_HEAD_CLS}" style="min-width:280px">代码 · 名称 / 行业 / 排名</th>
+        <th class="py-2 px-3 text-center">状态</th>
         <th class="py-2 px-3 text-center" title="0..100,5 维加权（按此降序）">底部分 ▼</th>
         <th class="py-2 px-3 text-right">市值</th>
         <th class="py-2 px-3 text-left">上市日</th>
@@ -5468,16 +5472,8 @@ function _renderJuniorTable() {
   else if (_juniorFilter === "main") list = visibleAll.filter(x => x.board === "main");
 
   const ctEl = document.getElementById("junior-count");
-  if (ctEl) ctEl.textContent = `${list.length} / ${all.length} 只 · 档位 [${_juniorTierFilter}]`;
-
-  ["all","broken","star","chinext","main"].forEach(k => {
-    const b = document.getElementById("junior-filter-" + k);
-    if (b) {
-      b.classList.toggle("border-violet-500", k === _juniorFilter);
-      b.classList.toggle("bg-violet-50", k === _juniorFilter);
-      b.classList.toggle("text-violet-700", k === _juniorFilter);
-    }
-  });
+  if (ctEl) ctEl.textContent = `${list.length} / ${all.length} 只`;
+  _rebuildJuniorSelects("cn", all);
 
   const el = document.getElementById("ipo-junior-table");
   if (!el) return;
@@ -5495,20 +5491,23 @@ function _renderJuniorTable() {
     const breakdown = x.score_breakdown || {};
     const tooltip = `折发行 ${breakdown.discount_to_issue || 0} + 时间衰减 ${breakdown.time_decay || 0} + 首日溢价 ${breakdown.first_day_premium || 0} + 较首日 ${breakdown.vs_first_close || 0}`;
     const pctStr = (x.percentile !== undefined && x.percentile !== null) ? ` · <span class="text-violet-700 font-semibold">前 ${x.percentile}%</span>` : "";
-    const rankPrefix = `<span class="text-slate-500">#${rank}/${totalAll}</span>${pctStr} · <span class="text-slate-700">底部分 ${x.score}</span>`;
-    const verdictLine = _juniorVerdictCell(x);
+    const rankPrefix = `<span class="text-slate-500">#${rank}/${totalAll}</span>${pctStr}`;
+    const rlInline = _juniorRedLinesInline(x);
     const rowClass = x.tier === "可小仓试探" ? "bg-emerald-50/40"
                      : x.tier === "可研究"     ? "bg-amber-50/30"
                      : x.tier === "不碰"       ? "bg-rose-50/40"
                      : "";
     return `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50 cursor-pointer ${rowClass}" data-code="${_esc(x.code)}" data-name="${_esc(x.name || "")}" onclick="openStockDetail(this.dataset.code, this.dataset.name)">
-      <td class="py-2 px-3 font-mono font-bold text-slate-900 align-top">${_esc(x.code)}</td>
-      <td class="py-2 px-3 align-top">
-        <div class="text-slate-800">${_esc(x.name || "")}</div>
-        ${x.industry ? `<div class="text-[10px] text-slate-500 mt-0.5">${_esc(x.industry)}</div>` : ""}
+      <td class="py-2 px-3 align-top ${_STICKY_CELL_CLS}" style="min-width:300px;max-width:340px">
+        <div class="flex items-baseline gap-2">
+          <span class="font-mono font-bold text-slate-900">${_esc(x.code)}</span>
+          <span class="text-slate-800 text-sm truncate" title="${_esc(x.name || "")}">${_esc(x.name || "")}</span>
+        </div>
+        ${x.industry ? `<div class="text-[10px] text-slate-500 mt-0.5 truncate">${_esc(x.industry)}</div>` : ""}
         <div class="text-[11px] text-slate-600 mt-1 leading-snug">${rankPrefix}${x.summary ? " · " + _esc(x.summary) : ""}</div>
-        ${verdictLine}
+        ${rlInline}
       </td>
+      <td class="py-2 px-3 text-center align-top">${_juniorTierBadge(x)}</td>
       <td class="py-2 px-3 text-center align-top" title="${tooltip}">${_ipoJuniorScoreBadge(x.score)}</td>
       <td class="py-2 px-3 text-xs text-slate-500 align-top">${_ipoBoardLabel(x.board)}</td>
       <td class="py-2 px-3 text-xs text-slate-600 align-top">${_esc(x.list_date)} <span class="text-slate-400">(${x.months_listed}月)</span></td>
@@ -5519,11 +5518,11 @@ function _renderJuniorTable() {
       <td class="py-2 px-3 text-xs align-top">${tags}</td>
     </tr>`;
   }).join("");
-  el.innerHTML = `<table class="w-full text-sm">
+  el.innerHTML = `<table class="text-sm border-collapse" style="min-width:1200px">
     <thead class="text-xs text-slate-500 bg-slate-50 border-b border-slate-200">
       <tr>
-        <th class="py-2 px-3 text-left">代码</th>
-        <th class="py-2 px-3 text-left">名称 · 行业 · 排名/总结</th>
+        <th class="py-2 px-3 text-left ${_STICKY_HEAD_CLS}" style="min-width:300px">代码 · 名称 / 行业 / 排名 · 总结</th>
+        <th class="py-2 px-3 text-center">状态</th>
         <th class="py-2 px-3 text-center" title="0..100，四维加权（按此降序）">底部分 ▼</th>
         <th class="py-2 px-3 text-left">板块</th>
         <th class="py-2 px-3 text-left">上市日</th>
@@ -9573,9 +9572,9 @@ function _reasonSummary(row) {
         const heldBadge = isHeld
           ? `<span class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-200 text-amber-900 align-middle ml-1">⚠️ 你持仓</span>`
           : "";
-        const rowBg = isHeld ? "bg-amber-50 border-l-2 border-amber-400 pl-2" : "";
-        return `<li class="flex items-center gap-2 py-0.5 ${rowBg}">
-          <span class="font-mono text-[11px] text-slate-500 min-w-[80px]">${rank}</span>
+        const rowBg = isHeld ? "bg-amber-50 border-l-2 border-amber-400" : "";
+        return `<li class="flex items-center gap-3 px-4 py-1.5 ${rowBg}">
+          <span class="font-mono text-[11px] text-slate-500 min-w-[88px]">${rank}</span>
           <span class="font-mono text-xs font-bold text-slate-900">${tk}</span>
           <span class="text-xs text-slate-600">${name}${heldBadge}</span>
           <span class="ml-auto text-[11px] text-slate-500 font-mono">上次 综合 ${score} / ${rating}</span>
