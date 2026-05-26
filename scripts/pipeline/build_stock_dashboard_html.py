@@ -5486,10 +5486,11 @@ function switchIpoMarket(market) {
     }
   });
   // 重置过滤器 + 按市场显示对应筛选按钮
+  // 默认 filter 切到"科技": A 股 → 科创板, 美股 → 🔬 仅科技 (项目主题是科技/AI 股票池)
   _unlockFilter = "all";
-  _juniorFilter = "all";
   const isCN = market === "cn";
   const isUS = market === "us";
+  _juniorFilter = isCN ? "star" : (isUS ? "tech" : "all");
   document.querySelectorAll(".unlock-filter-btn").forEach(el => {
     el.style.display = isCN ? "" : "none";
   });
