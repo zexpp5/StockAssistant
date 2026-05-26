@@ -50,6 +50,150 @@ CACHE_DIR = REPO / "data" / "cache"
 CN_INDUSTRY_CACHE = CACHE_DIR / "cn_industry_by_code.json"
 CN_INDUSTRY_TTL_DAYS = 7  # 行业基本不变；缓存 7 天可覆盖周末 + 个别拉取失败
 
+# 美股 yfinance 行业 → 中文映射（GICS 风格）
+# 用户不熟英文行业名，dashboard 展示用中文；漏掉的回退原英文 + (待译)
+US_SECTOR_ZH = {
+    "Basic Materials": "基础材料",
+    "Communication Services": "通信服务",
+    "Consumer Cyclical": "可选消费",
+    "Consumer Defensive": "必需消费",
+    "Energy": "能源",
+    "Financial Services": "金融",
+    "Healthcare": "医疗保健",
+    "Industrials": "工业",
+    "Real Estate": "房地产",
+    "Technology": "信息技术",
+    "Utilities": "公用事业",
+}
+
+US_INDUSTRY_ZH = {
+    "Advertising Agencies": "广告代理",
+    "Aerospace & Defense": "航空航天与国防",
+    "Airlines": "航空",
+    "Auto & Truck Dealerships": "汽车经销",
+    "Banks - Regional": "区域性银行",
+    "Beverages - Wineries & Distilleries": "酒类制造",
+    "Biotechnology": "生物技术",
+    "Broadcasting": "广播",
+    "Building Materials": "建筑材料",
+    "Building Products & Equipment": "建材与设备",
+    "Capital Markets": "资本市场",
+    "Computer Hardware": "计算机硬件",
+    "Conglomerates": "综合企业",
+    "Consulting Services": "咨询服务",
+    "Credit Services": "信贷服务",
+    "Diagnostics & Research": "诊断与研究",
+    "Drug Manufacturers - Specialty & Generic": "特种与仿制药",
+    "Education & Training Services": "教育培训",
+    "Electronic Gaming & Multimedia": "电子游戏与多媒体",
+    "Engineering & Construction": "工程与建筑",
+    "Entertainment": "娱乐",
+    "Furnishings, Fixtures & Appliances": "家居家电",
+    "Gambling": "博彩",
+    "Gold": "黄金",
+    "Health Information Services": "医疗信息服务",
+    "Household & Personal Products": "家用与个人用品",
+    "Information Technology Services": "IT 服务",
+    "Insurance - Diversified": "综合保险",
+    "Insurance - Property & Casualty": "财产保险",
+    "Insurance Brokers": "保险经纪",
+    "Integrated Freight & Logistics": "综合物流",
+    "Internet Content & Information": "互联网内容",
+    "Leisure": "休闲娱乐",
+    "Medical Care Facilities": "医疗机构",
+    "Medical Devices": "医疗器械",
+    "Medical Distribution": "医药分销",
+    "Medical Instruments & Supplies": "医疗器械与耗材",
+    "Oil & Gas E&P": "油气勘探开采",
+    "Oil & Gas Equipment & Services": "油气设备与服务",
+    "Oil & Gas Midstream": "油气中游",
+    "Other Industrial Metals & Mining": "其他工业金属与采矿",
+    "Packaged Foods": "包装食品",
+    "Pollution & Treatment Controls": "环保治理设备",
+    "REIT - Diversified": "综合 REIT",
+    "REIT - Industrial": "工业 REIT",
+    "REIT - Specialty": "特种 REIT",
+    "Real Estate - Development": "房地产开发",
+    "Restaurants": "餐饮",
+    "Scientific & Technical Instruments": "科学仪器",
+    "Semiconductors": "半导体",
+    "Shell Companies": "壳公司",
+    "Software - Application": "应用软件",
+    "Software - Infrastructure": "基础软件",
+    "Solar": "太阳能",
+    "Specialty Business Services": "专业商业服务",
+    "Specialty Industrial Machinery": "专业工业机械",
+    "Specialty Retail": "专业零售",
+    "Steel": "钢铁",
+    "Telecom Services": "电信服务",
+    "Travel Services": "旅游服务",
+    "Waste Management": "废物处理",
+    # 常见但当前池子未出现，预填覆盖未来新股
+    "Asset Management": "资产管理",
+    "Auto Manufacturers": "汽车制造",
+    "Auto Parts": "汽车零部件",
+    "Beverages - Non-Alcoholic": "非酒精饮料",
+    "Chemicals": "化工",
+    "Communication Equipment": "通信设备",
+    "Confectioners": "糖果食品",
+    "Consumer Electronics": "消费电子",
+    "Copper": "铜业",
+    "Discount Stores": "折扣零售",
+    "Electrical Equipment & Parts": "电气设备",
+    "Electronic Components": "电子元件",
+    "Electronics & Computer Distribution": "电子与计算机分销",
+    "Farm & Heavy Construction Machinery": "农机与重型工程机械",
+    "Farm Products": "农产品",
+    "Financial Conglomerates": "综合金融",
+    "Financial Data & Stock Exchanges": "金融数据与交易所",
+    "Footwear & Accessories": "鞋类与配饰",
+    "Grocery Stores": "杂货零售",
+    "Health Care Plans": "医疗保险计划",
+    "Home Improvement Retail": "家居装修零售",
+    "Industrial Distribution": "工业分销",
+    "Internet Retail": "互联网零售",
+    "Lodging": "酒店住宿",
+    "Lumber & Wood Production": "木材生产",
+    "Luxury Goods": "奢侈品",
+    "Marine Shipping": "海运",
+    "Metal Fabrication": "金属加工",
+    "Mortgage Finance": "住房抵押金融",
+    "Personal Services": "个人服务",
+    "Pharmaceutical Retailers": "药品零售",
+    "Publishing": "出版",
+    "Railroads": "铁路",
+    "Rental & Leasing Services": "租赁服务",
+    "Residential Construction": "住宅建筑",
+    "Resorts & Casinos": "度假村与赌场",
+    "Security & Protection Services": "安保服务",
+    "Silver": "白银",
+    "Staffing & Employment Services": "人力资源",
+    "Tobacco": "烟草",
+    "Tools & Accessories": "工具与配件",
+    "Trucking": "卡车运输",
+    "Uranium": "铀矿",
+    "Utilities - Diversified": "综合公用事业",
+    "Utilities - Independent Power Producers": "独立发电",
+    "Utilities - Regulated Electric": "电力公用",
+    "Utilities - Regulated Gas": "燃气公用",
+    "Utilities - Regulated Water": "供水公用",
+    "Utilities - Renewable": "可再生能源",
+}
+
+
+def _zh_us_sector(en: Any) -> str:
+    if not en:
+        return ""
+    s = str(en).strip()
+    return US_SECTOR_ZH.get(s, s)
+
+
+def _zh_us_industry(en: Any) -> str:
+    if not en:
+        return ""
+    s = str(en).strip()
+    return US_INDUSTRY_ZH.get(s, f"{s}(待译)")
+
 
 # ───────────── 通用工具 ─────────────
 
@@ -674,8 +818,8 @@ def _enrich_with_price(items: list[dict], hist_cache: dict, meta_cache: dict) ->
             **e,
             "current_price": round(cur, 2) if cur else None,
             "vs_issue_pct": vs_issue,
-            "sector": m.get("sector"),
-            "industry": m.get("industry"),
+            "sector": _zh_us_sector(m.get("sector")),
+            "industry": _zh_us_industry(m.get("industry")),
             "market_cap_m": round(m.get("market_cap") / 1e6, 1) if m.get("market_cap") else None,
         })
     return out
@@ -685,9 +829,8 @@ def build_us_ipo_calendar(nasdaq_window: dict) -> dict:
     """从 NASDAQ window 构造 dashboard 三栏:
        - upcoming_filing  (即将申购): filed 列表,近 60 天内
        - awaiting_listing (已申购未上市): priced 列表,priced_date 在过去 7 天内
-       - recently_listed  (近 30 日上市): priced 列表,priced_date 在过去 30 天内
-       这里 awaiting_listing 和 recently_listed 会有部分重叠(过去 7 天内的同时属于两者),
-       前端处理:awaiting 只显示「最近 7 天 priced」,recently 显示「7-30 天前 priced」避免重复
+       - recently_listed  (近 30 日上市): priced 列表,priced_date 在 8-30 天前
+       0-7 天已在 awaiting_listing 展示；这里排除，避免同一 IPO 在两栏重复出现。
     """
     today = date.today()
     priced = nasdaq_window.get("priced") or []
@@ -720,7 +863,7 @@ def build_us_ipo_calendar(nasdaq_window: dict) -> dict:
         item = {**p, "days_since_priced": d}
         if 0 <= d <= 7:
             awaiting.append(item)
-        if 0 <= d <= 30:
+        if 8 <= d <= 30:
             recently.append(item)
     awaiting.sort(key=lambda x: x.get("days_since_priced", 999))
     recently.sort(key=lambda x: x.get("days_since_priced", 999))
@@ -916,8 +1059,8 @@ def fetch_us_junior_pool(holdings: set[str], watchlist: set[str],
             "symbol": sym,
             "name": c.get("name") or "",
             "exchange": c.get("exchange") or "",
-            "sector": sector,
-            "industry": industry,
+            "sector": _zh_us_sector(sector),
+            "industry": _zh_us_industry(industry),
             "ipo_date": c.get("priced_date"),
             "months_listed": round(months_listed, 1),
             "issue_price": round(issue_price, 2),
