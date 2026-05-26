@@ -9020,7 +9020,7 @@ function _renderReasonPanel(c) {
     <div class="grid grid-cols-1 lg:grid-cols-[160px_240px_1fr_260px] gap-3 items-start">
       <div>
         <div class="text-[11px] text-slate-500 mb-1">推荐信号</div>
-        <div class="flex items-center gap-2 flex-wrap">${_signalBadge(c)}${_newBadge(c)}${_appearanceBadge(c)}<span class="font-mono text-xs text-slate-600">score ${score}</span></div>
+        <div class="flex items-center gap-2 flex-wrap">${_signalBadge(c)}${_newBadge(c)}${_riseBadge(c)}${_appearanceBadge(c)}<span class="font-mono text-xs text-slate-600">score ${score}</span></div>
         <div class="text-[11px] text-slate-500 mt-2">入选价 <span class="font-mono text-slate-700">${_fmtEntryPrice(c)}</span></div>
       </div>
       <div>
@@ -9248,6 +9248,27 @@ function _newBadge(row) {
   const title = date ? `首次进入推荐：${date}` : `首次进入推荐`;
   return `<span title="${title}" class="inline-flex px-1.5 py-0.5 rounded border border-violet-300 bg-violet-50 text-violet-700 text-[10px] font-bold align-middle ml-1">🆕</span>`;
 }
+// 📈 排名跃升 — 相比上一批次 rank 进 3 位+ 或 score 涨 2.0+
+// 仅 total_runs >= 2 时启用
+function _riseBadge(row) {
+  const totalRuns = (typeof DISCOVERY !== "undefined" && Number(DISCOVERY.appearance_total_runs)) || 0;
+  if (totalRuns < 2) return "";
+  const rankUp = row && row.rank_up;
+  const scoreUp = row && row.score_up;
+  const ru = Number(rankUp);
+  const su = Number(scoreUp);
+  const rankTrigger = Number.isFinite(ru) && ru >= 3;
+  const scoreTrigger = Number.isFinite(su) && su >= 2.0;
+  if (!rankTrigger && !scoreTrigger) return "";
+  const parts = [];
+  if (rankTrigger) parts.push(`排名 ${row.prev_rank}→${row.cur_rank ?? row.rank}（+${ru} 位）`);
+  if (scoreTrigger) parts.push(`分数 ${row.prev_score}→${row.cur_score ?? (row.total_score?.toFixed?.(1) ?? "")}（+${su.toFixed(1)}）`);
+  const title = `相比上批次跃升：${parts.join("；")}`;
+  // 标签简短显示：rank 优先，否则 score
+  const label = rankTrigger ? `📈 +${ru} 位` : `📈 +${su.toFixed(1)} 分`;
+  return `<span title="${title}" class="inline-flex px-1.5 py-0.5 rounded border border-amber-300 bg-amber-50 text-amber-700 text-[10px] font-bold align-middle ml-1">${label}</span>`;
+}
+
 // 「连 N 日」标记 — 从最新批次往前数连续在的天数（跌出过就清零）
 // 仅 consecutive >= 2 显示（连 1 日 = 等同没标，无信息量）
 function _appearanceBadge(row) {
@@ -9528,7 +9549,7 @@ function _reasonSummary(row) {
           ${c.rank}
         </td>
         <td class="disc-sticky-code px-3 py-2 font-mono font-semibold text-slate-900 cursor-pointer"
-            onclick="toggleDiscoveryDetail('${tk}')">${c.ticker}${_newBadge(c)}${_appearanceBadge(c)}</td>
+            onclick="toggleDiscoveryDetail('${tk}')">${c.ticker}${_newBadge(c)}${_riseBadge(c)}${_appearanceBadge(c)}</td>
         <td class="px-3 py-2 text-slate-700 cursor-pointer"
             onclick="toggleDiscoveryDetail('${tk}')">
           <div>${c.name || ""}</div>
@@ -10571,15 +10592,13 @@ def _runtime_load_json(rel: str) -> dict:
 
 
 def _build_appearance_index() -> dict:
-    """ticker (uppercase) → {first_seen_run_id, first_seen_date, count, consecutive} + _meta{total_runs}。
-
-    用 recommendation_picks ⋈ recommendation_runs 算：
-      - count: 总共出现过几次
-      - consecutive: 从最新 run 往前数连续在的天数（跌出过就清零）
-      - first_seen_date / first_seen_run_id: 首次进入推荐的日期 / run_id
+    """ticker (uppercase) → {first_seen_*, count, consecutive,
+                              cur_rank, prev_rank, rank_up, cur_score, prev_score, score_up}
+    + _meta{total_runs}。
 
     🆕 判定 = count == 1 且 total_runs >= 2（首次出现）。
-    「连 N 日」判定 = consecutive >= 2（连续 1 天无信息量）。
+    「连 N 日」判定 = consecutive >= 2。
+    📈 跃升判定 = rank_up >= 3 或 score_up >= 2.0（相对上一批次）。
     """
     db_path = _duckdb_path()
     if not os.path.exists(db_path):
@@ -10592,7 +10611,6 @@ def _build_appearance_index() -> dict:
         con = duckdb.connect(db_path, read_only=True)
         try:
             total_runs = int(con.execute("SELECT COUNT(*) FROM recommendation_runs").fetchone()[0] or 0)
-            # 每只票：列出它出现过的 run 序号（DESC，用于算连续）+ 首次 run_id/date + 总次数
             rows = con.execute(
                 """
                 WITH ordered AS (
@@ -10601,14 +10619,18 @@ def _build_appearance_index() -> dict:
                     FROM recommendation_runs r
                 ),
                 picks AS (
-                    SELECT p.symbol, o.rn, o.run_id, o.run_date
+                    SELECT p.symbol, o.rn, o.run_id, o.run_date, p.rank, p.total_score
                     FROM recommendation_picks p JOIN ordered o ON p.run_id = o.run_id
                 )
                 SELECT symbol,
                        array_agg(rn ORDER BY rn DESC) AS run_ranks,
                        (SELECT p2.run_id FROM picks p2 WHERE p2.symbol = picks.symbol ORDER BY p2.rn ASC LIMIT 1) AS first_run_id,
                        (SELECT CAST(p3.run_date AS VARCHAR) FROM picks p3 WHERE p3.symbol = picks.symbol ORDER BY p3.rn ASC LIMIT 1) AS first_date,
-                       COUNT(*) AS cnt
+                       COUNT(*) AS cnt,
+                       (SELECT p4.rank FROM picks p4 WHERE p4.symbol = picks.symbol ORDER BY p4.rn DESC LIMIT 1) AS cur_rank,
+                       (SELECT p5.total_score FROM picks p5 WHERE p5.symbol = picks.symbol ORDER BY p5.rn DESC LIMIT 1) AS cur_score,
+                       (SELECT p6.rank FROM picks p6 WHERE p6.symbol = picks.symbol ORDER BY p6.rn DESC LIMIT 1 OFFSET 1) AS prev_rank,
+                       (SELECT p7.total_score FROM picks p7 WHERE p7.symbol = picks.symbol ORDER BY p7.rn DESC LIMIT 1 OFFSET 1) AS prev_score
                 FROM picks
                 GROUP BY symbol
                 """
@@ -10616,10 +10638,9 @@ def _build_appearance_index() -> dict:
         finally:
             con.close()
         out: dict = {"_meta": {"total_runs": total_runs}}
-        for symbol, run_ranks, first_run_id, first_date, cnt in rows:
+        for symbol, run_ranks, first_run_id, first_date, cnt, cur_rank, cur_score, prev_rank, prev_score in rows:
             if not symbol:
                 continue
-            # 算 consecutive：从最新 run（rn = total_runs）开始往前看，期望 rn 严格递减
             consecutive = 0
             expected = total_runs
             for rn in (run_ranks or []):
@@ -10628,11 +10649,23 @@ def _build_appearance_index() -> dict:
                     expected -= 1
                 else:
                     break
+            cur_rank_i = int(cur_rank) if cur_rank is not None else None
+            prev_rank_i = int(prev_rank) if prev_rank is not None else None
+            cur_score_f = float(cur_score) if cur_score is not None else None
+            prev_score_f = float(prev_score) if prev_score is not None else None
+            rank_up = (prev_rank_i - cur_rank_i) if (cur_rank_i is not None and prev_rank_i is not None) else None
+            score_up = (cur_score_f - prev_score_f) if (cur_score_f is not None and prev_score_f is not None) else None
             out[str(symbol).upper()] = {
                 "count": int(cnt or 0),
                 "consecutive": consecutive,
                 "first_seen_run_id": first_run_id,
                 "first_seen_date": first_date,
+                "cur_rank": cur_rank_i,
+                "prev_rank": prev_rank_i,
+                "rank_up": rank_up,
+                "cur_score": round(cur_score_f, 2) if cur_score_f is not None else None,
+                "prev_score": round(prev_score_f, 2) if prev_score_f is not None else None,
+                "score_up": round(score_up, 2) if score_up is not None else None,
             }
         return out
     except Exception as e:
@@ -13977,6 +14010,10 @@ def build():
                 item["consecutive_runs"] = ap.get("consecutive")
                 item["first_seen_date"] = ap.get("first_seen_date")
                 item["first_seen_run_id"] = ap.get("first_seen_run_id")
+                item["rank_up"] = ap.get("rank_up")
+                item["score_up"] = ap.get("score_up")
+                item["prev_rank"] = ap.get("prev_rank")
+                item["prev_score"] = ap.get("prev_score")
             merged_candidates.append(item)
         v2_stats_main = _runtime_db_stats().get("v2") or {}
         discovery = {
