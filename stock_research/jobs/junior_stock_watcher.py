@@ -47,6 +47,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 CACHE_DIR = REPO / "data" / "cache"
+CN_INDUSTRY_CACHE = CACHE_DIR / "cn_industry_by_code.json"
+CN_INDUSTRY_TTL_DAYS = 7  # 行业基本不变；缓存 7 天可覆盖周末 + 个别拉取失败
 
 
 # ───────────── 通用工具 ─────────────
@@ -158,6 +160,130 @@ def _import_ak():
 # ═════════════════════════════════════════════════════
 #  A 股
 # ═════════════════════════════════════════════════════
+
+def _cn_junior_summary(
+    months_listed: float,
+    vs_issue_pct: float,
+    vs_first_close_pct: float | None,
+    first_chg_pct: float | None,
+) -> str:
+    """把次新股池打分维度翻译成"人话"摘要。
+
+    朴实事实描述，不做未来预测；不做"建议买/不建议买"判断 —
+    用户自行做基本面/行业/技术面三重判断。
+    """
+    m = int(round(months_listed))
+    # 月数阶段
+    if months_listed < 9:
+        stage = f"上市 {m} 月刚解禁初期"
+    elif months_listed < 12:
+        stage = f"上市 {m} 月接近首发解禁窗口"
+    elif months_listed <= 18:
+        stage = f"上市 {m} 月正处首发解禁窗口"
+    elif months_listed <= 21:
+        stage = f"上市 {m} 月度过解禁压力期"
+    else:
+        stage = f"上市 {m} 月次新尾段"
+
+    # vs 发行价
+    if vs_issue_pct < -30:
+        price_phrase = f"深度破发 {abs(vs_issue_pct):.0f}%"
+    elif vs_issue_pct < 0:
+        price_phrase = f"已破发 {abs(vs_issue_pct):.0f}%"
+    elif vs_issue_pct < 50:
+        price_phrase = f"较发行价 +{vs_issue_pct:.0f}%"
+    elif vs_issue_pct < 100:
+        price_phrase = f"较发行价 +{vs_issue_pct:.0f}% 偏强"
+    else:
+        price_phrase = f"较发行价 +{vs_issue_pct:.0f}% 主力强势"
+
+    parts = [stage, price_phrase]
+
+    # vs 首日收盘
+    if vs_first_close_pct is not None:
+        if vs_first_close_pct < -70:
+            parts.append(f"较首日已跌 {abs(vs_first_close_pct):.0f}%（接近底部）")
+        elif vs_first_close_pct < -50:
+            parts.append(f"较首日跌 {abs(vs_first_close_pct):.0f}%（过半）")
+        elif vs_first_close_pct < -20:
+            parts.append(f"较首日跌 {abs(vs_first_close_pct):.0f}%")
+        elif vs_first_close_pct < 0:
+            parts.append(f"较首日小跌 {abs(vs_first_close_pct):.0f}%")
+        elif vs_first_close_pct > 20:
+            parts.append(f"较首日 +{vs_first_close_pct:.0f}%")
+        # -20~+20 之间不啰嗦
+
+    return " · ".join(parts)
+
+
+def _load_cn_industry_cache() -> dict[str, str]:
+    """读 code → industry 缓存。整体 TTL 7 天，过期就丢全部重拉。"""
+    if not CN_INDUSTRY_CACHE.exists():
+        return {}
+    try:
+        payload = json.loads(CN_INDUSTRY_CACHE.read_text(encoding="utf-8"))
+        saved_at = datetime.fromisoformat(payload.get("saved_at", "1970-01-01"))
+        if datetime.now() - saved_at > timedelta(days=CN_INDUSTRY_TTL_DAYS):
+            return {}
+        entries = payload.get("entries") or {}
+        return {str(k): str(v) for k, v in entries.items() if v}
+    except Exception:
+        return {}
+
+
+def _save_cn_industry_cache(entries: dict[str, str]) -> None:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "saved_at": datetime.now().isoformat(timespec="seconds"),
+        "entries": entries,
+    }
+    CN_INDUSTRY_CACHE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _enrich_cn_industry(items: list[dict]) -> None:
+    """给 A 股 items inplace 补 industry 字段。
+
+    数据源：akshare stock_individual_info_em（东财个股资讯）。
+    fail-soft：拉不到就保持空字符串，不抛异常、不阻塞主流程。
+    限流：每只 0.3s sleep；缓存命中跳过。
+    """
+    ak = _import_ak()
+    if ak is None:
+        return
+    cache = _load_cn_industry_cache()
+    # 先用缓存填
+    for it in items:
+        code = it.get("code")
+        if code and not it.get("industry") and code in cache:
+            it["industry"] = cache[code]
+    # 找还缺的
+    missing = [it for it in items if not it.get("industry") and it.get("code")]
+    if not missing:
+        return
+    import time as _time
+    fetched = 0
+    failed = 0
+    for it in missing:
+        code = it["code"]
+        try:
+            df = ak.stock_individual_info_em(symbol=code)
+            row = dict(zip(df["item"], df["value"]))
+            industry = str(row.get("行业") or "").strip()
+            if industry:
+                it["industry"] = industry
+                cache[code] = industry
+                fetched += 1
+            _time.sleep(0.3)
+        except Exception:
+            failed += 1
+            # 单只失败不阻塞剩下的；多个连续失败说明源挂了，提前终止
+            if failed >= 5 and fetched == 0:
+                logger.warning("[CN industry] 连续失败 %d 次，akshare EM 可能限流，跳过剩余 %d 只", failed, len(missing) - missing.index(it))
+                break
+    if fetched > 0:
+        _save_cn_industry_cache(cache)
+    logger.info("[CN industry] 补全 %d 只 (失败 %d / 缓存 %d / 总 %d)", fetched, failed, len(cache), len(items))
+
 
 def fetch_cn_unlock_radar(holdings: set[str], watchlist: set[str], horizon_days: int = 90) -> list[dict]:
     """A 股未来 horizon_days 内个股解禁明细，按"解禁压力"排序。
@@ -298,10 +424,13 @@ def fetch_cn_junior_pool(holdings: set[str], watchlist: set[str],
         if vs_first_close_pct is not None and vs_first_close_pct < -50:
             tags.append("较首日腰斩")
 
+        summary = _cn_junior_summary(months_listed, vs_issue_pct, vs_first_close_pct, first_chg)
+
         out.append({
             "code": code,
             "name": str(r.get("股票简称") or ""),
             "board": _board_of_cn(code),
+            "industry": "",  # TODO: 等 akshare 网络恢复 + 加 _enrich_cn_industry() 补
             "list_date": list_date_str,
             "months_listed": round(months_listed, 1),
             "issue_price": round(issue_price, 2),
@@ -319,6 +448,7 @@ def fetch_cn_junior_pool(holdings: set[str], watchlist: set[str],
                 "vs_first_close": round(s_vs_first, 1),
             },
             "tags": tags,
+            "summary": summary,
             "in_holdings": code in holdings,
             "in_watchlist": code in watchlist,
         })
@@ -857,6 +987,8 @@ def build_radar() -> dict:
     logger.info("[CN] 拉次新股池（上市 6-24 月）...")
     cn_junior = fetch_cn_junior_pool(pools["cn"]["holdings"], pools["cn"]["watchlist"], months_min=6, months_max=24)
     logger.info("[CN]   → %d 只候选", len(cn_junior))
+    logger.info("[CN] 补 industry 字段（缓存 7 天 + fail-soft）...")
+    _enrich_cn_industry(cn_junior)
 
     # —— 美股 (NASDAQ 公开 API + yfinance) ——
     logger.info("[US] 拉 NASDAQ IPO window (过去 24 月 priced + 未来 2 月 filed)...")

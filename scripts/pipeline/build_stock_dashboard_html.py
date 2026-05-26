@@ -1938,6 +1938,23 @@ function switchDiscoveryView(view) {
       分数越高越接近"被遗忘 + 已破发"的潜在底部位置。
       <br><span class="text-rose-700">⚠️ 高分不等于值得买；这只是"研究起点"，仍需你做基本面 + 行业 + 技术面三重判断。</span>
     </div>
+    <details class="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm">
+      <summary class="cursor-pointer font-semibold text-slate-700 select-none">📖 怎么读这张表（每列含义 · 点击展开）</summary>
+      <div class="mt-3 space-y-1.5 text-xs text-slate-700 leading-relaxed">
+        <div>• <strong>名称下小字</strong>：① 行业（数据源恢复后自动补上）；② <strong>一句话总结</strong> — 把这只目前在啥阶段、相对发行价/首日是涨是跌翻译成人话</div>
+        <div>• <strong>底部分</strong>：0..100 综合分。<span class="text-slate-500">分数高 ≠ 该买，只是更接近"被遗忘+已破发"的研究起点</span></div>
+        <div>• <strong>vs 发行</strong>：现价相对发行价。<span class="text-rose-700">负数 = 已破发</span>（可能正筑底，也可能继续阴跌）；<span class="text-emerald-700">+200% = 主力强势</span>但解禁后可能砸盘</div>
+        <div>• <strong>vs 首日收盘</strong>：现价相对首日爆炒后收盘价。次新股首日普遍翻倍，这里看"从爆炒高点跌了多少"；-70% 以上 ≈ 接近底部位置</div>
+        <div>• <strong>板块</strong>：沪深主板（老股流动性好）/ 科创板·创业板（科技股 + 涨跌幅大）/ 其他（北交所，流动性差）</div>
+        <div>• <strong>标签</strong>：已破发 / 首发解禁窗口（12-18 月，原始股东可能减持）/ 首日爆炒 / 较首日腰斩</div>
+        <div class="pt-2 mt-2 border-t border-slate-200 text-slate-600">
+          <strong class="text-slate-800">怎么用</strong>：先点开任意一只进个股研究查基本面 / 公司业务 / 行业地位。
+          高分 + 已破发 + <strong>度过解禁压力期（18-21 月）</strong> = 相对值得做基本面研究的候选；
+          仍处于解禁窗口（12-18 月）= 解禁前后可能大幅波动，谨慎；
+          <strong>顶部黄条解禁临近</strong> = 短期内可能砸盘，研究归研究，下手要慎。
+        </div>
+      </div>
+    </details>
     <div class="flex flex-wrap gap-2 items-center">
       <label class="text-xs text-slate-600">筛选:</label>
       <button onclick="filterJunior('all')" id="junior-filter-all" class="junior-filter-btn px-3 py-1 text-xs rounded border border-slate-300 bg-white text-slate-700 hover:border-violet-500">全部</button>
@@ -5390,16 +5407,20 @@ function _renderJuniorTable() {
     const breakdown = x.score_breakdown || {};
     const tooltip = `折发行 ${breakdown.discount_to_issue || 0} + 时间衰减 ${breakdown.time_decay || 0} + 首日溢价 ${breakdown.first_day_premium || 0} + 较首日 ${breakdown.vs_first_close || 0}`;
     return `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50 cursor-pointer" data-code="${_esc(x.code)}" data-name="${_esc(x.name || "")}" onclick="openStockDetail(this.dataset.code, this.dataset.name)">
-      <td class="py-2 px-3 font-mono font-bold text-slate-900">${_esc(x.code)}</td>
-      <td class="py-2 px-3 text-slate-800">${_esc(x.name || "")}</td>
-      <td class="py-2 px-3 text-xs text-slate-500">${_ipoBoardLabel(x.board)}</td>
-      <td class="py-2 px-3 text-xs text-slate-600">${_esc(x.list_date)} <span class="text-slate-400">(${x.months_listed}月)</span></td>
-      <td class="py-2 px-3 text-right font-mono text-slate-700">¥${x.issue_price}</td>
-      <td class="py-2 px-3 text-right font-mono text-slate-700">¥${x.current_price}</td>
-      <td class="py-2 px-3 text-right font-mono ${vsIssueClass}">${x.vs_issue_pct > 0 ? "+" : ""}${x.vs_issue_pct}%</td>
-      <td class="py-2 px-3 text-right font-mono text-slate-600">${x.vs_first_close_pct !== null ? (x.vs_first_close_pct > 0 ? "+" : "") + x.vs_first_close_pct + "%" : "—"}</td>
-      <td class="py-2 px-3 text-center" title="${tooltip}">${_ipoJuniorScoreBadge(x.score)}</td>
-      <td class="py-2 px-3 text-xs">${tags}</td>
+      <td class="py-2 px-3 font-mono font-bold text-slate-900 align-top">${_esc(x.code)}</td>
+      <td class="py-2 px-3 align-top">
+        <div class="text-slate-800">${_esc(x.name || "")}</div>
+        ${x.industry ? `<div class="text-[10px] text-slate-500 mt-0.5">${_esc(x.industry)}</div>` : ""}
+        ${x.summary ? `<div class="text-[11px] text-slate-600 mt-1 leading-snug">${_esc(x.summary)}</div>` : ""}
+      </td>
+      <td class="py-2 px-3 text-xs text-slate-500 align-top">${_ipoBoardLabel(x.board)}</td>
+      <td class="py-2 px-3 text-xs text-slate-600 align-top">${_esc(x.list_date)} <span class="text-slate-400">(${x.months_listed}月)</span></td>
+      <td class="py-2 px-3 text-right font-mono text-slate-700 align-top">¥${x.issue_price}</td>
+      <td class="py-2 px-3 text-right font-mono text-slate-700 align-top">¥${x.current_price}</td>
+      <td class="py-2 px-3 text-right font-mono ${vsIssueClass} align-top">${x.vs_issue_pct > 0 ? "+" : ""}${x.vs_issue_pct}%</td>
+      <td class="py-2 px-3 text-right font-mono text-slate-600 align-top">${x.vs_first_close_pct !== null ? (x.vs_first_close_pct > 0 ? "+" : "") + x.vs_first_close_pct + "%" : "—"}</td>
+      <td class="py-2 px-3 text-center align-top" title="${tooltip}">${_ipoJuniorScoreBadge(x.score)}</td>
+      <td class="py-2 px-3 text-xs align-top">${tags}</td>
     </tr>`;
   }).join("");
   el.innerHTML = `<table class="w-full text-sm">
@@ -8942,7 +8963,7 @@ function _renderReasonPanel(c) {
     <div class="grid grid-cols-1 lg:grid-cols-[160px_240px_1fr_260px] gap-3 items-start">
       <div>
         <div class="text-[11px] text-slate-500 mb-1">推荐信号</div>
-        <div class="flex items-center gap-2">${_signalBadge(c)}<span class="font-mono text-xs text-slate-600">score ${score}</span></div>
+        <div class="flex items-center gap-2 flex-wrap">${_signalBadge(c)}${_newBadge(c)}${_appearanceBadge(c)}<span class="font-mono text-xs text-slate-600">score ${score}</span></div>
         <div class="text-[11px] text-slate-500 mt-2">入选价 <span class="font-mono text-slate-700">${_fmtEntryPrice(c)}</span></div>
       </div>
       <div>
@@ -9158,6 +9179,29 @@ function _signalBadge(row) {
   return `<span class="inline-flex px-2 py-0.5 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700 text-[11px] font-semibold">${label}</span>`;
 }
 
+// 🆕 第一次推荐 badge
+// 显示规则：appearance_count == 1 && DISCOVERY.appearance_total_runs >= 2
+// （仅 1 个 run 时全部都是 "首次"，标了无信息量，所以冷启动期不显示）
+function _newBadge(row) {
+  const totalRuns = (typeof DISCOVERY !== "undefined" && Number(DISCOVERY.appearance_total_runs)) || 0;
+  if (totalRuns < 2) return "";
+  const cnt = row && row.appearance_count;
+  if (cnt !== 1) return "";
+  const date = row && row.first_seen_date;
+  const title = date ? `首次进入推荐：${date}` : `首次进入推荐`;
+  return `<span title="${title}" class="inline-flex px-1.5 py-0.5 rounded border border-violet-300 bg-violet-50 text-violet-700 text-[10px] font-bold align-middle ml-1">🆕</span>`;
+}
+// runs >= 2 时也给"非首次"的票一个低调标记，告诉用户它出现了几次（避免只看到 🆕 黑白对比）
+function _appearanceBadge(row) {
+  const totalRuns = (typeof DISCOVERY !== "undefined" && Number(DISCOVERY.appearance_total_runs)) || 0;
+  if (totalRuns < 2) return "";
+  const cnt = Number(row && row.appearance_count);
+  if (!Number.isFinite(cnt) || cnt <= 1) return "";
+  const date = row && row.first_seen_date;
+  const title = date ? `${date} 起累计 ${cnt} 次进入推荐` : `累计 ${cnt} 次进入推荐`;
+  return `<span title="${title}" class="inline-flex px-1.5 py-0.5 rounded border border-slate-200 bg-slate-50 text-slate-500 text-[10px] font-mono align-middle ml-1">${cnt}×</span>`;
+}
+
 function _factorValue(row, keys) {
   const factors = (row && row.factor_scores) || {};
   for (const k of keys) {
@@ -9254,6 +9298,19 @@ function _reasonSummary(row) {
     const batchTotal = Number(DISCOVERY.full_batch_count || DISCOVERY.batch_total || cands.length || 0);
     const todayLabel = `今日完整 ${batchTotal || cands.length} 只`;
     tabCountEl.textContent = `${todayLabel} · 历史 ${nRuns} 批 / ${nHist} 条推荐`;
+  }
+
+  // ── 🆕 标记冷启动 banner
+  // 仅 1 个 run 时不显示 🆕（全部都是 "首次" 没有信息量），用 banner 告诉用户原因
+  const _appearanceTotalRuns = Number(DISCOVERY.appearance_total_runs) || 0;
+  if (_appearanceTotalRuns < 2 && wrap) {
+    const bannerHtml = `<div class="bg-violet-50 border border-violet-200 rounded-lg p-3 mb-3 text-[12px] text-violet-800 leading-relaxed">
+      <strong>🆕 新进入推荐标记 · 暂未启用</strong>
+      系统昨日（5/25 12:10）切换到新版打分公式，历史推荐数据库刚开始累积。
+      明日 daily_refresh 跑出第 2 批推荐后，<strong>"昨日没有 / 今日新进"</strong>的票才会自动标 🆕。
+      在 "推荐历史" sub-tab 也会给"首次进入"那行标 🆕。
+    </div>`;
+    wrap.insertAdjacentHTML("beforebegin", bannerHtml);
   }
 
   // ── 准确度面板(基于 V2 DISCOVERY_HISTORY 历史回测数据)
@@ -9411,7 +9468,7 @@ function _reasonSummary(row) {
           ${c.rank}
         </td>
         <td class="disc-sticky-code px-3 py-2 font-mono font-semibold text-slate-900 cursor-pointer"
-            onclick="toggleDiscoveryDetail('${tk}')">${c.ticker}</td>
+            onclick="toggleDiscoveryDetail('${tk}')">${c.ticker}${_newBadge(c)}${_appearanceBadge(c)}</td>
         <td class="px-3 py-2 text-slate-700 cursor-pointer"
             onclick="toggleDiscoveryDetail('${tk}')">
           <div>${c.name || ""}</div>
@@ -9475,6 +9532,21 @@ function _reasonSummary(row) {
         (byDate[d] = byDate[d] || []).push(h);
       });
       const dates = Object.keys(byDate).sort().reverse();  // 倒序
+
+      // 🆕 首次出现索引：ticker → 最早 generated_date；仅 runs >= 2 时启用
+      const firstSeenMap = {};
+      DISCOVERY_HISTORY.forEach(h => {
+        const t = String(h.ticker || "").toUpperCase();
+        const d = h.generated_date || h.run_id || "";
+        if (!t || !d) return;
+        if (!firstSeenMap[t] || d < firstSeenMap[t]) firstSeenMap[t] = d;
+      });
+      const _historyTotalRuns = dates.length;
+      const _isFirstSeen = (h, batchDate) => {
+        if (_historyTotalRuns < 2) return false;
+        const t = String(h.ticker || "").toUpperCase();
+        return t && firstSeenMap[t] === batchDate;
+      };
 
       historyEl.innerHTML = dates.map(d => {
         const recs = byDate[d];
@@ -9541,9 +9613,12 @@ function _reasonSummary(row) {
           const score = (r.score != null) ? Number(r.score).toFixed(1)
             : (r.composite_z != null ? Number(r.composite_z).toFixed(2) : "—");
           const market = _marketLabel(_candidateMarketCode(r));
+          const newTag = _isFirstSeen(r, d)
+            ? ` <span title="首次进入推荐：${d}" class="inline-flex px-1.5 py-0.5 rounded border border-violet-300 bg-violet-50 text-violet-700 text-[10px] font-bold align-middle">🆕</span>`
+            : "";
           return `<tr class="hover:bg-slate-50">
             <td class="px-2 py-1 font-mono text-xs text-slate-500">#${r.rank}</td>
-            <td class="px-2 py-1 font-mono text-xs font-bold">${r.ticker}</td>
+            <td class="px-2 py-1 font-mono text-xs font-bold">${r.ticker}${newTag}</td>
             <td class="px-2 py-1 text-xs text-slate-700 max-w-[180px] truncate">${r.name || ""}</td>
             <td class="px-2 py-1 text-xs whitespace-nowrap">${market}</td>
             <td class="px-2 py-1 text-xs whitespace-nowrap">${_signalBadge(r)}</td>
@@ -10433,6 +10508,56 @@ def _runtime_load_json(rel: str) -> dict:
         return payload if isinstance(payload, dict) else {"_payload": payload}
     except Exception as e:
         return {"_error": str(e)}
+
+
+def _build_appearance_index() -> dict:
+    """ticker (uppercase) → {first_seen_run_id, first_seen_date, count} + _meta{total_runs}。
+
+    用 recommendation_picks ⋈ recommendation_runs 算每只票出现过的 run 次数。
+    🆕 判定 = count == 1 且 total_runs >= 2（避免冷启动 60 只全标）。
+    """
+    db_path = _duckdb_path()
+    if not os.path.exists(db_path):
+        return {"_meta": {"total_runs": 0}}
+    try:
+        import duckdb
+    except ImportError:
+        return {"_meta": {"total_runs": 0}}
+    try:
+        con = duckdb.connect(db_path, read_only=True)
+        try:
+            total_runs = con.execute("SELECT COUNT(*) FROM recommendation_runs").fetchone()[0]
+            # 每只票：首次 run_id + 首次日期 + 出现次数
+            rows = con.execute(
+                """
+                WITH picks AS (
+                    SELECT p.symbol, r.run_id, r.run_date, r.generated_at,
+                           ROW_NUMBER() OVER (PARTITION BY p.symbol ORDER BY r.generated_at ASC) AS rn
+                    FROM recommendation_picks p JOIN recommendation_runs r ON p.run_id = r.run_id
+                )
+                SELECT symbol,
+                       MAX(CASE WHEN rn = 1 THEN run_id END) AS first_run_id,
+                       MAX(CASE WHEN rn = 1 THEN CAST(run_date AS VARCHAR) END) AS first_date,
+                       COUNT(*) AS cnt
+                FROM picks
+                GROUP BY symbol
+                """
+            ).fetchall()
+        finally:
+            con.close()
+        out: dict = {"_meta": {"total_runs": int(total_runs or 0)}}
+        for symbol, first_run_id, first_date, cnt in rows:
+            if not symbol:
+                continue
+            out[str(symbol).upper()] = {
+                "count": int(cnt or 0),
+                "first_seen_run_id": first_run_id,
+                "first_seen_date": first_date,
+            }
+        return out
+    except Exception as e:
+        print(f"  ⚠️ appearance index 失败: {e}")
+        return {"_meta": {"total_runs": 0}}
 
 
 def _build_catalyst_index() -> dict[str, str]:
@@ -13705,6 +13830,8 @@ def build():
             if isinstance(c, dict)
         }
         catalyst_by_ticker = _build_catalyst_index()
+        appearance_idx = _build_appearance_index()
+        appearance_total_runs = (appearance_idx.get("_meta") or {}).get("total_runs", 0)
         merged_candidates = []
         for c in v2_candidates_main:
             rich = rich_by_ticker.get(str(c.get("ticker") or c.get("code") or "").upper()) or {}
@@ -13722,9 +13849,15 @@ def build():
                 }
             if rich.get("etfs"):
                 item["etfs"] = rich.get("etfs")
-            cat = catalyst_by_ticker.get(str(item.get("ticker") or item.get("code") or "").upper())
+            tk_upper = str(item.get("ticker") or item.get("code") or "").upper()
+            cat = catalyst_by_ticker.get(tk_upper)
             if cat:
                 item["catalyst"] = cat
+            ap = appearance_idx.get(tk_upper)
+            if ap:
+                item["appearance_count"] = ap.get("count")
+                item["first_seen_date"] = ap.get("first_seen_date")
+                item["first_seen_run_id"] = ap.get("first_seen_run_id")
             merged_candidates.append(item)
         v2_stats_main = _runtime_db_stats().get("v2") or {}
         discovery = {
@@ -13734,6 +13867,7 @@ def build():
             "universe_scope": "system_tech_universe",
             "universe_size": v2_stats_main.get("system_universe") or len(merged_candidates),
             "candidates": merged_candidates,
+            "appearance_total_runs": appearance_total_runs,
         }
     else:
         discovery = discovery_json

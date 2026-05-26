@@ -17,6 +17,8 @@ sys.path.insert(0, str(REPO))
 
 from stock_research.jobs.junior_stock_watcher import (  # type: ignore
     _board_of_cn,
+    _cn_junior_summary,
+    _enrich_cn_industry,
     fetch_cn_junior_pool,
     fetch_cn_unlock_radar,
 )
@@ -250,6 +252,74 @@ class JuniorPoolPitFilterTest(unittest.TestCase):
         with self._patch_ak(rows):
             out = fetch_cn_junior_pool(set(), set(), months_min=6, months_max=24)
         self.assertEqual(out, [])
+
+
+class CnJuniorSummaryTest(unittest.TestCase):
+    """人话总结的几个关键档位。"""
+
+    def test_solar_window_broken(self):
+        # 14 月 + 破发 26% + 较首日跌 59%
+        s = _cn_junior_summary(14.2, -25.8, -58.6, None)
+        self.assertIn("14 月", s)
+        self.assertIn("首发解禁窗口", s)
+        self.assertIn("已破发 26%", s)
+        self.assertIn("过半", s)
+
+    def test_post_lockup_strong(self):
+        # 19 月 + 较发行 +225% + 较首日 -82%
+        s = _cn_junior_summary(19.4, 225.4, -82.3, 100)
+        self.assertIn("19 月", s)
+        self.assertIn("度过解禁压力期", s)
+        self.assertIn("主力强势", s)
+        self.assertIn("接近底部", s)
+
+    def test_early_stage(self):
+        # 7 月 + 接近发行价 + 较首日小幅
+        s = _cn_junior_summary(7.0, 5.0, -10.0, 50)
+        self.assertIn("7 月", s)
+        self.assertIn("刚解禁初期", s)
+        # vs_first -10% 在 -20~0 之间应显示"小跌"
+        self.assertIn("小跌", s)
+
+
+class EnrichCnIndustryFailSoftTest(unittest.TestCase):
+    """_enrich_cn_industry 必须 fail-soft：网络挂不该抛 + 缓存命中跳过调用。"""
+
+    def test_network_failure_does_not_raise(self):
+        items = [
+            {"code": "603395", "name": "红四方", "industry": ""},
+            {"code": "301501", "name": "恒鑫生活", "industry": ""},
+        ]
+        ak = MagicMock()
+        ak.stock_individual_info_em.side_effect = ConnectionError("Remote disconnected")
+        with patch(
+            "stock_research.jobs.junior_stock_watcher._import_ak",
+            return_value=ak,
+        ), patch(
+            "stock_research.jobs.junior_stock_watcher._load_cn_industry_cache",
+            return_value={},
+        ):
+            # 不应该抛
+            _enrich_cn_industry(items)
+        # industry 字段保持空
+        self.assertEqual(items[0]["industry"], "")
+        self.assertEqual(items[1]["industry"], "")
+
+    def test_cache_hit_skips_api_call(self):
+        items = [{"code": "603395", "name": "红四方", "industry": ""}]
+        ak = MagicMock()
+        with patch(
+            "stock_research.jobs.junior_stock_watcher._import_ak",
+            return_value=ak,
+        ), patch(
+            "stock_research.jobs.junior_stock_watcher._load_cn_industry_cache",
+            return_value={"603395": "化学制品"},
+        ):
+            _enrich_cn_industry(items)
+        # 缓存命中：industry 已填
+        self.assertEqual(items[0]["industry"], "化学制品")
+        # ak.stock_individual_info_em 未被调用
+        ak.stock_individual_info_em.assert_not_called()
 
 
 if __name__ == "__main__":
