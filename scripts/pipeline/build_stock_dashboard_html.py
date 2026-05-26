@@ -5194,21 +5194,76 @@ function _renderIpoSection() {
   else _renderIpoSection_CN();
 }
 
+function _renderUnlockTable_US() {
+  // step 2: 美股 lockup 雷达 — 估算 (priced + 180 天)
+  const m = _ipoCurrentMarket();
+  const all = m.unlock_radar || [];
+  const el = document.getElementById("ipo-unlock-table");
+  const ctEl = document.getElementById("unlock-count");
+
+  let list = all;
+  if (_unlockFilter === "pool") list = all.filter(x => x.in_holdings || x.in_watchlist);
+  else if (_unlockFilter === "high") list = all.filter(x => x.days_to_unlock <= 30);
+  else if (_unlockFilter === "week") list = all.filter(x => x.days_to_unlock <= 7);
+
+  if (ctEl) ctEl.textContent = `${list.length} / ${all.length} 条 (估算)`;
+
+  ["all","pool","high","week"].forEach(k => {
+    const b = document.getElementById("unlock-filter-" + k);
+    if (b) {
+      b.classList.toggle("border-violet-500", k === _unlockFilter);
+      b.classList.toggle("bg-violet-50", k === _unlockFilter);
+      b.classList.toggle("text-violet-700", k === _unlockFilter);
+    }
+  });
+
+  if (!el) return;
+  const banner = `<div class="p-3 text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-t-xl">
+    <strong>⚠️ 美股 lockup 数据为估算</strong>：用 SEC 典型默认 <strong>180 天</strong>（priced + 180）计算。
+    实际 lockup 在 S-1 招股书，长度可能 90-365 天不等；关键决策建议查公司 S-1 文件确认。
+  </div>`;
+  if (!list.length) {
+    el.innerHTML = banner + `<div class="p-6 text-center text-sm text-slate-500">未来 90 天内无估算 lockup 到期。</div>`;
+    return;
+  }
+  const rows = list.slice(0, 200).map(x => {
+    const poolTag = x.in_holdings
+      ? `<span class="px-1.5 py-0.5 rounded text-[10px] bg-rose-100 text-rose-700">持仓</span>`
+      : x.in_watchlist ? `<span class="px-1.5 py-0.5 rounded text-[10px] bg-amber-100 text-amber-700">自选</span>` : "";
+    const dClass = x.days_to_unlock <= 7 ? "text-rose-700 font-bold" :
+                   x.days_to_unlock <= 30 ? "text-rose-600 font-semibold" : "text-slate-600";
+    return `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50 cursor-pointer" data-code="${_esc(x.symbol)}" data-name="${_esc(x.name || "")}" onclick="openStockDetail(this.dataset.code, this.dataset.name)">
+      <td class="py-2 px-3 font-mono font-bold text-slate-900">${_esc(x.symbol)}</td>
+      <td class="py-2 px-3 text-slate-800">${_esc(x.name || "")} ${poolTag}</td>
+      <td class="py-2 px-3 text-xs text-slate-500">${_esc(x.exchange || "")}</td>
+      <td class="py-2 px-3 text-xs text-slate-600">${_esc(x.ipo_date)}</td>
+      <td class="py-2 px-3 text-xs text-slate-700">${_esc(x.est_lockup_end)} <span class="text-amber-700">(估算)</span></td>
+      <td class="py-2 px-3 text-right text-xs font-mono ${dClass}">${x.days_to_unlock} 天</td>
+      <td class="py-2 px-3 text-right text-xs font-mono text-slate-600">${x.issue_price ? "$" + x.issue_price : "—"}</td>
+    </tr>`;
+  }).join("");
+  el.innerHTML = banner + `<table class="w-full text-sm">
+    <thead class="text-xs text-slate-500 bg-slate-50 border-b border-slate-200">
+      <tr>
+        <th class="py-2 px-3 text-left">代码</th>
+        <th class="py-2 px-3 text-left">名称</th>
+        <th class="py-2 px-3 text-left">交易所</th>
+        <th class="py-2 px-3 text-left">上市日</th>
+        <th class="py-2 px-3 text-left">估算 lockup 到期</th>
+        <th class="py-2 px-3 text-right">距今</th>
+        <th class="py-2 px-3 text-right">发行价</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>${list.length > 200 ? `<div class="text-xs text-slate-500 px-3 py-2 border-t border-slate-100">仅显示前 200 条（共 ${list.length} 条）</div>` : ""}`;
+}
+
 function _renderUnlockTable() {
   const m = _ipoCurrentMarket();
   const all = m.unlock_radar || [];
   const el = document.getElementById("ipo-unlock-table");
 
-  if (_ipoMarket === "us") {
-    if (el) el.innerHTML = `<div class="p-6 text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-xl">
-      <strong>美股解禁数据暂未接入。</strong><br>
-      美股 IPO lockup 通常 90-180 天，相关数据需付费源解析 S-1 招股书。
-      可外部查：<a href="https://www.nasdaq.com/market-activity/lockup-expirations" target="_blank" class="text-violet-700 hover:underline">NASDAQ Lockup Expirations</a>
-    </div>`;
-    const ctEl = document.getElementById("unlock-count");
-    if (ctEl) ctEl.textContent = "（美股数据未接入）";
-    return;
-  }
+  if (_ipoMarket === "us") return _renderUnlockTable_US();
   if (_ipoMarket === "hk") {
     if (el) el.innerHTML = `<div class="p-6 text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-xl">
       <strong>港股解禁数据暂未接入。</strong><br>
@@ -5546,7 +5601,7 @@ function switchIpoMarket(market) {
   });
   const hint = document.getElementById("ipo-market-hint");
   if (hint) {
-    if (market === "us") hint.textContent = "美股：IPO 日历 ✓ · 解禁数据未接入 · 次新股池来自 NASDAQ priced 24 月窗口";
+    if (market === "us") hint.textContent = "美股：IPO 日历 ✓ · 解禁 (估算 180 天) ✓ · 次新股池来自 NASDAQ priced 24 月窗口";
     else if (market === "hk") hint.textContent = "港股：开源数据源受限，仅显示外链入口";
     else hint.textContent = "A 股：数据最全（IPO/解禁/次新股三件齐备）";
   }
@@ -9394,6 +9449,32 @@ function _reasonSummary(row) {
     wrap.insertAdjacentHTML("beforebegin", bannerHtml);
   }
 
+  // ── 📉 跌出 Top banner（上批次在 picks、本批次跌出的票）
+  const _dropouts = Array.isArray(DISCOVERY.dropouts) ? DISCOVERY.dropouts : [];
+  if (_dropouts.length > 0 && wrap) {
+    const rows = _dropouts.map(d => {
+      const tk = String(d.ticker || "");
+      const name = String(d.name || "");
+      const rank = d.prev_rank != null ? `#${d.prev_rank}` : "—";
+      const score = d.prev_score != null ? d.prev_score.toFixed(1) : "—";
+      const rating = String(d.prev_rating || "");
+      return `<li class="flex items-center gap-2 py-0.5">
+        <span class="font-mono text-xs font-semibold text-slate-700">${rank}</span>
+        <span class="font-mono text-xs font-bold text-slate-900">${tk}</span>
+        <span class="text-xs text-slate-600">${name}</span>
+        <span class="ml-auto text-[11px] text-slate-500 font-mono">上次 score ${score} · ${rating}</span>
+      </li>`;
+    }).join("");
+    const dropoutHtml = `<details class="bg-rose-50 border border-rose-200 rounded-lg p-3 mb-3 text-[12px] text-rose-900 leading-relaxed">
+      <summary class="cursor-pointer font-bold">
+        📉 上批次在 Top、本批次跌出 (${_dropouts.length} 只) · 点击展开
+      </summary>
+      <p class="mt-2 text-[11px] text-rose-700">这些票上次还在 ${_dropouts[0].prev_date || "上批次"} 推荐里，今早被模型替换出去。若你手上有，建议复查持有理由。</p>
+      <ul class="mt-2 divide-y divide-rose-100 bg-white rounded">${rows}</ul>
+    </details>`;
+    wrap.insertAdjacentHTML("beforebegin", dropoutHtml);
+  }
+
   // ── 准确度面板(基于 V2 DISCOVERY_HISTORY 历史回测数据)
   const stats = _computeDiscoveryStats();
   if (accuracyEl) {
@@ -10671,6 +10752,65 @@ def _build_appearance_index() -> dict:
     except Exception as e:
         print(f"  ⚠️ appearance index 失败: {e}")
         return {"_meta": {"total_runs": 0}}
+
+
+def _build_dropouts() -> list[dict]:
+    """📉 上批次在 picks、本批次跌出 → 列出供 dashboard 顶部 banner 显示。
+
+    跌出 = 上一次 run 出现在 recommendation_picks，最新 run 不在。
+    仅 total_runs >= 2 时有意义。
+    """
+    db_path = _duckdb_path()
+    if not os.path.exists(db_path):
+        return []
+    try:
+        import duckdb
+    except ImportError:
+        return []
+    try:
+        con = duckdb.connect(db_path, read_only=True)
+        try:
+            total_runs = int(con.execute("SELECT COUNT(*) FROM recommendation_runs").fetchone()[0] or 0)
+            if total_runs < 2:
+                return []
+            rows = con.execute(
+                """
+                WITH ordered AS (
+                    SELECT r.run_id, r.run_date,
+                           ROW_NUMBER() OVER (ORDER BY r.generated_at DESC) AS rn
+                    FROM recommendation_runs r
+                ),
+                latest_syms AS (
+                    SELECT p.symbol FROM recommendation_picks p
+                    JOIN ordered o ON p.run_id = o.run_id WHERE o.rn = 1
+                ),
+                prev AS (
+                    SELECT p.symbol, p.name, p.rank, p.total_score, p.rating, o.run_date
+                    FROM recommendation_picks p JOIN ordered o ON p.run_id = o.run_id
+                    WHERE o.rn = 2
+                )
+                SELECT symbol, name, rank, total_score, rating, CAST(run_date AS VARCHAR)
+                FROM prev
+                WHERE symbol NOT IN (SELECT symbol FROM latest_syms)
+                ORDER BY rank
+                """
+            ).fetchall()
+        finally:
+            con.close()
+        out = []
+        for symbol, name, rank, score, rating, run_date in rows:
+            out.append({
+                "ticker": symbol,
+                "name": name or "",
+                "prev_rank": int(rank) if rank is not None else None,
+                "prev_score": round(float(score), 2) if score is not None else None,
+                "prev_rating": rating or "",
+                "prev_date": run_date,
+            })
+        return out
+    except Exception as e:
+        print(f"  ⚠️ dropouts 失败: {e}")
+        return []
 
 
 def _build_catalyst_index() -> dict[str, str]:
@@ -14016,6 +14156,7 @@ def build():
                 item["prev_score"] = ap.get("prev_score")
             merged_candidates.append(item)
         v2_stats_main = _runtime_db_stats().get("v2") or {}
+        dropouts = _build_dropouts()
         discovery = {
             **discovery_json,
             "generated_at": batch_meta_main.get("batch_generated_at") or discovery_json.get("generated_at") or datetime.now().isoformat(timespec="seconds"),
@@ -14024,6 +14165,7 @@ def build():
             "universe_size": v2_stats_main.get("system_universe") or len(merged_candidates),
             "candidates": merged_candidates,
             "appearance_total_runs": appearance_total_runs,
+            "dropouts": dropouts,
         }
     else:
         discovery = discovery_json
