@@ -66,15 +66,55 @@ CATEGORY_RULES = [
     ("earnings_preview",  ["盈利警告", "盈利預告", "業績預告", "盈喜", "盈警", "正面盈利", "負面盈利"]),
     # A2 停牌 / 复牌
     ("trading_halt",      ["暫停買賣", "恢復買賣", "短暫停牌", "復牌"]),
+    # A6 并购 / 私有化 / 借壳（必须先于 A5，避免「重大合约」被 ma_takeover 抢走）
+    ("ma_takeover",       ["要約", "私有化", "聯合公佈", "建議收購", "全面收購"]),
+    # A5 重大订单 / 合同 / 战略合作（订单类公告，常发在「自愿公告」/「内幕消息」类）
+    # 注意：避免单"收購"（已被 ma_takeover 占用）；避免单"合作"（太宽）
+    ("major_order",       ["重大合同", "重大合約", "重大合约", "重大订单", "重大訂單",
+                           "中標", "中标",
+                           "採購協議", "采购协议", "供應協議", "供应协议",
+                           "框架協議", "框架协议", "戰略合作協議", "战略合作协议",
+                           "重大關連交易", "重大关连交易"]),
     # A3 股东减/增持（披露权益）
     ("insider_change",    ["披露權益", "權益披露", "董事權益", "股東權益變動", "主要股東"]),
     # A4 回购
     ("buyback",           ["股份回購", "股份購回", "回購股份", "購回股份"]),
-    # A6 并购 / 私有化 / 借壳
-    ("ma_takeover",       ["收購", "要約", "合併", "私有化", "聯合公佈", "建議收購"]),
     # A 财报正式公布（已被 yfinance 覆盖，但有时间戳更早 PDF）
     ("earnings_announcement", ["末期業績", "中期業績", "季度業績", "年度業績", "全年業績"]),
 ]
+
+# 重大订单金额识别正则（中港股常用表达）：用于从 title 提取金额
+import re as _re
+_AMOUNT_PATTERNS = [
+    # 亿级（繁简两套）— 优先级高，先匹配
+    _re.compile(r"(\d+(?:\.\d+)?)\s*億美元"),
+    _re.compile(r"(\d+(?:\.\d+)?)\s*億港元"),
+    _re.compile(r"(\d+(?:\.\d+)?)\s*億元?(?!美|港)"),
+    _re.compile(r"(\d+(?:\.\d+)?)\s*亿美元"),
+    _re.compile(r"(\d+(?:\.\d+)?)\s*亿港元"),
+    _re.compile(r"(\d+(?:\.\d+)?)\s*亿元?(?!美|港)"),
+    # 万级
+    _re.compile(r"(\d+(?:\.\d+)?)\s*萬美元"),
+    _re.compile(r"(\d+(?:\.\d+)?)\s*萬港元"),
+    _re.compile(r"(\d+(?:\.\d+)?)\s*萬元?(?!美|港)"),
+    _re.compile(r"(\d+(?:\.\d+)?)\s*万美元"),
+    _re.compile(r"(\d+(?:\.\d+)?)\s*万港元"),
+    _re.compile(r"(\d+(?:\.\d+)?)\s*万元?(?!美|港)"),
+    # 英文
+    _re.compile(r"USD\s*(\d+(?:\.\d+)?)\s*(?:billion|b)\b", _re.IGNORECASE),
+    _re.compile(r"USD\s*(\d+(?:\.\d+)?)\s*(?:million|m)\b", _re.IGNORECASE),
+]
+
+def _extract_amount(text: str) -> str:
+    """从 title 抽取订单金额（含单位），找不到返回空。"""
+    if not text:
+        return ""
+    for p in _AMOUNT_PATTERNS:
+        m = p.search(text)
+        if m:
+            # 取整个匹配文本，保留单位
+            return m.group(0)
+    return ""
 
 # 字符实体反转义（HKEX JSON 里 / 转成 &#x2f;）
 _HTML_ENT = re.compile(r"\\?&#x([0-9a-fA-F]+);")
@@ -217,18 +257,25 @@ def main() -> int:
             event_date = _parse_event_date(a.get("DATE_TIME", ""))
             if not event_date:
                 continue
-            events.append({
+            title = _unescape(a.get("TITLE", ""))
+            entry = {
                 "ticker": ticker,
                 "stock_code": _unescape(a.get("STOCK_CODE", "")).split("<")[0].strip(),
                 "stock_id": sid,
                 "event_date": event_date,
                 "event_type": etype,
-                "title": _unescape(a.get("TITLE", "")),
+                "title": title,
                 "long_text": _unescape(a.get("LONG_TEXT", "")),
                 "file_link": a.get("FILE_LINK", ""),
                 "news_id": a.get("NEWS_ID", ""),
                 "source": "hkexnews.hk/titleSearchServlet",
-            })
+            }
+            # major_order 类公告：尝试从 title 抽金额
+            if etype == "major_order":
+                amt = _extract_amount(title)
+                if amt:
+                    entry["amount_text"] = amt
+            events.append(entry)
         hit += 1
         time.sleep(0.3)  # rate limit 礼貌
 

@@ -39,6 +39,7 @@ _CACHE: dict[str, dict[str, list[dict]] | None] = {
 # 股东减增持 / 回购最弱（腾讯天天回购，无信号量）
 HKEX_PRIORITY = {
     "earnings_preview": 0,   # 盈警/盈喜
+    "major_order":      1,   # 重大订单 / 合约 / 战略合作（A5 NLP）
     "ma_takeover":      1,   # 并购/私有化/要约
     "trading_halt":     2,   # 停牌/复牌
     # earnings_announcement: 不优先（yfinance 含 EPS 数字更可用）
@@ -235,6 +236,7 @@ def _catalyst_from_hkex(events: list[dict], today: date, lookback_days: int, max
 
     label_map = {
         "earnings_preview": "📢 业绩预告",
+        "major_order":      "📜 重大订单/合约",
         "ma_takeover":      "🤝 并购/要约",
         "trading_halt":     "🛑 停牌/复牌",
         "insider_change":   "👥 股东权益变动",
@@ -242,7 +244,9 @@ def _catalyst_from_hkex(events: list[dict], today: date, lookback_days: int, max
         "earnings_announcement": "📋 业绩公告",
     }
     prefix = label_map.get(etype, "📄 公告")
-    return f"{ed.strftime('%-m/%-d')} {prefix}：{title}（{days_ago}d 前）"
+    amt = e.get("amount_text") or ""
+    amt_suffix = f"（{amt}）" if amt else ""
+    return f"{ed.strftime('%-m/%-d')} {prefix}：{title}{amt_suffix}（{days_ago}d 前）"
 
 
 def _catalyst_from_form4(events: list[dict], today: date, lookback_days: int) -> str | None:
