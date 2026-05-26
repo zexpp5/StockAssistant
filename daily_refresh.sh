@@ -465,6 +465,7 @@ is_research_step && run_step "17/25 OpenBB 综合情报" "-m stock_research.jobs
 needs_ipo_data && run_step "18/25 IPO 打新日历" "-m stock_research.jobs.ipo_daily"
 is_research_step && run_step "19/25 事件日历（解禁/减持/财报）" "-m stock_research.jobs.event_calendar_daily"
 is_research_step && run_step "19a/25 港股事件日历（yfinance 财报+超预期）" "-m stock_research.jobs.event_calendar_hk_daily"
+is_research_step && run_step "19c/25 美股事件日历（yfinance 财报+超预期）" "-m stock_research.jobs.event_calendar_us_daily"
 needs_ipo_data && run_step "19b/25 次新股+解禁雷达（IPO & 次新股 tab 数据源）" "-m stock_research.jobs.junior_stock_watcher"
 is_research_step && run_step "20/25 产业政策事件扫描" "-m stock_research.jobs.policy_scan_daily"
 

@@ -10642,7 +10642,8 @@ def _build_appearance_index() -> dict:
 
 def _build_catalyst_index() -> dict[str, str]:
     """ticker (uppercase) → "📰 ..." catalyst 一句话；
-    数据源：event_calendar_hk.json (港股 yfinance) + event_calendar.json (A 股 akshare)。
+    数据源：event_calendar_hk.json (港股 yfinance) + event_calendar.json (A 股 akshare)
+           + event_calendar_us.json (美股 yfinance)。
     与 morning_brief._build_catalyst 字段一致；前端在「推荐依据」前 prepend 这一行。
     """
     from datetime import date, datetime as _dt
@@ -10716,6 +10717,43 @@ def _build_catalyst_index() -> dict[str, str]:
             # 候选侧会用 ticker.upper() 查；这里两种 key 都放（裸 6 位 + 带后缀）
             for suffix in (".SH", ".SS", ".SZ", ".BJ", ""):
                 out[f"{code}{suffix}".upper()] = text
+
+    # 美股事件（earnings + earnings_upcoming）—— 同港股逻辑，ticker 是裸代码（DELL/NVDA/...）
+    us = _runtime_load_json("data/event_calendar_us.json") or {}
+    us_idx: dict[str, list[dict]] = {}
+    for e in (us.get("events") or []):
+        us_idx.setdefault((e.get("ticker") or "").upper(), []).append(e)
+    for tk, evs in us_idx.items():
+        recent: list[tuple[date, dict]] = []
+        upcoming: list[tuple[date, dict]] = []
+        for e in evs:
+            try:
+                ed = _dt.strptime(e.get("event_date", ""), "%Y-%m-%d").date()
+            except Exception:
+                continue
+            if e.get("event_type") == "earnings" and 0 <= (today - ed).days <= LOOKBACK:
+                recent.append((ed, e))
+            elif e.get("event_type") == "earnings_upcoming" and 0 <= (ed - today).days <= 14:
+                upcoming.append((ed, e))
+        if recent:
+            recent.sort(key=lambda x: abs((x[1].get("surprise_pct") or 0)), reverse=True)
+            ed, e = recent[0]
+            days_ago = (today - ed).days
+            surp = e.get("surprise_pct")
+            est = e.get("eps_estimate")
+            act = e.get("eps_actual")
+            if surp is not None and est is not None and act is not None:
+                sign = "超预期" if surp > 0 else "差预期"
+                out[tk] = f"📰 {ed.strftime('%-m/%-d')} EPS 实际 {act:.2f}/估 {est:.2f}，{sign} {surp:+.1f}%（{days_ago}d 前）"
+            else:
+                out[tk] = f"📰 {ed.strftime('%-m/%-d')} 财报已披露（{days_ago}d 前）"
+        elif upcoming:
+            upcoming.sort(key=lambda x: x[0])
+            ed, e = upcoming[0]
+            days_to = (ed - today).days
+            est = e.get("eps_estimate")
+            est_label = f"EPS 估 {est:.2f}" if isinstance(est, (int, float)) else "EPS 估 n/a"
+            out[tk] = f"📰 {ed.strftime('%-m/%-d')} 财报临近（+{days_to}d，{est_label}）"
 
     return out
 
