@@ -1556,6 +1556,96 @@ def _build_catalyst(ticker: str, lookback_days: int = 60) -> str | None:
     return f"  📰 {s}" if s else None
 
 
+def _ticker_signal_lines(ticker: str) -> list[str]:
+    """ticker 主行下方应当追加的 signal 行列表（按重要度排序）：
+    🆕 首次进入 / 📈 跃升 在前，📰 催化在后。无信号返回 []。
+    """
+    out: list[str] = []
+    rise = _build_rise_signal(ticker)
+    if rise:
+        out.append(rise)
+    cat = _build_catalyst(ticker)
+    if cat:
+        out.append(cat)
+    return out
+
+
+# ───────────── 推荐异动（🆕/📈/📉）— 读 dashboard dump 的 picks_appearance.json ─────────────
+# dashboard build 时算好（read DuckDB once），morning_brief 这里只读 JSON 避免锁冲突。
+
+_APPEARANCE_CACHE: dict | None = None
+
+
+def _load_appearance() -> dict:
+    global _APPEARANCE_CACHE
+    if _APPEARANCE_CACHE is None:
+        d = _load_json(REPO / "data" / "latest" / "picks_appearance.json") or {}
+        _APPEARANCE_CACHE = d
+    return _APPEARANCE_CACHE
+
+
+def _build_rise_signal(ticker: str) -> str | None:
+    """📈 跃升 / 🆕 首次 一行（不带缩进，caller 自己加 2 空格）。
+    无触发返回 None。
+    门槛同 dashboard：rank_up >= 3 或 score_up >= 2.0；🆕 = count==1 && total_runs>=2。
+    """
+    if not ticker:
+        return None
+    ap = _load_appearance()
+    total_runs = int(ap.get("total_runs") or 0)
+    if total_runs < 2:
+        return None
+    info = (ap.get("tickers") or {}).get(ticker.upper())
+    if not info:
+        return None
+    count = int(info.get("count") or 0)
+    if count == 1:
+        return f"  🆕 首次进入推荐（{info.get('first_seen_date') or '今日'}）"
+    rank_up = info.get("rank_up")
+    score_up = info.get("score_up")
+    parts = []
+    if isinstance(rank_up, (int, float)) and rank_up >= 3:
+        parts.append(f"排名 {info.get('prev_rank')}→{info.get('cur_rank')}（+{rank_up} 位）")
+    if isinstance(score_up, (int, float)) and score_up >= 2.0:
+        parts.append(f"评分 {info.get('prev_score')}→{info.get('cur_score')}（+{score_up:.1f}）")
+    return f"  📈 {' · '.join(parts)}" if parts else None
+
+
+def section_dropouts() -> str:
+    """跌出 Top section — 上批次在 picks、本批次不在的票（含持仓警示）。"""
+    ap = _load_appearance()
+    drops = ap.get("dropouts") or []
+    if not drops:
+        return ""
+    # 持仓 set
+    review = _load_json(REPO / "data" / "latest" / "real_holding_review.json") or {}
+    held = {(it.get("symbol") or it.get("code") or "").upper() for it in (review.get("items") or [])}
+    # 按市场分组
+    by_market = {"US": [], "CN": [], "HK": []}
+    for d in drops:
+        m = (d.get("market") or "").upper()
+        if m in by_market:
+            by_market[m].append(d)
+    parts = ["#### 3.5 📉 上批次在 Top、本批次跌出"]
+    parts.append(f"_总 {len(drops)} 只 · 跌出 ≠ 退出科技 universe，可能只是排名滑出前 20。若手上有，建议复查持有理由。_")
+    for m_key, m_label in [("CN", "🇨🇳 A 股"), ("HK", "🇭🇰 港股"), ("US", "🇺🇸 美股")]:
+        rows = by_market.get(m_key) or []
+        if not rows:
+            continue
+        rows = sorted(rows, key=lambda x: (x.get("prev_rank") or 99))
+        parts.append(f"**{m_label}** · {len(rows)} 只")
+        for d in rows:
+            tk = (d.get("ticker") or "").upper()
+            name = d.get("name") or ""
+            rank = d.get("prev_rank")
+            score = d.get("prev_score")
+            rating = d.get("prev_rating") or ""
+            rating_cn = {"strong_buy": "强买", "buy": "买入", "watch": "观察", "avoid": "回避"}.get(rating, rating)
+            held_warn = " ⚠️ **你持仓**" if tk in held else ""
+            parts.append(f"• 上次第 {rank} 名 · **{tk}** {name} · 综合 {score} / {rating_cn}{held_warn}")
+    return "\n".join(parts)
+
+
 def _humanize_picks(plan: list[dict], a_share: bool, history: dict | None = None,
                     factor_scores: dict | None = None) -> list[str]:
     """把 plan_v5 entry 排成一句话/只 + 推荐理由行（扁平 list，每只股 1-4 行）。"""
@@ -1577,9 +1667,7 @@ def _humanize_picks(plan: list[dict], a_share: bool, history: dict | None = None
         out.append(
             f"• **{ticker}** {weight*100:.1f}%{f_str} · 综合 {z:+.2f}{spark_str}"
         )
-        cat = _build_catalyst(ticker)
-        if cat:
-            out.append(cat)
+        out.extend(_ticker_signal_lines(ticker))
         if not a_share:
             pros, cons = _build_us_reasons(ticker, factors_map, signals_map)
             out.extend(_format_reason_lines(pros, cons))
@@ -1605,10 +1693,8 @@ def _humanize_picks_grouped(plan: list[dict], a_share: bool, history: dict | Non
         # F-Score 缺失时不在主行展示「F-Score 缺失」噪声；section header 已说明基本面未覆盖
         f_str = f" · F-Score {f_score}" if f_score != "缺失" else ""
         head = f"• **{ticker}** {weight*100:.1f}%{f_str} · 综合 {z:+.2f}{spark_str}"
-        cat = _build_catalyst(ticker)
         block_lines: list[str] = [head]
-        if cat:
-            block_lines.append(cat)
+        block_lines.extend(_ticker_signal_lines(ticker))
         if not a_share:
             pros, cons = _build_us_reasons(ticker, factors_map, signals_map)
             block_lines.extend(_format_reason_lines(pros, cons))
@@ -1693,9 +1779,7 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
             spark, pct60 = _ticker_sparkline(history or {}, ticker)
             spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
             lines.append(f"• **{ticker}** {name} · 综合 {score:.3f}{f_str}{spark_str}")
-            cat = _build_catalyst(ticker)
-            if cat:
-                lines.append(cat)
+            lines.extend(_ticker_signal_lines(ticker))
             pros, cons = _build_hk_reasons(entry)
             lines.extend(_format_reason_lines(pros, cons))
     else:
@@ -1722,9 +1806,7 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
             spark, pct60 = _ticker_sparkline(history or {}, ticker)
             spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
             lines.append(f"• **{ticker}** {name} · 综合 {score:.3f}{f_str}{spark_str}")
-            cat = _build_catalyst(ticker)
-            if cat:
-                lines.append(cat)
+            lines.extend(_ticker_signal_lines(ticker))
             pros, cons = _build_a_share_reasons(entry)
             lines.extend(_format_reason_lines(pros, cons))
     elif plan:
@@ -2281,6 +2363,10 @@ def build_brief(share_mode: bool = False) -> str:
                       factor_scores=factor_scores, read_only=read_only),
         "\n",
     ])
+    # 📉 跌出 Top — 上批次在 picks、本批次跌出（含持仓警示）
+    dropouts_md = section_dropouts()
+    if dropouts_md:
+        parts.extend([dropouts_md, "\n"])
     # A 股被拒 top 20 — 审计约束器是否过严（无 a_share_picks 时整段省略）
     rejected_md = section_rejected_a_share(a_share_picks)
     if rejected_md:
@@ -2653,13 +2739,9 @@ def _build_card_payload() -> dict:
                 f_score = _entry_f_score(e)
                 f_str = f" · F-Score {_format_f_score(f_score)}"
                 head = f"• **{t}** {e.get('name','')} · {e.get('composite', 0):.2f}{f_str}{spark_str}"
-                cat = _build_catalyst(t)
                 pros, cons = _build_hk_reasons(e)
                 rl = _format_reason_lines(pros, cons)
-                block_parts = [head]
-                if cat:
-                    block_parts.append(cat)
-                block_parts.extend(rl)
+                block_parts = [head] + _ticker_signal_lines(t) + rl
                 hk_blocks.append("\n".join(block_parts))
             ts_hk = _fmt_ts(hk_picks.get("generated_at"))
             section2.append({"tag": "div", "text": {"tag": "lark_md",
@@ -2691,13 +2773,9 @@ def _build_card_payload() -> dict:
                 f_score = _entry_f_score(e)
                 f_str = f" · F-Score {_format_f_score(f_score)}"
                 head = f"• **{t}** {e.get('name','')} · {e.get('composite', 0):.2f}{f_str}{spark_str}"
-                cat = _build_catalyst(t)
                 pros, cons = _build_a_share_reasons(e)
                 rl = _format_reason_lines(pros, cons)
-                block_parts = [head]
-                if cat:
-                    block_parts.append(cat)
-                block_parts.extend(rl)
+                block_parts = [head] + _ticker_signal_lines(t) + rl
                 a_blocks.append("\n".join(block_parts))
             ts_cn = _fmt_ts(a_share_picks.get("generated_at"))
             section2.append({"tag": "div", "text": {"tag": "lark_md",

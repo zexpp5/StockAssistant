@@ -4254,9 +4254,110 @@ async function openStockDetail(code, name) {
     renderStockDetail(data);
   } catch (e) {
     document.getElementById("stock-detail-loading").style.display = "none";
-    document.getElementById("stock-detail-content").innerHTML =
-      `<div class="bg-rose-50 border border-rose-200 text-rose-700 rounded p-4 text-sm">加载失败：${_esc(e.message)}</div>`;
+    // 404 时 fallback：若该 code 在 JUNIOR_RADAR 池里有数据，渲染 IPO-only 详情
+    const fb = _renderIpoOnlyFallback(code, name);
+    if (fb) {
+      document.getElementById("stock-detail-content").innerHTML = fb;
+    } else {
+      document.getElementById("stock-detail-content").innerHTML =
+        `<div class="bg-rose-50 border border-rose-200 text-rose-700 rounded p-4 text-sm">加载失败：${_esc(e.message)}</div>`;
+    }
   }
+}
+
+// 在 JUNIOR_RADAR 池子里按 code/symbol 找数据 (IPO 池次新池均查)
+function _findInJuniorRadar(code) {
+  if (!JUNIOR_RADAR || !code) return null;
+  const c = code.toUpperCase();
+  const markets = JUNIOR_RADAR.markets || {};
+  for (const mk of ["us","cn","hk"]) {
+    const m = markets[mk] || {};
+    const pool = m.junior_pool || [];
+    for (const x of pool) {
+      const k = (x.symbol || x.code || "").toUpperCase();
+      if (k === c) return {market: mk, item: x, kind: "junior_pool"};
+    }
+    const ul = m.unlock_radar || [];
+    for (const x of ul) {
+      const k = (x.symbol || x.code || "").toUpperCase();
+      if (k === c) return {market: mk, item: x, kind: "unlock_radar"};
+    }
+  }
+  return null;
+}
+
+// 当主 DB 没这个 code 但 IPO 池里有时,渲染一个 IPO-only fallback 视图
+function _renderIpoOnlyFallback(code, name) {
+  const hit = _findInJuniorRadar(code);
+  if (!hit) return null;
+  const x = hit.item;
+  const isUS = hit.market === "us";
+  const isCN = hit.market === "cn";
+  // 外链：US → Yahoo Finance + NASDAQ; CN → 东方财富
+  const links = [];
+  if (isUS) {
+    links.push(`<a href="https://finance.yahoo.com/quote/${encodeURIComponent(code)}" target="_blank" class="text-violet-700 hover:underline">Yahoo Finance</a>`);
+    links.push(`<a href="https://www.nasdaq.com/market-activity/stocks/${encodeURIComponent(code.toLowerCase())}" target="_blank" class="text-violet-700 hover:underline">NASDAQ</a>`);
+    links.push(`<a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${encodeURIComponent(code)}&type=&dateb=&owner=include&count=40" target="_blank" class="text-violet-700 hover:underline">SEC EDGAR</a>`);
+  } else if (isCN) {
+    const c = code.replace(/\D/g, "").padStart(6, "0");
+    const mkt = c.startsWith("6") ? "sh" : "sz";
+    links.push(`<a href="https://quote.eastmoney.com/${mkt}${c}.html" target="_blank" class="text-violet-700 hover:underline">东方财富</a>`);
+    links.push(`<a href="https://xueqiu.com/S/${mkt.toUpperCase()}${c}" target="_blank" class="text-violet-700 hover:underline">雪球</a>`);
+  }
+  // 基本字段表
+  const kv = [];
+  const push = (k, v) => { if (v !== null && v !== undefined && v !== "") kv.push([k, v]); };
+  push("市场", isUS ? "🇺🇸 美股 (NASDAQ priced)" : isCN ? "🇨🇳 A 股" : "其他");
+  push("行业", x.industry || x.sector || "—");
+  push("上市日", x.ipo_date || x.list_date || "—");
+  push("发行价", x.issue_price ? (isUS ? "$" : "¥") + x.issue_price : "—");
+  push("最新价", x.current_price ? (isUS ? "$" : "¥") + x.current_price : "—");
+  push("vs 发行", x.vs_issue_pct !== null && x.vs_issue_pct !== undefined ? x.vs_issue_pct + "%" : "—");
+  push("上市月数", x.months_listed ? x.months_listed + " 月" : "—");
+  if (isUS) {
+    push("市值", x.market_cap_m ? "$" + Math.round(x.market_cap_m) + "M" : "—");
+    push("最低价 (全期)", x.low_since_ipo ? "$" + x.low_since_ipo + (x.low_date ? " (" + x.low_date + ")" : "") : "—");
+    push("反弹幅度", x.rebound_pct !== null && x.rebound_pct !== undefined ? "+" + x.rebound_pct + "%" : "—");
+    push("估算 lockup 到期", x.est_lockup_end ? x.est_lockup_end + " (距今 " + x.days_to_est_lockup + " 天)" : "—");
+    push("MA20 / MA50", (x.ma20 ? "$" + x.ma20 : "—") + " / " + (x.ma50 ? "$" + x.ma50 : "—"));
+    push("触底分 / 准备度", (x.bottom_score || x.score || "—") + " / " + (x.readiness_score !== null && x.readiness_score !== undefined ? x.readiness_score : "—"));
+  } else if (isCN) {
+    push("板块", _ipoBoardLabel(x.board));
+    push("首日收盘", x.first_close ? "¥" + x.first_close : "—");
+    push("首日涨幅", x.first_day_change_pct !== null && x.first_day_change_pct !== undefined ? x.first_day_change_pct + "%" : "—");
+    push("vs 首日收盘", x.vs_first_close_pct !== null && x.vs_first_close_pct !== undefined ? x.vs_first_close_pct + "%" : "—");
+    push("触底分", x.score || "—");
+  }
+  const kvHtml = kv.map(([k, v]) => `<tr><td class="py-1 px-3 text-slate-500 text-xs">${k}</td><td class="py-1 px-3 font-mono text-sm">${_esc(String(v))}</td></tr>`).join("");
+  // tier badge + audit card
+  const tierHtml = x.tier ? `<div class="mb-3">${_juniorTierBadge(x)}</div>` : "";
+  const auditHtml = x.audit_card ? (() => {
+    const a = x.audit_card;
+    const seg = (label, val, cls) => val ? `<div class="mt-1 ${cls}"><span class="font-semibold">${label}</span> ${_esc(val)}</div>` : "";
+    return `<div class="mt-4 bg-violet-50 border border-violet-200 rounded p-3 text-sm">
+      <div class="font-bold text-violet-800 mb-2">📋 买前审查卡</div>
+      ${seg("✓ 为什么像底:", a.why_bottom_like, "text-emerald-800")}
+      ${seg("⚠ 还差啥信号:", a.whats_missing, "text-amber-800")}
+      ${seg("🛑 止损参考:", a.stop_loss_hint, "text-rose-800")}
+    </div>`;
+  })() : "";
+  const summary = x.summary ? `<div class="text-sm text-slate-600 italic mb-3">"${_esc(x.summary)}"</div>` : "";
+  return `<div class="space-y-4">
+    <div class="bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-900">
+      <strong>⚠️ 该股暂未纳入主系统分析池</strong>（只在 IPO/次新股雷达中）— 故无 v6/v9 因子、13F 持仓、技术面深度等。下方仅展示 IPO 池数据。
+    </div>
+    ${tierHtml}
+    ${summary}
+    <div class="bg-white border border-slate-200 rounded">
+      <div class="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700">IPO / 次新股池数据</div>
+      <table class="w-full">${kvHtml}</table>
+    </div>
+    ${auditHtml}
+    <div class="text-sm">
+      <span class="text-slate-600">外部跟踪：</span>${links.join(" · ")}
+    </div>
+  </div>`;
 }
 
 function closeStockDetail() {
@@ -14320,6 +14421,18 @@ def build():
             merged_candidates.append(item)
         v2_stats_main = _runtime_db_stats().get("v2") or {}
         dropouts = _build_dropouts()
+        # Dump 给 morning_brief 复用（避免 morning_brief 自己连 DuckDB 锁冲突）
+        try:
+            appearance_dump_path = os.path.join(_REPO, "data", "latest", "picks_appearance.json")
+            with open(appearance_dump_path, "w", encoding="utf-8") as _f:
+                json.dump({
+                    "generated_at": datetime.now().isoformat(),
+                    "total_runs": appearance_total_runs,
+                    "tickers": {k: v for k, v in appearance_idx.items() if not k.startswith("_")},
+                    "dropouts": dropouts,
+                }, _f, ensure_ascii=False, default=str)
+        except Exception as _e:
+            print(f"  ⚠️ picks_appearance.json dump 失败（不阻断 dashboard）：{_e}")
         discovery = {
             **discovery_json,
             "generated_at": batch_meta_main.get("batch_generated_at") or discovery_json.get("generated_at") or datetime.now().isoformat(timespec="seconds"),
