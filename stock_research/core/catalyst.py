@@ -31,6 +31,7 @@ _CACHE: dict[str, dict[str, list[dict]] | None] = {
     "us": None,
     "hkex": None,
     "us_sec": None,
+    "us_form4": None,
 }
 
 # 港股 HKEX 事件类型 → 优先级（数字小 = 优先用作 catalyst 句）
@@ -102,6 +103,19 @@ def _events_hkex() -> dict[str, list[dict]]:
     return _CACHE["hkex"]
 
 
+def _events_us_form4() -> dict[str, list[dict]]:
+    """Form 4 内部人交易（每只 ticker 一条聚合事件）。"""
+    if _CACHE["us_form4"] is None:
+        d = _load_json("data/event_calendar_us_form4.json")
+        idx: dict[str, list[dict]] = {}
+        for e in (d.get("events") or []):
+            t = (e.get("ticker") or "").upper()
+            if t:
+                idx.setdefault(t, []).append(e)
+        _CACHE["us_form4"] = idx
+    return _CACHE["us_form4"]
+
+
 def _events_us_sec() -> dict[str, list[dict]]:
     """美股 SEC EDGAR filings（按 ticker 分组）。"""
     if _CACHE["us_sec"] is None:
@@ -170,13 +184,20 @@ def get_catalyst(ticker: str, *, lookback_days: int = LOOKBACK_DAYS, today: date
         code = tk_upper.split(".")[0]
         return _catalyst_from_cn_yjbb(_events_cn().get(code) or [], today, lookback_days)
 
-    # 美股（裸 ticker）— 三段优先级链同港股
+    # 美股（裸 ticker）— 四段优先级链
+    # 1. SEC 13D/13G (max_priority=1) 收购信号最强
     strong = _catalyst_from_sec(_events_us_sec().get(tk_upper) or [], today, lookback_days, max_priority=1)
     if strong:
         return strong
+    # 2. Form 4 内部人净买入/卖出（已经按 |净额|≥$1M 过滤）
+    form4 = _catalyst_from_form4(_events_us_form4().get(tk_upper) or [], today, lookback_days)
+    if form4:
+        return form4
+    # 3. yfinance EPS 超预期
     eps = _catalyst_from_earnings_dates(_events_us().get(tk_upper) or [], today, lookback_days)
     if eps:
         return eps
+    # 4. SEC 弱催化兜底（8-K material_event + DEF 14A）
     return _catalyst_from_sec(_events_us_sec().get(tk_upper) or [], today, lookback_days, max_priority=9)
 
 
@@ -222,6 +243,28 @@ def _catalyst_from_hkex(events: list[dict], today: date, lookback_days: int, max
     }
     prefix = label_map.get(etype, "📄 公告")
     return f"{ed.strftime('%-m/%-d')} {prefix}：{title}（{days_ago}d 前）"
+
+
+def _catalyst_from_form4(events: list[dict], today: date, lookback_days: int) -> str | None:
+    """Form 4 内部人净买入/净卖出 → 催化句。
+    输入 events 一般只有 1 条（每 ticker 聚合 60 天）。
+    """
+    if not events:
+        return None
+    # 取最大净额的一条（防御性，正常只 1 条）
+    e = max(events, key=lambda x: abs(x.get("net_amount_usd") or 0))
+    try:
+        ed = datetime.strptime(e.get("event_date", ""), "%Y-%m-%d").date()
+    except Exception:
+        return None
+    if (today - ed).days > lookback_days + 7:  # 容忍 7d 缓冲
+        return None
+    net = e.get("net_amount_usd") or 0
+    abs_m = abs(net) / 1_000_000
+    days_ago = (today - ed).days
+    if e.get("event_type") == "insider_net_buy":
+        return f"{ed.strftime('%-m/%-d')} 🟢 内部人净买入 ${abs_m:.1f}M（60d 累计，最新申报 {days_ago}d 前）"
+    return f"{ed.strftime('%-m/%-d')} 🔴 内部人净卖出 ${abs_m:.1f}M（60d 累计，最新申报 {days_ago}d 前）"
 
 
 def _catalyst_from_sec(events: list[dict], today: date, lookback_days: int, max_priority: int = 9) -> str | None:

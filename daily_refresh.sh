@@ -471,6 +471,7 @@ run_step "19a/25 港股事件日历（yfinance 财报+超预期）" "-m stock_re
 run_step "19d/25 港股 HKEX 披露易公告（盈警/停牌/股东/回购/并购）" "-m stock_research.jobs.event_calendar_hk_hkex_daily"
 run_step "19c/25 美股事件日历（yfinance 财报+超预期）" "-m stock_research.jobs.event_calendar_us_daily"
 run_step "19e/25 美股 SEC EDGAR（8-K/13G/13D/DEF 14A）" "-m stock_research.jobs.event_calendar_us_sec_daily"
+run_step "19f/25 美股 SEC Form 4 内部人交易（净买/卖额聚合）" "-m stock_research.jobs.event_calendar_us_form4_daily"
 needs_ipo_data && run_step "19b/25 次新股+解禁雷达（IPO & 次新股 tab 数据源）" "-m stock_research.jobs.junior_stock_watcher"
 is_research_step && run_step "20/25 产业政策事件扫描" "-m stock_research.jobs.policy_scan_daily"
 

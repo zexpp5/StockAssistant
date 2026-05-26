@@ -10641,6 +10641,7 @@ def _augment_source_health_with_catalyst(source_health: dict | None) -> None:
         ("data/event_calendar_us.json",      "event_calendar_us",      "美股事件日历"),
         ("data/event_calendar_hk_hkex.json", "event_calendar_hk_hkex", "港股 HKEX 披露易"),
         ("data/event_calendar_us_sec.json",  "event_calendar_us_sec",  "美股 SEC EDGAR"),
+        ("data/event_calendar_us_form4.json","event_calendar_us_form4","美股 Form 4 内部人"),
     ]:
         path = os.path.join(_REPO, rel)
         if not os.path.exists(path):

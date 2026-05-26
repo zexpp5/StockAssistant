@@ -74,6 +74,7 @@ EVENT_CALENDAR_JSON = (
     "data/event_calendar_us.json",         # 美股 yfinance 财报 + EPS 超预期
     "data/event_calendar_hk_hkex.json",    # 港股 HKEX 披露易公告（盈警/停牌/股东/回购/并购）
     "data/event_calendar_us_sec.json",     # 美股 SEC EDGAR（8-K/13G/13D/DEF 14A）
+    "data/event_calendar_us_form4.json",   # 美股 SEC Form 4 内部人交易（净买/卖聚合）
 )
 
 
