@@ -1436,12 +1436,43 @@ def _build_us_reasons(ticker: str, factors_map: dict, signals_map: dict) -> tupl
     net_val = ins.get("net_value_usd_approx")
     if isinstance(net_val, (int, float)) and abs(net_val) >= 1e7:
         mn = net_val / 1e6
-        if mn > 0:
+        # 跟 Form 4 60d 数据交叉，方向相反时合并成「反转」描述（避免 ✅ 6m 净买入 + 🔴 60d 净卖出 视觉冲突）
+        form4_60d = _form4_60d_net_m(ticker)
+        if form4_60d is not None and (mn * form4_60d) < 0:
+            # 方向相反
+            if mn > 0:
+                cons.append(
+                    f"内部人 6m 净买入 ${mn:.0f}M，但 **近 60d 转向**净卖出 ${-form4_60d:.0f}M（管理层近期改变方向）"
+                )
+            else:
+                pros.append(
+                    f"内部人 6m 净卖出 ${-mn:.0f}M，但 **近 60d 转向**净买入 ${form4_60d:.0f}M（管理层近期改变方向）"
+                )
+        elif mn > 0:
             pros.append(f"内部人 6m 净买入 ${mn:.0f}M（管理层看好信号）")
         else:
             cons.append(f"内部人 6m 净卖出 ${-mn:.0f}M（注意管理层抛售）")
 
     return pros, cons
+
+
+# 缓存：避免 _build_us_reasons 每次重读 Form 4 文件
+_FORM4_60D_CACHE: dict[str, float] | None = None
+
+
+def _form4_60d_net_m(ticker: str) -> float | None:
+    """读 Form 4 60d 聚合净额（百万美元，正=买负=卖），不存在返回 None。"""
+    global _FORM4_60D_CACHE
+    if _FORM4_60D_CACHE is None:
+        d = _load_json(REPO / "data" / "event_calendar_us_form4.json") or {}
+        idx: dict[str, float] = {}
+        for e in (d.get("events") or []):
+            t = (e.get("ticker") or "").upper()
+            net = e.get("net_amount_usd")
+            if t and isinstance(net, (int, float)):
+                idx[t] = net / 1e6
+        _FORM4_60D_CACHE = idx
+    return _FORM4_60D_CACHE.get(ticker.upper())
 
 
 def _build_hk_reasons(entry: dict) -> tuple[list[str], list[str]]:
@@ -2188,6 +2219,79 @@ def section_factor_risk(plan: dict | None, factor_scores: dict | None) -> str:
 # Section 4: 红旗
 # ────────────────────────────────────────────────────────
 
+def _load_junior_radar() -> dict | None:
+    """读 data/latest/junior_stock_radar.json (junior_stock_watcher 输出)"""
+    p = REPO / "data" / "latest" / "junior_stock_radar.json"
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("read junior_stock_radar.json failed: %s", exc)
+        return None
+
+
+def _diff_emoji(flag: str | None) -> str:
+    return {
+        "new": "🆕",
+        "upgraded": "📈",
+        "downgraded": "📉",
+        "jumped": "↑",
+        "slipped": "↓",
+    }.get(flag or "", "")
+
+
+def section_junior_radar(top_n: int = 5) -> str:
+    """🎯 次新股触底候选 — 只列 🟢 可小仓试探 + 🟡 可研究, 每条带 diff 标记 + 一句 why。
+
+    数据源: data/latest/junior_stock_radar.json (junior_stock_watcher 输出)
+    不渲染条件: 池子里没有 actionable (可研究/可小仓试探)
+    """
+    radar = _load_junior_radar()
+    if not radar:
+        return ""
+    markets = radar.get("markets") or {}
+    sections = []
+    for mk, label in [("us", "🇺🇸 美股"), ("cn", "🇨🇳 A 股")]:
+        pool = (markets.get(mk) or {}).get("junior_pool") or []
+        actionable = [x for x in pool if x.get("tier") in ("可小仓试探", "可研究")]
+        actionable.sort(key=lambda x: (
+            0 if x.get("tier") == "可小仓试探" else 1,
+            x.get("percentile") or 999,
+        ))
+        if not actionable:
+            continue
+        lines = [f"**{label}** ({len(actionable)} 只 actionable, 显示前 {min(top_n, len(actionable))}):"]
+        for x in actionable[:top_n]:
+            code = x.get("symbol") or x.get("code")
+            name = x.get("name") or ""
+            tier_emoji = "🟢" if x.get("tier") == "可小仓试探" else "🟡"
+            diff = _diff_emoji(x.get("diff_flag"))
+            pct = x.get("percentile")
+            pct_str = f"前 {pct}%" if pct is not None else ""
+            ready = x.get("readiness_score")
+            ready_str = f" · 准备度 {int(ready)}" if ready is not None else ""
+            audit = x.get("audit_card") or {}
+            why = audit.get("why_bottom_like") or ""
+            missing = audit.get("whats_missing") or ""
+            head = f"- {tier_emoji} **{code}** {name} {diff} ({pct_str}{ready_str})"
+            lines.append(head)
+            if why:
+                lines.append(f"  ✓ {why}")
+            if missing and missing != "三层信号齐全,可正式进入买前研究":
+                lines.append(f"  ⚠ {missing}")
+        sections.append("\n".join(lines))
+    if not sections:
+        return ""
+    body = "\n\n".join(sections)
+    return (
+        "#### 🎯 次新股触底候选\n"
+        "_仅作研究起点,非买入建议;来自 IPO & 次新股 tab 触底分前 10/30% + 过解禁窗口的候选。_\n\n"
+        f"{body}\n\n"
+        "_完整列表 + 买前审查卡见 dashboard IPO & 次新股 tab → 次新股底部观察池。_\n"
+    )
+
+
 def section_red_flags(
     plan: dict | None,
     events: dict | None,
@@ -2387,6 +2491,10 @@ def build_brief(share_mode: bool = False) -> str:
     factor_risk = section_factor_risk(plan, factor_scores)
     if factor_risk:
         parts.extend([factor_risk, "\n"])
+    # 3.7 次新股触底候选 (junior_stock_watcher 输出 → 列 actionable + diff 标)
+    junior_radar_md = section_junior_radar()
+    if junior_radar_md:
+        parts.extend([junior_radar_md, "\n"])
     red_flags = section_red_flags(plan, events, factor_scores, defense)
     if red_flags:
         parts.append(red_flags)
@@ -2903,6 +3011,40 @@ def _build_card_payload() -> dict:
             {"tag": "plain_text", "content": "回测含 survivorship bias 不代表未来；崩盘期实测 alpha = -9.77%，4/4 regime 3 跑输 SPY。"}
         ]})
     blocks.extend(section3)
+
+    # ─── Section 3.7: 🎯 次新股触底候选 (junior_stock_watcher → 列 actionable + diff) ───
+    radar = _load_junior_radar()
+    if radar:
+        markets = radar.get("markets") or {}
+        radar_lines: list[str] = []
+        any_actionable = False
+        for mk, label in [("us", "🇺🇸 美股"), ("cn", "🇨🇳 A 股")]:
+            pool = (markets.get(mk) or {}).get("junior_pool") or []
+            actionable = [x for x in pool if x.get("tier") in ("可小仓试探", "可研究")]
+            if not actionable:
+                continue
+            any_actionable = True
+            actionable.sort(key=lambda x: (
+                0 if x.get("tier") == "可小仓试探" else 1,
+                x.get("percentile") or 999,
+            ))
+            radar_lines.append(f"**{label}** ({len(actionable)} 只 actionable)")
+            for x in actionable[:3]:
+                code = x.get("symbol") or x.get("code")
+                name = (x.get("name") or "")[:24]
+                te = "🟢" if x.get("tier") == "可小仓试探" else "🟡"
+                diff = _diff_emoji(x.get("diff_flag"))
+                pct = x.get("percentile")
+                pct_str = f"前 {pct}%" if pct is not None else ""
+                ready = x.get("readiness_score")
+                ready_str = f" · 准备度 {int(ready)}" if ready is not None else ""
+                radar_lines.append(f"  {te} **{code}** {name} {diff} · {pct_str}{ready_str}")
+        if any_actionable:
+            radar_lines.append("")
+            radar_lines.append("_仅作研究起点,非买入建议; 完整列表 + 买前审查卡见 dashboard。_")
+            blocks.append({"tag": "div", "text": {"tag": "lark_md",
+                "content": "**🎯 次新股触底候选**\n" + "\n".join(radar_lines)}})
+            blocks.append({"tag": "hr"})
 
     # ─── Section 4: 红旗（仅非空时，唯一例外用色块强警示）───
     flags: list[str] = []
