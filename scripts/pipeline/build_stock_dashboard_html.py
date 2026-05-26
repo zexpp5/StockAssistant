@@ -1963,25 +1963,19 @@ function switchDiscoveryView(view) {
         </div>
       </div>
     </details>
-    <div class="flex flex-wrap gap-2 items-center">
-      <label class="text-xs text-slate-600">筛选:</label>
-      <button onclick="filterJunior('all')" id="junior-filter-all" class="junior-filter-btn px-3 py-1 text-xs rounded border border-slate-300 bg-white text-slate-700 hover:border-violet-500">全部</button>
-      <button onclick="filterJunior('tech')" id="junior-filter-tech" class="junior-filter-btn px-3 py-1 text-xs rounded border border-violet-300 bg-violet-50 text-violet-700 hover:border-violet-500">🔬 仅科技</button>
-      <button onclick="filterJunior('broken')" id="junior-filter-broken" class="junior-filter-btn px-3 py-1 text-xs rounded border border-slate-300 bg-white text-slate-700 hover:border-violet-500">仅已破发</button>
-      <button onclick="filterJunior('star')" id="junior-filter-star" class="junior-filter-btn px-3 py-1 text-xs rounded border border-slate-300 bg-white text-slate-700 hover:border-violet-500">科创板</button>
-      <button onclick="filterJunior('chinext')" id="junior-filter-chinext" class="junior-filter-btn px-3 py-1 text-xs rounded border border-slate-300 bg-white text-slate-700 hover:border-violet-500">创业板</button>
-      <button onclick="filterJunior('main')" id="junior-filter-main" class="junior-filter-btn px-3 py-1 text-xs rounded border border-slate-300 bg-white text-slate-700 hover:border-violet-500">沪深主板</button>
-      <span class="text-slate-300 mx-1">|</span>
-      <label class="text-xs text-slate-600">档位:</label>
-      <button onclick="setJuniorTierFilter('actionable')" id="junior-tier-actionable"
-              class="junior-tier-btn px-3 py-1 text-xs rounded border border-slate-300 bg-white text-slate-700 hover:border-emerald-500"
-              title="只看 percentile 前 30% 且过解禁窗口的（可小仓试探 + 可研究）">🟢🟡 仅可操作 <span id="junior-tc-actionable">0</span></button>
-      <button onclick="setJuniorTierFilter('watch')" id="junior-tier-watch"
-              class="junior-tier-btn px-3 py-1 text-xs rounded border border-slate-300 bg-white text-slate-700 hover:border-violet-500"
-              title="可操作 + 只观察（默认）">+ ⚪ 只观察 <span id="junior-tc-watch">0</span></button>
-      <button onclick="setJuniorTierFilter('all')" id="junior-tier-all"
-              class="junior-tier-btn px-3 py-1 text-xs rounded border border-slate-300 bg-white text-slate-700 hover:border-rose-400"
-              title="再加上不碰那批看一眼">+ 🚫 含不碰 <span id="junior-tc-all">0</span></button>
+    <div class="flex flex-wrap gap-3 items-center">
+      <label class="text-xs text-slate-600 font-medium">档位</label>
+      <select id="junior-tier-select" onchange="setJuniorTierFilter(this.value)"
+              class="text-sm border border-slate-300 rounded px-2 py-1 bg-white min-w-[180px]">
+        <option value="actionable">🟢🟡 仅可操作</option>
+        <option value="watch" selected>+ ⚪ 只观察（默认）</option>
+        <option value="all">+ 🚫 含不碰</option>
+      </select>
+      <label class="text-xs text-slate-600 font-medium ml-2">行业/板块</label>
+      <select id="junior-filter-select" onchange="filterJunior(this.value)"
+              class="text-sm border border-slate-300 rounded px-2 py-1 bg-white min-w-[140px]">
+        <option value="all">全部</option>
+      </select>
       <span id="junior-count" class="ml-auto text-xs text-slate-500"></span>
     </div>
     <div id="ipo-junior-table" class="bg-white rounded-xl border border-slate-200 overflow-x-auto"></div>
@@ -5358,18 +5352,9 @@ function _renderJuniorTable_US() {
   let list = visibleAll;
   if (_juniorFilter === "tech") list = visibleAll.filter(x => x.is_tech);
   else if (_juniorFilter === "broken") list = visibleAll.filter(x => (x.vs_issue_pct || 0) < 0);
-  // 高亮活动 filter 按钮
-  ["all","tech","broken","star","chinext","main"].forEach(k => {
-    const b = document.getElementById("junior-filter-" + k);
-    if (b) {
-      const active = k === _juniorFilter;
-      b.classList.toggle("border-violet-500", active);
-      b.classList.toggle("bg-violet-50", active);
-      b.classList.toggle("text-violet-700", active);
-    }
-  });
+  _rebuildJuniorSelects("us", all);
   const ctEl = document.getElementById("junior-count");
-  if (ctEl) ctEl.textContent = `${list.length} / ${all.length} 只 · 档位 [${_juniorTierFilter}]`;
+  if (ctEl) ctEl.textContent = `${list.length} / ${all.length} 只`;
 
   if (!el) return;
   if (!list.length) {
@@ -5575,6 +5560,39 @@ function filterUnlock(k) { _unlockFilter = k; _renderUnlockTable(); }
 function filterJunior(k) { _juniorFilter = k; _renderJuniorTable(); }
 function setJuniorTierFilter(k) { _juniorTierFilter = k; _renderJuniorTable(); }
 
+// step 3 (revised): 按市场重建行业/板块下拉，并写入分档统计
+function _rebuildJuniorSelects(market, all) {
+  const sel = document.getElementById("junior-filter-select");
+  if (sel) {
+    let opts = '<option value="all">全部</option>';
+    if (market === "us") {
+      opts += '<option value="tech">🔬 仅科技</option>';
+      opts += '<option value="broken">仅已破发</option>';
+    } else if (market === "cn") {
+      opts += '<option value="broken">仅已破发</option>';
+      opts += '<option value="star">科创板</option>';
+      opts += '<option value="chinext">创业板</option>';
+      opts += '<option value="main">沪深主板</option>';
+    }
+    sel.innerHTML = opts;
+    // 保留选择 (跨市场不兼容的回退 all)
+    const valid = Array.from(sel.options).map(o => o.value);
+    if (!valid.includes(_juniorFilter)) _juniorFilter = "all";
+    sel.value = _juniorFilter;
+  }
+  const tsel = document.getElementById("junior-tier-select");
+  if (tsel) {
+    const cActionable = all.filter(x => _juniorTierAllowed(x.tier, "actionable")).length;
+    const cWatch      = all.filter(x => _juniorTierAllowed(x.tier, "watch")).length;
+    const cAll        = all.length;
+    tsel.innerHTML =
+      `<option value="actionable">🟢🟡 仅可操作 (${cActionable})</option>` +
+      `<option value="watch">+ ⚪ 只观察 默认 (${cWatch})</option>` +
+      `<option value="all">+ 🚫 含不碰 (${cAll})</option>`;
+    tsel.value = _juniorTierFilter;
+  }
+}
+
 // step 3: tier 包含逻辑 — actionable=可操作两档；watch=+只观察；all=+不碰
 function _juniorTierAllowed(tier, mode) {
   if (mode === "actionable") return tier === "可小仓试探" || tier === "可研究";
@@ -5603,20 +5621,17 @@ function _juniorVerdictCell(x) {
   return `<div class="mt-1.5 leading-snug">${badge}${lines ? " " + lines : ""}</div>`;
 }
 
-function _renderJuniorTierBtns(actionable, watch, all) {
-  const m = { actionable, watch, all };
-  ["actionable","watch","all"].forEach(k => {
-    const b = document.getElementById("junior-tier-" + k);
-    if (b) {
-      const active = k === _juniorTierFilter;
-      b.classList.toggle("bg-violet-50", active);
-      b.classList.toggle("border-violet-500", active);
-      b.classList.toggle("text-violet-700", active);
-    }
-    const cEl = document.getElementById("junior-tc-" + k);
-    if (cEl) cEl.textContent = "(" + m[k] + ")";
-  });
+// 红线明细行 (仅"不碰"项显示) — 给名称单元格用
+function _juniorRedLinesInline(x) {
+  const rls = x.red_lines || [];
+  if (!rls.length) return "";
+  const labels = rls.map(r => `<span class="px-1.5 py-0.5 rounded text-[10px] bg-rose-100 text-rose-700 mr-1" title="${_esc(r.detail || '')}">${_esc(r.label)}</span>`).join("");
+  return `<div class="mt-1 leading-snug">${labels}</div>`;
 }
+
+// sticky 首列样式 — 代码+名称合并；其它列横滚
+const _STICKY_CELL_CLS = "sticky left-0 z-10 bg-white border-r border-slate-200";
+const _STICKY_HEAD_CLS = "sticky left-0 z-20 bg-slate-50 border-r border-slate-200";
 
 function switchIpoMarket(market) {
   _ipoMarket = market;
@@ -9486,7 +9501,7 @@ function _reasonSummary(row) {
   // 仅 1 个 run 时不显示 🆕（全部都是 "首次" 没有信息量），用 banner 告诉用户原因
   const _appearanceTotalRuns = Number(DISCOVERY.appearance_total_runs) || 0;
   if (_appearanceTotalRuns < 2 && wrap) {
-    const bannerHtml = `<div class="bg-violet-50 border border-violet-200 rounded-lg p-3 mb-3 text-[12px] text-violet-800 leading-relaxed">
+    const bannerHtml = `<div class="bg-violet-50 border border-violet-200 rounded-lg p-4 mb-3 mx-3 text-[12px] text-violet-800 leading-relaxed">
       <strong>🆕 新进入推荐标记 · 暂未启用</strong>
       系统昨日（5/25 12:10）切换到新版打分公式，历史推荐数据库刚开始累积。
       明日 daily_refresh 跑出第 2 批推荐后，<strong>"昨日没有 / 今日新进"</strong>的票才会自动标 🆕。
@@ -9534,7 +9549,7 @@ function _reasonSummary(row) {
           el.innerHTML = "";
           return;
         }
-        el.innerHTML = `<div class="bg-slate-50 border border-slate-200 rounded-lg p-2 mb-3 text-[11px] text-slate-500">
+        el.innerHTML = `<div class="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-3 mx-3 text-[11px] text-slate-500">
           📉 当前市场（${_marketLabel(activeMarket)}）无跌出 · 总览：${breakdown}
         </div>`;
         return;
@@ -9552,7 +9567,7 @@ function _reasonSummary(row) {
         const tkUpper = tk.toUpperCase();
         const isHeld = _heldTickers.has(tkUpper);
         const name = String(d.name || "");
-        const rank = d.prev_rank != null ? `5/25 第 ${d.prev_rank} 名` : "上批次";
+        const rank = d.prev_rank != null ? `上次第 ${d.prev_rank} 名` : "上批次";
         const score = d.prev_score != null ? d.prev_score.toFixed(1) : "—";
         const rating = _ratingLabelCN(d.prev_rating);
         const heldBadge = isHeld
@@ -9569,7 +9584,7 @@ function _reasonSummary(row) {
       const titleSuffix = heldCount > 0
         ? `<span class="text-[11px] font-bold text-amber-700 ml-2">⚠️ 含 ${heldCount} 只你持仓</span>`
         : "";
-      el.innerHTML = `<details class="bg-rose-50 border border-rose-200 rounded-lg p-3 mb-3 text-[12px] text-rose-900 leading-relaxed" open>
+      el.innerHTML = `<details class="bg-rose-50 border border-rose-200 rounded-lg p-4 mb-3 mx-3 text-[12px] text-rose-900 leading-relaxed" open>
         <summary class="cursor-pointer font-bold">
           📉 ${_marketLabel(activeMarket)} 上批次在 Top、本批次跌出 (${filtered.length} 只)
           ${titleSuffix}
