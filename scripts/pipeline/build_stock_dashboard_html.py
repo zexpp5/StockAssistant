@@ -977,8 +977,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <th class="px-3 py-2 text-left">因子拆解</th>
             <th class="px-3 py-2 text-right">入选价</th>
             <th class="px-3 py-2 text-right">市值 ($B)</th>
-            <th class="px-3 py-2 text-right" title="入选后 5 天涨幅 - 同期 SPY 涨幅">5d α</th>
-            <th class="px-3 py-2 text-right" title="入选后 20 天涨幅 - 同期 SPY 涨幅">20d α</th>
+            <th class="px-3 py-2 text-right" title="入选后 1 天涨幅 - 同期基准涨幅">1d α</th>
+            <th class="px-3 py-2 text-right" title="入选后 5 天涨幅 - 同期基准涨幅">5d α</th>
+            <th class="px-3 py-2 text-right" title="入选后 20 天涨幅 - 同期基准涨幅">20d α</th>
+            <th class="px-3 py-2 text-right" title="入选后 60 天涨幅 - 同期基准涨幅">60d α</th>
             <th class="px-3 py-2 text-left">推荐依据</th>
             <th class="px-3 py-2 text-left">风险</th>
             <th class="px-3 py-2 text-left">来源</th>
@@ -1525,6 +1527,64 @@ function switchDiscoveryView(view) {
     <span class="ml-auto text-xs text-slate-500" id="backtest-universe-meta">—</span>
   </div>
 
+  <!-- ============ 📋 今天 AI 推荐的组合 (2026-05-27 新增) ============
+       数据源: PLAN_A_V6.plan_v6 (来自 data/latest/plan_a_v5.json)
+       这是当前最新一次 optimize_portfolio 跑出来的目标组合,跟下方"已锁定方案的回测"
+       是两套数据 —— 下方是冻结在锁定日的回测视角(避免 look-ahead bias)。
+  -->
+  <section id="today-plan-card" class="bg-white border-2 border-violet-300 rounded-xl shadow-sm mb-6">
+    <header class="px-5 py-4 border-b border-slate-200 flex items-center justify-between gap-3 flex-wrap">
+      <div>
+        <h3 class="text-lg font-bold text-slate-900">📋 今天 AI 推荐的组合</h3>
+        <p class="text-xs text-slate-500 mt-0.5" id="today-plan-subtitle">—</p>
+      </div>
+      <div class="text-right">
+        <div class="text-[11px] text-slate-500 uppercase tracking-widest">是否已成为锁定方案</div>
+        <div id="today-plan-lock-status" class="text-sm font-medium text-amber-700 mt-0.5">—</div>
+      </div>
+    </header>
+    <!-- 顶部 KPI -->
+    <div id="today-plan-kpis" class="grid grid-cols-2 md:grid-cols-5 gap-3 px-5 pt-4 pb-2"></div>
+    <!-- 表格 -->
+    <div class="px-5 pb-4">
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 text-slate-600 text-[11px] uppercase tracking-wide">
+            <tr>
+              <th class="px-3 py-2 text-left w-[40px]">#</th>
+              <th class="px-3 py-2 text-left">代码</th>
+              <th class="px-3 py-2 text-left">公司名</th>
+              <th class="px-3 py-2 text-right" title="capped_weight: Markowitz + 半 Kelly + ADV + 行业 cap 之后的最终权重">仓位%</th>
+              <th class="px-3 py-2 text-right" title="按本金 50 万估算的金额(USD)">金额</th>
+              <th class="px-3 py-2 text-right" title="V2 推荐池综合分(估值+动量+数据质量+覆盖度)">V2 总分</th>
+              <th class="px-3 py-2 text-right" title="Piotroski F-Score: 9 项财务体检,得分越高越好">F</th>
+              <th class="px-3 py-2 text-left">信号</th>
+              <th class="px-3 py-2 text-left">主题</th>
+            </tr>
+          </thead>
+          <tbody id="today-plan-table-body" class="divide-y divide-slate-100"></tbody>
+        </table>
+      </div>
+      <p id="today-plan-empty" class="hidden text-sm text-slate-500 py-6 text-center">
+        plan_a_v5.json 缺失或为空 — 请先跑 <code class="text-xs bg-slate-100 px-1 rounded">python3 -m stock_research.jobs.optimize_portfolio</code>
+      </p>
+      <p class="text-[11px] text-slate-400 mt-3 leading-relaxed">
+        💡 这是最新一次 optimize_portfolio 算出的目标组合 — 跟下方"已锁定方案的回测"是两套数据。
+        想让它生效成"新的锁定日方案"(影响下方回测),需要每周一让 daily_refresh 自动调仓,或人工触发。
+      </p>
+    </div>
+  </section>
+
+  <!-- 下方现有内容: 已锁定方案的回测追踪 (NAV / Sharpe / 单股贡献) -->
+  <div class="mb-3 flex items-center gap-3 flex-wrap">
+    <h3 class="text-lg font-bold text-slate-900">📊 已锁定方案的回测追踪</h3>
+    <span id="locked-plan-meta" class="text-xs text-slate-500">—</span>
+  </div>
+  <p class="text-xs text-slate-500 mb-4">
+    这部分跟上方"今天 AI 推荐"<strong>不是同一套数据</strong> — 是首次锁定日那批组合的实盘跟踪。
+    为避免 look-ahead bias(用今天的股票回填历史曲线),锁定后的 NAV/Sharpe/贡献表<strong>冻结</strong>不会因为修候选池而变。
+  </p>
+
   <div class="bg-white border border-slate-200 rounded-xl p-4 mb-5">
     <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
       <h3 class="text-base font-bold text-slate-900">先看这三件事</h3>
@@ -1837,13 +1897,31 @@ function switchDiscoveryView(view) {
       <h2 class="text-2xl font-bold text-slate-900">催化信号验证</h2>
     </div>
     <p class="text-sm text-slate-600 leading-relaxed">
-      回测每类 catalyst 事件（盈警 / 内部人交易 / 8-K Item / 业绩超预期 等）
-      在 T+1/5/20 个交易日的<strong>平均 alpha</strong>（vs SPY / ^HSI / 000300.SS 基准）。
-      <span class="text-rose-700 font-medium">回答"这套催化系统到底有没有 alpha"。</span>
+      在 AI 推荐里你会看到每只票下面有一行「📰 5/21 EPS 超预期 +58%」这种催化句。
+      这一页用<strong>真实历史数据</strong>检验：<strong>这些催化信号事后真的会让股价涨吗？</strong>
     </p>
-    <div class="mt-2 text-[11px] text-slate-500">
-      数据源：<code class="font-mono">data/latest/catalyst_validation.json</code>
-      （由 <code class="font-mono">python3 scripts/tools/evaluate_catalyst_signals.py</code> 生成）
+  </div>
+
+  <!-- 教学卡：怎么读这一页 -->
+  <div class="bg-amber-50 border border-amber-200 rounded-xl p-5 mb-5">
+    <h3 class="font-bold text-amber-900 mb-3">📖 怎么读这一页（新人必读）</h3>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-slate-800 leading-relaxed">
+      <div>
+        <div class="font-bold mb-1">🎯 这里在干嘛？</div>
+        <p>把过去 60 天的所有催化事件（业绩超预期 / 内部人买卖 / 高管变动 / 重大协议 ……）拿出来，看每类事件发生后<strong>第 1 天 / 第 5 天 / 第 20 天</strong>股价相对大盘多涨了几个百分点。</p>
+      </div>
+      <div>
+        <div class="font-bold mb-1">💡 为啥重要？</div>
+        <p>如果某类催化历史平均 <strong>+5% / 命中率 70%</strong>，说明它真有 alpha，看到就该跟；如果 <strong>-2% / 命中率 30%</strong>，看到就该回避。把"催化系统"从"看起来好用"变成"统计可信"。</p>
+      </div>
+      <div>
+        <div class="font-bold mb-1">📐 "超额涨幅"是什么？</div>
+        <p>不是看股价涨多少，而是<strong>减掉大盘同期涨幅</strong>。某只票事件后 5 天涨 3%，但 SPY 同期涨 2%，超额涨幅 = 3% - 2% = <strong>+1%</strong>。过滤掉大盘整体走势，留下属于这个事件的 alpha。基准：美股 SPY / 港股 恒生指数 / A 股 沪深 300。</p>
+      </div>
+      <div>
+        <div class="font-bold mb-1">🔧 怎么用结论？</div>
+        <p>每天 AI 推荐里出现一只票配某类催化，回到这页查那类催化的历史表现：<span class="text-emerald-700 font-medium">🚀 强正 + 样本 ≥ 20</span> = 可参考；<span class="text-slate-500">小样本(&lt;5)</span> = 数据不够先观察；<span class="text-rose-600">↘️ 弱反向</span> = 看到反而要警觉。</p>
+      </div>
     </div>
   </div>
 
@@ -1851,31 +1929,37 @@ function switchDiscoveryView(view) {
 
   <div class="overflow-x-auto">
     <table class="w-full text-sm bg-white rounded-lg overflow-hidden border border-slate-200">
-      <thead class="bg-slate-100 text-[11px] text-slate-600 uppercase">
+      <thead class="bg-slate-100 text-[11px] text-slate-600">
         <tr>
-          <th class="px-3 py-2 text-left">事件类型</th>
-          <th class="px-3 py-2 text-right">样本 n</th>
-          <th class="px-3 py-2 text-right" title="T+1 个交易日 alpha 均值">T+1 mean%</th>
-          <th class="px-3 py-2 text-right" title="T+5 alpha 均值">T+5 mean%</th>
-          <th class="px-3 py-2 text-right" title="T+5 alpha 中位数">T+5 median%</th>
-          <th class="px-3 py-2 text-right" title="T+5 hit pct (alpha>0 比例)">T+5 hit%</th>
-          <th class="px-3 py-2 text-right" title="T+20 alpha 均值">T+20 mean%</th>
-          <th class="px-3 py-2 text-right" title="T+5 标准差">σ</th>
-          <th class="px-3 py-2 text-center" title="T+1/5/20 alpha 趋势 sparkline">趋势</th>
-          <th class="px-3 py-2 text-left">信号强度</th>
+          <th class="px-3 py-2 text-left">催化类型</th>
+          <th class="px-3 py-2 text-right" title="历史发生过多少次,样本越大结论越可信">样本</th>
+          <th class="px-3 py-2 text-right" title="事件发生后第 1 个交易日,股票超过大盘的涨幅%">第 1 天<br>超额涨幅</th>
+          <th class="px-3 py-2 text-right" title="事件发生后第 5 个交易日,股票超过大盘的涨幅% (核心指标)">第 5 天<br>超额涨幅</th>
+          <th class="px-3 py-2 text-right" title="第 5 天的中位数 (排除极端值更稳健)">5 天<br>中位数</th>
+          <th class="px-3 py-2 text-right" title="第 5 天超额涨幅 > 0 的比例">命中率</th>
+          <th class="px-3 py-2 text-right" title="事件发生后第 20 个交易日 (约一个月)的超额涨幅">第 20 天</th>
+          <th class="px-3 py-2 text-right" title="样本之间的离散度,越小越稳定">波动</th>
+          <th class="px-3 py-2 text-center" title="三时点超额涨幅柱状图 · 绿向上=涨 / 红向下=跌 · 满高度 ±5%">趋势图</th>
+          <th class="px-3 py-2 text-left">结论</th>
         </tr>
       </thead>
       <tbody id="catalyst-validation-body"></tbody>
     </table>
   </div>
 
-  <div class="mt-4 text-[11px] text-slate-500 leading-relaxed">
-    <strong>读法：</strong>
-    🚀 mean ≥ +3% / hit ≥ 60% = 强正信号 ·
-    📈 mean &gt; 0 = 弱正 ·
-    📉 mean &lt; 0 = 反向（事件后下跌） ·
-    样本 n &lt; 5 标灰色（统计意义弱） ·
-    完整 JSON 含 best / worst / stdev 详情。
+  <div class="mt-4 bg-slate-50 border border-slate-200 rounded-lg p-3 text-[12px] text-slate-700 leading-relaxed">
+    <div class="font-bold mb-2">🏷️ 结论分档</div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+      <div><span class="text-emerald-700 font-bold">🚀 强正信号</span>：5 天平均超大盘 ≥ +3% 且 命中率 ≥ 60% → <strong>看到该跟</strong></div>
+      <div><span class="text-emerald-600">📈 弱正</span>：平均涨，但幅度或命中率不够强 → 可关注</div>
+      <div><span class="text-rose-500">↘️ 弱反向</span>：平均跌但跌幅 &lt; 3% → 谨慎</div>
+      <div><span class="text-rose-700 font-bold">📉 强反向</span>：平均跌幅 ≥ 3% → <strong>看到反而该回避</strong></div>
+      <div class="opacity-60 md:col-span-2 mt-1">⚠️ 灰色行：样本 &lt; 5 次，统计意义弱，只参考不下结论</div>
+    </div>
+    <div class="mt-3 pt-2 border-t border-slate-200 text-[11px] text-slate-500">
+      数据源：<code class="font-mono">data/latest/catalyst_validation.json</code>
+      （每天 daily_refresh 重跑 <code class="font-mono">evaluate_catalyst_signals.py</code> 自动累积，样本会越来越大）
+    </div>
   </div>
 </section>
 
@@ -5173,11 +5257,10 @@ function renderCatalystValidation() {
     return;
   }
   meta.innerHTML = `
-    <span>📅 ${d.generated_at ? d.generated_at.slice(0,16).replace("T"," ") : "?"}</span>
+    <span>📅 数据更新于 ${d.generated_at ? d.generated_at.slice(0,16).replace("T"," ") : "?"}</span>
     &nbsp;·&nbsp;事件总数 <strong>${d.n_events_total ?? "?"}</strong>
-    &nbsp;·&nbsp;入回测 <strong>${d.n_events_with_price ?? "?"}</strong>
-    &nbsp;·&nbsp;无价格跳过 ${d.no_price_data ?? "?"}
-    &nbsp;·&nbsp;<span class="text-slate-500">基准 US=${d.benchmark_us || "?"} / HK=${d.benchmark_hk || "?"} / CN=${d.benchmark_cn || "?"}</span>
+    &nbsp;·&nbsp;有股价数据可回测 <strong>${d.n_events_with_price ?? "?"}</strong>
+    &nbsp;·&nbsp;<span class="text-slate-500" title="对比基准: 美股 SPY / 港股 恒生指数 / A 股 沪深 300">基准已应用</span>
   `;
   // 排序：按 T+5 mean 降序
   const rows = keys.map(k => {
@@ -5207,19 +5290,60 @@ function renderCatalystValidation() {
     if (mean < -3) return '<span class="text-rose-700 font-bold">📉 强反向</span>';
     return '<span class="text-rose-500">↘️ 弱反向</span>';
   };
+  // 英文事件类型 → 中文（每条带一句"这是什么"）
+  const TYPE_LABELS = {
+    "ma_takeover": "🤝 并购/要约（公司被收购）",
+    "earnings_preview": "📢 业绩预告（盈警/盈喜）",
+    "earnings_announcement": "📋 业绩公告（正式财报披露）",
+    "earnings::✅ 超预期 >+10%": "✅ 业绩大超预期 (>+10%)",
+    "earnings::↗️ 超预期 0~+10%": "↗️ 业绩超预期 (0~+10%)",
+    "earnings::↘️ 差预期 -10%~0": "↘️ 业绩差预期 (-10%~0)",
+    "earnings::❌ 差预期 <-10%": "❌ 业绩大差预期 (<-10%)",
+    "earnings": "📊 业绩(未细分方向)",
+    "buyback": "💰 公司回购股份",
+    "insider_change": "👥 大股东权益变动",
+    "insider_net_buy": "🟢 内部人净买入 (高管增持)",
+    "insider_net_sell": "🔴 内部人净卖出 (高管减持)",
+    "trading_halt": "🛑 停牌/复牌",
+    "ma_takeover": "🤝 并购/要约",
+    "proxy": "🗳️ 股东大会/委托书",
+    "passive_holder_change": "👥 13G 大股东被动持仓",
+    "active_holder_change": "🎯 13D 大股东主动持仓 (常含收购意图)",
+    "material_event": "📣 8-K 重大事件 (未细分子类)",
+    "material_event::📜 重大协议": "📜 8-K 重大商业协议",
+    "material_event::👤 高管变动": "👤 8-K 高管离任/任命",
+    "material_event::⚠️ 裁员/退出": "⚠️ 8-K 裁员/业务退出",
+    "material_event::⚠️ 资产减值": "⚠️ 8-K 资产减值",
+    "material_event::🤝 收购完成": "🤝 8-K 收购完成",
+    "material_event::🛑 退市通知": "🛑 8-K 退市通知",
+    "material_event::⚠️ 破产": "⚠️ 8-K 申请破产",
+    "material_event::📣 重大披露": "📣 8-K 重大信息披露 (FD)",
+    "material_event::🗳️ 股东表决结果": "🗳️ 8-K 股东表决结果",
+    "material_event::📋 财报": "📋 8-K 财报发布",
+    "material_event::📰 其他事件": "📰 8-K 其他事件",
+    "material_event::📎 财报附件": "📎 8-K 财报附件",
+    "material_event::📜 章程修订": "📜 8-K 公司章程修订",
+  };
+  const labelOf = k => {
+    if (TYPE_LABELS[k]) return TYPE_LABELS[k];
+    // 兜底：material_event::Item X.XX 这种
+    if (k.startsWith("material_event::")) return `📣 8-K ${k.split("::")[1]}`;
+    return k;
+  };
   body.innerHTML = rows.map(r => {
     const dim = r.n < 5 ? 'opacity-60' : '';
     const sparkline = _catalystSparkline(r.h1.mean, r.h5.mean, r.h20.mean);
+    const label = labelOf(r.key);
     return `<tr class="hover:bg-slate-50 ${dim}">
-      <td class="px-3 py-2 text-slate-800">${r.key}</td>
+      <td class="px-3 py-2 text-slate-800" title="${r.key}">${label}</td>
       <td class="px-3 py-2 text-right font-mono text-xs">${r.n}</td>
-      <td class="px-3 py-2 text-right font-mono text-xs ${colorClass(r.h1.mean)}">${fmt(r.h1.mean)}</td>
-      <td class="px-3 py-2 text-right font-mono text-xs ${colorClass(r.h5.mean)}">${fmt(r.h5.mean)}</td>
-      <td class="px-3 py-2 text-right font-mono text-xs ${colorClass(r.h5.median)}">${fmt(r.h5.median)}</td>
-      <td class="px-3 py-2 text-right font-mono text-xs text-slate-600">${(r.h5.hit_pos ?? 0).toFixed(1)}</td>
-      <td class="px-3 py-2 text-right font-mono text-xs ${colorClass(r.h20.mean)}">${fmt(r.h20.mean)}</td>
+      <td class="px-3 py-2 text-right font-mono text-xs ${colorClass(r.h1.mean)}">${fmt(r.h1.mean)}%</td>
+      <td class="px-3 py-2 text-right font-mono text-xs ${colorClass(r.h5.mean)}">${fmt(r.h5.mean)}%</td>
+      <td class="px-3 py-2 text-right font-mono text-xs ${colorClass(r.h5.median)}">${fmt(r.h5.median)}%</td>
+      <td class="px-3 py-2 text-right font-mono text-xs text-slate-600">${(r.h5.hit_pos ?? 0).toFixed(1)}%</td>
+      <td class="px-3 py-2 text-right font-mono text-xs ${colorClass(r.h20.mean)}">${fmt(r.h20.mean)}%</td>
       <td class="px-3 py-2 text-right font-mono text-xs text-slate-500">${(r.h5.stdev ?? 0).toFixed(2)}</td>
-      <td class="px-3 py-2 text-center" title="T+1=${fmt(r.h1.mean)}% T+5=${fmt(r.h5.mean)}% T+20=${fmt(r.h20.mean)}%">${sparkline}</td>
+      <td class="px-3 py-2 text-center" title="第1天=${fmt(r.h1.mean)}% 第5天=${fmt(r.h5.mean)}% 第20天=${fmt(r.h20.mean)}%">${sparkline}</td>
       <td class="px-3 py-2 text-left text-xs">${sigLabel(r.h5.mean, r.h5.hit_pos)}</td>
     </tr>`;
   }).join("");
@@ -8710,6 +8834,140 @@ function goToAIRecommend(ev) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
+// ============ 📋 今天 AI 推荐的组合 (2026-05-27 新增) ============
+// 数据源: PLAN_A_V6 (来自 plan_a_v5.json) + PICKS (V2 picks 拿 name/total_score/theme)
+// 跟下方"已锁定方案回测"是两套数据流 —— 这里是最新 plan,下方是冻结的 inception snapshot
+function renderTodayPlan() {
+  const plan = (typeof PLAN_A_V6 !== 'undefined' && PLAN_A_V6) || {};
+  const tbody = document.getElementById('today-plan-table-body');
+  const emptyEl = document.getElementById('today-plan-empty');
+  const subtitleEl = document.getElementById('today-plan-subtitle');
+  const kpisEl = document.getElementById('today-plan-kpis');
+  const lockStatusEl = document.getElementById('today-plan-lock-status');
+  const lockedMetaEl = document.getElementById('locked-plan-meta');
+  if (!tbody || !emptyEl) return;
+
+  const rows = plan.plan_v6 || plan.plan_v5 || plan.plan || [];
+  if (!Array.isArray(rows) || rows.length === 0) {
+    tbody.innerHTML = '';
+    emptyEl.classList.remove('hidden');
+    if (subtitleEl) subtitleEl.textContent = '—';
+    if (kpisEl) kpisEl.innerHTML = '';
+    return;
+  }
+  emptyEl.classList.add('hidden');
+
+  // 副标题：生成时间 + 候选池信息
+  const gen = (plan.generated_at || '').slice(0, 16).replace('T', ' ');
+  const u = plan.candidate_universe || {};
+  if (subtitleEl) {
+    subtitleEl.textContent = `生成时间 ${gen || '?'} · 从 ${u.count || '?'} 只 ${u.market_scope || ''} 候选挑出 ${rows.length} 只`;
+  }
+
+  // 锁定状态：跟下方回测的 inception 比较
+  const bt = (typeof _BACKTEST !== 'undefined' && _BACKTEST) || {};
+  const inception = bt.inception_date || '';
+  const today = (gen || '').slice(0, 10);
+  if (lockStatusEl) {
+    if (inception && today && inception < today) {
+      lockStatusEl.innerHTML = `<span class="text-amber-700">未锁定</span><div class="text-[10px] text-slate-500">下方回测仍跟踪 ${inception}</div>`;
+    } else if (inception && today && inception === today) {
+      lockStatusEl.innerHTML = `<span class="text-emerald-700">已是锁定方案</span>`;
+    } else {
+      lockStatusEl.innerHTML = `<span class="text-slate-500">—</span>`;
+    }
+  }
+  if (lockedMetaEl) {
+    lockedMetaEl.textContent = inception ? `锁定于 ${inception} · 基线 ${bt.baseline_date || '?'} · 跟踪 ${(bt.metrics && bt.metrics.n_tracked_days) || 0} 天` : '—';
+  }
+
+  // KPI 卡片
+  const m = plan.portfolio_metrics || {};
+  const constraints = plan.constraints || {};
+  const grossPct = ((constraints.gross_exposure_effective || 0) * 100).toFixed(1);
+  const cashPct = ((constraints.cash_pct_effective || 0) * 100).toFixed(1);
+  const sharpe = (m.annual_sharpe != null) ? Number(m.annual_sharpe).toFixed(2) : '—';
+  const annRet = (m.annual_return_pct != null) ? Number(m.annual_return_pct).toFixed(1) + '%' : '—';
+  const annVol = (m.annual_vol_pct != null) ? Number(m.annual_vol_pct).toFixed(1) + '%' : '—';
+  const netAlpha = (m.net_alpha_pct != null) ? Number(m.net_alpha_pct).toFixed(1) + '%' : '—';
+  if (kpisEl) {
+    kpisEl.innerHTML = `
+      <div class="bg-violet-50 rounded-lg p-3 text-center">
+        <div class="text-2xl font-bold text-violet-900">${rows.length}</div>
+        <div class="text-[11px] text-slate-600 mt-0.5">仓位数</div>
+      </div>
+      <div class="bg-slate-50 rounded-lg p-3 text-center">
+        <div class="text-2xl font-bold text-slate-900">${grossPct}%</div>
+        <div class="text-[11px] text-slate-600 mt-0.5">总仓位 · 现金 ${cashPct}%</div>
+      </div>
+      <div class="bg-slate-50 rounded-lg p-3 text-center">
+        <div class="text-2xl font-bold text-slate-900">${sharpe}</div>
+        <div class="text-[11px] text-slate-600 mt-0.5">年化 Sharpe(预期)</div>
+      </div>
+      <div class="bg-emerald-50 rounded-lg p-3 text-center">
+        <div class="text-2xl font-bold text-emerald-800">${annRet}</div>
+        <div class="text-[11px] text-slate-600 mt-0.5">年化收益(预期)</div>
+      </div>
+      <div class="bg-slate-50 rounded-lg p-3 text-center">
+        <div class="text-2xl font-bold text-slate-900">${annVol}</div>
+        <div class="text-[11px] text-slate-600 mt-0.5">年化波动 · α ${netAlpha}</div>
+      </div>
+    `;
+  }
+
+  // join PICKS 拿 name + total_score + theme
+  const picksLookup = {};
+  if (typeof PICKS !== 'undefined' && Array.isArray(PICKS)) {
+    PICKS.forEach(p => {
+      const k = (p.code || p.symbol || '').toUpperCase();
+      if (k) picksLookup[k] = p;
+    });
+  }
+
+  // 按 capped_weight 降序
+  const sortedRows = rows.slice().sort((a, b) => {
+    const wa = a.capped_weight || a.target_weight || a.weight || 0;
+    const wb = b.capped_weight || b.target_weight || b.weight || 0;
+    return wb - wa;
+  });
+
+  const fmtPct = v => (v == null) ? '—' : (Number(v) * 100).toFixed(2) + '%';
+  const fmtAmt = v => (v == null) ? '—' : Math.round(Number(v)).toLocaleString();
+  const fmtScore = v => (v == null) ? '—' : Number(v).toFixed(1);
+
+  const signalBadge = sig => {
+    if (!sig) return '';
+    const sig_low = String(sig).toLowerCase();
+    if (sig_low === 'buy') return '<span class="inline-flex px-1.5 py-0.5 rounded text-[10px] bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200">买</span>';
+    if (sig_low === 'sell') return '<span class="inline-flex px-1.5 py-0.5 rounded text-[10px] bg-rose-50 text-rose-700 ring-1 ring-rose-200">卖</span>';
+    if (sig_low === 'hold') return '<span class="inline-flex px-1.5 py-0.5 rounded text-[10px] bg-slate-100 text-slate-600 ring-1 ring-slate-200">持</span>';
+    return `<span class="text-[11px] text-slate-500">${sig}</span>`;
+  };
+
+  tbody.innerHTML = sortedRows.map((r, i) => {
+    const ticker = (r.ticker || '').toUpperCase();
+    const pick = picksLookup[ticker] || {};
+    const name = pick.name || ticker;
+    const w = r.capped_weight || r.target_weight || r.weight || 0;
+    const totalScore = pick.total_score;
+    const theme = (typeof WATCHLIST_CHAIN_INFO !== 'undefined' && WATCHLIST_CHAIN_INFO[ticker] && WATCHLIST_CHAIN_INFO[ticker].chain)
+      || pick.theme || '';
+    return `
+      <tr class="hover:bg-slate-50">
+        <td class="px-3 py-2 text-slate-500">${i + 1}</td>
+        <td class="px-3 py-2 font-mono font-semibold text-violet-700">${ticker}</td>
+        <td class="px-3 py-2 text-slate-800">${name}</td>
+        <td class="px-3 py-2 text-right font-mono font-bold text-violet-900">${fmtPct(w)}</td>
+        <td class="px-3 py-2 text-right font-mono text-slate-600">$${fmtAmt(r.amount)}</td>
+        <td class="px-3 py-2 text-right font-mono text-slate-700">${fmtScore(totalScore)}</td>
+        <td class="px-3 py-2 text-right font-mono text-slate-600">${r.f_score != null ? Number(r.f_score).toFixed(0) : '—'}</td>
+        <td class="px-3 py-2">${signalBadge(pick.signal)}</td>
+        <td class="px-3 py-2 text-xs text-slate-600">${theme || '—'}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
 function renderBacktestUniverseBanner(data) {
   const u = data && data.candidate_universe;
   const countEl = document.getElementById('backtest-universe-count');
@@ -8741,6 +8999,7 @@ function renderPlanBacktest() {
   const bannerEl = document.getElementById('backtest-inception-banner');
   const rebalanceEl = document.getElementById('backtest-rebalance-log');
   renderBacktestUniverseBanner(data);
+  renderTodayPlan();
   if (!metricsEl) return;
 
   if (!data.dates || data.dates.length === 0) {
@@ -10306,10 +10565,12 @@ function _reasonSummary(row) {
         if (t.endsWith(".L"))  return "🇬🇧 英股";
         return "🇺🇸 美股";
       })();
-      // 从历史里查 alpha (用本 ticker 最早一次推荐的 5d/20d alpha — 它跟踪时间最长)
+      // 从历史里查 alpha (用本 ticker 最早一次推荐的 1d/5d/20d/60d alpha — 它跟踪时间最长)
       const track = _lookupTrackingForToday(c.ticker);
+      const alpha1 = track ? track.alpha_1d : null;
       const alpha5 = track ? track.alpha_5d : null;
       const alpha20 = track ? track.alpha_20d : null;
+      const alpha60 = track ? track.alpha_60d : null;
       const tk = _esc(c.ticker);
       return `<tr class="hover:bg-slate-50">
         <td class="disc-sticky-rank px-3 py-2 font-mono text-slate-500">
@@ -10333,8 +10594,10 @@ function _reasonSummary(row) {
         <td class="px-3 py-2 min-w-[210px]">${factorHtml}</td>
         <td class="px-3 py-2 text-right font-mono text-slate-700 whitespace-nowrap">${entryText}</td>
         <td class="px-3 py-2 text-right font-mono text-slate-700">${cap}</td>
+        <td class="px-3 py-2 text-right">${_fmtAlpha(alpha1)}</td>
         <td class="px-3 py-2 text-right">${_fmtAlpha(alpha5)}</td>
         <td class="px-3 py-2 text-right">${_fmtAlpha(alpha20)}</td>
+        <td class="px-3 py-2 text-right">${_fmtAlpha(alpha60)}</td>
         <td class="px-3 py-2 text-xs text-slate-700 min-w-[260px] leading-snug">${_esc(reasonText)}</td>
         <td class="disc-cell-wrap px-3 py-2 text-xs min-w-[200px] max-w-[320px] leading-snug">${_riskSummaryHtml(c, 1)}</td>
         <td class="px-3 py-2">${etfs}</td>
@@ -10460,6 +10723,17 @@ function _reasonSummary(row) {
         </div>`;
 
         const _alphaBadge = v => (v == null) ? "" : (v > 5 ? "🚀 " : (v < -5 ? "⚠️ " : ""));
+        // 历史 row 缺的字段从 DISCOVERY.candidates lookup 兜底（市值/ETF）；找不到显示 "—"
+        const _capLookup = (tk) => {
+          const c = Array.isArray(DISCOVERY?.candidates)
+            ? DISCOVERY.candidates.find(x => (x.ticker || x.code) === tk) : null;
+          return c?.market_cap_usd ? (c.market_cap_usd / 1e9).toFixed(1) : "—";
+        };
+        const _etfsLookup = (tk) => {
+          const c = Array.isArray(DISCOVERY?.candidates)
+            ? DISCOVERY.candidates.find(x => (x.ticker || x.code) === tk) : null;
+          return (c?.etfs || []).map(e => `<span class="inline-block px-1 py-0.5 mr-0.5 text-[10px] bg-indigo-100 text-indigo-700 rounded">${e}</span>`).join("") || "—";
+        };
         const rows = recs.map(r => {
           const a1 = _alphaBadge(r.alpha_1d) + _fmtAlpha(r.alpha_1d);
           const a5 = _alphaBadge(r.alpha_5d) + _fmtAlpha(r.alpha_5d);
@@ -10471,21 +10745,36 @@ function _reasonSummary(row) {
           const newTag = _isFirstSeen(r, d)
             ? ` <span title="首次进入推荐：${d}" class="inline-flex px-1.5 py-0.5 rounded border border-violet-300 bg-violet-50 text-violet-700 text-[10px] font-bold align-middle">🆕</span>`
             : "";
+          const theme = _esc(chainThemeFor(r.ticker) || "");
+          const cap = _capLookup(r.ticker);
+          const etfs = _etfsLookup(r.ticker);
+          const tk = _esc(r.ticker || "");
           return `<tr class="hover:bg-slate-50">
             <td class="px-2 py-1 font-mono text-xs text-slate-500">#${r.rank}</td>
             <td class="px-2 py-1 font-mono text-xs font-bold">${r.ticker}${newTag}</td>
             <td class="px-2 py-1 text-xs text-slate-700 max-w-[180px] truncate">${r.name || ""}</td>
-            <td class="px-2 py-1 text-xs whitespace-nowrap">${market}</td>
             <td class="px-2 py-1 text-xs whitespace-nowrap">${_signalBadge(r)}</td>
+            <td class="px-2 py-1 text-xs whitespace-nowrap">${market}</td>
+            <td class="px-2 py-1 text-xs text-slate-600 whitespace-nowrap">${theme || "—"}</td>
             <td class="px-2 py-1 text-right text-xs font-mono">${score}</td>
             <td class="px-2 py-1 text-xs min-w-[190px]">${_factorBreakdownHtml(r, true)}</td>
             <td class="px-2 py-1 text-right text-xs font-mono whitespace-nowrap">${_fmtEntryPrice(r)}</td>
-            <td class="px-2 py-1 text-xs text-slate-700 min-w-[260px] max-w-[360px] whitespace-normal leading-snug">${_esc(_reasonSummary(r))}</td>
-            <td class="px-2 py-1 text-xs min-w-[180px] max-w-[260px] whitespace-normal leading-snug">${_riskSummaryHtml(r, 1)}</td>
+            <td class="px-2 py-1 text-right text-xs font-mono text-slate-700">${cap}</td>
             <td class="px-2 py-1 text-right text-xs">${a1}</td>
             <td class="px-2 py-1 text-right text-xs">${a5}</td>
             <td class="px-2 py-1 text-right text-xs">${a20}</td>
             <td class="px-2 py-1 text-right text-xs">${a60}</td>
+            <td class="px-2 py-1 text-xs text-slate-700 min-w-[260px] max-w-[360px] whitespace-normal leading-snug">${_esc(_reasonSummary(r))}</td>
+            <td class="px-2 py-1 text-xs min-w-[180px] max-w-[260px] whitespace-normal leading-snug">${_riskSummaryHtml(r, 1)}</td>
+            <td class="px-2 py-1 text-xs whitespace-nowrap">${etfs}</td>
+            <td class="px-2 py-1 text-center text-[10px] text-slate-500 whitespace-nowrap" title="本批次推荐时间">${r.run_date || d || "—"}</td>
+            <td class="px-2 py-1 text-center">
+              <button data-ticker="${tk}"
+                      onclick="addDiscoveryToWatchlist('${tk}', this)"
+                      class="discovery-add-btn px-1.5 py-0.5 text-[10px] bg-violet-600 hover:bg-violet-700 text-white rounded transition whitespace-nowrap">
+                ➕
+              </button>
+            </td>
           </tr>`;
         }).join("");
 
@@ -10498,18 +10787,23 @@ function _reasonSummary(row) {
                 <tr>
                   <th class="px-2 py-1 text-left">排名</th>
                   <th class="px-2 py-1 text-left">代码</th>
-                  <th class="px-2 py-1 text-left">名字</th>
-                  <th class="px-2 py-1 text-left">市场</th>
+                  <th class="px-2 py-1 text-left">名称</th>
                   <th class="px-2 py-1 text-left">信号</th>
-                  <th class="px-2 py-1 text-right">分数</th>
+                  <th class="px-2 py-1 text-left">市场</th>
+                  <th class="px-2 py-1 text-left">主题</th>
+                  <th class="px-2 py-1 text-right">综合分</th>
                   <th class="px-2 py-1 text-left">因子拆解</th>
                   <th class="px-2 py-1 text-right">入选价</th>
+                  <th class="px-2 py-1 text-right">市值 ($B)</th>
+                  <th class="px-2 py-1 text-right" title="入选后 1 天 alpha">1d α</th>
+                  <th class="px-2 py-1 text-right" title="入选后 5 天 alpha">5d α</th>
+                  <th class="px-2 py-1 text-right" title="入选后 20 天 alpha">20d α</th>
+                  <th class="px-2 py-1 text-right" title="入选后 60 天 alpha">60d α</th>
                   <th class="px-2 py-1 text-left">推荐依据</th>
                   <th class="px-2 py-1 text-left">风险</th>
-                  <th class="px-2 py-1 text-right" title="α > +5% 大涨命中 🚀 · α < -5% 大跌掉队 ⚠️">1d α</th>
-                  <th class="px-2 py-1 text-right" title="α > +5% 大涨命中 🚀 · α < -5% 大跌掉队 ⚠️">5d α</th>
-                  <th class="px-2 py-1 text-right" title="α > +5% 大涨命中 🚀 · α < -5% 大跌掉队 ⚠️">20d α</th>
-                  <th class="px-2 py-1 text-right" title="α > +5% 大涨命中 🚀 · α < -5% 大跌掉队 ⚠️">60d α</th>
+                  <th class="px-2 py-1 text-left">来源</th>
+                  <th class="px-2 py-1 text-center">推荐时间</th>
+                  <th class="px-2 py-1 text-center">操作</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-slate-100">${rows}</tbody>
