@@ -166,6 +166,52 @@ def fetch_cls_alerts() -> list[dict]:
     return out
 
 
+def fetch_hkma_press(limit: int = 20) -> list[dict]:
+    """香港金融管理局 (HKMA) 新闻发布 — 港股相关货币政策 / 监管声明。
+
+    页面：https://www.hkma.gov.hk/eng/news-and-media/press-releases/
+    解析 server-rendered HTML 拿 URL（含日期）+ 标题。不拉详情页（只 title 关键词匹配）。
+    """
+    try:
+        import requests
+    except ImportError:
+        logger.warning("requests not installed, skip HKMA")
+        return []
+    import re as _re
+    url = "https://www.hkma.gov.hk/eng/news-and-media/press-releases/"
+    try:
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0 LinearV"}, timeout=10)
+        if r.status_code != 200:
+            return []
+        html = r.text
+    except Exception as e:
+        logger.warning("HKMA press fetch err: %s", e)
+        return []
+
+    pat = _re.compile(
+        r'href="(/eng/news-and-media/press-releases/(\d{4})/(\d{2})/(\d{8}-\d+)/)"[^>]*>([^<]+)</a>'
+    )
+    out: list[dict] = []
+    seen: set[str] = set()
+    for full_url, yyyy, mm, ymd_n, title in pat.findall(html)[:limit * 2]:
+        if full_url in seen:
+            continue
+        seen.add(full_url)
+        try:
+            d = date(int(yyyy), int(mm), int(ymd_n[6:8]))
+        except Exception:
+            continue
+        out.append({
+            "date": d,
+            "title": title.strip(),
+            "content": "",  # 不拉详情减少请求；title 已含主信号
+            "source": "hkma.gov.hk/press-releases",
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
 # ───────────── 政策识别 ─────────────
 
 def _detect_authority(text: str) -> str:
@@ -197,7 +243,9 @@ def _score(authority: str, themes: list[str], has_verb: bool) -> int:
         # 国务院/中央 = 3 分；部委 = 2 分；其他 = 1 分
         if authority in ("国务院", "中央", "中共中央"):
             s += 3
-        elif authority in ("国家发改委", "发改委", "工信部", "财政部", "央行", "证监会"):
+        elif authority in ("国家发改委", "发改委", "工信部", "财政部", "央行", "证监会",
+                            # 港股监管机构等同部委级
+                            "HKMA", "香港金管局", "香港证监会", "SFC", "港交所", "HKEX", "港澳办"):
             s += 2
         else:
             s += 1
@@ -226,6 +274,16 @@ def detect_policy_events(news_items: list[dict],
         themes = _match_themes(full)
         has_verb = _has_policy_verb(full)
 
+        # 来源是港股监管机构自身（HKMA / SFC / HKEX），自动当权威
+        src_lower = (item.get("source", "") or "").lower()
+        if not authority:
+            if "hkma" in src_lower:
+                authority = "HKMA"
+            elif "sfc" in src_lower:
+                authority = "香港证监会"
+            elif "hkex" in src_lower:
+                authority = "港交所"
+
         # 过滤：必须有权威或（政策动词+主题）
         if not authority and not (has_verb and themes):
             continue
@@ -237,11 +295,17 @@ def detect_policy_events(news_items: list[dict],
         # 市场判定：命中港股关键词 → +hk；命中 A 股主题（半导体/AI/光伏等）→ +cn
         # 默认（既不命中港股也不命中专属主题）→ cn（内地政策默认影响 A 股）
         markets: list[str] = []
-        if any(kw in full for kw in _HK_MARKET_KEYWORDS) or "港股通" in themes:
+        src = item.get("source", "") or ""
+        # 来源直接来自港股监管机构 → 必标 hk（覆盖关键词匹配）
+        if "hkma" in src.lower() or "sfc" in src.lower() or "hkex" in src.lower():
             markets.append("hk")
+        if any(kw in full for kw in _HK_MARKET_KEYWORDS) or "港股通" in themes:
+            if "hk" not in markets:
+                markets.append("hk")
         # A 股标记规则：非港股主题命中 / 内地权威发文 → 影响 A 股
         if any(t != "港股通" for t in themes) or (authority and "香港" not in (authority or "")):
-            markets.insert(0, "cn")
+            if "hk" not in markets[:1]:  # 港股监管来源的不要又加 cn
+                markets.insert(0, "cn")
         if not markets:
             markets = ["cn"]
 
@@ -272,6 +336,9 @@ def scan_recent_policies(days: int = 7, min_score: int = 2) -> list[PolicyEvent]
 
     # 2. 财联社电报（最近一批）
     all_news.extend(fetch_cls_alerts())
+
+    # 3. 香港金管局 (HKMA) press releases — 港股专属源
+    all_news.extend(fetch_hkma_press(limit=30))
 
     events = detect_policy_events(all_news, min_score=min_score)
     # 按日期降序 + 相关性降序
