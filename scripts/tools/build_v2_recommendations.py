@@ -109,7 +109,12 @@ def _factor_scores(row: dict[str, Any]) -> dict[str, float]:
     )
     coverage = sum(1 for key in coverage_fields if row.get(key) is not None) / len(coverage_fields)
     data_quality = coverage * 100.0
-    total = 0.42 * momentum + 0.38 * valuation + 0.20 * data_quality
+    # 2026-05-26: momentum 0.42→0.15、valuation 0.38→0.65。
+    # 理由：calibrated_factor_weights.json 的 IC 审计判定 momentum 已失效
+    # (mean IC=0.004, hit_rate=44%, 🔴 decayed)，原 0.42 权重会把"已经涨上来的票"
+    # 推成 strong_buy（典型案例：5-26 京东方 60d +20.6% 排第 2）。valuation 是三因子
+    # 里唯一未被反证有效的（PEG/PE 长期稳定），承接砍下来的权重。
+    total = 0.15 * momentum + 0.65 * valuation + 0.20 * data_quality
     scores: dict[str, Any] = {
         "valuation": round(valuation, 2),
         "momentum": round(momentum, 2),
