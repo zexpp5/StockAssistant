@@ -69,9 +69,10 @@ IPO_LATEST_JSON = (
 # 事件日历 / catalyst 数据源（dashboard 的 📰 推荐依据 + morning_brief 的 📰 一句话）
 # WARN 级：事件源滞后或缺失会让 📰 解释消失，但主推荐还能跑。
 EVENT_CALENDAR_JSON = (
-    "data/event_calendar.json",       # A 股 akshare 财报 + 解禁 + 减增持
-    "data/event_calendar_hk.json",    # 港股 yfinance 财报 + EPS 超预期
-    "data/event_calendar_us.json",    # 美股 yfinance 财报 + EPS 超预期
+    "data/event_calendar.json",            # A 股 akshare 财报 + 解禁 + 减增持
+    "data/event_calendar_hk.json",         # 港股 yfinance 财报 + EPS 超预期
+    "data/event_calendar_us.json",         # 美股 yfinance 财报 + EPS 超预期
+    "data/event_calendar_hk_hkex.json",    # 港股 HKEX 披露易公告（盈警/停牌/股东/回购/并购）
 )
 
 

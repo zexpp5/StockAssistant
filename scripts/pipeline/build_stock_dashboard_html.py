@@ -788,9 +788,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 </section>
 
-<!-- ============ 打分规则说明（动态由 scoring_rules_panel_html 渲染） ============ -->
-{SCORING_RULES_PANEL}
-
 <!-- ============ 自选股·AI 优选回顾 ============ -->
 <section id="picks-review" class="max-w-7xl mx-auto px-6 py-10 bg-gradient-to-br from-amber-50 to-orange-50 rounded-2xl my-6">
   <div class="flex items-start justify-between mb-4 gap-4">
@@ -1798,7 +1795,7 @@ function switchDiscoveryView(view) {
 <!-- ============ 🗂 个股全历史中介页（从已拉取股票池跳转过来）============ -->
 <section id="stock-detail" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
   <div class="mb-6 flex items-center gap-3">
-    <button onclick="closeStockDetail()" class="text-sm px-3 py-1.5 rounded border border-slate-300 text-slate-700 hover:bg-slate-50">← 返回已拉取股票池</button>
+    <button onclick="closeStockDetail()" id="stock-detail-back-btn" class="text-sm px-3 py-1.5 rounded border border-slate-300 text-slate-700 hover:bg-slate-50">← 返回</button>
     <h2 class="text-2xl font-bold text-slate-900">🗂 个股全历史 · <span id="stock-detail-code" class="font-mono text-violet-700">—</span></h2>
     <span id="stock-detail-name" class="text-base text-slate-600"></span>
     <span id="stock-detail-meta" class="ml-auto text-xs font-mono text-slate-500"></span>
@@ -4236,10 +4233,26 @@ function _findDbRowForTicker(ticker) {
 
 // ============ 🗂 个股全历史中介页（从已拉取股票池跳过来）============
 let _stockDetailReturnTab = "db-explorer";  // 关闭时回到哪个父 tab
+let _currentTab = "overview";  // 由 switchTab 维护,openStockDetail 用来记进入前所在 tab
+
+// 各 tab 对应的"返回"按钮文案
+const _STOCK_DETAIL_BACK_LABEL = {
+  "db-explorer": "← 返回 已拉取股票池",
+  "ipo-junior":  "← 返回 IPO & 次新股",
+  "real-holdings": "← 返回 我的持仓",
+  "watchlist": "← 返回 自选股配置",
+  "portfolio": "← 返回 AI 组合方案",
+  "recommendations": "← 返回 AI 推荐",
+  "overview": "← 返回 今日决策台",
+};
 
 async function openStockDetail(code, name) {
   if (!code) return;
-  _stockDetailReturnTab = "db-explorer";
+  // 记进入前所在 tab,关闭时回到那里 (不是硬编码 db-explorer)
+  _stockDetailReturnTab = (_currentTab && _currentTab !== "stock-detail") ? _currentTab : "db-explorer";
+  // 返回按钮文案跟着来源 tab 走
+  const backBtn = document.getElementById("stock-detail-back-btn");
+  if (backBtn) backBtn.textContent = _STOCK_DETAIL_BACK_LABEL[_stockDetailReturnTab] || "← 返回";
   // 顶部基本信息先填上
   document.getElementById("stock-detail-code").textContent = code;
   document.getElementById("stock-detail-name").textContent = name ? `· ${name}` : "";
@@ -4885,7 +4898,7 @@ const TAB_SECTIONS = {
   overview: ["hero", "stress-test", "thesis", "evolution", "scarce", "events", "hundred-x"],
   "real-holdings": ["real-holdings"],
   portfolio: ["portfolio"],
-  picks: ["scoring-rules", "picks-review"],
+  picks: ["picks-review"],
   discovery: ["discovery"],
   "buy-research": ["valuation", "audit-panel"],
   audit: ["valuation", "audit-panel"],
@@ -4902,24 +4915,17 @@ const TAB_SECTIONS = {
   "stock-detail": ["stock-detail"],
   "runtime-status": ["runtime-status"],
   upgrade: ["upgrade"],
-  "init-config": ["init-config", "portfolio-config", "watchlist-edit", "scoring-rules", "picks-review"],
+  "init-config": ["init-config", "portfolio-config", "watchlist-edit", "picks-review"],
 };
 
 // 二级 tab：在 #init-config 父 tab 里切换 投资方案 / 自选股 / AI 优选
 let _initSubCurrent = "portfolio";
 function _mountInitPicksSections() {
   const wled = document.getElementById("watchlist-edit");
-  const scoring = document.getElementById("scoring-rules");
   const review = document.getElementById("picks-review");
-  if (!wled) return;
-  if (scoring && scoring.previousElementSibling !== wled) {
-    wled.insertAdjacentElement("afterend", scoring);
-  }
-  if (review) {
-    const anchor = scoring || wled;
-    if (review.previousElementSibling !== anchor) {
-      anchor.insertAdjacentElement("afterend", review);
-    }
+  if (!wled || !review) return;
+  if (review.previousElementSibling !== wled) {
+    wled.insertAdjacentElement("afterend", review);
   }
 }
 
@@ -4928,11 +4934,9 @@ function switchInitSub(sub) {
   _mountInitPicksSections();
   const pcfg = document.getElementById("portfolio-config");
   const wled = document.getElementById("watchlist-edit");
-  const scoring = document.getElementById("scoring-rules");
   const review = document.getElementById("picks-review");
   if (pcfg) pcfg.style.display = (sub === "portfolio") ? "" : "none";
   if (wled) wled.style.display = (sub === "watchlist") ? "" : "none";
-  if (scoring) scoring.style.display = (sub === "picks") ? "" : "none";
   if (review) review.style.display = (sub === "picks") ? "" : "none";
   // 按钮 active 样式
   document.querySelectorAll(".init-sub-btn").forEach(b => {
@@ -4950,6 +4954,7 @@ function switchInitSub(sub) {
 }
 
 function switchTab(tab) {
+  _currentTab = tab;  // 记当前 tab,openStockDetail 用来计算返回目标
   // 收集所有需要管理的 section id
   const allSections = new Set();
   Object.values(TAB_SECTIONS).forEach(arr => arr.forEach(id => allSections.add(id)));
@@ -4988,6 +4993,7 @@ function getTabFromHash() {
   if (h === "portfolio-config") { _initSubCurrent = "portfolio"; return "init-config"; }
   if (h === "watchlist-edit")   { _initSubCurrent = "watchlist"; return "init-config"; }
   if (h === "picks" || h === "picks-review" || h === "scoring-rules") {
+    // scoring-rules 已退役（2026-05-26）；保留 hash 兜底，跳到 AI 优选子页
     _initSubCurrent = "picks";
     return "init-config";
   }
@@ -5501,7 +5507,7 @@ function _renderJuniorTable_US() {
         <div class="flex items-baseline gap-2">
           <span class="font-mono font-bold text-slate-900">${_esc(x.symbol)}</span>
           <span class="text-slate-800 text-sm truncate" title="${_esc(x.name || "")}">${_esc(x.name || "")}</span>
-          ${poolTag}
+          ${poolTag}${_juniorDiffBadge(x)}
         </div>
         ${sectorLine}
         ${rankLine}
@@ -5598,6 +5604,7 @@ function _renderJuniorTable() {
         <div class="flex items-baseline gap-2">
           <span class="font-mono font-bold text-slate-900">${_esc(x.code)}</span>
           <span class="text-slate-800 text-sm truncate" title="${_esc(x.name || "")}">${_esc(x.name || "")}</span>
+          ${_juniorDiffBadge(x)}
         </div>
         ${x.industry ? `<div class="text-[10px] text-slate-500 mt-0.5 truncate">${_esc(x.industry)}</div>` : ""}
         <div class="text-[11px] text-slate-600 mt-1 leading-snug">${rankPrefix}${x.summary ? " · " + _esc(x.summary) : ""}</div>
@@ -5725,6 +5732,19 @@ function _juniorRedLinesInline(x) {
   if (!rls.length) return "";
   const labels = rls.map(r => `<span class="px-1.5 py-0.5 rounded text-[10px] bg-rose-100 text-rose-700 mr-1" title="${_esc(r.detail || '')}">${_esc(r.label)}</span>`).join("");
   return `<div class="mt-1 leading-snug">${labels}</div>`;
+}
+
+// step 5b: 日间 diff badge — 名称行内显示进出/升降档
+function _juniorDiffBadge(x) {
+  const f = x.diff_flag;
+  if (!f) return "";
+  const prev = x.prev_tier ? ` (昨: ${_esc(x.prev_tier)})` : "";
+  if (f === "new")        return `<span class="ml-1 px-1.5 py-0.5 rounded text-[10px] bg-emerald-100 text-emerald-700 font-bold" title="昨日不在榜${prev}">🆕 新</span>`;
+  if (f === "upgraded")   return `<span class="ml-1 px-1.5 py-0.5 rounded text-[10px] bg-emerald-100 text-emerald-700 font-bold" title="档位升档${prev}">📈 升档</span>`;
+  if (f === "downgraded") return `<span class="ml-1 px-1.5 py-0.5 rounded text-[10px] bg-rose-100 text-rose-700 font-bold" title="档位降档${prev}">📉 降档</span>`;
+  if (f === "jumped")     return `<span class="ml-1 px-1.5 py-0.5 rounded text-[10px] bg-sky-100 text-sky-700" title="同档但 percentile 跳升 ≥5%${prev}">↑ 跳升</span>`;
+  if (f === "slipped")    return `<span class="ml-1 px-1.5 py-0.5 rounded text-[10px] bg-amber-100 text-amber-700" title="同档但 percentile 后退 ≥5%${prev}">↓ 后退</span>`;
+  return "";
 }
 
 // step 5a: 买前审查卡 (仅 🟢/🟡 候选) — 折叠展开 3 段
@@ -10578,268 +10598,6 @@ def theme_section_html(theme, all_records):
 </details>'''
 
 
-def load_calibration_snapshot():
-    """读最新的因子权重校准（stock_research.jobs.calibrate_pick_weights 写出）。"""
-    path = os.path.join(_REPO,
-                        "data", "factor_weights.json")
-    if not os.path.exists(path):
-        return None
-    try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return None
-
-
-def _ic_badge(mean_ic):
-    """根据 mean IC 返回带状态徽章的 HTML。Grinold-Kahn 阈值。"""
-    if mean_ic is None:
-        return '<span class="text-xs px-2 py-0.5 rounded bg-slate-200 text-slate-600 font-mono">无 IC 数据</span>'
-    if mean_ic >= 0.05:
-        cls, icon, label = "bg-emerald-100 text-emerald-800", "🟢", "实证有效"
-    elif mean_ic >= 0.02:
-        cls, icon, label = "bg-amber-100 text-amber-800", "🟡", "边际有效"
-    elif mean_ic >= -0.02:
-        cls, icon, label = "bg-rose-100 text-rose-800", "🔴", "失效"
-    else:
-        cls, icon, label = "bg-rose-200 text-rose-900", "⛔", "反向 alpha"
-    return f'<span class="text-xs px-2 py-0.5 rounded {cls} font-mono">{icon} {label} IC={mean_ic:+.3f}</span>'
-
-
-def _uncal_badge(reason_short):
-    return (f'<span class="text-xs px-2 py-0.5 rounded bg-slate-200 text-slate-700 font-mono" '
-            f'title="{reason_short}">⚪ 未实证</span>')
-
-
-def scoring_rules_panel_html(calib):
-    """渲染「自选股·AI 优选 · 打分规则」面板。
-
-    calib=None 时显示"未校准"警告 + 全部维度标⚪未实证
-    calib 存在时按 factor_weights.json 内容动态展示每个因子的 IC 实证状态
-    """
-    if not calib:
-        evidence_html = '''
-      <div class="bg-amber-50 border-l-4 border-amber-400 p-4 rounded mb-4">
-        <strong class="text-amber-900">⚠️ 当前所有打分规则均为手拍 heuristic（无 IC 实证）</strong>
-        <p class="text-sm text-slate-700 mt-1">跑 <code class="bg-amber-100 px-1.5 py-0.5 rounded text-xs">python3 -m stock_research.jobs.calibrate_pick_weights</code> 生成实证证据</p>
-      </div>'''
-        ai_badge = _uncal_badge("人工分类标注，无历史时间序列可测")
-        val_badge = _uncal_badge("PEG 历史快照需历史 EPS 预测")
-        trend_badge = _uncal_badge("尚未运行 IC 校准")
-        cred_badge = _uncal_badge("人工分类标注，无历史时间序列可测")
-        trend_subblock = ""
-    else:
-        gen_at = calib.get("generated_at", "未知")
-        sample = calib.get("sample", {})
-        n_tickers = sample.get("n_tickers", 0)
-        n_regimes = sample.get("n_regimes_with_data", 0)
-        trend_audit = calib.get("calibrated", {}).get("trend", {}).get("ic_audit", {})
-        composite_ic = trend_audit.get("trend_composite", {}).get("mean_ic")
-
-        evidence_html = f'''
-      <div class="bg-emerald-50 border-l-4 border-emerald-400 p-4 rounded mb-4 text-sm">
-        <div class="flex items-center gap-2 flex-wrap">
-          <strong class="text-emerald-900">📊 已加载 IC 实证</strong>
-          <span class="text-xs text-slate-500">({n_tickers} 只样本 × {n_regimes} 个 regime · Spearman IC · Grinold-Kahn 2000)</span>
-        </div>
-        <div class="text-xs text-slate-600 mt-1">最近校准: <span class="font-mono">{gen_at}</span> · 重跑命令: <code class="bg-emerald-100 px-1.5 py-0.5 rounded text-xs">python3 -m stock_research.jobs.calibrate_pick_weights</code></div>
-      </div>'''
-        ai_badge = _uncal_badge("人工分类标注，无历史时间序列可测")
-        val_badge = _uncal_badge("PEG 历史快照需历史 EPS 预测，yfinance 提供有限")
-        trend_badge = _ic_badge(composite_ic)
-        cred_badge = _uncal_badge("人工分类标注，无历史时间序列可测")
-
-        # 趋势子因子 IC 明细表
-        rows = []
-        label_map = {
-            "trend_composite": "复合分 (1Y 档位 + 追高扣分)",
-            "trend_1y_raw": "1Y 线性涨幅",
-            "trend_1w_raw": "1W 线性涨幅 (已删)",
-        }
-        for fname, summary in trend_audit.items():
-            ic = summary.get("mean_ic")
-            ir = summary.get("ic_ir", 0)
-            label = label_map.get(fname, fname)
-            mark = "🟢" if ic and ic >= 0.05 else ("🟡" if ic and ic >= 0.02 else "🔴")
-            ic_str = f"{ic:+.3f}" if ic is not None else "  N/A"
-            rows.append(
-                f'<tr class="border-b border-cyan-100"><td class="py-1 pr-2 text-slate-700">{mark} {label}</td>'
-                f'<td class="py-1 font-mono text-right">{ic_str}</td>'
-                f'<td class="py-1 font-mono text-right text-slate-500">{ir:+.2f}</td></tr>'
-            )
-        trend_subblock = f'''
-        <div class="mt-3 pt-3 border-t border-cyan-200 text-xs">
-          <div class="font-bold text-cyan-800 mb-1">子因子 IC 实证 ({n_tickers} 只 × {n_regimes} regime):</div>
-          <table class="w-full text-xs">
-            <thead class="text-slate-500"><tr><th class="text-left font-normal">子因子</th><th class="text-right font-normal">mean IC</th><th class="text-right font-normal">IR</th></tr></thead>
-            <tbody>{"".join(rows)}</tbody>
-          </table>
-          <div class="text-xs text-slate-500 mt-1">IC ≥ 0.05 = 有效；0.02-0.05 = 边际；&lt; 0.02 = 失效</div>
-        </div>'''
-
-    return f'''
-<section id="scoring-rules" class="max-w-7xl mx-auto px-6 py-10">
-  <details class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-    <summary class="px-6 py-4 hover:bg-slate-50 cursor-pointer">
-      <div class="flex items-center justify-between gap-3">
-        <div>
-          <h2 class="text-2xl font-bold text-slate-900 flex items-center gap-3">
-            <span class="text-3xl">📐</span>
-            自选股·AI 优选 · 打分规则（透明 + IC 实证）
-          </h2>
-          <p class="text-sm text-slate-600 mt-1 ml-12">点击展开 — 看每个维度有没有数据实证支撑</p>
-        </div>
-        <span class="arrow text-slate-400"></span>
-      </div>
-    </summary>
-
-    <div class="px-6 pb-6">
-      {evidence_html}
-
-      <div class="bg-slate-900 text-white rounded-xl p-5 mb-4 font-mono">
-        <div class="text-xs text-slate-400 mb-2">综合公式（满分 100）</div>
-        <div class="text-base md:text-lg">
-          <span class="text-amber-300">综合得分</span> =
-          <span class="text-rose-300">AI 关联度</span> (35) +
-          <span class="text-emerald-300">估值</span> (25) +
-          <span class="text-cyan-300">趋势</span> (25) +
-          <span class="text-violet-300">数据可信度</span> (15)
-        </div>
-      </div>
-
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-
-        <!-- AI 关联度 -->
-        <div class="bg-rose-50 border-2 border-rose-200 rounded-xl p-4">
-          <div class="flex items-center justify-between mb-2">
-            <h3 class="font-bold text-rose-800">🎯 AI 关联度</h3>
-            <span class="text-2xl font-mono font-bold text-rose-600">35</span>
-          </div>
-          <div class="mb-3">{ai_badge}</div>
-          <div class="text-xs text-slate-700 space-y-1.5">
-            <div class="flex justify-between border-b border-rose-100 pb-1"><span>极强（核心标的）</span><span class="font-mono font-bold">35</span></div>
-            <div class="flex justify-between border-b border-rose-100 pb-1"><span>强（直接受益）</span><span class="font-mono font-bold">28</span></div>
-            <div class="flex justify-between border-b border-rose-100 pb-1"><span>中（间接受益）</span><span class="font-mono">18</span></div>
-            <div class="flex justify-between border-b border-rose-100 pb-1"><span>弱（沾边）</span><span class="font-mono">8</span></div>
-            <div class="flex justify-between"><span>无</span><span class="font-mono">0</span></div>
-          </div>
-          <div class="text-xs text-rose-700 mt-3 pt-2 border-t border-rose-200">
-            <strong>未实证</strong>：人工分类无历史标注；待 picks 表 ≥ 3 个月做 logit 校准
-          </div>
-        </div>
-
-        <!-- 估值 -->
-        <div class="bg-emerald-50 border-2 border-emerald-200 rounded-xl p-4">
-          <div class="flex items-center justify-between mb-2">
-            <h3 class="font-bold text-emerald-800">💰 估值（PEG/PE）</h3>
-            <span class="text-2xl font-mono font-bold text-emerald-600">25</span>
-          </div>
-          <div class="mb-3">{val_badge}</div>
-          <div class="text-xs text-slate-700 space-y-1.5">
-            <div class="text-slate-500 mb-1 italic">优先看 PEG（PE÷增速）：</div>
-            <div class="flex justify-between border-b border-emerald-100 pb-1"><span>PEG &lt; 1（便宜）</span><span class="font-mono font-bold">25</span></div>
-            <div class="flex justify-between border-b border-emerald-100 pb-1"><span>PEG 1-2（合理）</span><span class="font-mono font-bold">18</span></div>
-            <div class="flex justify-between border-b border-emerald-100 pb-1"><span>PEG 2-3（偏贵）</span><span class="font-mono">10</span></div>
-            <div class="flex justify-between border-b border-emerald-100 pb-1"><span>PEG &gt; 3（贵）</span><span class="font-mono">4</span></div>
-            <div class="flex justify-between"><span>PEG 缺失，PE &lt; 25</span><span class="font-mono">15</span></div>
-          </div>
-          <div class="text-xs text-emerald-700 mt-3 pt-2 border-t border-emerald-200">
-            <strong>未实证</strong>：PEG 历史需 EPS 预测（yfinance 不稳定）；接 FMP/Finnhub 后做 IC 回测
-          </div>
-        </div>
-
-        <!-- 趋势 -->
-        <div class="bg-cyan-50 border-2 border-cyan-200 rounded-xl p-4">
-          <div class="flex items-center justify-between mb-2">
-            <h3 class="font-bold text-cyan-800">📈 趋势（1Y）</h3>
-            <span class="text-2xl font-mono font-bold text-cyan-600">25</span>
-          </div>
-          <div class="mb-3">{trend_badge}</div>
-          <div class="text-xs text-slate-700 space-y-1.5">
-            <div class="text-slate-500 mb-1 italic">1 年涨幅档位：</div>
-            <div class="flex justify-between border-b border-cyan-100 pb-1"><span>涨 50%-200%（健康）</span><span class="font-mono font-bold">20</span></div>
-            <div class="flex justify-between border-b border-cyan-100 pb-1"><span>涨 0%-50%（稳健）</span><span class="font-mono">15</span></div>
-            <div class="flex justify-between border-b border-cyan-100 pb-1"><span>涨 &gt; 200%（追高）</span><span class="font-mono">12</span></div>
-            <div class="flex justify-between"><span>跌（逆势）</span><span class="font-mono">8</span></div>
-          </div>
-          <div class="text-xs text-cyan-700 mt-3 pt-2 border-t border-cyan-200">
-            <strong>实证：「追高扣分」复合分 IC 优于线性 1Y</strong>，6 regime 已验证
-          </div>
-          {trend_subblock}
-        </div>
-
-        <!-- 数据可信度 -->
-        <div class="bg-violet-50 border-2 border-violet-200 rounded-xl p-4">
-          <div class="flex items-center justify-between mb-2">
-            <h3 class="font-bold text-violet-800">🔍 数据可信度</h3>
-            <span class="text-2xl font-mono font-bold text-violet-600">15</span>
-          </div>
-          <div class="mb-3">{cred_badge}</div>
-          <div class="text-xs text-slate-700 space-y-1.5">
-            <div class="flex justify-between border-b border-violet-100 pb-1"><span>🟢 高（官方+多源）</span><span class="font-mono font-bold">15</span></div>
-            <div class="flex justify-between border-b border-violet-100 pb-1"><span>🟡 中（权威媒体单源）</span><span class="font-mono">10</span></div>
-            <div class="flex justify-between border-b border-violet-100 pb-1"><span>🔴 低（二手/推断）</span><span class="font-mono">5</span></div>
-            <div class="flex justify-between"><span>未填</span><span class="font-mono">3</span></div>
-          </div>
-          <div class="text-xs text-violet-700 mt-3 pt-2 border-t border-violet-200">
-            <strong>未实证</strong>：人工分类无历史标注，无 IC 可测
-          </div>
-        </div>
-      </div>
-
-      <!-- 评级阈值 -->
-      <div class="bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl p-5 mb-4">
-        <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
-          <h3 class="font-bold text-slate-900">📊 评级阈值</h3>
-          <span class="text-xs px-2 py-0.5 rounded bg-slate-200 text-slate-700 font-mono">⚪ 未实证（待 picks ≥ 3 个月做 logit calibration）</span>
-        </div>
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div class="bg-white rounded-lg p-3 border-l-4 border-amber-500">
-            <div class="font-bold text-lg">⭐⭐⭐ 强烈推荐</div>
-            <div class="text-sm text-slate-600 mt-1">综合得分 ≥ <strong class="text-amber-700">75</strong></div>
-            <div class="text-xs text-slate-500 mt-2">4 维度都接近满分，确定性较高的标的</div>
-          </div>
-          <div class="bg-white rounded-lg p-3 border-l-4 border-orange-400">
-            <div class="font-bold text-lg">⭐⭐ 推荐</div>
-            <div class="text-sm text-slate-600 mt-1">综合得分 ≥ <strong class="text-orange-700">60</strong></div>
-            <div class="text-xs text-slate-500 mt-2">某个维度优秀但不是全维度都好</div>
-          </div>
-          <div class="bg-white rounded-lg p-3 border-l-4 border-yellow-400">
-            <div class="font-bold text-lg">⭐ 关注</div>
-            <div class="text-sm text-slate-600 mt-1">综合得分 ≥ <strong class="text-yellow-700">50</strong></div>
-            <div class="text-xs text-slate-500 mt-2">有亮点但风险较大，谨慎跟踪</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- 命中评级（持有后判断）-->
-      <div class="bg-gradient-to-r from-slate-100 to-blue-50 rounded-xl p-5 mb-4">
-        <h3 class="font-bold text-slate-900 mb-2">🎯 命中评级（入选后实际表现）</h3>
-        <p class="text-xs text-slate-600 mb-3">入选后我会持续跟踪，按累计涨跌幅自动评级，验证选股策略是否有效</p>
-        <div class="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
-          <div class="bg-emerald-100 text-emerald-800 rounded p-2 text-center"><div class="font-bold">🚀 大涨</div><div class="font-mono">&gt; +15%</div></div>
-          <div class="bg-emerald-50 text-emerald-700 rounded p-2 text-center"><div class="font-bold">✅ 命中</div><div class="font-mono">+5% ~ +15%</div></div>
-          <div class="bg-slate-100 text-slate-700 rounded p-2 text-center"><div class="font-bold">🟢 跟随</div><div class="font-mono">-5% ~ +5%</div></div>
-          <div class="bg-amber-50 text-amber-700 rounded p-2 text-center"><div class="font-bold">⚠️ 不及</div><div class="font-mono">-5% ~ -15%</div></div>
-          <div class="bg-rose-100 text-rose-800 rounded p-2 text-center"><div class="font-bold">❌ 大跌</div><div class="font-mono">&lt; -15%</div></div>
-        </div>
-      </div>
-
-      <!-- 限制 + 说明 -->
-      <div class="bg-rose-50 border-l-4 border-rose-400 p-4 rounded">
-        <h3 class="font-bold text-rose-900 mb-2">⚠️ 这套打分系统的限制</h3>
-        <ul class="text-sm text-slate-700 space-y-1 list-disc pl-5">
-          <li><strong>是定量框架，不是买卖建议</strong>：满分 100 不代表「一定会涨」，0 分不代表「一定会跌」</li>
-          <li><strong>4 维度中 3 维（AI/估值/可信度）权重未经 IC 实证</strong>：等 picks 表 ≥ 3 个月可做 logit 校准</li>
-          <li><strong>不考虑宏观/政策风险</strong>：地缘冲突、关税、监管这些黑天鹅打分没法量化</li>
-          <li><strong>2018 类熊市趋势 IC 反转</strong>：所有趋势因子在系统性下跌中变负 alpha，依赖 v7 防御信号</li>
-          <li><strong>只用 自选股内 37 只</strong>：不是从全市场万只里挑，覆盖范围有限</li>
-        </ul>
-      </div>
-    </div>
-  </details>
-</section>'''
-
 
 def _augment_source_health_with_catalyst(source_health: dict | None) -> None:
     """把三个 event_calendar 的健康状况合并进 source_health.sources。
@@ -10858,9 +10616,10 @@ def _augment_source_health_with_catalyst(source_health: dict | None) -> None:
     DEGRADE_ERR_COUNT = 5
     STALE_DAYS = 2
     for rel, label, market_label in [
-        ("data/event_calendar.json",    "event_calendar_cn", "A 股事件日历"),
-        ("data/event_calendar_hk.json", "event_calendar_hk", "港股事件日历"),
-        ("data/event_calendar_us.json", "event_calendar_us", "美股事件日历"),
+        ("data/event_calendar.json",         "event_calendar_cn",      "A 股事件日历"),
+        ("data/event_calendar_hk.json",      "event_calendar_hk",      "港股事件日历"),
+        ("data/event_calendar_us.json",      "event_calendar_us",      "美股事件日历"),
+        ("data/event_calendar_hk_hkex.json", "event_calendar_hk_hkex", "港股 HKEX 披露易"),
     ]:
         path = os.path.join(_REPO, rel)
         if not os.path.exists(path):
@@ -14003,6 +13762,126 @@ def _choose_fresher_payload(file_payload: dict, db_payload: dict) -> dict:
     return db_payload
 
 
+def _load_v2_watchlist_picks() -> tuple[list[dict], dict[str, dict]]:
+    """自选股 · AI 优选：最新 run 的 recommendation_picks JOIN manual_watchlist。
+
+    Returns (picks_list, watchlist_ratings)：
+      - picks_list 喂前端 PICKS_JSON，结构匹配 _pickMarket / _ratingBadge / _pickPriceHtml 等消费者
+      - watchlist_ratings 喂前端 WATCHLIST_RATINGS_JSON（自选股列表评级 badge）
+
+    JOIN 用 symbol 直接对齐 —— manual_watchlist 的 market 字段是 "A股·沪交所/美股/US/HK"
+    杂混历史值，跟 recommendation_picks 的 "US/CN/HK" 对不上；symbol 才是稳的 key。
+    """
+    db_path = _duckdb_path()
+    if not os.path.exists(db_path):
+        return [], {}
+    try:
+        import duckdb
+    except ImportError:
+        return [], {}
+
+    market_label = {"US": "美股", "CN": "A股", "HK": "港股"}
+    model_source_map = {"US": "v2_us", "CN": "v2_cn", "HK": "v2_hk"}
+    # V2 评级 → V1 风格星标文本：前端 _ratingScore 看 "⭐⭐⭐/⭐⭐/⭐" 前缀派生 0-3 档，
+    # 让现有 _ratingBadge / _pickReasons 逻辑直接复用，不动 JS。
+    rating_label = {
+        "strong_buy": "⭐⭐⭐ 强买",
+        "buy":        "⭐⭐ 买入",
+        "watch":      "⭐ 观察",
+        "avoid":      "⛔ 不建议",
+    }
+
+    rows: list[tuple] = []
+    try:
+        con = duckdb.connect(db_path, read_only=True)
+        try:
+            tables = {str(r[0]) for r in con.execute("SHOW TABLES").fetchall()}
+            if not {"recommendation_runs", "recommendation_picks", "manual_watchlist"}.issubset(tables):
+                return [], {}
+            rows = con.execute(
+                """
+                WITH latest AS (
+                    SELECT run_id, run_date, generated_at
+                    FROM recommendation_runs
+                    ORDER BY generated_at DESC LIMIT 1
+                )
+                SELECT
+                    p.symbol,
+                    COALESCE(NULLIF(w.name, ''), p.name)        AS name,
+                    p.market,
+                    p.rating,
+                    p.signal,
+                    p.total_score,
+                    p.factor_scores_json,
+                    p.recommendation_reason,
+                    p.risk_flags_json,
+                    p.entry_price,
+                    p.entry_currency,
+                    l.run_date,
+                    l.generated_at
+                FROM manual_watchlist w
+                JOIN recommendation_picks p ON p.symbol = w.symbol
+                JOIN latest l               ON l.run_id = p.run_id
+                ORDER BY p.total_score DESC NULLS LAST
+                """
+            ).fetchall()
+        finally:
+            con.close()
+    except Exception as e:
+        print(f"  ⚠️ 自选股 picks 加载失败 (V2 JOIN): {e}")
+        return [], {}
+
+    picks_list: list[dict] = []
+    watchlist_ratings: dict[str, dict] = {}
+    for (sym, name, market, rating, signal, total_score,
+         factor_json, reason, risk_json, entry_price, entry_ccy,
+         run_date, generated_at) in rows:
+        try:
+            factor_scores = json.loads(factor_json) if factor_json else {}
+        except Exception:
+            factor_scores = {}
+        try:
+            risk_flags = json.loads(risk_json) if risk_json else []
+        except Exception:
+            risk_flags = []
+        rating_text = rating_label.get(rating, rating or "")
+        # 红旗拼到 rating 后面：前端 _buildPickReasons 按 " · " 拆出来当 cons 显示。
+        # risk_flags 元素是 dict {code, severity, message}，取 message 兜底 code。
+        if risk_flags:
+            flag_texts = []
+            for f in risk_flags:
+                if isinstance(f, dict):
+                    msg = f.get("message") or f.get("code")
+                    if msg:
+                        flag_texts.append(str(msg))
+                elif f:
+                    flag_texts.append(str(f))
+            if flag_texts:
+                rating_text = f"{rating_text} · {'｜'.join(flag_texts)}"
+        pick = {
+            "code": sym,
+            "name": name,
+            "market": market_label.get(market, market),
+            "rating": rating_text,
+            "signal": signal,
+            "total_score": float(total_score) if total_score is not None else None,
+            "pick_date": run_date.isoformat() if run_date else None,
+            "model_source": model_source_map.get(market, "v2"),
+            "entry_price": float(entry_price) if entry_price is not None else None,
+            "entry_currency": entry_ccy,
+            "recommendation_reason": reason,
+            "factor_scores": factor_scores,
+            "risk_flags": risk_flags,
+            "ai_at": generated_at.isoformat() if generated_at else None,
+        }
+        picks_list.append(pick)
+        watchlist_ratings[sym] = {
+            "rating": rating_text,
+            "total_score": pick["total_score"],
+        }
+    return picks_list, watchlist_ratings
+
+
 def _load_latest_pick_dates_by_market() -> dict[str, str | None]:
     """DB-first latest production pick_date per market.
 
@@ -14282,7 +14161,9 @@ def build():
         # 不再调任何 V1 函数。chain/chain_tier 等 V1-only 主观字段为 None，前端做空值处理。
         from stock_db import fetch_research_records_v2
         records = fetch_research_records_v2()
-        picks = []
+        # 自选股 · AI 优选：manual_watchlist JOIN 最新 run 的 recommendation_picks
+        # （前端 PICKS_JSON + WATCHLIST_RATINGS_JSON 共用同一份数据，避免两份不一致）
+        picks, _watchlist_ratings_v2 = _load_v2_watchlist_picks()
         pool_total = int(v2_stats.get("system_universe") or 0)
         pool_membership = int(v2_stats.get("pool_membership") or 0)
         price_daily = int(v2_stats.get("price_daily") or 0)
@@ -14302,6 +14183,7 @@ def build():
         # 留个 graceful 兜底，避免老 DB 启动炸：返回空集让 dashboard 仍能渲染骨架。
         print("  ⚠️  非 clean v2 DB — 系统已切到纯 V2 路径，records 留空")
         records, picks = [], []
+        _watchlist_ratings_v2 = {}
     # 兼容旧 schema: market_cap 字段(人工填写"$2.8T")现在格式化自 yf_market_cap
     for r in records:
         r["market_cap"] = _fmt_market_cap(r.get("yf_market_cap"))
@@ -14549,9 +14431,6 @@ def build():
     html = html.replace("{TODAY_DECISION_PANEL}", today_decision_panel_html())
     html = html.replace("{RUNTIME_STATUS_PANEL}", runtime_status_panel_html())
 
-    # 打分规则面板（动态读 factor_weights.json，缺失则 fallback 到「未实证」版本）
-    calib_snap = load_calibration_snapshot()
-    html = html.replace("{SCORING_RULES_PANEL}", scoring_rules_panel_html(calib_snap))
     if audit_snap_db:
         n_picks_db = audit_snap_db.get("picks_today_count", 0)
         print(f"  反向审查快照已加载 [DuckDB]（{n_picks_db} 只 picks @ {ts_db}）")
@@ -14617,9 +14496,10 @@ def build():
     print(f"  AI 推荐历史已加载 [V2 pick_outcomes] ({len(disc_hist)} 条)")
     html = html.replace("{DISCOVERY_HISTORY_JSON}", json.dumps(disc_hist, ensure_ascii=False, default=str))
 
-    # 2026-05-21 V1 cutover：原 V1 picks + watchlist 自选股 AI 评级查询已删
-    # V2 路径：自选股·AI 优选 picks 来自 manual_watchlist JOIN recommendation_picks（待补 V2 评级 panel）
-    watchlist_ratings = {}
+    # 2026-05-26: V2 路径自选股 AI 评级 — 跟 PICKS_JSON 同源（_load_v2_watchlist_picks
+    # 一次 JOIN 同时算出 picks 和 ratings dict，避免两边漂移）
+    watchlist_ratings = _watchlist_ratings_v2
+    print(f"  自选股 AI 评级注入: {len(watchlist_ratings)} 只命中最新 run")
     html = html.replace("{WATCHLIST_RATINGS_JSON}", json.dumps(watchlist_ratings, ensure_ascii=False))
 
     # 2026-05-25: 自选股 coverage 注入 — 让前端"未评级" badge 区分四种原因

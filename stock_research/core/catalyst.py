@@ -29,6 +29,19 @@ _CACHE: dict[str, dict[str, list[dict]] | None] = {
     "hk": None,
     "cn": None,
     "us": None,
+    "hkex": None,
+}
+
+# 港股 HKEX 事件类型 → 优先级（数字小 = 优先用作 catalyst 句）
+# 盈警/盈喜最强信号，并购次之；业绩公告跟 yfinance 重叠（yfinance 含 EPS 数字更可读，不用 HKEX）
+# 股东减增持 / 回购最弱（腾讯天天回购，无信号量）
+HKEX_PRIORITY = {
+    "earnings_preview": 0,   # 盈警/盈喜
+    "ma_takeover":      1,   # 并购/私有化/要约
+    "trading_halt":     2,   # 停牌/复牌
+    # earnings_announcement: 不优先（yfinance 含 EPS 数字更可用）
+    "insider_change":   4,   # 股东减增持
+    "buyback":          5,   # 回购（弱信号）
 }
 
 
@@ -64,6 +77,19 @@ def _events_us() -> dict[str, list[dict]]:
                 idx.setdefault(t, []).append(e)
         _CACHE["us"] = idx
     return _CACHE["us"]
+
+
+def _events_hkex() -> dict[str, list[dict]]:
+    """HKEX 披露易公告（按 ticker 分组）。"""
+    if _CACHE["hkex"] is None:
+        d = _load_json("data/event_calendar_hk_hkex.json")
+        idx: dict[str, list[dict]] = {}
+        for e in (d.get("events") or []):
+            t = (e.get("ticker") or "").upper()
+            if t:
+                idx.setdefault(t, []).append(e)
+        _CACHE["hkex"] = idx
+    return _CACHE["hkex"]
 
 
 def _events_cn() -> dict[str, list[dict]]:
@@ -105,7 +131,16 @@ def get_catalyst(ticker: str, *, lookback_days: int = LOOKBACK_DAYS, today: date
 
     # 港股
     if tk_upper.endswith(".HK"):
-        return _catalyst_from_earnings_dates(_events_hk().get(tk_upper) or [], today, lookback_days)
+        # 强催化优先：HKEX 盈警/并购/停牌 (priority 0-2)
+        strong = _catalyst_from_hkex(_events_hkex().get(tk_upper) or [], today, lookback_days, max_priority=2)
+        if strong:
+            return strong
+        # 次强：yfinance EPS 超预期（有数字最直观）
+        eps = _catalyst_from_earnings_dates(_events_hk().get(tk_upper) or [], today, lookback_days)
+        if eps:
+            return eps
+        # 兜底：HKEX 弱催化（股东减增持/回购，priority 3-5）
+        return _catalyst_from_hkex(_events_hkex().get(tk_upper) or [], today, lookback_days, max_priority=9)
 
     # A 股
     if _is_a_share(tk_upper):
@@ -114,6 +149,50 @@ def get_catalyst(ticker: str, *, lookback_days: int = LOOKBACK_DAYS, today: date
 
     # 美股（裸 ticker）
     return _catalyst_from_earnings_dates(_events_us().get(tk_upper) or [], today, lookback_days)
+
+
+def _catalyst_from_hkex(events: list[dict], today: date, lookback_days: int, max_priority: int = 9) -> str | None:
+    """HKEX 公告 → 催化句。按事件类型优先级 + 日期新近度选最强。
+    `max_priority` 控制只考虑优先级 ≤ max_priority 的事件类型。
+    """
+    if not events:
+        return None
+    # 收集 lookback 窗口内符合优先级的事件
+    candidates: list[tuple[int, date, dict]] = []
+    for e in events:
+        etype = e.get("event_type", "")
+        prio = HKEX_PRIORITY.get(etype)
+        if prio is None or prio > max_priority:
+            continue
+        try:
+            ed = datetime.strptime(e.get("event_date", ""), "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if not (0 <= (today - ed).days <= lookback_days):
+            continue
+        candidates.append((prio, ed, e))
+    if not candidates:
+        return None
+    # 先按 priority 升序，再按日期降序（更新优先）
+    candidates.sort(key=lambda x: (x[0], -(x[1].toordinal())))
+    _, ed, e = candidates[0]
+    days_ago = (today - ed).days
+    etype = e.get("event_type", "")
+    title = (e.get("title") or "").strip()
+    # 标题截断到 30 字避免过长
+    if len(title) > 30:
+        title = title[:28] + "…"
+
+    label_map = {
+        "earnings_preview": "📢 业绩预告",
+        "ma_takeover":      "🤝 并购/要约",
+        "trading_halt":     "🛑 停牌/复牌",
+        "insider_change":   "👥 股东权益变动",
+        "buyback":          "💰 回购",
+        "earnings_announcement": "📋 业绩公告",
+    }
+    prefix = label_map.get(etype, "📄 公告")
+    return f"{ed.strftime('%-m/%-d')} {prefix}：{title}（{days_ago}d 前）"
 
 
 def _catalyst_from_earnings_dates(events: list[dict], today: date, lookback_days: int) -> str | None:
