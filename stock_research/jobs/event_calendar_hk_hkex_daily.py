@@ -133,29 +133,152 @@ _UNIT_TO_CNY = {
 
 
 # 客户名白名单（中国主要科技 / 工业 / 央企 + 全球大客户）
+# 注：每个客户尽量提供 简体/繁体/英文 三套表达
 _CUSTOMER_KEYWORDS = [
-    # 三大运营商
-    "中国移动", "中国电信", "中国联通", "中移动", "中电信", "中聯通",
-    # 中国头部科技 / 互联网
-    "华为", "華為", "比亚迪", "比亞迪", "腾讯", "騰訊", "阿里巴巴", "阿里",
-    "京东", "京東", "字节跳动", "字節", "美团", "美團", "百度", "小米",
-    "OPPO", "vivo", "联想", "聯想", "理想", "蔚来", "蔚來", "小鵬", "小鹏",
-    # 重要央企
-    "宁德时代", "寧德時代", "国家电网", "南方电网", "中石油", "中石化", "中国神华",
-    "中铁", "中交", "中铝", "中核", "中船",
-    # 海外大客户
-    "苹果", "Apple", "微软", "Microsoft", "谷歌", "Google", "亚马逊", "Amazon",
-    "Meta", "Facebook", "特斯拉", "Tesla", "英伟达", "NVIDIA",
-    "三星", "Samsung", "丰田", "Toyota", "本田", "Honda",
+    # ─── 中国 三大运营商 ───
+    "中国移动", "中國移動", "中移动", "China Mobile",
+    "中国电信", "中國電信", "中电信", "China Telecom",
+    "中国联通", "中國聯通", "中联通", "China Unicom",
+    # ─── 中国 头部科技 / 互联网 ───
+    "华为", "華為", "Huawei",
+    "比亚迪", "比亞迪", "BYD",
+    "腾讯", "騰訊", "Tencent",
+    "阿里巴巴", "阿里", "Alibaba",
+    "京东", "京東", "JD.com", "JD ",
+    "字节跳动", "字節跳動", "字节", "字節", "ByteDance",
+    "美团", "美團", "Meituan",
+    "百度", "Baidu",
+    "网易", "網易", "NetEase",
+    "拼多多", "PDD",
+    "快手", "Kuaishou",
+    "B站", "哔哩哔哩", "嗶哩嗶哩", "Bilibili",
+    "小米", "Xiaomi",
+    "OPPO", "vivo", "荣耀", "榮耀", "Honor",
+    "联想", "聯想", "Lenovo",
+    # ─── 中国 新能源车企 ───
+    "理想", "Li Auto", "LI Auto",
+    "蔚来", "蔚來", "NIO",
+    "小鹏", "小鵬", "XPeng",
+    "极氪", "極氪", "Zeekr",
+    "广汽", "廣汽", "GAC", "上汽", "SAIC", "一汽", "FAW",
+    # ─── 中国 重要央企 ───
+    "宁德时代", "寧德時代", "CATL",
+    "国家电网", "國家電網", "State Grid",
+    "南方电网", "南方電網",
+    "中石油", "中石化", "中海油", "Sinopec", "PetroChina",
+    "中国神华", "中國神華", "Shenhua",
+    "中铁", "中鐵", "中交", "中铝", "中鋁", "中核", "中船", "中航", "中冶",
+    # ─── 中国 金融 ───
+    "工商银行", "工商銀行", "ICBC",
+    "建设银行", "建設銀行", "CCB",
+    "中国银行", "中國銀行", "BoC", "Bank of China",
+    "农业银行", "農業銀行", "ABC",
+    "招商银行", "招商銀行", "China Merchants",
+    # ─── 海外 美国巨头 ───
+    "苹果", "蘋果", "Apple", "AAPL",
+    "微软", "微軟", "Microsoft", "MSFT",
+    "谷歌", "Google", "GOOGL", "Alphabet",
+    "亚马逊", "亞馬遜", "Amazon", "AMZN",
+    "Meta", "Facebook", "META",
+    "特斯拉", "Tesla", "TSLA",
+    "英伟达", "英偉達", "NVIDIA", "NVDA",
+    "AMD", "高通", "Qualcomm", "QCOM",
+    "Intel", "英特尔", "英特爾",
+    "OpenAI", "Anthropic",
+    "甲骨文", "Oracle",
+    "IBM",
+    "Salesforce",
+    "Netflix", "奈飞", "奈飛",
+    # ─── 海外 半导体 / 设备 ───
+    "TSMC", "台积电", "台積電",
+    "ASML", "阿斯麦", "阿斯麥",
+    "应用材料", "應用材料", "Applied Materials",
+    "Lam Research", "泛林",
+    "三星", "Samsung",
+    # ─── 海外 车厂 ───
+    "丰田", "豐田", "Toyota",
+    "本田", "Honda",
+    "大众", "大眾", "Volkswagen", "VW",
+    "宝马", "寶馬", "BMW",
+    "奔驰", "賓士", "Mercedes",
+    "福特", "Ford",
+    "通用", "General Motors", "GM",
+    # ─── 海外 其他 ───
+    "波音", "Boeing", "空客", "Airbus",
+    "沃尔玛", "沃爾瑪", "Walmart",
+    "迪士尼", "Disney",
 ]
 
 
-def _extract_customer(text: str) -> str:
-    """从 title 抽取客户名（白名单匹配）。返回第一个命中的客户名。"""
+def _fetch_pdf_summary(session, file_link: str) -> str:
+    """拉 HKEX 公告 PDF，提取第一页前 400 字作为摘要。失败返回空。
+
+    HKEX file_link 格式：/listedco/listconews/sehk/YYYY/MMDD/YYYYMMDDNNNNN_c.pdf
+    完整 URL: https://www1.hkexnews.hk{file_link}
+    """
+    if not file_link or not file_link.endswith(".pdf"):
+        return ""
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        return ""
+    import io
+    url = file_link if file_link.startswith("http") else f"https://www1.hkexnews.hk{file_link}"
+    try:
+        r = session.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        if r.status_code != 200:
+            return ""
+        reader = PdfReader(io.BytesIO(r.content))
+        if not reader.pages:
+            return ""
+        text = reader.pages[0].extract_text() or ""
+    except Exception as e:
+        logger.debug("PDF parse %s err: %s", url, e)
+        return ""
+    # 清洗：折叠空白 + 去掉常见免责声明前缀
+    import re as _re3
+    text = _re3.sub(r"\s+", " ", text).strip()
+    # 跳过开头的"香港交易及結算所有限公司..."免责段（典型 100-200 字）
+    skip_markers = [
+        "概不對因本公告全部",
+        "concerning the contents of this announcement",
+        "對其準確性或完整性",
+    ]
+    for marker in skip_markers:
+        idx = text.find(marker)
+        if 0 < idx < 600:
+            # 跳过免责段直到下一个章节标记
+            text = text[idx + len(marker):].lstrip()
+            # 找第一个段落级文本起点
+            for sep in ["。", ".", ":", "："]:
+                p = text.find(sep)
+                if 0 < p < 200:
+                    text = text[p + len(sep):].lstrip()
+                    break
+            break
+    return text[:400]
+
+
+def _extract_customer(text: str, self_name: str = "") -> str:
+    """从 text 抽取客户名（白名单匹配）。
+    self_name: 发公告的本公司名（含简繁版本），匹配到自己就跳过避免"联想公告里提到联想"误识别。
+    """
     if not text:
         return ""
+    # 拆 self_name 成多个变体
+    self_tokens: set[str] = set()
+    if self_name:
+        for sep in (" ", "/", "(", "（", "－", "-"):
+            self_name = self_name.replace(sep, "|")
+        for t in self_name.split("|"):
+            t = t.strip()
+            if len(t) >= 2:
+                self_tokens.add(t)
     for c in _CUSTOMER_KEYWORDS:
         if c in text:
+            # 自己被命中 → 跳过
+            if any(c == st or c in st or st in c for st in self_tokens):
+                continue
             return c
     return ""
 
@@ -328,17 +451,34 @@ def main() -> int:
                 "news_id": a.get("NEWS_ID", ""),
                 "source": "hkexnews.hk/titleSearchServlet",
             }
-            # major_order 类公告：抽金额 + 客户名 + 转 CNY 估值（用于阈值过滤）
+            # major_order 类公告：抽金额 + 客户名 + 转 CNY 估值 + 拉 PDF 摘要
             if etype == "major_order":
+                self_name = name or _unescape(a.get("STOCK_NAME", "")).split("<")[0].strip()
                 amt = _extract_amount(title)
                 if amt:
                     entry["amount_text"] = amt
                     cny = _amount_to_cny(amt)
                     if cny > 0:
                         entry["amount_cny_approx"] = round(cny, 0)
-                customer = _extract_customer(title)
+                customer = _extract_customer(title, self_name=self_name)
                 if customer:
                     entry["customer"] = customer
+                # 拉 PDF 首页摘要（可能含合同期限/起止日期/cap 等关键细节）
+                pdf_summary = _fetch_pdf_summary(session, a.get("FILE_LINK", ""))
+                if pdf_summary:
+                    entry["context_summary"] = pdf_summary
+                    # 如果 title 没抽到金额/客户，尝试从 summary 抽
+                    if "amount_text" not in entry:
+                        amt2 = _extract_amount(pdf_summary)
+                        if amt2:
+                            entry["amount_text"] = amt2
+                            cny2 = _amount_to_cny(amt2)
+                            if cny2 > 0:
+                                entry["amount_cny_approx"] = round(cny2, 0)
+                    if "customer" not in entry:
+                        c2 = _extract_customer(pdf_summary, self_name=self_name)
+                        if c2:
+                            entry["customer"] = c2
             events.append(entry)
         hit += 1
         time.sleep(0.3)  # rate limit 礼貌

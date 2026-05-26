@@ -122,15 +122,34 @@ def _fetch_8k_items(session, url: str) -> list[str]:
 
 
 def _8k_best_item_label(items: list[str]) -> tuple[str, int]:
-    """从 8-K items 列表里挑 priority 最小（最强）的，返回 (label, priority)。"""
+    """从 8-K items 列表里挑 priority 最强的 1-2 个组合显示。
+
+    例：[1.01, 5.02, 9.01] → "📜 重大协议 + 👤 高管变动" (priority=1)
+        [5.07, 9.01]      → "🗳️ 股东表决结果" (priority=4)
+
+    规则：
+      · 取 priority 最小的（最强）那条为主标
+      · 如果有另外一条 priority ≤ 主标 priority + 1，合并显示（"+ 副标")
+      · 财报附件 (9.01) / 章程修订 (5.03) 这种 priority ≥ 4 的辅助项不进合并
+    """
     if not items:
         return ("", 9)
-    best = (9, "")
-    for it in items:
-        label, prio = ITEM_8K_LABELS.get(it, (f"Item {it}", 6))
-        if prio < best[0]:
-            best = (prio, label)
-    return (best[1], best[0])
+    # 按优先级排序，priority 小 = 强
+    ranked = sorted(
+        [(ITEM_8K_LABELS.get(it, (f"Item {it}", 6))[1],
+          ITEM_8K_LABELS.get(it, (f"Item {it}", 6))[0], it)
+         for it in items],
+        key=lambda x: x[0],
+    )
+    primary_prio, primary_label, _ = ranked[0]
+    # 找一个值得"+ 副标"的（priority 接近主标 + 不是噪音类）
+    secondaries = [
+        lbl for prio, lbl, _ in ranked[1:]
+        if prio <= primary_prio + 1 and prio < 4 and lbl != primary_label
+    ]
+    if secondaries:
+        return (f"{primary_label} + {secondaries[0]}", primary_prio)
+    return (primary_label, primary_prio)
 
 
 def _fetch_filings(session, cik: int, lookback_days: int = 60) -> list[dict]:

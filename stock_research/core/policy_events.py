@@ -238,6 +238,34 @@ def fetch_hkma_press(limit: int = 20) -> list[dict]:
     return out
 
 
+# SFC news 噪音模式（演讲/获奖/活动通告 = 无政策信号）
+_SFC_NOISE_PATTERNS = [
+    "New speech by", "speech by ", "Keynote", "keynote",
+    "Remarks at", "remarks at ",
+    "Speech at", "speech at ",
+    "address at", "Address at",
+    "Welcoming remarks", "welcoming remarks",
+    "Closing remarks", "closing remarks",
+    "Opening remarks", "opening remarks",
+    "Investor and Financial Education Award",
+    "Education Award",
+    "Securities and Investment Institute",
+    "Independent Non-Executive Director",
+    "IOSCO Committee",  # 跨境监管会议（信号弱）
+    "hosts ", "hosted ", "host ",  # 主办活动
+    "joined ", "joins ",  # 加入某全球倡议（信号弱）
+]
+
+
+def _is_sfc_noise(title: str) -> bool:
+    """SFC news 标题命中噪音模式 → True 跳过。
+    保留：执法行动 / 监管要求 / 罚款 / 调查 / 检讨 这种实质政策信号。
+    """
+    if not title:
+        return True
+    return any(p in title for p in _SFC_NOISE_PATTERNS)
+
+
 def fetch_sfc_news(limit: int = 30) -> list[dict]:
     """香港证监会 (SFC) news — 港股监管 / 执法。
 
@@ -269,18 +297,27 @@ def fetch_sfc_news(limit: int = 30) -> list[dict]:
         return []
 
     out: list[dict] = []
-    for item in (data.get("items") or [])[:limit]:
+    n_noise = 0
+    for item in (data.get("items") or [])[:limit * 2]:
         iso_dt = item.get("issueDate") or ""
         try:
             d = datetime.strptime(iso_dt[:10], "%Y-%m-%d").date()
         except Exception:
             continue
+        title = (item.get("title") or "").strip()
+        if _is_sfc_noise(title):
+            n_noise += 1
+            continue
         out.append({
             "date": d,
-            "title": (item.get("title") or "").strip(),
+            "title": title,
             "content": "",
             "source": f"sfc.hk/news?type={item.get('newsType','')}",
         })
+        if len(out) >= limit:
+            break
+    if n_noise:
+        logger.info("SFC noise 过滤 %d 条 (speech / award / ceremony 等)", n_noise)
     return out
 
 
