@@ -30,6 +30,7 @@ _CACHE: dict[str, dict[str, list[dict]] | None] = {
     "cn": None,
     "us": None,
     "hkex": None,
+    "us_sec": None,
 }
 
 # 港股 HKEX 事件类型 → 优先级（数字小 = 优先用作 catalyst 句）
@@ -42,6 +43,15 @@ HKEX_PRIORITY = {
     # earnings_announcement: 不优先（yfinance 含 EPS 数字更可用）
     "insider_change":   4,   # 股东减增持
     "buyback":          5,   # 回购（弱信号）
+}
+
+# 美股 SEC 事件优先级
+US_SEC_PRIORITY = {
+    "active_holder_change":  0,  # SC 13D - 主动持仓往往含收购意图
+    "passive_holder_change": 1,  # SC 13G - 大资金进入
+    # 8-K material_event 暂时不放强催化（title 太 generic，要等 Item 解析）
+    "material_event":        4,
+    "proxy":                 5,  # 股东大会通知（信号弱）
 }
 
 
@@ -90,6 +100,19 @@ def _events_hkex() -> dict[str, list[dict]]:
                 idx.setdefault(t, []).append(e)
         _CACHE["hkex"] = idx
     return _CACHE["hkex"]
+
+
+def _events_us_sec() -> dict[str, list[dict]]:
+    """美股 SEC EDGAR filings（按 ticker 分组）。"""
+    if _CACHE["us_sec"] is None:
+        d = _load_json("data/event_calendar_us_sec.json")
+        idx: dict[str, list[dict]] = {}
+        for e in (d.get("events") or []):
+            t = (e.get("ticker") or "").upper()
+            if t:
+                idx.setdefault(t, []).append(e)
+        _CACHE["us_sec"] = idx
+    return _CACHE["us_sec"]
 
 
 def _events_cn() -> dict[str, list[dict]]:
@@ -147,8 +170,14 @@ def get_catalyst(ticker: str, *, lookback_days: int = LOOKBACK_DAYS, today: date
         code = tk_upper.split(".")[0]
         return _catalyst_from_cn_yjbb(_events_cn().get(code) or [], today, lookback_days)
 
-    # 美股（裸 ticker）
-    return _catalyst_from_earnings_dates(_events_us().get(tk_upper) or [], today, lookback_days)
+    # 美股（裸 ticker）— 三段优先级链同港股
+    strong = _catalyst_from_sec(_events_us_sec().get(tk_upper) or [], today, lookback_days, max_priority=1)
+    if strong:
+        return strong
+    eps = _catalyst_from_earnings_dates(_events_us().get(tk_upper) or [], today, lookback_days)
+    if eps:
+        return eps
+    return _catalyst_from_sec(_events_us_sec().get(tk_upper) or [], today, lookback_days, max_priority=9)
 
 
 def _catalyst_from_hkex(events: list[dict], today: date, lookback_days: int, max_priority: int = 9) -> str | None:
@@ -193,6 +222,40 @@ def _catalyst_from_hkex(events: list[dict], today: date, lookback_days: int, max
     }
     prefix = label_map.get(etype, "📄 公告")
     return f"{ed.strftime('%-m/%-d')} {prefix}：{title}（{days_ago}d 前）"
+
+
+def _catalyst_from_sec(events: list[dict], today: date, lookback_days: int, max_priority: int = 9) -> str | None:
+    """SEC EDGAR filings → 催化句。按 event_type 优先级 + 日期新近度。"""
+    if not events:
+        return None
+    candidates: list[tuple[int, date, dict]] = []
+    for e in events:
+        etype = e.get("event_type", "")
+        prio = US_SEC_PRIORITY.get(etype)
+        if prio is None or prio > max_priority:
+            continue
+        try:
+            ed = datetime.strptime(e.get("event_date", ""), "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if not (0 <= (today - ed).days <= lookback_days):
+            continue
+        candidates.append((prio, ed, e))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: (x[0], -(x[1].toordinal())))
+    _, ed, e = candidates[0]
+    days_ago = (today - ed).days
+    etype = e.get("event_type", "")
+    form = e.get("form", "")
+    label_map = {
+        "active_holder_change":   "🎯 大股东主动持仓（13D 常含收购意图）",
+        "passive_holder_change":  "👥 大股东被动持仓（13G）",
+        "material_event":         "📣 8-K 重大事件",
+        "proxy":                  "🗳️ 股东大会",
+    }
+    label = label_map.get(etype, f"📄 {form}")
+    return f"{ed.strftime('%-m/%-d')} {label}（{days_ago}d 前）"
 
 
 def _catalyst_from_earnings_dates(events: list[dict], today: date, lookback_days: int) -> str | None:
