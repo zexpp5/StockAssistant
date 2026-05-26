@@ -1968,8 +1968,8 @@ function switchDiscoveryView(view) {
       <select id="junior-tier-select" onchange="setJuniorTierFilter(this.value)"
               class="text-sm border border-slate-300 rounded px-2 py-1 bg-white min-w-[180px]">
         <option value="actionable">🟢🟡 仅可操作</option>
-        <option value="watch" selected>+ ⚪ 只观察（默认）</option>
-        <option value="all">+ 🚫 含不碰</option>
+        <option value="watch" selected>⚪ 排除不碰（默认）</option>
+        <option value="all">🚫 全部</option>
       </select>
       <label class="text-xs text-slate-600 font-medium ml-2">行业/板块</label>
       <select id="junior-filter-select" onchange="filterJunior(this.value)"
@@ -5342,17 +5342,12 @@ function _renderJuniorTable_US() {
   const m = _ipoCurrentMarket();
   const all = m.junior_pool || [];
   const el = document.getElementById("ipo-junior-table");
-  // step 3: tier 计数 + filter
-  const cActionable = all.filter(x => _juniorTierAllowed(x.tier, "actionable")).length;
-  const cWatch      = all.filter(x => _juniorTierAllowed(x.tier, "watch")).length;
-  const cAll        = all.length;
-  _renderJuniorTierBtns(cActionable, cWatch, cAll);
+  _rebuildJuniorSelects("us", all);
   const visibleAll = all.filter(x => _juniorTierAllowed(x.tier, _juniorTierFilter));
   // 筛选: tech / broken
   let list = visibleAll;
   if (_juniorFilter === "tech") list = visibleAll.filter(x => x.is_tech);
   else if (_juniorFilter === "broken") list = visibleAll.filter(x => (x.vs_issue_pct || 0) < 0);
-  _rebuildJuniorSelects("us", all);
   const ctEl = document.getElementById("junior-count");
   if (ctEl) ctEl.textContent = `${list.length} / ${all.length} 只`;
 
@@ -5459,11 +5454,7 @@ function _renderJuniorTable() {
   if (_ipoMarket === "hk") return _renderJuniorTable_HK();
   const m = _ipoCurrentMarket();
   const all = m.junior_pool || [];
-  // step 3: tier 计数 + filter
-  const cActionable = all.filter(x => _juniorTierAllowed(x.tier, "actionable")).length;
-  const cWatch      = all.filter(x => _juniorTierAllowed(x.tier, "watch")).length;
-  const cAll        = all.length;
-  _renderJuniorTierBtns(cActionable, cWatch, cAll);
+  _rebuildJuniorSelects("cn", all);
   const visibleAll = all.filter(x => _juniorTierAllowed(x.tier, _juniorTierFilter));
   let list = visibleAll;
   if (_juniorFilter === "broken") list = visibleAll.filter(x => x.broken_issue);
@@ -5473,7 +5464,6 @@ function _renderJuniorTable() {
 
   const ctEl = document.getElementById("junior-count");
   if (ctEl) ctEl.textContent = `${list.length} / ${all.length} 只`;
-  _rebuildJuniorSelects("cn", all);
 
   const el = document.getElementById("ipo-junior-table");
   if (!el) return;
@@ -5586,8 +5576,8 @@ function _rebuildJuniorSelects(market, all) {
     const cAll        = all.length;
     tsel.innerHTML =
       `<option value="actionable">🟢🟡 仅可操作 (${cActionable})</option>` +
-      `<option value="watch">+ ⚪ 只观察 默认 (${cWatch})</option>` +
-      `<option value="all">+ 🚫 含不碰 (${cAll})</option>`;
+      `<option value="watch">⚪ 排除不碰 默认 (${cWatch})</option>` +
+      `<option value="all">🚫 全部 (${cAll})</option>`;
     tsel.value = _juniorTierFilter;
   }
 }
@@ -10709,6 +10699,110 @@ def scoring_rules_panel_html(calib):
 </section>'''
 
 
+def _augment_source_health_with_catalyst(source_health: dict | None) -> None:
+    """把三个 event_calendar 的健康状况合并进 source_health.sources。
+
+    每个 collector 写出的 JSON 含 coverage{hit, miss, errored}，
+    hit/总 < 90% 或 errored > 5 时标 degraded，进 sources 字典让降级面板展示。
+
+    inline 修改 source_health 字典（如果传入 None 则不动）。
+    """
+    if not isinstance(source_health, dict):
+        return
+    from datetime import date, datetime as _dt
+    sources = source_health.setdefault("sources", {})
+    today = date.today()
+    DEGRADE_HIT_RATIO = 0.9
+    DEGRADE_ERR_COUNT = 5
+    STALE_DAYS = 2
+    for rel, label, market_label in [
+        ("data/event_calendar.json",    "event_calendar_cn", "A 股事件日历"),
+        ("data/event_calendar_hk.json", "event_calendar_hk", "港股事件日历"),
+        ("data/event_calendar_us.json", "event_calendar_us", "美股事件日历"),
+    ]:
+        path = os.path.join(_REPO, rel)
+        if not os.path.exists(path):
+            sources[label] = {
+                "status": "down",
+                "reason": "file_missing",
+                "impact": f"{market_label} 文件缺失，推荐侧 📰 一句话解释会消失",
+                "affected_fields": ["catalyst", "📰 推荐依据 前缀"],
+                "unaffected_fields": ["主推荐排名", "评分"],
+                "operator_action": f"重跑 `python3 -m stock_research.jobs.{label}_daily`",
+                "last_event": {"ts": "", "detail": f"{rel} 不存在"},
+            }
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            sources[label] = {
+                "status": "down",
+                "reason": "invalid_json",
+                "impact": f"{market_label} JSON 解析失败",
+                "operator_action": "检查文件内容；重跑 collector",
+                "last_event": {"ts": "", "detail": str(e)[:200]},
+            }
+            continue
+        gen_at = data.get("generated_at") or ""
+        try:
+            gen_dt = _dt.fromisoformat(gen_at) if gen_at else None
+        except Exception:
+            gen_dt = None
+        age_days = (today - gen_dt.date()).days if gen_dt else None
+
+        # A 股 event_calendar.json 跟港股/美股 schema 不同（没有 coverage 字段）
+        # A 股看 n_events 是否合理
+        if label == "event_calendar_cn":
+            n_events = int(data.get("n_events") or 0)
+            stale = age_days is not None and age_days > STALE_DAYS
+            if n_events < 1000:
+                sources[label] = {
+                    "status": "degraded",
+                    "reason": "few_events",
+                    "impact": f"{market_label} 仅 {n_events} 条事件 (期望 1000+)，A 股票 📰 覆盖会偏低",
+                    "affected_fields": ["A 股 catalyst"],
+                    "unaffected_fields": ["港股 / 美股 catalyst"],
+                    "operator_action": "重跑 `python3 -m stock_research.jobs.event_calendar_daily`",
+                    "last_event": {"ts": gen_at, "detail": f"n_events={n_events}, age={age_days}d"},
+                }
+            elif stale:
+                sources[label] = {
+                    "status": "degraded",
+                    "reason": "stale",
+                    "impact": f"{market_label} 已 {age_days} 天未刷新",
+                    "operator_action": "重跑 event_calendar_daily",
+                    "last_event": {"ts": gen_at, "detail": f"age={age_days}d"},
+                }
+            continue
+
+        # HK/US 用 coverage
+        cov = data.get("coverage") or {}
+        hit = int(cov.get("hit") or 0)
+        miss = int(cov.get("miss") or 0)
+        errored = int(cov.get("errored") or 0)
+        total = hit + miss + errored
+        ratio = (hit / total) if total > 0 else 0.0
+        stale = age_days is not None and age_days > STALE_DAYS
+        problems = []
+        if ratio < DEGRADE_HIT_RATIO and total > 0:
+            problems.append(f"命中率 {ratio:.0%} (期望 ≥{DEGRADE_HIT_RATIO:.0%})")
+        if errored > DEGRADE_ERR_COUNT:
+            problems.append(f"错误 {errored} 只 (期望 ≤{DEGRADE_ERR_COUNT})")
+        if stale:
+            problems.append(f"已 {age_days} 天未刷新")
+        if problems:
+            sources[label] = {
+                "status": "degraded",
+                "reason": "low_coverage" if (ratio < DEGRADE_HIT_RATIO) else ("errors" if errored > DEGRADE_ERR_COUNT else "stale"),
+                "impact": f"{market_label}: " + "；".join(problems),
+                "affected_fields": [f"{market_label.split('事件')[0]}股 catalyst (📰 推荐依据)"],
+                "unaffected_fields": ["其他市场 catalyst", "主推荐排名"],
+                "operator_action": f"重跑 `python3 -m stock_research.jobs.{label}_daily`",
+                "last_event": {"ts": gen_at, "detail": f"hit={hit}/miss={miss}/err={errored}, age={age_days}d"},
+            }
+
+
 def source_health_panel_html(payload: dict | None) -> str:
     """Render data-source degradation near today's picks."""
     if not isinstance(payload, dict) or not payload.get("sources"):
@@ -14247,6 +14341,7 @@ def build():
     # discovery_candidates.json 只作为富字段补充；候选范围以 DuckDB recommendation_picks 为准。
     discovery_json = _load_json("data/discovery_candidates.json")
     source_health = _load_json("data/latest/source_health.json")
+    _augment_source_health_with_catalyst(source_health)
     batch_meta_main = _runtime_v2_latest_batch_meta()
     v2_candidates_main = _runtime_v2_recommendations()
     if v2_candidates_main:
