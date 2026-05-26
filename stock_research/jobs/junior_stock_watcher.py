@@ -240,12 +240,20 @@ def _save_cn_industry_cache(entries: dict[str, str]) -> None:
     CN_INDUSTRY_CACHE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _enrich_cn_industry(items: list[dict]) -> None:
-    """给 A 股 items inplace 补 industry 字段。
+def _strip_sw_roman(s: str) -> str:
+    """申万行业名有"Ⅰ/Ⅱ/Ⅲ"罗马数字后缀，对用户无意义，剥掉。"""
+    return (s or "").rstrip("ⅠⅡⅢⅣⅤ").strip()
 
-    数据源：akshare stock_individual_info_em（东财个股资讯）。
-    fail-soft：拉不到就保持空字符串，不抛异常、不阻塞主流程。
-    限流：每只 0.3s sleep；缓存命中跳过。
+
+def _enrich_cn_industry(items: list[dict]) -> None:
+    """给 A 股 items inplace 补 industry 字段（申万一级 / 二级）。
+
+    数据源：akshare stock_industry_change_cninfo（巨潮接口，含 4 套行业分类）。
+    选申万分类（分类标准编码 008003），展示"门类 / 次类" = SW1 / SW2，
+    例："电力设备 / 其他电源设备"、"基础化工 / 农化制品"。
+
+    实测：~0.5s/只，159 只首次约 80s；命中 7 天缓存后秒级。
+    fail-soft：单只失败不抛异常；连续 5 次失败提前终止避免拖慢主流程。
     """
     ak = _import_ak()
     if ak is None:
@@ -259,30 +267,40 @@ def _enrich_cn_industry(items: list[dict]) -> None:
     # 找还缺的
     missing = [it for it in items if not it.get("industry") and it.get("code")]
     if not missing:
+        logger.info("[CN industry] 全部命中缓存（%d 只）", len(items))
         return
     import time as _time
+    today = date.today().strftime("%Y%m%d")
+    start = (date.today() - timedelta(days=730)).strftime("%Y%m%d")  # 回看 2 年内的分类变更
     fetched = 0
     failed = 0
-    for it in missing:
+    consec_fail = 0
+    for idx, it in enumerate(missing):
         code = it["code"]
         try:
-            df = ak.stock_individual_info_em(symbol=code)
-            row = dict(zip(df["item"], df["value"]))
-            industry = str(row.get("行业") or "").strip()
-            if industry:
-                it["industry"] = industry
-                cache[code] = industry
-                fetched += 1
-            _time.sleep(0.3)
+            df = ak.stock_industry_change_cninfo(symbol=code, start_date=start, end_date=today)
+            sw = df[df["分类标准编码"] == "008003"]  # 申银万国行业分类标准
+            if not sw.empty:
+                r = sw.iloc[-1]
+                sw1 = _strip_sw_roman(str(r.get("行业门类") or ""))
+                sw2 = _strip_sw_roman(str(r.get("行业次类") or ""))
+                industry = f"{sw1} / {sw2}" if sw1 and sw2 else (sw1 or sw2)
+                if industry:
+                    it["industry"] = industry
+                    cache[code] = industry
+                    fetched += 1
+                    consec_fail = 0
+            _time.sleep(0.2)
         except Exception:
             failed += 1
-            # 单只失败不阻塞剩下的；多个连续失败说明源挂了，提前终止
-            if failed >= 5 and fetched == 0:
-                logger.warning("[CN industry] 连续失败 %d 次，akshare EM 可能限流，跳过剩余 %d 只", failed, len(missing) - missing.index(it))
+            consec_fail += 1
+            if consec_fail >= 5:
+                logger.warning("[CN industry] 连续失败 5 次，cninfo 可能限流，跳过剩余 %d 只", len(missing) - idx - 1)
                 break
     if fetched > 0:
         _save_cn_industry_cache(cache)
-    logger.info("[CN industry] 补全 %d 只 (失败 %d / 缓存 %d / 总 %d)", fetched, failed, len(cache), len(items))
+    logger.info("[CN industry] 申万分类补全 %d 只 (失败 %d / 缓存累计 %d / 池子总 %d)",
+                fetched, failed, len(cache), len(items))
 
 
 def fetch_cn_unlock_radar(holdings: set[str], watchlist: set[str], horizon_days: int = 90) -> list[dict]:

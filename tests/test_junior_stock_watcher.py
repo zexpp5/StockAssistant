@@ -291,7 +291,7 @@ class EnrichCnIndustryFailSoftTest(unittest.TestCase):
             {"code": "301501", "name": "恒鑫生活", "industry": ""},
         ]
         ak = MagicMock()
-        ak.stock_individual_info_em.side_effect = ConnectionError("Remote disconnected")
+        ak.stock_industry_change_cninfo.side_effect = ConnectionError("Remote disconnected")
         with patch(
             "stock_research.jobs.junior_stock_watcher._import_ak",
             return_value=ak,
@@ -313,13 +313,35 @@ class EnrichCnIndustryFailSoftTest(unittest.TestCase):
             return_value=ak,
         ), patch(
             "stock_research.jobs.junior_stock_watcher._load_cn_industry_cache",
-            return_value={"603395": "化学制品"},
+            return_value={"603395": "基础化工 / 农化制品"},
         ):
             _enrich_cn_industry(items)
         # 缓存命中：industry 已填
-        self.assertEqual(items[0]["industry"], "化学制品")
-        # ak.stock_individual_info_em 未被调用
-        ak.stock_individual_info_em.assert_not_called()
+        self.assertEqual(items[0]["industry"], "基础化工 / 农化制品")
+        # 接口未被调用
+        ak.stock_industry_change_cninfo.assert_not_called()
+
+    def test_sw_classification_parsed(self):
+        """巨潮接口返回 4 套分类，只取申万(008003) 的门类/次类。"""
+        items = [{"code": "688411", "name": "海博思创", "industry": ""}]
+        ak = MagicMock()
+        ak.stock_industry_change_cninfo.return_value = pd.DataFrame([
+            {"分类标准编码": "008001", "行业门类": "制造业", "行业次类": ""},  # 证监会(忽略)
+            {"分类标准编码": "008003", "行业门类": "电力设备", "行业次类": "其他电源设备Ⅱ"},  # 申万
+            {"分类标准编码": "008002", "行业门类": "工业", "行业次类": "重型电气设备"},  # 巨潮(忽略)
+        ])
+        with patch(
+            "stock_research.jobs.junior_stock_watcher._import_ak",
+            return_value=ak,
+        ), patch(
+            "stock_research.jobs.junior_stock_watcher._load_cn_industry_cache",
+            return_value={},
+        ), patch(
+            "stock_research.jobs.junior_stock_watcher._save_cn_industry_cache",
+        ):
+            _enrich_cn_industry(items)
+        # 申万门类 / 次类，罗马数字 Ⅱ 剥掉
+        self.assertEqual(items[0]["industry"], "电力设备 / 其他电源设备")
 
 
 if __name__ == "__main__":
