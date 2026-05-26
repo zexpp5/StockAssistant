@@ -1,11 +1,16 @@
-"""新股打新日报：抓 IPO 日历 + 推送提醒 + 写入 data/ipo_calendar.json。
+"""新股打新日报：抓 IPO 日历 + 写入 data/ipo_calendar.json。
 
-每日早晨 daily_refresh.sh 调一次。
+每日 daily_refresh.sh 调一次（早班/夜班/full 都跑，受 needs_ipo_data 守卫）。
 
 输出：
-  data/ipo_calendar.json  (被 dashboard / streamlit / 飞书消费)
-  data/reports/ipo_daily_YYYYMMDD.md  (人类可读 markdown)
+  data/ipo_calendar.json    被 junior_stock_watcher.py 读取，
+                            再合并到 data/latest/junior_stock_radar.json，
+                            最终在 dashboard IPO & 次新股 tab 展示
+  data/reports/ipo_daily_YYYYMMDD.md  人类可读 markdown
   stdout: 当日是否有可申购 + AI 相关新股摘要
+
+注意：飞书侧目前不直接消费此 JSON（morning_brief 暂未拼装 IPO section）。
+如需飞书推送，需在 morning_brief.py 增加 IPO 区块或单独写 webhook 推送 job。
 
 退出码：
   0 = 成功（含"接口正常但当日无新股"）

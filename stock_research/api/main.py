@@ -1354,6 +1354,41 @@ _sys.exit(rc)
         background.add_task(job.run_audit, only_code=code)
         return {"status": "queued", "job": "daily_audit", "code": code}
 
+    @app.get("/api/ipo/radar")
+    def get_ipo_radar() -> dict[str, Any]:
+        """返回最新 junior_stock_radar.json（IPO 日历 + 解禁雷达 + 次新股池）。
+
+        前端 dashboard 重新渲染 IPO tab 用：refresh-ipo 触发重算后，
+        前端 fetch 这个接口拿到新数据再替换 JUNIOR_RADAR。
+        """
+        p = _REPO_ROOT / "data" / "latest" / "junior_stock_radar.json"
+        if not p.exists():
+            return {"error": "junior_stock_radar.json 不存在；请先 POST /api/jobs/refresh-ipo"}
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception as e:
+            return {"error": f"读取失败: {e}"}
+
+    @app.post("/api/jobs/refresh-ipo")
+    def trigger_ipo_refresh(background: BackgroundTasks):
+        """触发 IPO 日历 + 次新股雷达刷新（异步，串行：先 ipo_daily 后 junior_stock_watcher）。
+
+        junior_stock_watcher 读取 ipo_daily 生成的 ipo_calendar.json，
+        所以必须串行不能并行。整体 ~15s。
+        """
+        def _run_both():
+            from ..jobs import ipo_daily, junior_stock_watcher
+            try:
+                ipo_daily.main()
+            except Exception as e:
+                logger.warning("refresh-ipo: ipo_daily 失败: %s", e)
+            try:
+                junior_stock_watcher.main()
+            except Exception as e:
+                logger.warning("refresh-ipo: junior_stock_watcher 失败: %s", e)
+        background.add_task(_run_both)
+        return {"status": "queued", "job": "refresh_ipo", "steps": ["ipo_daily", "junior_stock_watcher"]}
+
     return app
 
 

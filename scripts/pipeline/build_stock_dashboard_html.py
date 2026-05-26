@@ -1848,7 +1848,14 @@ function switchDiscoveryView(view) {
       ③ 上市 6–24 月、跌破发行价的次新股「底部观察池」。
       <span class="text-violet-700">所有数据每日刷新，仅供研究观察，不构成买入建议。</span>
     </p>
-    <p id="ipo-junior-meta" class="text-xs text-slate-500 mt-2"></p>
+    <div class="mt-2 flex flex-wrap items-center justify-between gap-3">
+      <p id="ipo-junior-meta" class="text-xs text-slate-500 flex-1 min-w-0"></p>
+      <button onclick="refreshIpoData()" id="ipo-refresh-btn"
+              title="后端串行跑 ipo_daily + junior_stock_watcher，~15s 完成"
+              class="text-xs px-3 py-1 rounded border border-violet-300 bg-white text-violet-700 hover:bg-violet-50 transition whitespace-nowrap">
+        🔄 重新拉取
+      </button>
+    </div>
   </div>
 
   <!-- 市场切换（一级 tab）-->
@@ -2747,6 +2754,12 @@ const PICKS        = {PICKS_JSON};
 // {us: ISO 时间, hk: ISO 时间, cn: ISO 时间}；某市场没数据时为 null
 const PICKS_TIMESTAMPS = {PICKS_TIMESTAMPS_JSON};
 const WATCHLIST_RATINGS = {WATCHLIST_RATINGS_JSON};  // {code: {rating, total_score, ai_score}}  来自 picks 最新一日
+// 2026-05-25: 自选股每只 code 在 picks universe 里的覆盖状态 — 让"未评级" badge 能告诉用户原因
+//   {code: "in_universe" | "dropped_from_universe" | "not_in_universe"}
+//   in_universe            → 现役科技池但今日没截入 top 20 → "📊 池外"
+//   dropped_from_universe  → 曾在科技池，最近重建时被剔除 → "📉 已下池"
+//   not_in_universe        → 从没进过 universe（消费/ETF/防御类）→ "📦 非科技 · 模型不评"
+const WATCHLIST_COVERAGE = {WATCHLIST_COVERAGE_JSON};
 const SIMULATION   = {SIMULATION_JSON};
 // 2026-05-11 PM: watchlist 链条定位信息(chain/chain_tier/chain_role/layman_intro)
 // 按 code 索引 → 任何 tab 显示股票时,Stock Pill 都能查到上下文
@@ -2902,7 +2915,18 @@ function _wlRatingBadge(code) {
     if (__pickJobRunning) {
       return '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs bg-sky-100 text-sky-700" title="后台 daily_picks_v5 正在跑评级"><span class="animate-pulse">🔄</span>&nbsp;评级中</span>';
     }
-    return '<span class="text-slate-400 text-xs" title="picks 表里没这只股 — 点刷新 / 或加一只新股自动触发评级">— 未评级</span>';
+    // 2026-05-25: 按 coverage 区分"为什么没评级"，避免让用户猜机制
+    const cov = WATCHLIST_COVERAGE[code];
+    if (cov === "in_universe") {
+      return '<span class="inline-flex px-2 py-0.5 rounded text-xs bg-slate-100 text-slate-600" title="在科技 universe 内，但今日 picks top 20 之外（被其它科技股压下去了）— 不是没跑，是没截入">📊 池外</span>';
+    }
+    if (cov === "dropped_from_universe") {
+      return '<span class="inline-flex px-2 py-0.5 rounded text-xs bg-orange-50 text-orange-700" title="曾在科技池里，最近一次 universe 重建时被剔除（可能因子表现退化 / 行情归类调整）— 你加的自选股仍保留，但模型不再为它打分">📉 已下池</span>';
+    }
+    if (cov === "not_in_universe") {
+      return '<span class="inline-flex px-2 py-0.5 rounded text-xs bg-amber-50 text-amber-700" title="模型 universe 是科技/AI 股池；这只属于消费 / ETF / 防御 / 港股非科技龙头等，因子模型不适用 — 不评是诚实的，不是 bug">📦 不评 · 非科技</span>';
+    }
+    return '<span class="text-slate-400 text-xs" title="今天还没跑过 picks — 点刷新或加一只新股自动触发评级">— 未评级</span>';
   }
   const r = String(info.rating);
   const score = info.total_score != null ? ` · ${Number(info.total_score).toFixed(1)}` : "";
@@ -4833,7 +4857,7 @@ window.addEventListener("DOMContentLoaded", () => {
 });
 
 // ============ 📅 IPO & 次新股 雷达（数据由 build_stock_dashboard_html.py 注入） ============
-const JUNIOR_RADAR = {JUNIOR_RADAR_JSON};
+let JUNIOR_RADAR = {JUNIOR_RADAR_JSON};
 let _ipoMarket = "us";  // us / cn / hk — 默认美股(用户 2026-05-25 偏好)
 let _ipoJuniorSub = "ipo";
 let _unlockFilter = "all";
@@ -5465,6 +5489,45 @@ function _updateIpoMeta() {
 function renderJuniorRadar() {
   switchIpoMarket(_ipoMarket);
   switchIpoJuniorSub(_ipoJuniorSub);
+}
+
+async function refreshIpoData() {
+  // 触发后端 ipo_daily + junior_stock_watcher 串行重算 (~15s)，
+  // polling /api/ipo/radar 直到 generated_at 变化，然后替换 JUNIOR_RADAR + 重新渲染。
+  // 注意：JUNIOR_RADAR 是 let（不是 const），允许整体替换。
+  const btn = document.getElementById("ipo-refresh-btn");
+  if (!btn) return;
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  const oldStamp = String((JUNIOR_RADAR && JUNIOR_RADAR.generated_at) || "");
+  try {
+    btn.innerHTML = "⏳ 触发刷新...";
+    const trig = await fetch(WATCHLIST_API_BASE + "/api/jobs/refresh-ipo", { method: "POST" });
+    if (!trig.ok) throw new Error("触发失败 HTTP " + trig.status);
+    // 后端实测 ~15s，4s 间隔 polling，最多 10 轮（40s）
+    for (let i = 1; i <= 10; i++) {
+      btn.innerHTML = `⏳ 拉取中 ${i*4}s/40s...`;
+      await new Promise(r => setTimeout(r, 4000));
+      try {
+        const dataRes = await fetch(WATCHLIST_API_BASE + "/api/ipo/radar");
+        if (!dataRes.ok) continue;
+        const fresh = await dataRes.json();
+        if (fresh.error) continue;
+        const newStamp = String(fresh.generated_at || "");
+        if (newStamp && newStamp !== oldStamp) {
+          JUNIOR_RADAR = fresh;
+          switchIpoMarket(_ipoMarket);
+          btn.innerHTML = "✓ 已刷新";
+          setTimeout(() => { btn.disabled = false; btn.innerHTML = orig; }, 3000);
+          return;
+        }
+      } catch (_e) { /* 继续下一轮 polling */ }
+    }
+    throw new Error("40s 内未拉到新数据，请稍后再试");
+  } catch (e) {
+    btn.innerHTML = "✗ " + (e.message || "失败");
+    setTimeout(() => { btn.disabled = false; btn.innerHTML = orig; }, 5000);
+  }
 }
 
 // ============ 持仓管理（DuckDB · real_holdings / model_sim_holdings 两本账） ============
@@ -9113,6 +9176,9 @@ function _riskSummaryHtml(row, maxItems = 1) {
 }
 
 function _reasonSummary(row) {
+  // catalyst（近 60d 财报超预期等）前缀，让用户先看到 why now
+  const catalyst = row && row.catalyst ? String(row.catalyst) : "";
+  const catalystPrefix = catalyst ? `${catalyst} · ` : "";
   const explicit = row && row.recommendation_reason;
   if (explicit) {
     const text = String(explicit);
@@ -9129,18 +9195,19 @@ function _reasonSummary(row) {
       const dates = [];
       if (m[4] && m[4] !== "missing") dates.push(`动量 ${m[4]}`);
       if (m[5] && m[5] !== "missing") dates.push(`估值 ${m[5]}`);
-      return `${parts.join(" / ")}${dates.length ? `；数据源 ${dates.join("，")}` : ""}`;
+      return `${catalystPrefix}${parts.join(" / ")}${dates.length ? `；数据源 ${dates.join("，")}` : ""}`;
     }
-    return text;
+    return `${catalystPrefix}${text}`;
   }
   const detail = (row && row.detail) || {};
-  if (detail.recommendation_reason) return String(detail.recommendation_reason);
+  if (detail.recommendation_reason) return `${catalystPrefix}${String(detail.recommendation_reason)}`;
   const f = (row && row.factor_scores) || detail.factor_scores || {};
   const parts = [];
   if (f.momentum != null) parts.push(`动量 ${Number(f.momentum).toFixed(0)}`);
   if (f.valuation != null) parts.push(`估值 ${Number(f.valuation).toFixed(0)}`);
   if (f.data_quality != null) parts.push(`数据 ${Number(f.data_quality).toFixed(0)}`);
-  return parts.length ? parts.join(" / ") : "暂无结构化推荐理由";
+  const body = parts.length ? parts.join(" / ") : (catalyst ? "" : "暂无结构化推荐理由");
+  return `${catalystPrefix}${body}`;
 }
 
 (function renderDiscovery() {
@@ -10341,6 +10408,86 @@ def _runtime_load_json(rel: str) -> dict:
         return payload if isinstance(payload, dict) else {"_payload": payload}
     except Exception as e:
         return {"_error": str(e)}
+
+
+def _build_catalyst_index() -> dict[str, str]:
+    """ticker (uppercase) → "📰 ..." catalyst 一句话；
+    数据源：event_calendar_hk.json (港股 yfinance) + event_calendar.json (A 股 akshare)。
+    与 morning_brief._build_catalyst 字段一致；前端在「推荐依据」前 prepend 这一行。
+    """
+    from datetime import date, datetime as _dt
+
+    out: dict[str, str] = {}
+    today = date.today()
+    LOOKBACK = 60
+
+    # 港股事件（earnings + earnings_upcoming）
+    hk = _runtime_load_json("data/event_calendar_hk.json") or {}
+    hk_idx: dict[str, list[dict]] = {}
+    for e in (hk.get("events") or []):
+        hk_idx.setdefault((e.get("ticker") or "").upper(), []).append(e)
+    for tk, evs in hk_idx.items():
+        recent: list[tuple[date, dict]] = []
+        upcoming: list[tuple[date, dict]] = []
+        for e in evs:
+            try:
+                ed = _dt.strptime(e.get("event_date", ""), "%Y-%m-%d").date()
+            except Exception:
+                continue
+            if e.get("event_type") == "earnings" and 0 <= (today - ed).days <= LOOKBACK:
+                recent.append((ed, e))
+            elif e.get("event_type") == "earnings_upcoming" and 0 <= (ed - today).days <= 14:
+                upcoming.append((ed, e))
+        if recent:
+            recent.sort(key=lambda x: abs((x[1].get("surprise_pct") or 0)), reverse=True)
+            ed, e = recent[0]
+            days_ago = (today - ed).days
+            surp = e.get("surprise_pct")
+            est = e.get("eps_estimate")
+            act = e.get("eps_actual")
+            if surp is not None and est is not None and act is not None:
+                sign = "超预期" if surp > 0 else "差预期"
+                out[tk] = f"📰 {ed.strftime('%-m/%-d')} EPS 实际 {act:.2f}/估 {est:.2f}，{sign} {surp:+.1f}%（{days_ago}d 前）"
+            else:
+                out[tk] = f"📰 {ed.strftime('%-m/%-d')} 财报已披露（{days_ago}d 前）"
+        elif upcoming:
+            upcoming.sort(key=lambda x: x[0])
+            ed, e = upcoming[0]
+            days_to = (ed - today).days
+            est = e.get("eps_estimate")
+            est_label = f"EPS 估 {est:.2f}" if isinstance(est, (int, float)) else "EPS 估 n/a"
+            out[tk] = f"📰 {ed.strftime('%-m/%-d')} 财报临近（+{days_to}d，{est_label}）"
+
+    # A 股事件（earnings 净利润同比）
+    cn = _runtime_load_json("data/event_calendar.json") or {}
+    cn_idx: dict[str, list[dict]] = {}
+    for e in (cn.get("events") or []):
+        code = e.get("code", "")
+        if code:
+            cn_idx.setdefault(code, []).append(e)
+    for code, evs in cn_idx.items():
+        recent: list[tuple[date, dict]] = []
+        for e in evs:
+            if e.get("event_type") != "earnings":
+                continue
+            try:
+                ed = _dt.strptime(e.get("event_date", ""), "%Y-%m-%d").date()
+            except Exception:
+                continue
+            if 0 <= (today - ed).days <= LOOKBACK:
+                recent.append((ed, e))
+        if recent:
+            recent.sort(key=lambda x: x[0], reverse=True)
+            ed, e = recent[0]
+            days_ago = (today - ed).days
+            mag = e.get("magnitude") or 0
+            text = f"📰 {ed.strftime('%-m/%-d')} 财报：净利润同比 {mag*100:+.1f}%（{days_ago}d 前）"
+            # A 股 candidate ticker 形如 "300001.SZ" / "601318.SH"，先建 6 位 code 索引
+            # 候选侧会用 ticker.upper() 查；这里两种 key 都放（裸 6 位 + 带后缀）
+            for suffix in (".SH", ".SS", ".SZ", ".BJ", ""):
+                out[f"{code}{suffix}".upper()] = text
+
+    return out
 
 
 def _runtime_artifact(rel: str) -> dict:
@@ -12065,6 +12212,11 @@ def runtime_status_panel_html() -> str:
             ("重建 HTML", "刷新 dashboard 页面"),
             ("早安简报", "生成飞书镜像"),
             ("生产闭环验收", "生产验收"),
+            ("IPO 打新日历", "拉取 IPO 日历"),
+            ("次新股+解禁雷达", "IPO/次新股数据"),
+            ("事件日历", "拉取事件日历"),
+            ("政策事件扫描", "扫描政策事件"),
+            ("产业政策事件扫描", "扫描政策事件"),
         ]
         action = body
         for needle, replacement in rules:
@@ -13527,6 +13679,7 @@ def build():
             for c in (discovery_json.get("candidates") or [])
             if isinstance(c, dict)
         }
+        catalyst_by_ticker = _build_catalyst_index()
         merged_candidates = []
         for c in v2_candidates_main:
             rich = rich_by_ticker.get(str(c.get("ticker") or c.get("code") or "").upper()) or {}
@@ -13544,6 +13697,9 @@ def build():
                 }
             if rich.get("etfs"):
                 item["etfs"] = rich.get("etfs")
+            cat = catalyst_by_ticker.get(str(item.get("ticker") or item.get("code") or "").upper())
+            if cat:
+                item["catalyst"] = cat
             merged_candidates.append(item)
         v2_stats_main = _runtime_db_stats().get("v2") or {}
         discovery = {
@@ -13732,6 +13888,36 @@ def build():
     # V2 路径：自选股·AI 优选 picks 来自 manual_watchlist JOIN recommendation_picks（待补 V2 评级 panel）
     watchlist_ratings = {}
     html = html.replace("{WATCHLIST_RATINGS_JSON}", json.dumps(watchlist_ratings, ensure_ascii=False))
+
+    # 2026-05-25: 自选股 coverage 注入 — 让前端"未评级" badge 区分四种原因
+    #   in_picks (前端 WATCHLIST_RATINGS 命中) / in_universe / dropped_from_universe / not_in_universe
+    # 见 _wlRatingBadge 分支说明
+    watchlist_coverage: dict[str, str] = {}
+    try:
+        _cov_conn = duckdb.connect(os.path.join(_REPO, "stock_history_v2.duckdb"), read_only=True)
+        try:
+            uni_active = {r[0] for r in _cov_conn.execute(
+                "SELECT symbol FROM system_universe WHERE active = TRUE"
+            ).fetchall()}
+            uni_dropped = {r[0] for r in _cov_conn.execute(
+                "SELECT symbol FROM system_universe WHERE active = FALSE"
+            ).fetchall()}
+            for (sym,) in _cov_conn.execute("SELECT symbol FROM manual_watchlist").fetchall():
+                if sym in uni_active:
+                    watchlist_coverage[sym] = "in_universe"
+                elif sym in uni_dropped:
+                    watchlist_coverage[sym] = "dropped_from_universe"
+                else:
+                    watchlist_coverage[sym] = "not_in_universe"
+        finally:
+            _cov_conn.close()
+        n_in = sum(1 for v in watchlist_coverage.values() if v == "in_universe")
+        n_drop = sum(1 for v in watchlist_coverage.values() if v == "dropped_from_universe")
+        n_out = sum(1 for v in watchlist_coverage.values() if v == "not_in_universe")
+        print(f"  自选股 coverage: {n_in} 现役科技池 / {n_drop} 已下池 / {n_out} universe 不覆盖")
+    except Exception as e:
+        print(f"  ⚠️ watchlist_coverage 加载失败: {e}")
+    html = html.replace("{WATCHLIST_COVERAGE_JSON}", json.dumps(watchlist_coverage, ensure_ascii=False))
     html = html.replace("{RECORDS_JSON}", json.dumps(records, ensure_ascii=False, default=str))
     html = html.replace("{PICKS_JSON}", json.dumps(picks, ensure_ascii=False, default=str))
     html = html.replace("{PICKS_TIMESTAMPS_JSON}", json.dumps(picks_timestamps, ensure_ascii=False))
