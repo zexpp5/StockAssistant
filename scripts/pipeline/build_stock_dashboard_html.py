@@ -4231,6 +4231,31 @@ function closeStockDetail() {
   switchTab(_stockDetailReturnTab || "db-explorer");
 }
 
+// 个股研究顶部 advisory 横条:从 JUNIOR_RADAR 找事件触发提示
+// 仅做事件提示(advisory),不做"次新=避雷"标签 — 避免和 IPO tab "研究起点"定位冲突
+function _renderStockDetailAdvisories() {
+  if (!JUNIOR_RADAR) return "";
+  const code = (document.getElementById("stock-detail-code")?.textContent || "").trim();
+  if (!code || code === "—") return "";
+  const items = [];
+  // 解禁压力(A 股) — 美股/港股 unlock_radar 暂未接入数据源
+  const cnUnlock = ((JUNIOR_RADAR.markets || {}).cn || {}).unlock_radar || [];
+  cnUnlock.forEach(u => {
+    if (u.code !== code) return;
+    if ((u.stress_score || 0) < 70) return;  // 阈值与 IPO tab "高压力" 筛选一致
+    if ((u.days_to_unlock || 999) > 7) return;
+    items.push(`
+      <div class="bg-amber-50 border border-amber-300 rounded-lg p-3 text-sm text-amber-900">
+        <div><span class="font-semibold">⚠️ 解禁临近</span> · ${_esc(u.unlock_date)} 解禁 ${u.market_value_yi} 亿（占流通 ${u.pct_of_float}% · 压力分 ${u.stress_score}）</div>
+        <div class="text-amber-700 text-xs mt-1">建议复查持仓，评估是否需要降仓 — 不构成卖出建议。
+          <a href="#ipo-junior" onclick="switchTab('ipo-junior'); switchIpoJuniorSub('unlock'); return false;" class="text-violet-700 hover:underline ml-1">查看解禁雷达 →</a>
+        </div>
+      </div>`);
+  });
+  if (!items.length) return "";
+  return `<div class="space-y-2 mb-4">${items.join("")}</div>`;
+}
+
 function renderStockDetail(data) {
   document.getElementById("stock-detail-loading").style.display = "none";
   const content = document.getElementById("stock-detail-content");
@@ -4703,7 +4728,7 @@ function renderStockDetail(data) {
       <p class="text-[10px] text-slate-400 mt-2">⚠️ YoY 需要 4 季前的同期数据，当前 yfinance 只给 5 季历史，所以多数老季的 YoY 暂为「—」；DB 每周累积后会自动补齐。QoQ（环比）对季节性行业仅供参考。前两列「季度末 + 分析」固定，其余列可横向滚动查看。</p>
     </div>`;
 
-  content.innerHTML = wlMetaCard + earningsCard + pricesCard + picksCard + reviewsCard + discoveryCard;
+  content.innerHTML = _renderStockDetailAdvisories() + wlMetaCard + earningsCard + pricesCard + picksCard + reviewsCard + discoveryCard;
 }
 
 function _yahooLink(code, market) {
