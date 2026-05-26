@@ -540,6 +540,31 @@ def build_delta(market: str, plan_file: str, out_file: str,
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
     print(f"\n  ✅ {out_file}")
+
+    # snapshot 归档：data/snapshots/picks_history/trade_delta_{market}_{stamp}.json
+    # 给 morning_brief 的 _detect_picks_delta 提供 baseline；自动保留最近 30 份
+    try:
+        snap_dir = os.path.join(_REPO, "data", "snapshots", "picks_history")
+        os.makedirs(snap_dir, exist_ok=True)
+        stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
+        snap_name = f"trade_delta_{market}_{stamp}.json"
+        snap_path = os.path.join(snap_dir, snap_name)
+        with open(snap_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
+        # 保留最近 30 份（每市场独立）
+        prefix = f"trade_delta_{market}_"
+        siblings = sorted(
+            [n for n in os.listdir(snap_dir) if n.startswith(prefix) and n.endswith(".json")],
+            reverse=True,
+        )
+        for stale in siblings[30:]:
+            try:
+                os.remove(os.path.join(snap_dir, stale))
+            except OSError:
+                pass
+    except Exception as e:
+        print(f"  ⚠️ snapshot 归档失败（不影响主流程）：{e}")
+
     return payload
 
 

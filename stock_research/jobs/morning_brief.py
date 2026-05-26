@@ -1542,6 +1542,106 @@ def _format_reason_lines(pros: list[str], cons: list[str],
     return lines
 
 
+# ───────────── why now catalyst (近 60 天事件解释 X 为啥被推荐) ─────────────
+
+_HK_EVENTS_CACHE: dict | None = None
+_CN_EVENTS_CACHE: dict | None = None
+
+
+def _events_hk() -> dict:
+    global _HK_EVENTS_CACHE
+    if _HK_EVENTS_CACHE is None:
+        d = _load_json(REPO / "data" / "event_calendar_hk.json") or {}
+        idx: dict[str, list[dict]] = {}
+        for e in (d.get("events") or []):
+            idx.setdefault(e.get("ticker", ""), []).append(e)
+        _HK_EVENTS_CACHE = idx
+    return _HK_EVENTS_CACHE
+
+
+def _events_cn() -> dict:
+    global _CN_EVENTS_CACHE
+    if _CN_EVENTS_CACHE is None:
+        d = _load_json(REPO / "data" / "event_calendar.json") or {}
+        idx: dict[str, list[dict]] = {}
+        for e in (d.get("events") or []):
+            code = e.get("code", "")
+            if code:
+                idx.setdefault(code, []).append(e)
+        _CN_EVENTS_CACHE = idx
+    return _CN_EVENTS_CACHE
+
+
+def _build_catalyst(ticker: str, lookback_days: int = 60) -> str | None:
+    """近 60 天最强催化一句话。HK 用 event_calendar_hk earnings + surprise；
+    A 股用 event_calendar earnings + 净利润同比；美股暂无对应数据，返回 None。
+
+    返回带 📰 前缀的缩进行，例如：
+      "  📰 5/21 EPS 0.04/估 0.03 超预期 +58.0%（4d 前财报）"
+    无可用催化时返回 None。
+    """
+    if not ticker:
+        return None
+    today = date.today()
+
+    if ticker.endswith(".HK"):
+        events = _events_hk().get(ticker) or []
+        # 优先：最近 lookback_days 内、surprise_pct 绝对值最大的 earnings
+        recent: list[tuple[date, dict]] = []
+        upcoming: list[tuple[date, dict]] = []
+        for e in events:
+            try:
+                ed = datetime.strptime(e.get("event_date", ""), "%Y-%m-%d").date()
+            except Exception:
+                continue
+            if e.get("event_type") == "earnings" and 0 <= (today - ed).days <= lookback_days:
+                recent.append((ed, e))
+            elif e.get("event_type") == "earnings_upcoming" and 0 <= (ed - today).days <= 14:
+                upcoming.append((ed, e))
+
+        if recent:
+            recent.sort(key=lambda x: abs((x[1].get("surprise_pct") or 0)), reverse=True)
+            ed, e = recent[0]
+            days_ago = (today - ed).days
+            surp = e.get("surprise_pct")
+            if surp is not None:
+                sign = "超预期" if surp > 0 else "差预期"
+                return f"  📰 {ed.strftime('%-m/%-d')} EPS 实际 {e.get('eps_actual'):.2f} / 估 {e.get('eps_estimate'):.2f}，{sign} {surp:+.1f}%（{days_ago}d 前）"
+            return f"  📰 {ed.strftime('%-m/%-d')} 财报已披露（{days_ago}d 前）"
+        if upcoming:
+            upcoming.sort(key=lambda x: x[0])
+            ed, e = upcoming[0]
+            days_to = (ed - today).days
+            return f"  📰 {ed.strftime('%-m/%-d')} 财报临近（+{days_to}d，EPS 估 {e.get('eps_estimate') or 'n/a'}）"
+        return None
+
+    # A 股
+    if _is_a_share(ticker):
+        code = ticker.split(".")[0]
+        events = _events_cn().get(code) or []
+        recent: list[tuple[date, dict]] = []
+        for e in events:
+            if e.get("event_type") != "earnings":
+                continue
+            try:
+                ed = datetime.strptime(e.get("event_date", ""), "%Y-%m-%d").date()
+            except Exception:
+                continue
+            if 0 <= (today - ed).days <= lookback_days:
+                recent.append((ed, e))
+        if recent:
+            recent.sort(key=lambda x: x[0], reverse=True)
+            ed, e = recent[0]
+            days_ago = (today - ed).days
+            mag = e.get("magnitude") or 0
+            # magnitude 是净利润同比小数（如 +0.20 = +20%）
+            return f"  📰 {ed.strftime('%-m/%-d')} 财报：净利润同比 {mag*100:+.1f}%（{days_ago}d 前）"
+        return None
+
+    # 美股：阶段 A 无对应数据源
+    return None
+
+
 def _humanize_picks(plan: list[dict], a_share: bool, history: dict | None = None,
                     factor_scores: dict | None = None) -> list[str]:
     """把 plan_v5 entry 排成一句话/只 + 推荐理由行（扁平 list，每只股 1-4 行）。"""
@@ -1563,6 +1663,9 @@ def _humanize_picks(plan: list[dict], a_share: bool, history: dict | None = None
         out.append(
             f"• **{ticker}** {weight*100:.1f}%{f_str} · 综合 {z:+.2f}{spark_str}"
         )
+        cat = _build_catalyst(ticker)
+        if cat:
+            out.append(cat)
         if not a_share:
             pros, cons = _build_us_reasons(ticker, factors_map, signals_map)
             out.extend(_format_reason_lines(pros, cons))
@@ -1588,12 +1691,14 @@ def _humanize_picks_grouped(plan: list[dict], a_share: bool, history: dict | Non
         # F-Score 缺失时不在主行展示「F-Score 缺失」噪声；section header 已说明基本面未覆盖
         f_str = f" · F-Score {f_score}" if f_score != "缺失" else ""
         head = f"• **{ticker}** {weight*100:.1f}%{f_str} · 综合 {z:+.2f}{spark_str}"
+        cat = _build_catalyst(ticker)
+        block_lines: list[str] = [head]
+        if cat:
+            block_lines.append(cat)
         if not a_share:
             pros, cons = _build_us_reasons(ticker, factors_map, signals_map)
-            reason_lines = _format_reason_lines(pros, cons)
-            out.append("\n".join([head] + reason_lines) if reason_lines else head)
-        else:
-            out.append(head)
+            block_lines.extend(_format_reason_lines(pros, cons))
+        out.append("\n".join(block_lines))
     return out
 
 
@@ -1674,6 +1779,9 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
             spark, pct60 = _ticker_sparkline(history or {}, ticker)
             spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
             lines.append(f"• **{ticker}** {name} · 综合 {score:.3f}{f_str}{spark_str}")
+            cat = _build_catalyst(ticker)
+            if cat:
+                lines.append(cat)
             pros, cons = _build_hk_reasons(entry)
             lines.extend(_format_reason_lines(pros, cons))
     else:
@@ -1700,6 +1808,9 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
             spark, pct60 = _ticker_sparkline(history or {}, ticker)
             spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
             lines.append(f"• **{ticker}** {name} · 综合 {score:.3f}{f_str}{spark_str}")
+            cat = _build_catalyst(ticker)
+            if cat:
+                lines.append(cat)
             pros, cons = _build_a_share_reasons(entry)
             lines.extend(_format_reason_lines(pros, cons))
     elif plan:
@@ -2628,9 +2739,14 @@ def _build_card_payload() -> dict:
                 f_score = _entry_f_score(e)
                 f_str = f" · F-Score {_format_f_score(f_score)}"
                 head = f"• **{t}** {e.get('name','')} · {e.get('composite', 0):.2f}{f_str}{spark_str}"
+                cat = _build_catalyst(t)
                 pros, cons = _build_hk_reasons(e)
                 rl = _format_reason_lines(pros, cons)
-                hk_blocks.append("\n".join([head] + rl) if rl else head)
+                block_parts = [head]
+                if cat:
+                    block_parts.append(cat)
+                block_parts.extend(rl)
+                hk_blocks.append("\n".join(block_parts))
             ts_hk = _fmt_ts(hk_picks.get("generated_at"))
             section2.append({"tag": "div", "text": {"tag": "lark_md",
                 "content": f"**🇭🇰 港股 ({len(hk_sel)} 只)** · {ts_hk}\n_每只股附 ✅ 推荐理由 + ⚠️ 风险点_"}})
@@ -2661,9 +2777,14 @@ def _build_card_payload() -> dict:
                 f_score = _entry_f_score(e)
                 f_str = f" · F-Score {_format_f_score(f_score)}"
                 head = f"• **{t}** {e.get('name','')} · {e.get('composite', 0):.2f}{f_str}{spark_str}"
+                cat = _build_catalyst(t)
                 pros, cons = _build_a_share_reasons(e)
                 rl = _format_reason_lines(pros, cons)
-                a_blocks.append("\n".join([head] + rl) if rl else head)
+                block_parts = [head]
+                if cat:
+                    block_parts.append(cat)
+                block_parts.extend(rl)
+                a_blocks.append("\n".join(block_parts))
             ts_cn = _fmt_ts(a_share_picks.get("generated_at"))
             section2.append({"tag": "div", "text": {"tag": "lark_md",
                 "content": f"**🇨🇳 A 股 ({len(sel)} 只)** · {ts_cn}\n_每只股附 ✅ 推荐理由 + ⚠️ 风险点_"}})

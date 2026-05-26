@@ -45,6 +45,8 @@ class StockEvent:
     magnitude: float = 0.0           # 事件量级（解禁市值/元，减持金额/元，业绩超预期 pct）
     description: str = ""
     source: str = ""                  # akshare 接口名
+    ticker: str = ""                  # 完整 ticker：A 股可空（用 code），港股填 "0992.HK"
+    market: str = "cn"                # "cn" / "hk"，缺省 cn 保持向后兼容
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
