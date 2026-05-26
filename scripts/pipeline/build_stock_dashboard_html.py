@@ -1936,14 +1936,16 @@ function switchDiscoveryView(view) {
   <!-- 子区 3: 次新股底部观察池 -->
   <div id="ipo-sub-junior" class="space-y-4" style="display:none">
     <div class="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 text-sm text-emerald-900">
-      <strong>策略说明:</strong> 新股上市后典型走势是「爆炒 → 解禁砸盘 → 一路阴跌 → 1-2 年后筑底」。
-      本池筛选上市 <strong>6-24 个月</strong> 的标的，按四 / 五维打分（折发行价 / 时间衰减 / 首日溢价 / 较首日跌幅 / 美股+流动性+反弹奖励）。
-      <br><strong>四档状态分档</strong>：
-      <span class="px-1 py-0.5 rounded bg-emerald-600 text-white text-[11px]">🟢 可小仓试探</span> 前 10% + 过解禁窗口 + 有止跌反弹（仅美股目前满足）；
-      <span class="px-1 py-0.5 rounded bg-amber-500 text-white text-[11px]">🟡 可研究</span> 前 30% + 过解禁窗口；
+      <strong>策略说明:</strong> 新股上市后典型走势是「爆炒 → 解禁砸盘 → 一路阴跌 → 1-2 年后筑底」。本池筛选上市 <strong>6-24 个月</strong>。
+      <br><strong>两层打分</strong>：
+      <span class="font-semibold">触底分</span> 0-100 判断"像不像底"（折发行价 + 时间窗口 + 较高点回撤 / 较首日跌幅）；
+      <span class="font-semibold">买入准备度</span> 0-100 判断"能不能动手"（流动性 + 反弹 + 站上 MA20 + 低点抬升 + 放量 + 池子）。
+      <br><strong>四档状态</strong>：
+      <span class="px-1 py-0.5 rounded bg-emerald-600 text-white text-[11px]">🟢 可小仓试探</span> 触底分前 10% + 过解禁窗口 + 准备度 ≥ 60；
+      <span class="px-1 py-0.5 rounded bg-amber-500 text-white text-[11px]">🟡 可研究</span> 触底分前 30% + 过解禁窗口；
       <span class="px-1 py-0.5 rounded bg-slate-200 text-slate-700 text-[11px]">⚪ 只观察</span> 通过红线但未达可研究门槛；
       <span class="px-1 py-0.5 rounded bg-rose-600 text-white text-[11px]">🚫 不碰</span> 红线触发（SPAC / 仙股 / 微盘 / 壳 / 低流动性 / 30 日大额解禁 / ST / 美股 lockup ±30 日）。
-      <br><span class="text-rose-700">⚠️ 即便 🟢 也只是"研究起点"，仍需基本面 + 行业 + 技术面三重判断；档位用 percentile（相对位置），不用绝对分数阈值。</span>
+      <br><span class="text-rose-700">⚠️ 即便 🟢 也只是"研究起点"；档位用 percentile（相对位置），不用绝对分数阈值。A 股准备度暂无（缺日 K 数据），所以 A 股目前不出 🟢。</span>
     </div>
     <details class="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm">
       <summary class="cursor-pointer font-semibold text-slate-700 select-none">📖 怎么读这张表（每列含义 · 点击展开）</summary>
@@ -5402,10 +5404,12 @@ function _renderJuniorTable_US() {
         </div>
         ${sectorLine}
         ${rankLine}
+        ${_juniorAuditCardBlock(x)}
         ${rlInline}
       </td>
       <td class="py-2 px-3 text-center align-top">${_juniorTierBadge(x)}</td>
       <td class="py-2 px-3 text-center align-top" title="${tooltip}">${_ipoJuniorScoreBadge(x.score)}</td>
+      <td class="py-2 px-3 text-center align-top">${_juniorReadinessBadge(x)}</td>
       <td class="py-2 px-3 text-right font-mono text-xs text-slate-600 align-top">${_mcap(x.market_cap_m)}</td>
       <td class="py-2 px-3 text-xs text-slate-600 align-top">${_esc(x.ipo_date)} <span class="text-slate-400">(${x.months_listed}m)</span></td>
       <td class="py-2 px-3 text-right font-mono text-slate-700 align-top">$${x.issue_price}</td>
@@ -5417,12 +5421,13 @@ function _renderJuniorTable_US() {
       <td class="py-2 px-3 text-xs align-top">${tags}</td>
     </tr>`;
   }).join("");
-  el.innerHTML = `<table class="text-sm border-collapse" style="min-width:1320px">
+  el.innerHTML = `<table class="text-sm border-collapse" style="min-width:1400px">
     <thead class="text-xs text-slate-500 bg-slate-50 border-b border-slate-200">
       <tr>
         <th class="py-2 px-3 text-left ${_STICKY_HEAD_CLS}" style="min-width:280px">代码 · 名称 / 行业 / 排名</th>
         <th class="py-2 px-3 text-center">状态</th>
-        <th class="py-2 px-3 text-center" title="0..100,5 维加权（按此降序）">底部分 ▼</th>
+        <th class="py-2 px-3 text-center" title="触底分 0-100：折发行价 + 时间窗口 + 较高点回撤（按此降序排）">触底分 ▼</th>
+        <th class="py-2 px-3 text-center" title="买入准备度 0-100：流动性 + 止跌反弹 + 均线 + 低点抬升 + 放量 + 池子。≥60 才进 🟢 可小仓试探">准备度</th>
         <th class="py-2 px-3 text-right">市值</th>
         <th class="py-2 px-3 text-left">上市日</th>
         <th class="py-2 px-3 text-right">发行价</th>
@@ -5495,10 +5500,12 @@ function _renderJuniorTable() {
         </div>
         ${x.industry ? `<div class="text-[10px] text-slate-500 mt-0.5 truncate">${_esc(x.industry)}</div>` : ""}
         <div class="text-[11px] text-slate-600 mt-1 leading-snug">${rankPrefix}${x.summary ? " · " + _esc(x.summary) : ""}</div>
+        ${_juniorAuditCardBlock(x)}
         ${rlInline}
       </td>
       <td class="py-2 px-3 text-center align-top">${_juniorTierBadge(x)}</td>
       <td class="py-2 px-3 text-center align-top" title="${tooltip}">${_ipoJuniorScoreBadge(x.score)}</td>
+      <td class="py-2 px-3 text-center align-top">${_juniorReadinessBadge(x)}</td>
       <td class="py-2 px-3 text-xs text-slate-500 align-top">${_ipoBoardLabel(x.board)}</td>
       <td class="py-2 px-3 text-xs text-slate-600 align-top">${_esc(x.list_date)} <span class="text-slate-400">(${x.months_listed}月)</span></td>
       <td class="py-2 px-3 text-right font-mono text-slate-700 align-top">¥${x.issue_price}</td>
@@ -5508,12 +5515,13 @@ function _renderJuniorTable() {
       <td class="py-2 px-3 text-xs align-top">${tags}</td>
     </tr>`;
   }).join("");
-  el.innerHTML = `<table class="text-sm border-collapse" style="min-width:1200px">
+  el.innerHTML = `<table class="text-sm border-collapse" style="min-width:1260px">
     <thead class="text-xs text-slate-500 bg-slate-50 border-b border-slate-200">
       <tr>
         <th class="py-2 px-3 text-left ${_STICKY_HEAD_CLS}" style="min-width:300px">代码 · 名称 / 行业 / 排名 · 总结</th>
         <th class="py-2 px-3 text-center">状态</th>
-        <th class="py-2 px-3 text-center" title="0..100，四维加权（按此降序）">底部分 ▼</th>
+        <th class="py-2 px-3 text-center" title="触底分 0-100：折发行价 + 时间窗口 + 首日溢价 + 较首日跌幅（按此降序排）">触底分 ▼</th>
+        <th class="py-2 px-3 text-center" title="买入准备度：A 股暂无日 K 数据,step 4.5 接 akshare 后开放">准备度</th>
         <th class="py-2 px-3 text-left">板块</th>
         <th class="py-2 px-3 text-left">上市日</th>
         <th class="py-2 px-3 text-right">发行价</th>
@@ -5616,6 +5624,39 @@ function _juniorRedLinesInline(x) {
   if (!rls.length) return "";
   const labels = rls.map(r => `<span class="px-1.5 py-0.5 rounded text-[10px] bg-rose-100 text-rose-700 mr-1" title="${_esc(r.detail || '')}">${_esc(r.label)}</span>`).join("");
   return `<div class="mt-1 leading-snug">${labels}</div>`;
+}
+
+// step 5a: 买前审查卡 (仅 🟢/🟡 候选) — 折叠展开 3 段
+function _juniorAuditCardBlock(x) {
+  const a = x.audit_card;
+  if (!a) return "";
+  const tier = x.tier;
+  const tierEmoji = tier === "可小仓试探" ? "🟢" : tier === "可研究" ? "🟡" : "";
+  const seg = (label, val, cls) => val
+    ? `<div class="text-[11px] mt-0.5 ${cls}"><span class="font-semibold">${label}</span> ${_esc(val)}</div>` : "";
+  return `<details class="mt-1.5 text-[11px]">
+    <summary class="cursor-pointer text-violet-700 hover:underline select-none">📋 ${tierEmoji} 买前审查卡</summary>
+    <div class="mt-1 pl-2 border-l-2 border-violet-200">
+      ${seg("✓ 为什么像底:", a.why_bottom_like, "text-emerald-800")}
+      ${seg("⚠ 还差啥信号:", a.whats_missing, "text-amber-800")}
+      ${seg("🛑 止损参考:", a.stop_loss_hint, "text-rose-800")}
+    </div>
+  </details>`;
+}
+
+// step 4: 买入准备度 badge (0-100, US 才有; CN 显示 "—")
+function _juniorReadinessBadge(x) {
+  const r = x.readiness_score;
+  if (r === null || r === undefined) {
+    return `<span class="text-xs text-slate-400" title="A 股暂无日 K 数据,买入准备度待 step 4.5 接 akshare K 线后开放">—</span>`;
+  }
+  const cls = r >= 60 ? "bg-emerald-600 text-white" :
+              r >= 40 ? "bg-amber-500 text-white" :
+              r >= 20 ? "bg-slate-300 text-slate-700" :
+                        "bg-slate-100 text-slate-500";
+  const bd = x.score_breakdown || {};
+  const tip = `流动性 ${bd.readiness_liquidity || 0} + 反弹 ${bd.readiness_rebound || 0} + 站上 MA20 ${bd.readiness_ma20 || 0} + 低点抬升 ${bd.readiness_low_hold || 0} + 放量 ${bd.readiness_volume || 0} + 池子 ${bd.readiness_pool || 0}`;
+  return `<span class="inline-block px-2 py-0.5 rounded text-xs font-bold ${cls}" title="${tip}">${r}</span>`;
 }
 
 // sticky 首列样式 — 代码+名称合并；其它列横滚
@@ -11043,121 +11084,13 @@ def _build_dropouts() -> list[dict]:
 
 
 def _build_catalyst_index() -> dict[str, str]:
-    """ticker (uppercase) → "📰 ..." catalyst 一句话；
-    数据源：event_calendar_hk.json (港股 yfinance) + event_calendar.json (A 股 akshare)
-           + event_calendar_us.json (美股 yfinance)。
-    与 morning_brief._build_catalyst 字段一致；前端在「推荐依据」前 prepend 这一行。
+    """ticker (uppercase) → "📰 ..." 一句话。
+    实现抽到 stock_research/core/catalyst.py 与 morning_brief 共享，避免双引擎漂移。
     """
-    from datetime import date, datetime as _dt
-
-    out: dict[str, str] = {}
-    today = date.today()
-    LOOKBACK = 60
-
-    # 港股事件（earnings + earnings_upcoming）
-    hk = _runtime_load_json("data/event_calendar_hk.json") or {}
-    hk_idx: dict[str, list[dict]] = {}
-    for e in (hk.get("events") or []):
-        hk_idx.setdefault((e.get("ticker") or "").upper(), []).append(e)
-    for tk, evs in hk_idx.items():
-        recent: list[tuple[date, dict]] = []
-        upcoming: list[tuple[date, dict]] = []
-        for e in evs:
-            try:
-                ed = _dt.strptime(e.get("event_date", ""), "%Y-%m-%d").date()
-            except Exception:
-                continue
-            if e.get("event_type") == "earnings" and 0 <= (today - ed).days <= LOOKBACK:
-                recent.append((ed, e))
-            elif e.get("event_type") == "earnings_upcoming" and 0 <= (ed - today).days <= 14:
-                upcoming.append((ed, e))
-        if recent:
-            recent.sort(key=lambda x: abs((x[1].get("surprise_pct") or 0)), reverse=True)
-            ed, e = recent[0]
-            days_ago = (today - ed).days
-            surp = e.get("surprise_pct")
-            est = e.get("eps_estimate")
-            act = e.get("eps_actual")
-            if surp is not None and est is not None and act is not None:
-                sign = "超预期" if surp > 0 else "差预期"
-                out[tk] = f"📰 {ed.strftime('%-m/%-d')} EPS 实际 {act:.2f}/估 {est:.2f}，{sign} {surp:+.1f}%（{days_ago}d 前）"
-            else:
-                out[tk] = f"📰 {ed.strftime('%-m/%-d')} 财报已披露（{days_ago}d 前）"
-        elif upcoming:
-            upcoming.sort(key=lambda x: x[0])
-            ed, e = upcoming[0]
-            days_to = (ed - today).days
-            est = e.get("eps_estimate")
-            est_label = f"EPS 估 {est:.2f}" if isinstance(est, (int, float)) else "EPS 估 n/a"
-            out[tk] = f"📰 {ed.strftime('%-m/%-d')} 财报临近（+{days_to}d，{est_label}）"
-
-    # A 股事件（earnings 净利润同比）
-    cn = _runtime_load_json("data/event_calendar.json") or {}
-    cn_idx: dict[str, list[dict]] = {}
-    for e in (cn.get("events") or []):
-        code = e.get("code", "")
-        if code:
-            cn_idx.setdefault(code, []).append(e)
-    for code, evs in cn_idx.items():
-        recent: list[tuple[date, dict]] = []
-        for e in evs:
-            if e.get("event_type") != "earnings":
-                continue
-            try:
-                ed = _dt.strptime(e.get("event_date", ""), "%Y-%m-%d").date()
-            except Exception:
-                continue
-            if 0 <= (today - ed).days <= LOOKBACK:
-                recent.append((ed, e))
-        if recent:
-            recent.sort(key=lambda x: x[0], reverse=True)
-            ed, e = recent[0]
-            days_ago = (today - ed).days
-            mag = e.get("magnitude") or 0
-            text = f"📰 {ed.strftime('%-m/%-d')} 财报：净利润同比 {mag*100:+.1f}%（{days_ago}d 前）"
-            # A 股 candidate ticker 形如 "300001.SZ" / "601318.SH"，先建 6 位 code 索引
-            # 候选侧会用 ticker.upper() 查；这里两种 key 都放（裸 6 位 + 带后缀）
-            for suffix in (".SH", ".SS", ".SZ", ".BJ", ""):
-                out[f"{code}{suffix}".upper()] = text
-
-    # 美股事件（earnings + earnings_upcoming）—— 同港股逻辑，ticker 是裸代码（DELL/NVDA/...）
-    us = _runtime_load_json("data/event_calendar_us.json") or {}
-    us_idx: dict[str, list[dict]] = {}
-    for e in (us.get("events") or []):
-        us_idx.setdefault((e.get("ticker") or "").upper(), []).append(e)
-    for tk, evs in us_idx.items():
-        recent: list[tuple[date, dict]] = []
-        upcoming: list[tuple[date, dict]] = []
-        for e in evs:
-            try:
-                ed = _dt.strptime(e.get("event_date", ""), "%Y-%m-%d").date()
-            except Exception:
-                continue
-            if e.get("event_type") == "earnings" and 0 <= (today - ed).days <= LOOKBACK:
-                recent.append((ed, e))
-            elif e.get("event_type") == "earnings_upcoming" and 0 <= (ed - today).days <= 14:
-                upcoming.append((ed, e))
-        if recent:
-            recent.sort(key=lambda x: abs((x[1].get("surprise_pct") or 0)), reverse=True)
-            ed, e = recent[0]
-            days_ago = (today - ed).days
-            surp = e.get("surprise_pct")
-            est = e.get("eps_estimate")
-            act = e.get("eps_actual")
-            if surp is not None and est is not None and act is not None:
-                sign = "超预期" if surp > 0 else "差预期"
-                out[tk] = f"📰 {ed.strftime('%-m/%-d')} EPS 实际 {act:.2f}/估 {est:.2f}，{sign} {surp:+.1f}%（{days_ago}d 前）"
-            else:
-                out[tk] = f"📰 {ed.strftime('%-m/%-d')} 财报已披露（{days_ago}d 前）"
-        elif upcoming:
-            upcoming.sort(key=lambda x: x[0])
-            ed, e = upcoming[0]
-            days_to = (ed - today).days
-            est = e.get("eps_estimate")
-            est_label = f"EPS 估 {est:.2f}" if isinstance(est, (int, float)) else "EPS 估 n/a"
-            out[tk] = f"📰 {ed.strftime('%-m/%-d')} 财报临近（+{days_to}d，{est_label}）"
-
-    return out
+    sys.path.insert(0, _REPO)
+    from stock_research.core.catalyst import build_index, reset_cache
+    reset_cache()  # 每次 dashboard build 重读最新文件
+    return build_index(prefix="📰 ")
 
 
 def _runtime_artifact(rel: str) -> dict:

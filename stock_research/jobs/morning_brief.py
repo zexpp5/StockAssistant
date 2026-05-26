@@ -1543,145 +1543,17 @@ def _format_reason_lines(pros: list[str], cons: list[str],
 
 
 # ───────────── why now catalyst (近 60 天事件解释 X 为啥被推荐) ─────────────
+# 实现抽到 stock_research/core/catalyst.py 与 dashboard 共享，避免双引擎漂移。
 
-_HK_EVENTS_CACHE: dict | None = None
-_CN_EVENTS_CACHE: dict | None = None
-_US_EVENTS_CACHE: dict | None = None
-
-
-def _events_hk() -> dict:
-    global _HK_EVENTS_CACHE
-    if _HK_EVENTS_CACHE is None:
-        d = _load_json(REPO / "data" / "event_calendar_hk.json") or {}
-        idx: dict[str, list[dict]] = {}
-        for e in (d.get("events") or []):
-            idx.setdefault(e.get("ticker", ""), []).append(e)
-        _HK_EVENTS_CACHE = idx
-    return _HK_EVENTS_CACHE
-
-
-def _events_cn() -> dict:
-    global _CN_EVENTS_CACHE
-    if _CN_EVENTS_CACHE is None:
-        d = _load_json(REPO / "data" / "event_calendar.json") or {}
-        idx: dict[str, list[dict]] = {}
-        for e in (d.get("events") or []):
-            code = e.get("code", "")
-            if code:
-                idx.setdefault(code, []).append(e)
-        _CN_EVENTS_CACHE = idx
-    return _CN_EVENTS_CACHE
-
-
-def _events_us() -> dict:
-    global _US_EVENTS_CACHE
-    if _US_EVENTS_CACHE is None:
-        d = _load_json(REPO / "data" / "event_calendar_us.json") or {}
-        idx: dict[str, list[dict]] = {}
-        for e in (d.get("events") or []):
-            idx.setdefault((e.get("ticker") or "").upper(), []).append(e)
-        _US_EVENTS_CACHE = idx
-    return _US_EVENTS_CACHE
+from stock_research.core.catalyst import get_catalyst as _catalyst_sentence
 
 
 def _build_catalyst(ticker: str, lookback_days: int = 60) -> str | None:
-    """近 60 天最强催化一句话。HK 用 event_calendar_hk earnings + surprise；
-    A 股用 event_calendar earnings + 净利润同比；美股暂无对应数据，返回 None。
-
-    返回带 📰 前缀的缩进行，例如：
-      "  📰 5/21 EPS 0.04/估 0.03 超预期 +58.0%（4d 前财报）"
-    无可用催化时返回 None。
+    """morning_brief 端 catalyst wrapper：返回缩进 + 📰 + 句子的完整行。
+    无可用催化返回 None。
     """
-    if not ticker:
-        return None
-    today = date.today()
-
-    if ticker.endswith(".HK"):
-        events = _events_hk().get(ticker) or []
-        # 优先：最近 lookback_days 内、surprise_pct 绝对值最大的 earnings
-        recent: list[tuple[date, dict]] = []
-        upcoming: list[tuple[date, dict]] = []
-        for e in events:
-            try:
-                ed = datetime.strptime(e.get("event_date", ""), "%Y-%m-%d").date()
-            except Exception:
-                continue
-            if e.get("event_type") == "earnings" and 0 <= (today - ed).days <= lookback_days:
-                recent.append((ed, e))
-            elif e.get("event_type") == "earnings_upcoming" and 0 <= (ed - today).days <= 14:
-                upcoming.append((ed, e))
-
-        if recent:
-            recent.sort(key=lambda x: abs((x[1].get("surprise_pct") or 0)), reverse=True)
-            ed, e = recent[0]
-            days_ago = (today - ed).days
-            surp = e.get("surprise_pct")
-            if surp is not None:
-                sign = "超预期" if surp > 0 else "差预期"
-                return f"  📰 {ed.strftime('%-m/%-d')} EPS 实际 {e.get('eps_actual'):.2f} / 估 {e.get('eps_estimate'):.2f}，{sign} {surp:+.1f}%（{days_ago}d 前）"
-            return f"  📰 {ed.strftime('%-m/%-d')} 财报已披露（{days_ago}d 前）"
-        if upcoming:
-            upcoming.sort(key=lambda x: x[0])
-            ed, e = upcoming[0]
-            days_to = (ed - today).days
-            return f"  📰 {ed.strftime('%-m/%-d')} 财报临近（+{days_to}d，EPS 估 {e.get('eps_estimate') or 'n/a'}）"
-        return None
-
-    # A 股
-    if _is_a_share(ticker):
-        code = ticker.split(".")[0]
-        events = _events_cn().get(code) or []
-        recent: list[tuple[date, dict]] = []
-        for e in events:
-            if e.get("event_type") != "earnings":
-                continue
-            try:
-                ed = datetime.strptime(e.get("event_date", ""), "%Y-%m-%d").date()
-            except Exception:
-                continue
-            if 0 <= (today - ed).days <= lookback_days:
-                recent.append((ed, e))
-        if recent:
-            recent.sort(key=lambda x: x[0], reverse=True)
-            ed, e = recent[0]
-            days_ago = (today - ed).days
-            mag = e.get("magnitude") or 0
-            # magnitude 是净利润同比小数（如 +0.20 = +20%）
-            return f"  📰 {ed.strftime('%-m/%-d')} 财报：净利润同比 {mag*100:+.1f}%（{days_ago}d 前）"
-        return None
-
-    # 美股 — yfinance earnings_dates 同港股一样的字段
-    events = _events_us().get(ticker.upper()) or []
-    if not events:
-        return None
-    recent: list[tuple[date, dict]] = []
-    upcoming: list[tuple[date, dict]] = []
-    for e in events:
-        try:
-            ed = datetime.strptime(e.get("event_date", ""), "%Y-%m-%d").date()
-        except Exception:
-            continue
-        if e.get("event_type") == "earnings" and 0 <= (today - ed).days <= lookback_days:
-            recent.append((ed, e))
-        elif e.get("event_type") == "earnings_upcoming" and 0 <= (ed - today).days <= 14:
-            upcoming.append((ed, e))
-    if recent:
-        recent.sort(key=lambda x: abs((x[1].get("surprise_pct") or 0)), reverse=True)
-        ed, e = recent[0]
-        days_ago = (today - ed).days
-        surp = e.get("surprise_pct")
-        if surp is not None and e.get("eps_actual") is not None and e.get("eps_estimate") is not None:
-            sign = "超预期" if surp > 0 else "差预期"
-            return f"  📰 {ed.strftime('%-m/%-d')} EPS 实际 {e.get('eps_actual'):.2f} / 估 {e.get('eps_estimate'):.2f}，{sign} {surp:+.1f}%（{days_ago}d 前）"
-        return f"  📰 {ed.strftime('%-m/%-d')} 财报已披露（{days_ago}d 前）"
-    if upcoming:
-        upcoming.sort(key=lambda x: x[0])
-        ed, e = upcoming[0]
-        days_to = (ed - today).days
-        est = e.get("eps_estimate")
-        est_label = f"EPS 估 {est:.2f}" if isinstance(est, (int, float)) else "EPS 估 n/a"
-        return f"  📰 {ed.strftime('%-m/%-d')} 财报临近（+{days_to}d，{est_label}）"
-    return None
+    s = _catalyst_sentence(ticker, lookback_days=lookback_days)
+    return f"  📰 {s}" if s else None
 
 
 def _humanize_picks(plan: list[dict], a_share: bool, history: dict | None = None,
