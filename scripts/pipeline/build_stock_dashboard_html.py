@@ -4335,12 +4335,32 @@ function _renderIpoOnlyFallback(code, name) {
     push("估算 lockup 到期", x.est_lockup_end ? x.est_lockup_end + " (距今 " + x.days_to_est_lockup + " 天)" : "—");
     push("MA20 / MA50", (x.ma20 ? "$" + x.ma20 : "—") + " / " + (x.ma50 ? "$" + x.ma50 : "—"));
     push("触底分 / 准备度", (x.bottom_score || x.score || "—") + " / " + (x.readiness_score !== null && x.readiness_score !== undefined ? x.readiness_score : "—"));
+    // gap #2: SEC dilution filings
+    const dil = x.dilution_filings_180d || [];
+    if (dil.length) {
+      const flist = dil.slice(0, 5).map(f => `${f.form} (${f.date})`).join(", ");
+      push("近180日稀释申报", `${dil.length} 次: ${flist}`);
+    } else if (x.sec_not_found) {
+      push("近180日稀释申报", "(非美国发行,SEC 无记录)");
+    }
+    // gap #3: yfinance financials
+    const fin = x.financials || {};
+    if (fin.gross_margin !== null && fin.gross_margin !== undefined) {
+      push("毛利率 (TTM)", (fin.gross_margin * 100).toFixed(0) + "%" + (fin.gross_margin < 0 ? " ⚠️" : ""));
+    }
+    if (fin.revenue_growth !== null && fin.revenue_growth !== undefined) {
+      push("收入增长 (YoY)", (fin.revenue_growth * 100).toFixed(0) + "%");
+    }
+    if (fin.runway_quarters !== null && fin.runway_quarters !== undefined) {
+      push("现金 runway", fin.runway_quarters + " 季度" + (fin.runway_quarters < 4 ? " ⚠️" : ""));
+    }
   } else if (isCN) {
     push("板块", _ipoBoardLabel(x.board));
     push("首日收盘", x.first_close ? "¥" + x.first_close : "—");
     push("首日涨幅", x.first_day_change_pct !== null && x.first_day_change_pct !== undefined ? x.first_day_change_pct + "%" : "—");
     push("vs 首日收盘", x.vs_first_close_pct !== null && x.vs_first_close_pct !== undefined ? x.vs_first_close_pct + "%" : "—");
-    push("触底分", x.score || "—");
+    push("MA20 / MA50", (x.ma20 ? "¥" + x.ma20 : "—") + " / " + (x.ma50 ? "¥" + x.ma50 : "—"));
+    push("触底分 / 准备度", (x.score || "—") + " / " + (x.readiness_score !== null && x.readiness_score !== undefined ? x.readiness_score : "—"));
   }
   const kvHtml = kv.map(([k, v]) => `<tr><td class="py-1 px-3 text-slate-500 text-xs">${k}</td><td class="py-1 px-3 font-mono text-sm">${_esc(String(v))}</td></tr>`).join("");
   // tier badge + audit card
@@ -10704,8 +10724,67 @@ def _augment_source_health_with_catalyst(source_health: dict | None) -> None:
             }
 
 
+# 把后端写进 JSON 的英文 reason / 供应商名翻译成大白话，
+# 让面板上一眼能看懂"今天是哪家挂了 + 为啥挂"。
+_SOURCE_REASON_CN = {
+    "recent_request_errors": "近期请求频繁失败",
+    "http_402":              "订阅档级不够，接口拒绝（402 Payment Required）",
+    "http_403":              "API key 没权限（403 Forbidden）",
+    "http_429":              "请求频率超限（429 Too Many Requests）",
+    "http_500":              "供应商服务器异常（500）",
+    "http_502":              "供应商网关错误（502）",
+    "http_503":              "供应商暂时不可用（503）",
+    "http_504":              "请求超时（504）",
+    "timeout":               "网络超时",
+    "connection_error":      "网络连不通",
+    "stale_data":            "拿到的数据太旧",
+    "coverage_low":          "命中率太低（成功的太少）",
+    "unknown":               "原因不明",
+}
+
+# 供应商一句话简介：让用户知道这家是干嘛的，不用去 Google
+_SOURCE_DESC_CN = {
+    "FMP":                "美股财报数据 API（Financial Modeling Prep）",
+    "akshare":            "A 股 / 港股 行情 + 财报开源数据",
+    "baostock":           "A 股辅助数据（财报、复权因子）",
+    "yfinance":           "全市场行情兜底（Yahoo Finance）",
+    "tushare":            "A 股专业数据（需付费 token）",
+    "ipo_calendar":       "IPO 日历（新股上市时间）",
+    "unlock_calendar":    "解禁日历（限售股解禁）",
+    "earnings_calendar":  "财报日历",
+}
+
+
+def _translate_source_reason(raw: str | None) -> str:
+    """`recent_request_errors` → `近期请求频繁失败` 等；找不到就回原文。"""
+    if not raw:
+        return "原因不明"
+    key = str(raw).strip().lower()
+    return _SOURCE_REASON_CN.get(key, str(raw))
+
+
+def _summarize_source_last_event(last: dict) -> tuple[str, str]:
+    """从 last_event 里提一句中文摘要 + 保留原文供折叠展开。
+
+    供应商一般丢一长串英文（FMP 那种"Premium Query Parameter..."），
+    用户看了也没用，提取关键字给一句中文：HTTP 状态码 + endpoint。
+    """
+    if not isinstance(last, dict) or not last:
+        return ("无近期事件记录", "")
+    reason_cn = _translate_source_reason(last.get("reason"))
+    path = str(last.get("path") or "").strip()
+    summary_parts = []
+    if reason_cn and reason_cn != "原因不明":
+        summary_parts.append(reason_cn)
+    if path:
+        summary_parts.append(f"endpoint: {path}")
+    summary = " · ".join(summary_parts) or "供应商返回异常"
+    raw_detail = str(last.get("detail") or "").strip()
+    return (summary, raw_detail)
+
+
 def source_health_panel_html(payload: dict | None) -> str:
-    """Render data-source degradation near today's picks."""
+    """渲染数据源降级面板（说人话，给小白看）。"""
     if not isinstance(payload, dict) or not payload.get("sources"):
         return ""
     sources = payload.get("sources") or {}
@@ -10716,68 +10795,61 @@ def source_health_panel_html(payload: dict | None) -> str:
     if not degraded:
         return ""
 
-    markets = payload.get("markets") or {}
-    market_rows = []
-    for market_key in ("US", "HK", "CN"):
-        info = markets.get(market_key) or {}
-        if not info:
-            continue
-        total = int(info.get("total") or 0)
-        success = int(info.get("success") or 0)
-        fail = int(info.get("fail") or 0)
-        status = "ok" if fail == 0 and success > 0 else ("source_down" if success <= 0 else "source_degraded")
-        market_rows.append(f"""
-      <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
-        <div class="flex items-center justify-between gap-2">
-          <div class="font-semibold text-slate-800">{market_key}</div>
-          <span class="text-xs font-mono px-2 py-0.5 rounded bg-white border border-slate-200">{status}</span>
-        </div>
-        <div class="mt-1 text-xs text-slate-600">成功 {success} / 总 {total} · 失败 {fail}</div>
-      </div>
-""")
-
     cards = []
     for name, info in degraded:
         name_s = html_lib.escape(str(name))
-        reason = html_lib.escape(str(info.get("reason") or "unknown"))
+        source_desc = html_lib.escape(_SOURCE_DESC_CN.get(str(name), "外部数据供应商"))
+        reason_cn = html_lib.escape(_translate_source_reason(info.get("reason")))
         impact = html_lib.escape(str(info.get("impact") or "部分字段不可用"))
         action = html_lib.escape(str(info.get("operator_action") or "稍后重跑对应步骤"))
         last = info.get("last_event") or {}
-        last_path = html_lib.escape(str(last.get("path") or ""))
-        last_detail = html_lib.escape(str(last.get("detail") or "")) if last.get("detail") else ""
+        last_summary_cn, last_raw = _summarize_source_last_event(last)
+        last_summary_s = html_lib.escape(last_summary_cn)
+        last_raw_html = (
+            f'<details class="mt-1"><summary class="text-[11px] text-slate-400 cursor-pointer hover:text-slate-600">查看供应商返回的原文</summary>'
+            f'<pre class="mt-1 text-[11px] text-slate-500 bg-slate-50 rounded p-2 whitespace-pre-wrap break-all">{html_lib.escape(last_raw)}</pre>'
+            f'</details>'
+        ) if last_raw else ""
         affected = "、".join(html_lib.escape(str(x)) for x in (info.get("affected_fields") or [])[:5])
         unaffected = "、".join(html_lib.escape(str(x)) for x in (info.get("unaffected_fields") or [])[:6])
         cards.append(f"""
       <div class="bg-white rounded-lg border border-amber-200 p-3">
-        <div class="flex items-center gap-2 mb-1">
+        <div class="flex items-center gap-2 mb-1 flex-wrap">
           <span class="px-2 py-0.5 rounded bg-amber-100 text-amber-800 text-xs font-mono">{name_s}</span>
-          <span class="text-xs text-amber-700">degraded · {reason}</span>
+          <span class="text-xs text-slate-600">{source_desc}</span>
+          <span class="text-xs text-amber-700 ml-auto">今天的状态：{reason_cn}</span>
         </div>
         <p class="text-sm text-slate-800">{impact}</p>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mt-2 text-xs">
-          <div class="bg-rose-50 text-rose-800 rounded p-2"><strong>受影响</strong>：{affected or "—"}</div>
-          <div class="bg-emerald-50 text-emerald-800 rounded p-2"><strong>仍可用</strong>：{unaffected or "—"}</div>
+          <div class="bg-rose-50 text-rose-800 rounded p-2"><strong>今天算不出的字段</strong>：{affected or "—"}</div>
+          <div class="bg-emerald-50 text-emerald-800 rounded p-2"><strong>仍然能算的字段</strong>：{unaffected or "—"}</div>
         </div>
-        <p class="text-xs text-slate-500 mt-2">最近事件：{last_path or "—"} {last_detail}</p>
-        <p class="text-xs text-slate-600 mt-1">处理建议：{action}</p>
+        <p class="text-xs text-slate-600 mt-2"><strong class="text-slate-700">最近一次出错：</strong>{last_summary_s}</p>
+        {last_raw_html}
+        <p class="text-xs text-slate-600 mt-2"><strong class="text-slate-700">怎么办：</strong>{action}</p>
       </div>
 """)
 
     ts = html_lib.escape(str(payload.get("generated_at") or ""))
-    pipeline = html_lib.escape(str(payload.get("pipeline") or ""))
+    pipeline_raw = str(payload.get("pipeline") or "")
+    pipeline_label = {"v2_us": "美股线", "v2_cn": "A 股线", "v2_hk": "港股线"}.get(pipeline_raw, pipeline_raw)
+    pipeline_meta = html_lib.escape(f"{pipeline_label} · {ts}" if pipeline_label else ts)
+    n_degraded = len(degraded)
     return f"""
   <div class="mb-6 rounded-xl border border-amber-300 bg-amber-50 p-4">
     <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
       <div>
-        <h3 class="text-sm font-bold text-amber-900">🧯 数据源降级提示</h3>
-        <p class="text-xs text-amber-800">这些不是隐藏错误；只说明某些字段今天为空，主推荐是否可用以质量闸门为准。</p>
+        <h3 class="text-sm font-bold text-amber-900">📡 有 {n_degraded} 家外部数据供应商今天不正常</h3>
+        <p class="text-xs text-amber-800 mt-0.5">
+          <strong class="text-amber-900">不影响今天的主推荐排名</strong>，
+          只是某些"深度因子"今天算不出来；下面列了哪些字段空着、哪些字段照常。
+        </p>
       </div>
-      <span class="text-[11px] font-mono text-amber-700">{pipeline} · {ts}</span>
+      <span class="text-[11px] font-mono text-amber-700">{pipeline_meta}</span>
     </div>
     <div class="space-y-3">
       {''.join(cards)}
     </div>
-    {('<div class="grid grid-cols-1 md:grid-cols-3 gap-2 mt-4">' + ''.join(market_rows) + '</div>') if market_rows else ''}
   </div>
 """
 
