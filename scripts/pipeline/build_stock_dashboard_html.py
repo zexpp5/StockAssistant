@@ -12897,6 +12897,232 @@ def _weekly_self_review_panel_html() -> str:
 """
 
 
+def _catalyst_action_label_py(catalyst: str, validation: dict) -> str:
+    """Python 端复现 JS _catalystActionBadge — 返回带色的 HTML 片段。"""
+    if not catalyst or not isinstance(validation, dict):
+        return ""
+    summary = validation.get("summary_by_type") or {}
+    # 从 catalyst 字符串推断 event key
+    key = None
+    if "📢 业绩预告" in catalyst:
+        key = "earnings_preview"
+    elif "🤝 并购" in catalyst or "🤝 收购完成" in catalyst:
+        key = "ma_takeover"
+    elif "🛑 停牌" in catalyst:
+        key = "trading_halt"
+    elif "💰 回购" in catalyst:
+        key = "buyback"
+    elif "🎯 大股东主动持仓" in catalyst:
+        key = "active_holder_change"
+    elif "🟢 内部人净买入" in catalyst:
+        key = "insider_net_buy"
+    elif "🔴 内部人净卖出" in catalyst:
+        key = "insider_net_sell"
+    elif "👤 高管变动" in catalyst:
+        key = "material_event::👤 高管变动"
+    elif "⚠️ 裁员" in catalyst:
+        key = "material_event::⚠️ 裁员/退出"
+    elif "📣 重大披露" in catalyst:
+        key = "material_event::📣 重大披露"
+    elif "📜 重大协议" in catalyst:
+        key = "material_event::📜 重大协议"
+    elif "EPS 实际" in catalyst and "超预期" in catalyst:
+        import re as _r
+        m = _r.search(r"超预期\s*\+(\d+(?:\.\d+)?)%", catalyst)
+        if m:
+            surp = float(m.group(1))
+            key = "earnings::✅ 超预期 >+10%" if surp >= 10 else "earnings::↗️ 超预期 0~+10%"
+    elif "EPS 实际" in catalyst and "差预期" in catalyst:
+        import re as _r
+        m = _r.search(r"差预期\s*-?(\d+(?:\.\d+)?)%", catalyst)
+        if m:
+            dec = float(m.group(1))
+            key = "earnings::❌ 差预期 <-10%" if dec >= 10 else "earnings::↘️ 差预期 -10%~0"
+    elif "财报：净利润同比" in catalyst:
+        key = "earnings"
+    if not key:
+        return ""
+    stats = summary.get(key)
+    if not stats or not stats.get("by_horizon", {}).get("T+5"):
+        return ""
+    h5 = stats["by_horizon"]["T+5"]
+    n = int(stats.get("n") or 0)
+    mean = h5.get("mean", 0)
+    hit = h5.get("hit_pos", 0)
+    mean_str = f"{'+' if mean >= 0 else ''}{mean:.1f}%"
+    if n < 5:
+        return f'<span class="inline-block px-2 py-0.5 rounded text-[11px] border border-slate-300 bg-slate-100 text-slate-600">⚪ 样本不足 · 仅 {n} 次</span>'
+    explain = f'类似 {n} 次 · 5天平均 <b>{mean_str}</b> · <b>{int(hit)}%</b> 涨'
+    if mean >= 3 and hit >= 60:
+        return f'<span class="inline-block px-2 py-0.5 rounded text-[11px] border-2 border-emerald-500 bg-emerald-100 text-emerald-900 font-bold">🚀 该跟 · {explain}</span>'
+    if mean > 0:
+        return f'<span class="inline-block px-2 py-0.5 rounded text-[11px] border-2 border-emerald-400 bg-emerald-50 text-emerald-800 font-bold">📈 可关注 · {explain}</span>'
+    if mean < -3:
+        return f'<span class="inline-block px-2 py-0.5 rounded text-[11px] border-2 border-rose-500 bg-rose-100 text-rose-900 font-bold">📉 回避 · {explain}</span>'
+    return f'<span class="inline-block px-2 py-0.5 rounded text-[11px] border-2 border-rose-300 bg-rose-50 text-rose-700 font-bold">↘️ 谨慎 · {explain}</span>'
+
+
+def _market_label_py(ticker: str) -> str:
+    t = (ticker or "").upper()
+    if t.endswith(".HK"): return "🇭🇰 港"
+    if t.endswith(".SS"): return "🇨🇳 沪"
+    if t.endswith(".SZ"): return "🇨🇳 深"
+    if t.endswith(".BJ"): return "🇨🇳 京"
+    return "🇺🇸 美"
+
+
+def _today_catalyst_movement_html() -> str:
+    """今日决策台首屏 · 「📰 今日推荐动向」卡：🆕 新进入 / 📈 跃升 / 📉 跌出。"""
+    appearance = _runtime_load_json("data/latest/picks_appearance.json")
+    validation = _runtime_load_json("data/latest/catalyst_validation.json")
+    if not appearance:
+        return ""
+    total_runs = int(appearance.get("total_runs") or 0)
+    if total_runs < 2:
+        return f"""
+  <div class="bg-violet-50 border border-violet-200 rounded-xl p-4 mb-6">
+    <div class="font-bold text-violet-900 mb-1">📰 今日推荐动向</div>
+    <p class="text-sm text-violet-800">
+      系统刚切换打分公式（5/25 12:10），历史推荐数据库正在累积。明日 daily_refresh 跑完才能开始算
+      🆕 新进入 / 📈 跃升 / 📉 跌出。
+    </p>
+  </div>"""
+
+    tickers = appearance.get("tickers") or {}
+    # 加载 candidate 元信息用于补 name / catalyst（v2 实际推荐池）
+    v2 = _runtime_v2_recommendations() or []
+    cand_meta = {(c.get("ticker") or "").upper(): c for c in v2 if c.get("ticker")}
+
+    # 三类列表
+    new_items = []
+    rise_items = []
+    for tk, info in tickers.items():
+        c = cand_meta.get(tk.upper())
+        if not c:
+            continue
+        cnt = int(info.get("count") or 0)
+        if cnt == 1:
+            new_items.append((tk, info, c))
+        rank_up = info.get("rank_up") or 0
+        score_up = info.get("score_up") or 0
+        if rank_up >= 3 or (score_up and score_up >= 2):
+            rise_items.append((tk, info, c))
+    dropouts = appearance.get("dropouts") or []
+
+    # 加载持仓 ticker set
+    held: set = set()
+    review = _runtime_load_json("data/latest/real_holding_review.json")
+    for it in (review.get("items") or []):
+        s = (it.get("symbol") or it.get("code") or "").upper()
+        if s:
+            held.add(s)
+
+    # 渲染一只票的行
+    def _row_html(tk: str, name: str, catalyst: str, extra: str = "") -> str:
+        ticker_disp = tk
+        market = _market_label_py(tk)
+        action = _catalyst_action_label_py(catalyst, validation) if catalyst else ""
+        held_warn = " <span class='inline-block px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-200 text-amber-900'>⚠️ 你持仓</span>" if tk.upper() in held else ""
+        catalyst_disp = html_lib.escape(catalyst) if catalyst else "<span class='text-slate-400 text-xs'>(无近期催化)</span>"
+        return f"""
+        <div class="flex items-start gap-3 py-2 border-b border-slate-100 last:border-0">
+          <span class="text-[10px] font-mono text-slate-400 min-w-[36px] mt-1">{market}</span>
+          <span class="font-mono font-bold text-slate-900 min-w-[100px] mt-1">{html_lib.escape(ticker_disp)}</span>
+          <span class="text-sm text-slate-700 min-w-[120px] mt-1">{html_lib.escape(name or '')}{held_warn}</span>
+          <div class="flex-1">
+            <div class="text-xs text-slate-600">{catalyst_disp}</div>
+            <div class="mt-1">{action}</div>
+            {extra}
+          </div>
+        </div>"""
+
+    # 🆕 新进入
+    new_html = ""
+    if new_items:
+        new_items.sort(key=lambda x: (_market_label_py(x[0]), x[0]))
+        rows = []
+        for tk, info, c in new_items[:10]:
+            name = c.get("name") or ""
+            catalyst = c.get("catalyst") or ""
+            rows.append(_row_html(tk, name, catalyst))
+        more = f' <span class="text-xs text-slate-500">+{len(new_items)-10} 只...</span>' if len(new_items) > 10 else ""
+        new_html = f"""
+    <div class="mb-5">
+      <div class="font-bold text-violet-900 text-sm mb-2">🆕 今日新进入推荐 <span class="text-slate-500 font-normal">({len(new_items)} 只){more}</span></div>
+      <div class="bg-white rounded-lg border border-violet-200 px-3">{''.join(rows)}</div>
+    </div>"""
+
+    # 📈 跃升
+    rise_html = ""
+    if rise_items:
+        rise_items.sort(key=lambda x: -(x[1].get("rank_up") or 0))
+        rows = []
+        for tk, info, c in rise_items[:10]:
+            name = c.get("name") or ""
+            catalyst = c.get("catalyst") or ""
+            rank_up = info.get("rank_up") or 0
+            score_up = info.get("score_up") or 0
+            extra_parts = []
+            if rank_up >= 3:
+                extra_parts.append(f"排名 {info.get('prev_rank')}→{info.get('cur_rank')} (+{rank_up})")
+            if score_up and score_up >= 2:
+                extra_parts.append(f"评分 +{score_up:.1f}")
+            extra = f'<div class="text-[11px] text-amber-700 mt-1">📈 ' + " · ".join(extra_parts) + '</div>' if extra_parts else ""
+            rows.append(_row_html(tk, name, catalyst, extra))
+        more = f' <span class="text-xs text-slate-500">+{len(rise_items)-10} 只...</span>' if len(rise_items) > 10 else ""
+        rise_html = f"""
+    <div class="mb-5">
+      <div class="font-bold text-amber-900 text-sm mb-2">📈 今日排名跃升 <span class="text-slate-500 font-normal">({len(rise_items)} 只){more}</span></div>
+      <div class="bg-white rounded-lg border border-amber-200 px-3">{''.join(rows)}</div>
+    </div>"""
+
+    # 📉 跌出
+    drop_html = ""
+    if dropouts:
+        # 持仓置顶
+        sorted_drops = sorted(dropouts, key=lambda d: (0 if (d.get("ticker") or "").upper() in held else 1, d.get("prev_rank") or 99))
+        rows = []
+        for d in sorted_drops[:10]:
+            tk = d.get("ticker") or ""
+            name = d.get("name") or ""
+            prev_rank = d.get("prev_rank")
+            prev_score = d.get("prev_score")
+            extra = f'<div class="text-[11px] text-rose-700 mt-1">📉 上次第 {prev_rank} 名 · 综合 {prev_score}</div>' if prev_rank else ""
+            rows.append(_row_html(tk, name, "", extra))
+        held_in_drop = sum(1 for d in dropouts if (d.get("ticker") or "").upper() in held)
+        warn = f' <span class="text-xs text-amber-700 font-bold">⚠️ 含 {held_in_drop} 只你持仓</span>' if held_in_drop else ""
+        more = f' <span class="text-xs text-slate-500">+{len(dropouts)-10} 只...</span>' if len(dropouts) > 10 else ""
+        drop_html = f"""
+    <div class="mb-3">
+      <div class="font-bold text-rose-900 text-sm mb-2">📉 今日跌出推荐 <span class="text-slate-500 font-normal">({len(dropouts)} 只){warn}{more}</span></div>
+      <div class="bg-white rounded-lg border border-rose-200 px-3">{''.join(rows)}</div>
+    </div>"""
+
+    if not (new_html or rise_html or drop_html):
+        return """
+  <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-6">
+    <div class="font-bold text-slate-700 mb-1">📰 今日推荐动向</div>
+    <p class="text-sm text-slate-600">今日推荐池跟昨日完全一致 · 没有新进入 / 跃升 / 跌出。</p>
+  </div>"""
+
+    return f"""
+  <div class="bg-gradient-to-br from-amber-50 to-rose-50 border-2 border-amber-200 rounded-2xl p-5 mb-6 shadow-sm">
+    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+      <div>
+        <h3 class="font-bold text-slate-900 text-lg">📰 今日推荐动向</h3>
+        <p class="text-xs text-slate-600 mt-1">
+          昨日 → 今日 推荐池变化 · 每条带「为啥推」+「历史这类信号靠不靠谱」·
+          <a href="#discovery" class="text-violet-700 hover:underline">完整 AI 推荐 →</a>
+          <a href="#catalyst-validation" class="text-violet-700 hover:underline ml-2">催化信号验证 →</a>
+        </p>
+      </div>
+    </div>
+    {new_html}
+    {rise_html}
+    {drop_html}
+  </div>"""
+
+
 def today_decision_panel_html() -> str:
     clean_v2 = _is_clean_v2_db()
     quality = _runtime_load_json("data/latest/recommendation_quality_gate.json")
@@ -13145,6 +13371,8 @@ def today_decision_panel_html() -> str:
   <div class="grid grid-cols-1 md:grid-cols-4 gap-3 mb-6">
     {cards_html}
   </div>
+
+  {_today_catalyst_movement_html()}
 
   {_weekly_self_review_panel_html()}
 
