@@ -47,6 +47,9 @@ HKEX_PRIORITY = {
     "buyback":          5,   # 回购（弱信号）
 }
 
+# major_order 金额阈值（CNY），低于此值降为弱信号 priority=4
+MAJOR_ORDER_CNY_THRESHOLD = 1e8  # 1 亿 CNY
+
 # 美股 SEC 事件优先级
 US_SEC_PRIORITY = {
     "active_holder_change":  0,  # SC 13D - 主动持仓往往含收购意图
@@ -213,7 +216,14 @@ def _catalyst_from_hkex(events: list[dict], today: date, lookback_days: int, max
     for e in events:
         etype = e.get("event_type", "")
         prio = HKEX_PRIORITY.get(etype)
-        if prio is None or prio > max_priority:
+        if prio is None:
+            continue
+        # major_order 金额阈值：< 1 亿 CNY 降为弱信号
+        if etype == "major_order":
+            amt_cny = e.get("amount_cny_approx") or 0
+            if amt_cny > 0 and amt_cny < MAJOR_ORDER_CNY_THRESHOLD:
+                prio = 4  # 降级
+        if prio > max_priority:
             continue
         try:
             ed = datetime.strptime(e.get("event_date", ""), "%Y-%m-%d").date()
@@ -244,7 +254,17 @@ def _catalyst_from_hkex(events: list[dict], today: date, lookback_days: int, max
         "earnings_announcement": "📋 业绩公告",
     }
     prefix = label_map.get(etype, "📄 公告")
+    # major_order 优先展示「客户 + 金额」(更直观),普通的 title 跟在后面
+    customer = e.get("customer") or ""
     amt = e.get("amount_text") or ""
+    if etype == "major_order" and (customer or amt):
+        parts = []
+        if customer:
+            parts.append(f"客户 {customer}")
+        if amt:
+            parts.append(amt)
+        kv = " · ".join(parts)
+        return f"{ed.strftime('%-m/%-d')} {prefix}：{kv}（{days_ago}d 前）"
     amt_suffix = f"（{amt}）" if amt else ""
     return f"{ed.strftime('%-m/%-d')} {prefix}：{title}{amt_suffix}（{days_ago}d 前）"
 
@@ -272,14 +292,21 @@ def _catalyst_from_form4(events: list[dict], today: date, lookback_days: int) ->
 
 
 def _catalyst_from_sec(events: list[dict], today: date, lookback_days: int, max_priority: int = 9) -> str | None:
-    """SEC EDGAR filings → 催化句。按 event_type 优先级 + 日期新近度。"""
+    """SEC EDGAR filings → 催化句。按 event_type 优先级 + 日期新近度。
+    8-K 用 item_priority 覆盖 form-level priority（item 解析后能精确分级）。
+    """
     if not events:
         return None
     candidates: list[tuple[int, date, dict]] = []
     for e in events:
         etype = e.get("event_type", "")
         prio = US_SEC_PRIORITY.get(etype)
-        if prio is None or prio > max_priority:
+        if prio is None:
+            continue
+        # 8-K：用 item_priority 修正（item 5.02 高管变动 = 2 比 form-level 4 强）
+        if etype == "material_event" and isinstance(e.get("item_priority"), int):
+            prio = e["item_priority"]
+        if prio > max_priority:
             continue
         try:
             ed = datetime.strptime(e.get("event_date", ""), "%Y-%m-%d").date()
@@ -295,13 +322,17 @@ def _catalyst_from_sec(events: list[dict], today: date, lookback_days: int, max_
     days_ago = (today - ed).days
     etype = e.get("event_type", "")
     form = e.get("form", "")
-    label_map = {
-        "active_holder_change":   "🎯 大股东主动持仓（13D 常含收购意图）",
-        "passive_holder_change":  "👥 大股东被动持仓（13G）",
-        "material_event":         "📣 8-K 重大事件",
-        "proxy":                  "🗳️ 股东大会",
-    }
-    label = label_map.get(etype, f"📄 {form}")
+    # 8-K 用 item_label 覆盖
+    if etype == "material_event" and e.get("item_label"):
+        label = e["item_label"]
+    else:
+        label_map = {
+            "active_holder_change":   "🎯 大股东主动持仓（13D 常含收购意图）",
+            "passive_holder_change":  "👥 大股东被动持仓（13G）",
+            "material_event":         "📣 8-K 重大事件",
+            "proxy":                  "🗳️ 股东大会",
+        }
+        label = label_map.get(etype, f"📄 {form}")
     return f"{ed.strftime('%-m/%-d')} {label}（{days_ago}d 前）"
 
 

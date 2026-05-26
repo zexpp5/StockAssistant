@@ -166,11 +166,30 @@ def fetch_cls_alerts() -> list[dict]:
     return out
 
 
+# HKMA press 标题里这些词出现 = 日常运营公告 (噪音),不该当政策信号
+_HKMA_NOISE_PATTERNS = [
+    "Scam alert", "scam alert", "fraudulent website", "fraudulent",
+    "Exchange Fund Notes Tender Results",
+    "Exchange Fund Bills Tender Results",
+    "Tender Results",
+    "appointment",  # 任命公告（除非含 Chief Executive 等关键词）
+    "Renminbi Bills",  # 央行例行人民币 bills issuance
+]
+
+
+def _is_hkma_noise(title: str) -> bool:
+    """标题命中噪音模式 → True 跳过。"""
+    if not title:
+        return True
+    return any(p in title for p in _HKMA_NOISE_PATTERNS)
+
+
 def fetch_hkma_press(limit: int = 20) -> list[dict]:
     """香港金融管理局 (HKMA) 新闻发布 — 港股相关货币政策 / 监管声明。
 
     页面：https://www.hkma.gov.hk/eng/news-and-media/press-releases/
     解析 server-rendered HTML 拿 URL（含日期）+ 标题。不拉详情页（只 title 关键词匹配）。
+    噪音过滤：日常 Tender Results / Scam alert 静默不进 events。
     """
     try:
         import requests
@@ -193,22 +212,75 @@ def fetch_hkma_press(limit: int = 20) -> list[dict]:
     )
     out: list[dict] = []
     seen: set[str] = set()
-    for full_url, yyyy, mm, ymd_n, title in pat.findall(html)[:limit * 2]:
+    n_noise = 0
+    for full_url, yyyy, mm, ymd_n, title in pat.findall(html)[:limit * 3]:
         if full_url in seen:
             continue
         seen.add(full_url)
+        title = title.strip()
+        if _is_hkma_noise(title):
+            n_noise += 1
+            continue
         try:
             d = date(int(yyyy), int(mm), int(ymd_n[6:8]))
         except Exception:
             continue
         out.append({
             "date": d,
-            "title": title.strip(),
+            "title": title,
             "content": "",  # 不拉详情减少请求；title 已含主信号
             "source": "hkma.gov.hk/press-releases",
         })
         if len(out) >= limit:
             break
+    if n_noise:
+        logger.info("HKMA 噪音过滤 %d 条 (Scam alert / Tender Results 等)", n_noise)
+    return out
+
+
+def fetch_sfc_news(limit: int = 30) -> list[dict]:
+    """香港证监会 (SFC) news — 港股监管 / 执法。
+
+    SPA backend：POST /edistributionWeb/api/news/search
+    新闻类型 newsType: GN (General News) / EF (Enforcement News) / CR (Corporate Communications)
+    返回精简后的 item list 给 policy_events 用。
+    """
+    try:
+        import requests
+    except ImportError:
+        return []
+    from datetime import date as _d
+    url = "https://apps.sfc.hk/edistributionWeb/api/news/search"
+    payload = {
+        "lang": "EN", "category": "all",
+        "year": _d.today().year,
+        "pageNo": 1, "pageSize": limit,
+        "sort": {"field": "issueDate", "order": "desc"},
+    }
+    try:
+        r = requests.post(url, json=payload, timeout=10,
+                          headers={"User-Agent": "Mozilla/5.0 LinearV",
+                                   "Content-Type": "application/json"})
+        if r.status_code != 200:
+            return []
+        data = r.json()
+    except Exception as e:
+        logger.warning("SFC news fetch err: %s", e)
+        return []
+
+    out: list[dict] = []
+    for item in (data.get("items") or [])[:limit]:
+        iso_dt = item.get("issueDate") or ""
+        try:
+            d = datetime.strptime(iso_dt[:10], "%Y-%m-%d").date()
+        except Exception:
+            continue
+        out.append({
+            "date": d,
+            "title": (item.get("title") or "").strip(),
+            "content": "",
+            "source": f"sfc.hk/news?type={item.get('newsType','')}",
+        })
     return out
 
 
@@ -339,6 +411,9 @@ def scan_recent_policies(days: int = 7, min_score: int = 2) -> list[PolicyEvent]
 
     # 3. 香港金管局 (HKMA) press releases — 港股专属源
     all_news.extend(fetch_hkma_press(limit=30))
+
+    # 4. 香港证监会 (SFC) news — 港股监管 / 执法
+    all_news.extend(fetch_sfc_news(limit=30))
 
     events = detect_policy_events(all_news, min_score=min_score)
     # 按日期降序 + 相关性降序

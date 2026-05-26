@@ -78,3 +78,25 @@
 ## 跟进位置
 
 todo 跟着这份文档逐项推进。完成的项打勾，新发现的 gap 追加到末尾。
+
+---
+
+## 2026-05-26 收尾追加 5 项 polish（全部完成）
+
+| 项目 | 状态 | 说明 |
+|---|---|---|
+| **B7b-noise** HKMA 噪音过滤 | ✅ | `_is_hkma_noise()` 黑名单过滤 Scam alert / Tender Results / Renminbi Bills 等日常运营公告，9 条 → 0 条有效（今天 HKMA 无政策信号） |
+| **A5-threshold** 金额阈值 | ✅ | `_amount_to_cny()` 把订单金额估算成 CNY，`< 1 亿 CNY` 的 major_order 降为 priority 4 弱信号；阈值 const `MAJOR_ORDER_CNY_THRESHOLD = 1e8` |
+| **C9-item** 8-K Item 解析 | ✅ | `_fetch_8k_items()` 拉每个 8-K HTML 用正则 `Item N.NN` 提取，写到 event `items[]` + `item_label` + `item_priority`；catalyst 用 item_priority 覆盖 form-level；80% 命中（130 个 8-K → 104 个解析出 item）；最常见 Item 9.01/2.02/7.01/5.02/5.07/1.01 |
+| **A5-ner** 客户名 NER | ✅ | 白名单规则匹配 50+ 主要客户（三大运营商/华为/比亚迪/腾讯/阿里/特斯拉/苹果/微软等）；major_order 句子优先「客户 X · 金额 Y」格式 |
+| **B7b-sfc** SFC News API | ✅ | 逆向找到 SFC SPA 真正 backend `POST /edistributionWeb/api/news/search` + payload `{"lang":"EN","category":"all","year":Y,"pageNo":1,"pageSize":N,"sort":{"field":"issueDate","order":"desc"}}`；返回 newsType=GN/EF 含 5250+ 历史新闻 |
+
+## 真正还能 polish 的（下一轮，非阻塞）
+
+| 项目 | 复杂度 | 说明 |
+|---|---|---|
+| **SFC speech 噪音过滤** | 低 | 「New speech by」/「Remarks at」/「Keynote」类演讲应过滤，跟 HKMA 同样套路 |
+| **8-K Item 多元组合标签** | 中 | 一个 8-K 可能同时含 1.01 + 5.02，目前只取最强 priority；可考虑组合「重大协议 + 高管变动」 |
+| **客户名扩词** | 低 | 现有 50 个白名单，可以接入飞书表格/外部源动态维护 |
+| **HKEX news SPA** | 高 | 跟 SFC 同样套路逆向，但 302 重定向链路更复杂 |
+| **A5 提取上下文段落** | 中 | 现在只看 title，详情 PDF 里能拿合同期限、起止日期、是否含 cap |

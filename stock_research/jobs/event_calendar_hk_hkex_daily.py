@@ -116,6 +116,64 @@ def _extract_amount(text: str) -> str:
             return m.group(0)
     return ""
 
+
+# 简单单位 → CNY 等值（粗略，用来过滤"重大"阈值）
+_UNIT_TO_CNY = {
+    "億美元": 7.2e8, "亿美元": 7.2e8,
+    "億港元": 0.9e8, "亿港元": 0.9e8,
+    "億元":   1e8,    "亿元":   1e8,
+    "億":     1e8,    "亿":     1e8,
+    "萬美元": 7.2e4, "万美元": 7.2e4,
+    "萬港元": 0.9e4, "万港元": 0.9e4,
+    "萬元":   1e4,    "万元":   1e4,
+    "萬":     1e4,    "万":     1e4,
+    "billion": 7.2e9, "Billion": 7.2e9,
+    "million": 7.2e6, "Million": 7.2e6,
+}
+
+
+# 客户名白名单（中国主要科技 / 工业 / 央企 + 全球大客户）
+_CUSTOMER_KEYWORDS = [
+    # 三大运营商
+    "中国移动", "中国电信", "中国联通", "中移动", "中电信", "中聯通",
+    # 中国头部科技 / 互联网
+    "华为", "華為", "比亚迪", "比亞迪", "腾讯", "騰訊", "阿里巴巴", "阿里",
+    "京东", "京東", "字节跳动", "字節", "美团", "美團", "百度", "小米",
+    "OPPO", "vivo", "联想", "聯想", "理想", "蔚来", "蔚來", "小鵬", "小鹏",
+    # 重要央企
+    "宁德时代", "寧德時代", "国家电网", "南方电网", "中石油", "中石化", "中国神华",
+    "中铁", "中交", "中铝", "中核", "中船",
+    # 海外大客户
+    "苹果", "Apple", "微软", "Microsoft", "谷歌", "Google", "亚马逊", "Amazon",
+    "Meta", "Facebook", "特斯拉", "Tesla", "英伟达", "NVIDIA",
+    "三星", "Samsung", "丰田", "Toyota", "本田", "Honda",
+]
+
+
+def _extract_customer(text: str) -> str:
+    """从 title 抽取客户名（白名单匹配）。返回第一个命中的客户名。"""
+    if not text:
+        return ""
+    for c in _CUSTOMER_KEYWORDS:
+        if c in text:
+            return c
+    return ""
+
+
+def _amount_to_cny(amount_text: str) -> float:
+    """金额文本 → CNY 等值估算。'5 亿美元' → 3.6e9。无法解析返回 0。"""
+    if not amount_text:
+        return 0.0
+    import re as _re2
+    m = _re2.search(r"(\d+(?:\.\d+)?)", amount_text)
+    if not m:
+        return 0.0
+    num = float(m.group(1))
+    for unit, factor in _UNIT_TO_CNY.items():
+        if unit in amount_text:
+            return num * factor
+    return num  # 没单位假设是元
+
 # 字符实体反转义（HKEX JSON 里 / 转成 &#x2f;）
 _HTML_ENT = re.compile(r"\\?&#x([0-9a-fA-F]+);")
 
@@ -270,11 +328,17 @@ def main() -> int:
                 "news_id": a.get("NEWS_ID", ""),
                 "source": "hkexnews.hk/titleSearchServlet",
             }
-            # major_order 类公告：尝试从 title 抽金额
+            # major_order 类公告：抽金额 + 客户名 + 转 CNY 估值（用于阈值过滤）
             if etype == "major_order":
                 amt = _extract_amount(title)
                 if amt:
                     entry["amount_text"] = amt
+                    cny = _amount_to_cny(amt)
+                    if cny > 0:
+                        entry["amount_cny_approx"] = round(cny, 0)
+                customer = _extract_customer(title)
+                if customer:
+                    entry["customer"] = customer
             events.append(entry)
         hit += 1
         time.sleep(0.3)  # rate limit 礼貌
