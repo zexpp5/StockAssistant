@@ -113,6 +113,34 @@ def main() -> int:
 
     print(f"✅ 写入 {out_path}")
     print(f"  候选数: {len(new_candidates)}")
+
+    # 自动入库：置信度阈值 freq ≥ 3 且涉及 ≥ 2 不同 ticker
+    # （单 ticker 多次提及可能只是该公司一直跟同一家客户合作的重复公告，信号弱）
+    auto_promote = [
+        c for c in new_candidates
+        if c["freq"] >= 3 and len(c["tickers"]) >= 2
+    ]
+    auto_path = REPO / "data" / "cache" / "customer_whitelist_auto.json"
+    auto_path.parent.mkdir(parents=True, exist_ok=True)
+    # 加载已存的 auto 文件，并集后写回
+    existing: list[str] = []
+    if auto_path.exists():
+        try:
+            existing = json.loads(auto_path.read_text(encoding="utf-8")).get("names") or []
+        except Exception:
+            existing = []
+    new_names = [c["name"] for c in auto_promote if c["name"] not in existing]
+    final_names = sorted(set(existing) | set(new_names))
+    auto_path.write_text(json.dumps({
+        "generated_at": datetime.now().isoformat(),
+        "criteria": "freq >= 3 && distinct_tickers >= 2",
+        "n_names": len(final_names),
+        "new_this_run": new_names,
+        "names": final_names,
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"  自动入库 (置信度≥3次且涉及≥2 ticker): 本次 +{len(new_names)} 累计 {len(final_names)}")
+    print(f"  → {auto_path}")
+
     print()
     print("Top 10 候选（频次降序）:")
     for c in new_candidates[:10]:

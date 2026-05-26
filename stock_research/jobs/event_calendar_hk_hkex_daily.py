@@ -313,8 +313,28 @@ def _fetch_pdf_summary(session, file_link: str, cache_con=None, news_id: str = "
     return summary
 
 
+_AUTO_WHITELIST_CACHE: list[str] | None = None
+
+
+def _load_auto_whitelist() -> list[str]:
+    """从 data/cache/customer_whitelist_auto.json 加载词频自动入库的客户名。"""
+    global _AUTO_WHITELIST_CACHE
+    if _AUTO_WHITELIST_CACHE is not None:
+        return _AUTO_WHITELIST_CACHE
+    p = REPO / "data" / "cache" / "customer_whitelist_auto.json"
+    if not p.exists():
+        _AUTO_WHITELIST_CACHE = []
+        return _AUTO_WHITELIST_CACHE
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        _AUTO_WHITELIST_CACHE = data.get("names") or []
+    except Exception:
+        _AUTO_WHITELIST_CACHE = []
+    return _AUTO_WHITELIST_CACHE
+
+
 def _extract_customer(text: str, self_name: str = "") -> str:
-    """从 text 抽取客户名（白名单匹配）。
+    """从 text 抽取客户名（白名单匹配 + 自动入库扩展）。
     self_name: 发公告的本公司名（含简繁版本），匹配到自己就跳过避免"联想公告里提到联想"误识别。
     """
     if not text:
@@ -328,7 +348,9 @@ def _extract_customer(text: str, self_name: str = "") -> str:
             t = t.strip()
             if len(t) >= 2:
                 self_tokens.add(t)
-    for c in _CUSTOMER_KEYWORDS:
+    # 静态白名单 + 自动入库扩展
+    all_names = list(_CUSTOMER_KEYWORDS) + _load_auto_whitelist()
+    for c in all_names:
         if c in text:
             # 自己被命中 → 跳过
             if any(c == st or c in st or st in c for st in self_tokens):

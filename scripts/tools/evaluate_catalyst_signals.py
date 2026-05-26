@@ -59,6 +59,34 @@ def load_price_map() -> dict[str, dict[str, float]]:
     return out
 
 
+def load_benchmark_map() -> dict[str, dict[str, float]]:
+    """benchmark symbol → {date_str: close}；从 DuckDB price_daily 拿三市场基准。"""
+    out: dict[str, dict[str, float]] = {}
+    db = REPO / "stock_history_v2.duckdb"
+    if not db.exists():
+        return out
+    try:
+        import duckdb
+        con = duckdb.connect(str(db), read_only=True)
+        for sym in ["SPY", "^HSI", "000300.SS"]:
+            try:
+                rows = con.execute(
+                    "SELECT trade_date, close FROM price_daily WHERE symbol=? ORDER BY trade_date",
+                    [sym],
+                ).fetchall()
+                out[sym] = {r[0].isoformat(): r[1] for r in rows if r[1]}
+            except Exception:
+                pass
+        con.close()
+    except Exception:
+        pass
+    return out
+
+
+def benchmark_for_market(market: str) -> str:
+    return {"US": "SPY", "HK": "^HSI", "CN": "000300.SS"}.get(market, "")
+
+
 def next_trading_close(price_map: dict, ticker: str, base_date: date, offset_days: int) -> tuple[date, float] | None:
     """从 base_date 算起，找第 offset_days 个交易日的 close（forward fill 跳过停牌）。"""
     prices = price_map.get(ticker.upper())
@@ -101,12 +129,12 @@ def calc_returns(price_map: dict, ticker: str, event_date: date) -> dict[int, fl
     return out or None
 
 
-def calc_benchmark_returns(price_map: dict, market: str, event_date: date) -> dict[int, float] | None:
-    """基准 N 日收益率（美股 SPY；HK/CN 暂无 → None）。"""
-    bench_ticker = {"US": "SPY"}.get(market)
-    if not bench_ticker:
+def calc_benchmark_returns(bench_map: dict, market: str, event_date: date) -> dict[int, float] | None:
+    """基准 N 日收益率（US: SPY / HK: ^HSI / CN: 000300.SS）。"""
+    bench_ticker = benchmark_for_market(market)
+    if not bench_ticker or bench_ticker not in bench_map:
         return None
-    return calc_returns(price_map, bench_ticker, event_date)
+    return calc_returns(bench_map, bench_ticker, event_date)
 
 
 def collect_events() -> list[dict]:
@@ -142,6 +170,21 @@ def collect_events() -> list[dict]:
             sub_label = ""
             if etype == "material_event" and e.get("item_label"):
                 sub_label = e["item_label"]
+            # earnings 按 surprise 方向细分（PEAD 信号区分正负）
+            elif etype == "earnings":
+                surp = e.get("surprise_pct")
+                mag = e.get("magnitude")
+                # HK/US (yfinance) 用 surprise_pct；A 股 (akshare) 用 magnitude (net_profit_yoy)
+                signal = surp if isinstance(surp, (int, float)) else (mag * 100 if isinstance(mag, (int, float)) else None)
+                if signal is not None:
+                    if signal >= 10:
+                        sub_label = "✅ 超预期 >+10%"
+                    elif signal >= 0:
+                        sub_label = "↗️ 超预期 0~+10%"
+                    elif signal >= -10:
+                        sub_label = "↘️ 差预期 -10%~0"
+                    else:
+                        sub_label = "❌ 差预期 <-10%"
             out.append({
                 "ticker": ticker,
                 "market": _market_of(ticker),
@@ -154,11 +197,13 @@ def collect_events() -> list[dict]:
 
 
 def main() -> int:
-    print("📊 加载 events + 价格历史...")
+    print("📊 加载 events + 价格历史 + 三市场基准...")
     events = collect_events()
     print(f"  事件总数: {len(events)}")
     price_map = load_price_map()
+    bench_map = load_benchmark_map()
     print(f"  价格历史 ticker: {len(price_map)}")
+    print(f"  基准数据: {list(bench_map.keys())} (US: SPY, HK: ^HSI, CN: 000300.SS)")
 
     # 按 (event_type, sub_label) 分组算 T+1/5/20 alpha
     from collections import defaultdict
@@ -170,11 +215,14 @@ def main() -> int:
         if not rets:
             no_price_count += 1
             continue
-        bench = calc_benchmark_returns(price_map, e["market"], e["event_date"]) or {}
-        # alpha = ticker return - benchmark return（无基准则用绝对 return）
+        bench = calc_benchmark_returns(bench_map, e["market"], e["event_date"]) or {}
+        # alpha = ticker return - benchmark return（三市场都用了基准）
         alphas = {}
         for n, r in rets.items():
-            alphas[n] = r - bench.get(n, 0) if e["market"] == "US" else r
+            if n in bench:
+                alphas[n] = r - bench[n]
+            else:
+                alphas[n] = r  # 无基准退化为绝对 return
         key = (e["event_type"], e["sub_label"])
         grouped[key].append({
             "ticker": e["ticker"],
@@ -215,8 +263,8 @@ def main() -> int:
         "n_events_with_price": sum(len(v) for v in grouped.values()),
         "no_price_data": no_price_count,
         "benchmark_us": "SPY (alpha)",
-        "benchmark_hk": "none (absolute return)",
-        "benchmark_cn": "none (absolute return)",
+        "benchmark_hk": "^HSI (alpha)",
+        "benchmark_cn": "000300.SS (alpha)",
         "summary_by_type": summary,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"✅ 详细报告: {out}")

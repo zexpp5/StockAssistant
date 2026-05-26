@@ -266,6 +266,27 @@ def _is_sfc_noise(title: str) -> bool:
     return any(p in title for p in _SFC_NOISE_PATTERNS)
 
 
+# HKEX news 噪音模式（慈善 / 颁奖 / 活动 = 无政策信号）
+_HKEX_NOISE_PATTERNS = [
+    "Foundation", "foundation",
+    "Care for Caregivers", "Caregivers",
+    "Charity", "charity",
+    "Award", "award",
+    "Hosts ", "hosts ",  # 主办活动（如 "HKEX Hosts 40th AOSEF"）
+    "Festival", "festival",
+    "Volunteering", "volunteering",
+    "Community", "community",
+    "Anniversary", "anniversary",
+    "joins ", "joined ",  # 加入某倡议
+]
+
+
+def _is_hkex_noise(title: str) -> bool:
+    if not title:
+        return True
+    return any(p in title for p in _HKEX_NOISE_PATTERNS)
+
+
 def fetch_hkex_news(limit: int = 30) -> list[dict]:
     """HKEX (港交所) 新闻发布 — 港股市场结构 / 产品发布 / 团队任命 / 监管协作。
 
@@ -293,22 +314,29 @@ def fetch_hkex_news(limit: int = 30) -> list[dict]:
     )
     out: list[dict] = []
     seen: set[str] = set()
-    for href, yyyy, yy, mm, dd, title in pat.findall(html)[:limit * 2]:
+    n_noise = 0
+    for href, yyyy, yy, mm, dd, title in pat.findall(html)[:limit * 3]:
         if href in seen:
             continue
         seen.add(href)
+        title = title.strip()
+        if _is_hkex_noise(title):
+            n_noise += 1
+            continue
         try:
             d = date(int(yyyy), int(mm), int(dd))
         except Exception:
             continue
         out.append({
             "date": d,
-            "title": title.strip(),
+            "title": title,
             "content": "",
             "source": "hkex.com.hk/news",
         })
         if len(out) >= limit:
             break
+    if n_noise:
+        logger.info("HKEX news 噪音过滤 %d 条 (Foundation / Award / Hosts 等)", n_noise)
     return out
 
 
