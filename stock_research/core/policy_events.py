@@ -41,6 +41,8 @@ POLICY_SOURCE_KEYWORDS = [
     "国务院", "中央", "中共中央", "国家发改委", "发改委", "工信部", "工业和信息化部",
     "财政部", "央行", "人民银行", "证监会", "银保监会", "国家能源局",
     "科技部", "商务部", "交通运输部", "住建部", "国资委",
+    # 港股相关权威：港澳办 + 港交所 + 香港金管局 / 证监会
+    "港澳办", "香港特区政府", "港交所", "HKEX", "金管局", "HKMA", "香港证监会", "SFC",
 ]
 
 # 政策动词（命中 = 政策动作）
@@ -67,7 +69,22 @@ THEME_KEYWORDS: dict[str, list[str]] = {
     "房地产": ["房地产", "楼市", "保交楼", "保障房", "白名单"],
     "医药": ["医保", "集采", "创新药", "医疗器械", "中医药"],
     "军工": ["军工", "国防", "航天", "航空发动机", "装备建设"],
+    # 港股专属主题（避免"互联互通"等多义词，否则会误击中外交新闻）
+    "港股通": ["港股通", "沪深港通", "深港通", "南向资金", "南向通", "北向资金",
+              "H 股", "H股", "红筹股", "互认基金", "跨境理财通", "港股 ETF"],
 }
+
+# 港股关键词集合（用来给 PolicyEvent.markets 标记 hk）
+# 经过 2026-05-26 实测，必须只保留港股金融专属词，否则会误击中外交/航天新闻：
+#   ❌ "香港特区政府" → 神舟发射现场提到香港代表
+#   ❌ "互联互通" → 外交合作语境的"互联互通"
+#   ❌ "香港" → 太宽，地理提及
+# 保留的都是不可能用在非港股金融语境的词。
+_HK_MARKET_KEYWORDS = [
+    "港股", "港股通", "沪深港通", "深港通", "南向资金", "南向通", "北向资金",
+    "H 股", "H股", "红筹股", "港交所", "HKEX", "香港金管局", "HKMA",
+    "香港证监会", "互认基金", "跨境理财通", "港股 ETF",
+]
 
 
 @dataclass
@@ -80,6 +97,7 @@ class PolicyEvent:
     relevance_score: int = 0                # 1-5，综合权威性 + 主题命中数
     full_text: str = ""                     # 原文（截断）
     source: str = ""                        # akshare 接口名
+    markets: list[str] = field(default_factory=list)  # 影响市场 ["cn"] / ["hk"] / ["cn","hk"]
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -216,6 +234,17 @@ def detect_policy_events(news_items: list[dict],
         if score < min_score:
             continue
 
+        # 市场判定：命中港股关键词 → +hk；命中 A 股主题（半导体/AI/光伏等）→ +cn
+        # 默认（既不命中港股也不命中专属主题）→ cn（内地政策默认影响 A 股）
+        markets: list[str] = []
+        if any(kw in full for kw in _HK_MARKET_KEYWORDS) or "港股通" in themes:
+            markets.append("hk")
+        # A 股标记规则：非港股主题命中 / 内地权威发文 → 影响 A 股
+        if any(t != "港股通" for t in themes) or (authority and "香港" not in (authority or "")):
+            markets.insert(0, "cn")
+        if not markets:
+            markets = ["cn"]
+
         events.append(PolicyEvent(
             date=item.get("date") or date.today(),
             title=title[:200],
@@ -224,6 +253,7 @@ def detect_policy_events(news_items: list[dict],
             relevance_score=score,
             full_text=content[:500],
             source=item.get("source", ""),
+            markets=markets,
         ))
     return events
 
