@@ -946,46 +946,35 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div id="discovery-count-explain" class="hidden mb-4 rounded-lg border border-violet-200 bg-white px-4 py-3 text-sm text-slate-700"></div>
     <div id="discovery-market-tabs" class="hidden mb-4 flex flex-wrap gap-2"></div>
     <style>
-      /* 今日 Top 表：所有字段单行显示 + 横向滚动；前两列(排名/代码) sticky 固定 */
-      #discovery-table-wrap td, #discovery-table-wrap th { white-space: nowrap; }
-      #discovery-table-wrap .disc-sticky-rank,
-      #discovery-table-wrap .disc-sticky-code { position: sticky; z-index: 2; background: #ffffff; }
-      #discovery-table-wrap .disc-sticky-rank { left: 0; min-width: 80px; }
-      #discovery-table-wrap .disc-sticky-code { left: 80px; min-width: 110px; box-shadow: 1px 0 0 rgba(15,23,42,0.06); }
-      #discovery-table-wrap thead th.disc-sticky-rank,
-      #discovery-table-wrap thead th.disc-sticky-code { background: #f8fafc; z-index: 5; }
-      #discovery-table-wrap tbody tr:hover .disc-sticky-rank,
-      #discovery-table-wrap tbody tr:hover .disc-sticky-code { background: #f8fafc; }
-      /* 展开详情面板里允许换行 */
+      /* 2026-05-27: 与"完整批次历史"对齐 — 默认换行，长字段（推荐依据/风险）显式限宽。
+         撤掉了原全局 nowrap + sticky 首两列（视觉太撑、横向滚动碍事）。
+         行内因子拆解的 pill 不换行；展开详情面板允许换行。 */
       #discovery-table-wrap tbody tr.disc-detail-row td { white-space: normal; }
-      /* 风险列文字较长，允许换行 + 限宽，避免把整张表撑爆 */
-      #discovery-table-wrap td.disc-cell-wrap { white-space: normal; }
-      /* 行内因子拆解的 pill 一行排，不换行；展开面板里(disc-detail-row)仍可换行 */
       #discovery-table-wrap tbody tr:not(.disc-detail-row) .flex-wrap { flex-wrap: nowrap; }
     </style>
     <div id="discovery-table-wrap" class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
       <table class="w-full text-sm">
-        <thead class="bg-slate-50 text-slate-600 text-xs uppercase tracking-wide">
+        <thead class="bg-slate-50 text-slate-500 text-[10px] uppercase tracking-wide">
           <tr>
-            <th class="disc-sticky-rank px-3 py-2 text-left">排名</th>
-            <th class="disc-sticky-code px-3 py-2 text-left">代码</th>
-            <th class="px-3 py-2 text-left">名称</th>
-            <th class="px-3 py-2 text-left">信号</th>
-            <th class="px-3 py-2 text-left">市场</th>
-            <th class="px-3 py-2 text-left">主题</th>
-            <th class="px-3 py-2 text-right">综合分</th>
-            <th class="px-3 py-2 text-left">因子拆解</th>
-            <th class="px-3 py-2 text-right">入选价</th>
-            <th class="px-3 py-2 text-right">市值 ($B)</th>
-            <th class="px-3 py-2 text-right" title="入选后 1 天涨幅 - 同期基准涨幅">1d α</th>
-            <th class="px-3 py-2 text-right" title="入选后 5 天涨幅 - 同期基准涨幅">5d α</th>
-            <th class="px-3 py-2 text-right" title="入选后 20 天涨幅 - 同期基准涨幅">20d α</th>
-            <th class="px-3 py-2 text-right" title="入选后 60 天涨幅 - 同期基准涨幅">60d α</th>
-            <th class="px-3 py-2 text-left">推荐依据</th>
-            <th class="px-3 py-2 text-left">风险</th>
-            <th class="px-3 py-2 text-left">来源</th>
-            <th class="px-3 py-2 text-center" title="AI 系统跑这批推荐的实际时间 — 防止误以为是实时数据">推荐时间</th>
-            <th class="px-3 py-2 text-center">操作</th>
+            <th class="px-2 py-1 text-left">排名</th>
+            <th class="px-2 py-1 text-left">代码</th>
+            <th class="px-2 py-1 text-left">名称</th>
+            <th class="px-2 py-1 text-left">信号</th>
+            <th class="px-2 py-1 text-left">市场</th>
+            <th class="px-2 py-1 text-left">主题</th>
+            <th class="px-2 py-1 text-right">综合分</th>
+            <th class="px-2 py-1 text-left">因子拆解</th>
+            <th class="px-2 py-1 text-right">入选价</th>
+            <th class="px-2 py-1 text-right">市值 ($B)</th>
+            <th class="px-2 py-1 text-right" title="入选后 1 天涨幅 - 同期基准涨幅">1d α</th>
+            <th class="px-2 py-1 text-right" title="入选后 5 天涨幅 - 同期基准涨幅">5d α</th>
+            <th class="px-2 py-1 text-right" title="入选后 20 天涨幅 - 同期基准涨幅">20d α</th>
+            <th class="px-2 py-1 text-right" title="入选后 60 天涨幅 - 同期基准涨幅">60d α</th>
+            <th class="px-2 py-1 text-left">推荐依据</th>
+            <th class="px-2 py-1 text-left">风险</th>
+            <th class="px-2 py-1 text-left">来源</th>
+            <th class="px-2 py-1 text-center" title="AI 系统跑这批推荐的实际时间 — 防止误以为是实时数据">推荐时间</th>
+            <th class="px-2 py-1 text-center">操作</th>
           </tr>
         </thead>
         <tbody id="discovery-table-body" class="divide-y divide-slate-100"></tbody>
@@ -8915,14 +8904,16 @@ function renderTodayPlan() {
     `;
   }
 
-  // join PICKS 拿 name + total_score + theme
-  const picksLookup = {};
-  if (typeof PICKS !== 'undefined' && Array.isArray(PICKS)) {
-    PICKS.forEach(p => {
-      const k = (p.code || p.symbol || '').toUpperCase();
-      if (k) picksLookup[k] = p;
+  // join DISCOVERY.candidates 拿 name + composite_z(V2 总分) + signal + sector
+  // 不能用 PICKS —— PICKS 只覆盖 watchlist 评级(6 只),不是 60 只候选池
+  const discoveryLookup = {};
+  try {
+    const dcands = (typeof DISCOVERY !== 'undefined' && DISCOVERY && DISCOVERY.candidates) || [];
+    dcands.forEach(c => {
+      const k = String(c.ticker || c.code || '').toUpperCase();
+      if (k) discoveryLookup[k] = c;
     });
-  }
+  } catch (e) { /* DISCOVERY 缺失不影响主体渲染 */ }
 
   // 按 capped_weight 降序
   const sortedRows = rows.slice().sort((a, b) => {
@@ -8946,12 +8937,12 @@ function renderTodayPlan() {
 
   tbody.innerHTML = sortedRows.map((r, i) => {
     const ticker = (r.ticker || '').toUpperCase();
-    const pick = picksLookup[ticker] || {};
-    const name = pick.name || ticker;
+    const cand = discoveryLookup[ticker] || {};
+    const name = cand.name || ticker;
     const w = r.capped_weight || r.target_weight || r.weight || 0;
-    const totalScore = pick.total_score;
-    const theme = (typeof WATCHLIST_CHAIN_INFO !== 'undefined' && WATCHLIST_CHAIN_INFO[ticker] && WATCHLIST_CHAIN_INFO[ticker].chain)
-      || pick.theme || '';
+    const totalScore = cand.composite_z;  // DISCOVERY 里就是 V2 总分(0-100)
+    const theme = (typeof chainThemeFor === 'function' ? chainThemeFor(ticker) : '')
+      || cand.sector || '';
     return `
       <tr class="hover:bg-slate-50">
         <td class="px-3 py-2 text-slate-500">${i + 1}</td>
@@ -8961,7 +8952,7 @@ function renderTodayPlan() {
         <td class="px-3 py-2 text-right font-mono text-slate-600">$${fmtAmt(r.amount)}</td>
         <td class="px-3 py-2 text-right font-mono text-slate-700">${fmtScore(totalScore)}</td>
         <td class="px-3 py-2 text-right font-mono text-slate-600">${r.f_score != null ? Number(r.f_score).toFixed(0) : '—'}</td>
-        <td class="px-3 py-2">${signalBadge(pick.signal)}</td>
+        <td class="px-3 py-2">${signalBadge(cand.signal)}</td>
         <td class="px-3 py-2 text-xs text-slate-600">${theme || '—'}</td>
       </tr>
     `;
@@ -10318,21 +10309,23 @@ function _catalystActionBadge(catalyst) {
   const n = stats.n || 0;
   const mean = h5.mean;
   const hit = h5.hit_pos;
+  // 共用 badge 样式：粗框 + 较大字号 + 强对比色块 → 让 badge 视觉明显跳出
+  const baseCls = "inline-flex items-center px-2.5 py-1 rounded-md text-[12px] font-bold align-middle mx-2 border-2 shadow-sm";
   // 样本不足明示
   if (n < 5) {
-    return `<span class="inline-flex px-1.5 py-0.5 rounded border border-slate-200 bg-slate-50 text-slate-500 text-[10px] ml-1" title="该类催化历史样本仅 ${n} 次,统计意义弱,不下结论">样本不足 (${n}次)</span>`;
+    return `<span class="${baseCls} border-slate-300 bg-slate-100 text-slate-600" title="该类催化历史样本仅 ${n} 次,统计意义弱,不下结论">⚪ 样本不足 (${n}次)</span>`;
   }
   const tip = `该类催化历史 ${n} 次：第 5 天平均超额涨幅 ${(mean>=0?'+':'')+mean.toFixed(2)}%，命中率 ${hit.toFixed(1)}%`;
   if (mean >= 3 && hit >= 60) {
-    return `<span class="inline-flex px-2 py-0.5 rounded font-bold bg-emerald-100 text-emerald-800 text-[11px] ml-1" title="${tip}">🚀 该跟 (${n}次)</span>`;
+    return `<span class="${baseCls} border-emerald-500 bg-emerald-100 text-emerald-900" title="${tip}">🚀 该跟 (${n}次)</span>`;
   }
   if (mean > 0) {
-    return `<span class="inline-flex px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 text-[11px] ml-1" title="${tip}">📈 可关注 (${n}次)</span>`;
+    return `<span class="${baseCls} border-emerald-400 bg-emerald-50 text-emerald-800" title="${tip}">📈 可关注 (${n}次)</span>`;
   }
   if (mean < -3) {
-    return `<span class="inline-flex px-2 py-0.5 rounded font-bold bg-rose-100 text-rose-800 text-[11px] ml-1" title="${tip}">📉 回避 (${n}次)</span>`;
+    return `<span class="${baseCls} border-rose-500 bg-rose-100 text-rose-900" title="${tip}">📉 回避 (${n}次)</span>`;
   }
-  return `<span class="inline-flex px-2 py-0.5 rounded bg-rose-50 text-rose-600 text-[11px] ml-1" title="${tip}">↘️ 谨慎 (${n}次)</span>`;
+  return `<span class="${baseCls} border-rose-300 bg-rose-50 text-rose-700" title="${tip}">↘️ 谨慎 (${n}次)</span>`;
 }
 
 function _reasonSummary(row) {
@@ -10664,45 +10657,43 @@ function _reasonSummaryHtml(row) {
       const alpha60 = track ? track.alpha_60d : null;
       const tk = _esc(c.ticker);
       return `<tr class="hover:bg-slate-50">
-        <td class="disc-sticky-rank px-3 py-2 font-mono text-slate-500">
+        <td class="px-2 py-1 font-mono text-xs text-slate-500">
           <button id="disc-toggle-${tk}" onclick="toggleDiscoveryDetail('${tk}')"
                   class="text-violet-600 hover:text-violet-800 mr-1 font-bold"
                   title="展开/折叠推荐理由">▶</button>
           <span title="当前市场 tab 内排名 (后端全局 rank #${c.rank})">${idx + 1}</span>
         </td>
-        <td class="disc-sticky-code px-3 py-2 font-mono font-semibold text-slate-900 cursor-pointer"
+        <td class="px-2 py-1 font-mono text-xs font-bold cursor-pointer"
             onclick="toggleDiscoveryDetail('${tk}')">${c.ticker}${_newBadge(c)}${_riseBadge(c)}${_appearanceBadge(c)}</td>
-        <td class="px-3 py-2 text-slate-700 cursor-pointer"
+        <td class="px-2 py-1 text-xs text-slate-700 min-w-[180px] cursor-pointer"
             onclick="toggleDiscoveryDetail('${tk}')">
-          <div>${c.name || ""}</div>
+          <div class="truncate max-w-[200px]">${c.name || ""}</div>
           ${c.quality_tag ? `<div class="mt-0.5">${_qualityTagHtml(c.quality_tag)}</div>` : ""}
           <div class="mt-0.5">${stockPill(c.ticker, {layout: "mini"})}</div>
         </td>
-        <td class="px-3 py-2 whitespace-nowrap">${_signalBadge(c)}</td>
-        <td class="px-3 py-2 text-xs text-slate-700 whitespace-nowrap">${market}</td>
-        <td class="px-3 py-2 text-xs text-slate-600 whitespace-nowrap">${_esc(chainThemeFor(c.ticker) || c.sector || "")}</td>
-        <td class="px-3 py-2 text-right font-mono ${zColor}">${scoreText}</td>
-        <td class="px-3 py-2 min-w-[210px]">${factorHtml}</td>
-        <td class="px-3 py-2 text-right font-mono text-slate-700 whitespace-nowrap">${entryText}</td>
-        <td class="px-3 py-2 text-right font-mono text-slate-700">${cap}</td>
-        <td class="px-3 py-2 text-right">${_fmtAlpha(alpha1)}</td>
-        <td class="px-3 py-2 text-right">${_fmtAlpha(alpha5)}</td>
-        <td class="px-3 py-2 text-right">${_fmtAlpha(alpha20)}</td>
-        <td class="px-3 py-2 text-right">${_fmtAlpha(alpha60)}</td>
-        <td class="px-3 py-2 text-xs text-slate-700 min-w-[260px] leading-snug">${reasonText}</td>
-        <td class="disc-cell-wrap px-3 py-2 text-xs min-w-[200px] max-w-[320px] leading-snug">${_riskSummaryHtml(c, 1)}</td>
-        <td class="px-3 py-2">${etfs}</td>
-        <td class="px-3 py-2 text-center text-xs whitespace-nowrap" title="${_esc(_discoveryTs.full)}">
-          <span class="${_discoveryTs.age.includes('⚠️') ? 'text-rose-600 font-medium' : 'text-slate-500'}">
-            🕐 ${_discoveryTs.short}
-          </span>
-          <div class="text-[10px] ${_discoveryTs.age.includes('⚠️') ? 'text-rose-500' : 'text-slate-400'}">${_discoveryTs.age}</div>
+        <td class="px-2 py-1 text-xs whitespace-nowrap">${_signalBadge(c)}</td>
+        <td class="px-2 py-1 text-xs whitespace-nowrap">${market}</td>
+        <td class="px-2 py-1 text-xs text-slate-600 whitespace-nowrap">${_esc(chainThemeFor(c.ticker) || c.sector || "")}</td>
+        <td class="px-2 py-1 text-right text-xs font-mono ${zColor}">${scoreText}</td>
+        <td class="px-2 py-1 text-xs min-w-[190px]">${factorHtml}</td>
+        <td class="px-2 py-1 text-right text-xs font-mono whitespace-nowrap">${entryText}</td>
+        <td class="px-2 py-1 text-right text-xs font-mono text-slate-700">${cap}</td>
+        <td class="px-2 py-1 text-right text-xs">${_fmtAlpha(alpha1)}</td>
+        <td class="px-2 py-1 text-right text-xs">${_fmtAlpha(alpha5)}</td>
+        <td class="px-2 py-1 text-right text-xs">${_fmtAlpha(alpha20)}</td>
+        <td class="px-2 py-1 text-right text-xs">${_fmtAlpha(alpha60)}</td>
+        <td class="px-2 py-1 text-xs text-slate-700 min-w-[260px] max-w-[360px] whitespace-normal leading-snug">${reasonText}</td>
+        <td class="px-2 py-1 text-xs min-w-[180px] max-w-[260px] whitespace-normal leading-snug">${_riskSummaryHtml(c, 1)}</td>
+        <td class="px-2 py-1 text-xs whitespace-nowrap">${etfs}</td>
+        <td class="px-2 py-1 text-center text-[10px] text-slate-500 whitespace-nowrap" title="${_esc(_discoveryTs.full)}">
+          <span class="${_discoveryTs.age.includes('⚠️') ? 'text-rose-600 font-medium' : ''}">🕐 ${_discoveryTs.short}</span>
         </td>
-        <td class="px-3 py-2 text-center">
+        <td class="px-2 py-1 text-center">
           <button data-ticker="${tk}"
                   onclick="addDiscoveryToWatchlist('${tk}', this)"
-                  class="discovery-add-btn px-2 py-1 text-xs bg-violet-600 hover:bg-violet-700 text-white rounded transition whitespace-nowrap">
-            ➕ 加关注
+                  title="加入自选股"
+                  class="discovery-add-btn px-1.5 py-0.5 text-[10px] bg-violet-600 hover:bg-violet-700 text-white rounded transition whitespace-nowrap">
+            ➕
           </button>
         </td>
       </tr>
@@ -10866,6 +10857,7 @@ function _reasonSummaryHtml(row) {
             <td class="px-2 py-1 text-center">
               <button data-ticker="${tk}"
                       onclick="addDiscoveryToWatchlist('${tk}', this)"
+                      title="加入自选股"
                       class="discovery-add-btn px-1.5 py-0.5 text-[10px] bg-violet-600 hover:bg-violet-700 text-white rounded transition whitespace-nowrap">
                 ➕
               </button>
