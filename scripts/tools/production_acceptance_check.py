@@ -66,6 +66,14 @@ IPO_LATEST_JSON = (
     "data/latest/junior_stock_radar.json",
 )
 
+# 事件日历 / catalyst 数据源（dashboard 的 📰 推荐依据 + morning_brief 的 📰 一句话）
+# WARN 级：事件源滞后或缺失会让 📰 解释消失，但主推荐还能跑。
+EVENT_CALENDAR_JSON = (
+    "data/event_calendar.json",       # A 股 akshare 财报 + 解禁 + 减增持
+    "data/event_calendar_hk.json",    # 港股 yfinance 财报 + EPS 超预期
+    "data/event_calendar_us.json",    # 美股 yfinance 财报 + EPS 超预期
+)
+
 
 def _issue(level: str, code: str, message: str, details: Any = None) -> dict[str, Any]:
     item = {"level": level, "code": code, "message": message}
@@ -425,6 +433,10 @@ def _surface_artifact_checks(
     # IPO tab 数据源放宽到 2 天 + WARN：早班加跑后通常 <24h，给周末/失败一点 buffer
     artifact_summary.update(_latest_json_checks(
         issues, IPO_LATEST_JSON, max_age_days=max(max_age_days, 2), level="WARN"
+    ))
+    # 事件日历同样 WARN + 2 天 buffer（事件源滞后只影响 📰 解释,不阻断主推荐）
+    artifact_summary.update(_latest_json_checks(
+        issues, EVENT_CALENDAR_JSON, max_age_days=max(max_age_days, 2), level="WARN"
     ))
     summary["artifacts"] = artifact_summary
 
@@ -1150,6 +1162,9 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
     artifact_summary.update(_latest_json_checks(issues, CORE_LATEST_JSON, max_age_days=max_age_days))
     artifact_summary.update(_latest_json_checks(
         issues, IPO_LATEST_JSON, max_age_days=max(max_age_days, 2), level="WARN"
+    ))
+    artifact_summary.update(_latest_json_checks(
+        issues, EVENT_CALENDAR_JSON, max_age_days=max(max_age_days, 2), level="WARN"
     ))
     if watchlist_markets["hk"]:
         artifact_summary.update(_latest_json_checks(issues, HK_LATEST_JSON, max_age_days=max_age_days))
