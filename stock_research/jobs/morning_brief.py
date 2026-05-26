@@ -1650,62 +1650,14 @@ def _signal_quality_tag(
     score_threshold: float | None = None,
     mode: str = "normalized",
 ) -> str | None:
-    """高分推荐的"追涨 vs 早期信号"二档标签。
+    """morning_brief 端的标签 wrapper — 真正的判断在 stock_research.core.quality_tag。
 
-    Why: V2 lite scoring 当前用 momentum 0.42 权重，但 IC audit 已判定 momentum 失效
-    （mean IC = 0.004）。结果是"已经涨上来的票"会被打成高分推荐，新人误以为是早期信号。
-    在系统层修 V2 权重前，先在展示层打标签提醒。
-
-    三档：
-      - ⚠️ 追涨进表：高分 + (60d ≥ +15% 或 30d 内单日涨幅 ≥ +9.5%)
-      - ✅ 早期信号：高分 + 60d ∈ ±5% + 30d 内无单日涨停
-      - 中性：返回 None（不显示）
-
-    mode 参数：
-      - "normalized" (A股/港股 V2 0-1 composite)：默认阈值 0.80
-      - "z_score"  (美股 _humanize_picks z-score)：默认阈值 +0.5
+    返回 markdown 行（带 2 空格缩进），或 None。
     """
-    if score_threshold is None:
-        # z_score 美股段：plan_v5 优化器选出的票本身就是"会买"过滤后的，
-        # 不用分数门槛——只要 60d/30d 触发就打标签。
-        # normalized A 股/港股：V2 推荐池 60+ 只，只对高分（≥0.80）打标，避免噪音。
-        score_threshold = -1e9 if mode == "z_score" else 0.80
-    if composite is None or composite < score_threshold:
-        return None
-
-    max_daily: float | None = None
-    if history and ticker in history:
-        closes = (history.get(ticker) or {}).get("close") or []
-        recent: list[float] = []
-        for c in closes[-31:]:
-            try:
-                if c is not None:
-                    recent.append(float(c))
-            except Exception:
-                continue
-        if len(recent) >= 2:
-            rets = []
-            for i in range(1, len(recent)):
-                prev = recent[i - 1]
-                if prev:
-                    rets.append((recent[i] - prev) / prev * 100.0)
-            if rets:
-                max_daily = max(rets)
-
-    chase_60 = pct60 is not None and pct60 >= 15.0
-    chase_spike = max_daily is not None and max_daily >= 9.5
-    if chase_60 or chase_spike:
-        why = []
-        if chase_60:
-            why.append(f"60d 已涨 {pct60:+.1f}%")
-        if chase_spike:
-            why.append(f"近30d 单日 {max_daily:+.1f}%")
-        return f"  ⚠️ 追涨进表（{' · '.join(why)}，不是早期信号）"
-
-    if pct60 is not None and -5.0 <= pct60 <= 5.0 and (max_daily is None or max_daily < 9.5):
-        return f"  ✅ 早期信号（60d 在 ±5% 平台 + 高分）"
-
-    return None
+    from stock_research.core.quality_tag import classify_from_history
+    tag = classify_from_history(ticker, composite, history or {},
+                                mode=mode, score_threshold=score_threshold)
+    return tag.as_markdown_line() if tag else None
 
 
 def section_dropouts() -> str:
