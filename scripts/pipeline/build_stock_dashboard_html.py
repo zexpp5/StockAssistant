@@ -995,6 +995,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <strong class="text-violet-700">α 列</strong>显示推荐后 5/20 交易日相对各市场基准的超额收益,
       数据来自 <code class="text-xs bg-slate-100 px-1 rounded">recommendation_picks + pick_outcomes</code>（V2，每日刷新；生产统计从 2026-05-25 12:10 起 — 在此之前的推荐打分公式仍在调整，历史数据已清除避免误导）。
     </p>
+    <!-- 反向 CTA: 把候选转成组合 (2026-05-27) -->
+    <div class="mt-4 bg-gradient-to-r from-violet-50 to-indigo-50 border border-violet-200 rounded-lg px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
+      <div class="text-sm text-slate-700">
+        <span class="font-semibold text-violet-900">⚖️ 想看 AI 把这批候选配成什么组合?</span>
+        <span class="text-slate-600 ml-1">「AI 组合方案」会从这里挑出 ~15 只 + 算出仓位比例。</span>
+      </div>
+      <a href="#" onclick="event.preventDefault(); switchTab('backtest');" class="bg-violet-600 hover:bg-violet-700 text-white px-3 py-1.5 rounded text-sm font-medium whitespace-nowrap">去看组合 →</a>
+    </div>
   </div>
 
   <!-- 推荐历史 view(默认隐藏,切换 sub-tab 后显示) -->
@@ -1506,6 +1514,17 @@ function switchDiscoveryView(view) {
     <p class="text-sm text-slate-600 mt-1">把今天的 AI 推荐转成“模型目标仓位”，再用历史快照检查动态调仓有没有比静态持有更好。这里只是模型方案，<strong class="text-rose-600">不是你的真实账户，也不会自动下单</strong>。</p>
   </div>
 
+  <!-- 候选池溯源条 (2026-05-27): 让用户看见组合是从哪个池子里挑出来的 -->
+  <div id="backtest-universe-banner" class="mb-5 bg-violet-50 border-l-4 border-violet-500 rounded-r-lg px-4 py-3 text-sm flex flex-wrap items-center gap-x-4 gap-y-1">
+    <span class="font-semibold text-violet-900">📊 候选池</span>
+    <span class="text-slate-700">
+      系统 AI 推荐池 · <span id="backtest-universe-market" class="font-mono">—</span>
+      <strong id="backtest-universe-count" class="text-violet-700">—</strong> 只
+    </span>
+    <a href="#" onclick="goToAIRecommend(event)" class="text-violet-700 hover:text-violet-900 hover:underline font-medium">查看完整候选 →</a>
+    <span class="ml-auto text-xs text-slate-500" id="backtest-universe-meta">—</span>
+  </div>
+
   <div class="bg-white border border-slate-200 rounded-xl p-4 mb-5">
     <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
       <h3 class="text-base font-bold text-slate-900">先看这三件事</h3>
@@ -1842,6 +1861,7 @@ function switchDiscoveryView(view) {
           <th class="px-3 py-2 text-right" title="T+5 hit pct (alpha>0 比例)">T+5 hit%</th>
           <th class="px-3 py-2 text-right" title="T+20 alpha 均值">T+20 mean%</th>
           <th class="px-3 py-2 text-right" title="T+5 标准差">σ</th>
+          <th class="px-3 py-2 text-center" title="T+1/5/20 alpha 趋势 sparkline">趋势</th>
           <th class="px-3 py-2 text-left">信号强度</th>
         </tr>
       </thead>
@@ -5111,6 +5131,35 @@ function switchHubAllChip(chip) {
   }, 50);
 }
 
+// 用 inline SVG 画 T+1/5/20 alpha sparkline（width 90 / height 24）
+// 正值上半绿 / 负值下半红 / 0 基准线
+function _catalystSparkline(t1, t5, t20) {
+  const vals = [t1, t5, t20].map(v => (v == null || !isFinite(v)) ? 0 : v);
+  if (vals.every(v => v === 0)) return '<span class="text-slate-300 text-xs">—</span>';
+  // 标定 magnitude：全部 ±5% 范围内,超出 clip
+  const SCALE = 5.0;  // ±5% 满高度
+  const W = 90, H = 24, BAR_W = 22, GAP = 4;
+  const cx0 = 8;
+  const baseY = H / 2;  // 0 基准线
+  const bars = vals.map((v, i) => {
+    const clipped = Math.max(-SCALE, Math.min(SCALE, v));
+    const barH = Math.abs(clipped / SCALE) * (H / 2 - 2);
+    const x = cx0 + i * (BAR_W + GAP);
+    const y = clipped >= 0 ? (baseY - barH) : baseY;
+    const color = clipped >= 0 ? "#10b981" : "#ef4444";
+    return `<rect x="${x}" y="${y}" width="${BAR_W}" height="${barH || 1}" fill="${color}" rx="1"/>`;
+  }).join("");
+  const labels = ['T+1','T+5','T+20'].map((lab, i) => {
+    const x = cx0 + i * (BAR_W + GAP) + BAR_W/2;
+    return `<text x="${x}" y="${H-1}" text-anchor="middle" font-size="7" fill="#94a3b8">${lab}</text>`;
+  }).join("");
+  return `<svg width="${W}" height="${H+8}" viewBox="0 0 ${W} ${H+8}" style="display:inline-block;vertical-align:middle">
+    <line x1="0" y1="${baseY}" x2="${W}" y2="${baseY}" stroke="#cbd5e1" stroke-width="0.5"/>
+    ${bars}
+    ${labels}
+  </svg>`;
+}
+
 function renderCatalystValidation() {
   const meta = document.getElementById("catalyst-validation-meta");
   const body = document.getElementById("catalyst-validation-body");
@@ -5160,6 +5209,7 @@ function renderCatalystValidation() {
   };
   body.innerHTML = rows.map(r => {
     const dim = r.n < 5 ? 'opacity-60' : '';
+    const sparkline = _catalystSparkline(r.h1.mean, r.h5.mean, r.h20.mean);
     return `<tr class="hover:bg-slate-50 ${dim}">
       <td class="px-3 py-2 text-slate-800">${r.key}</td>
       <td class="px-3 py-2 text-right font-mono text-xs">${r.n}</td>
@@ -5169,6 +5219,7 @@ function renderCatalystValidation() {
       <td class="px-3 py-2 text-right font-mono text-xs text-slate-600">${(r.h5.hit_pos ?? 0).toFixed(1)}</td>
       <td class="px-3 py-2 text-right font-mono text-xs ${colorClass(r.h20.mean)}">${fmt(r.h20.mean)}</td>
       <td class="px-3 py-2 text-right font-mono text-xs text-slate-500">${(r.h5.stdev ?? 0).toFixed(2)}</td>
+      <td class="px-3 py-2 text-center" title="T+1=${fmt(r.h1.mean)}% T+5=${fmt(r.h5.mean)}% T+20=${fmt(r.h20.mean)}%">${sparkline}</td>
       <td class="px-3 py-2 text-left text-xs">${sigLabel(r.h5.mean, r.h5.hit_pos)}</td>
     </tr>`;
   }).join("");
@@ -8651,6 +8702,33 @@ function renderOptPane() {
 }
 
 // ============ AI 组合方案 Tab ============
+function goToAIRecommend(ev) {
+  if (ev) ev.preventDefault();
+  if (typeof switchTab === 'function') switchTab('watchlist-hub');
+  if (typeof switchHubSub === 'function') switchHubSub('recommend', true);
+  // 滚到顶,方便看清候选名单
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function renderBacktestUniverseBanner(data) {
+  const u = data && data.candidate_universe;
+  const countEl = document.getElementById('backtest-universe-count');
+  const marketEl = document.getElementById('backtest-universe-market');
+  const metaEl = document.getElementById('backtest-universe-meta');
+  if (!countEl || !marketEl || !metaEl) return;
+  if (!u || !u.count) {
+    countEl.textContent = '—';
+    marketEl.textContent = '—';
+    metaEl.textContent = '候选池元数据缺失,请重跑 optimize_portfolio';
+    return;
+  }
+  const marketLabel = ({ US: '美股', HK: '港股', CN: 'A 股', ALL: '全市场' })[u.market_scope] || u.market_scope || '—';
+  marketEl.textContent = marketLabel;
+  countEl.textContent = u.count;
+  const modeLabel = u.mode === 'v2_lite' ? 'V2 lite (用 total_score)' : '完整因子';
+  metaEl.textContent = `批次 ${u.run_id || '?'} · ${u.run_date || '?'} · ${modeLabel}`;
+}
+
 function renderPlanBacktest() {
   const data = _BACKTEST || {};
   const dynData = _DYNAMIC || {};
@@ -8662,6 +8740,7 @@ function renderPlanBacktest() {
   const covEl = document.getElementById('backtest-coverage');
   const bannerEl = document.getElementById('backtest-inception-banner');
   const rebalanceEl = document.getElementById('backtest-rebalance-log');
+  renderBacktestUniverseBanner(data);
   if (!metricsEl) return;
 
   if (!data.dates || data.dates.length === 0) {
@@ -15003,6 +15082,9 @@ def build():
         baseline = backtest_db.get("baseline_date") or "?"
         print(f"  AI 组合方案 A 静态: 锁定 {inception} → 基线 {baseline} · 跟踪 {m['n_tracked_days']} 日"
               f" · 累计 {m['cumulative_return_pct']}% (vs SPY {m['bench_cumulative_return_pct']}%)")
+    # 透传 candidate_universe 到前端 _BACKTEST,用于顶部溯源条 (2026-05-27)
+    if backtest_db is not None and isinstance(plan_for_bt, dict):
+        backtest_db["candidate_universe"] = plan_for_bt.get("candidate_universe")
     html = html.replace("{PLAN_BACKTEST_JSON_DB}", json.dumps(backtest_db, ensure_ascii=False))
 
     # AI 组合方案 — Dynamic (C 类: weekly Monday rebalance, P1+P2)
