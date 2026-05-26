@@ -9501,6 +9501,25 @@ function _reasonSummary(row) {
   if (_dropouts.length > 0 && wrap) {
     // 插入空容器，由 _renderDropoutsBanner 填充
     wrap.insertAdjacentHTML("beforebegin", `<div id="discovery-dropouts-banner"></div>`);
+    // 持仓 ticker set（用于跌出 banner 高亮 + 置顶）
+    const _heldTickers = new Set();
+    try {
+      const items = (typeof REAL_HOLDING_REVIEW_EMBEDDED !== "undefined" && REAL_HOLDING_REVIEW_EMBEDDED.items) || [];
+      items.forEach(it => {
+        const s = String(it.symbol || it.code || "").toUpperCase();
+        if (s) _heldTickers.add(s);
+      });
+    } catch (e) { /* 持仓信息缺失不影响 banner */ }
+
+    function _ratingLabelCN(r) {
+      const k = String(r || "").toLowerCase();
+      if (k === "strong_buy") return "强买";
+      if (k === "buy") return "买入";
+      if (k === "watch") return "观察";
+      if (k === "avoid") return "回避";
+      return r || "";
+    }
+
     window._renderDropoutsBanner = function() {
       const el = document.getElementById("discovery-dropouts-banner");
       if (!el) return;
@@ -9510,10 +9529,9 @@ function _reasonSummary(row) {
       _dropouts.forEach(d => { const m = String(d.market || "").toUpperCase(); byMarket[m] = (byMarket[m] || 0) + 1; });
       const breakdown = ["US", "CN", "HK"].map(m => `${_marketLabel(m)} ${byMarket[m] || 0}`).join(" / ");
       if (filtered.length === 0) {
-        // 当前市场无跌出
         const otherMarkets = ["US", "CN", "HK"].filter(m => m !== activeMarket && byMarket[m] > 0);
         if (otherMarkets.length === 0) {
-          el.innerHTML = "";  // 全市场都没跌出
+          el.innerHTML = "";
           return;
         }
         el.innerHTML = `<div class="bg-slate-50 border border-slate-200 rounded-lg p-2 mb-3 text-[11px] text-slate-500">
@@ -9521,25 +9539,46 @@ function _reasonSummary(row) {
         </div>`;
         return;
       }
-      const rows = filtered.map(d => {
+      // 持仓置顶 + 按 prev_rank 升序
+      const sorted = filtered.slice().sort((a, b) => {
+        const aHeld = _heldTickers.has(String(a.ticker || "").toUpperCase()) ? 0 : 1;
+        const bHeld = _heldTickers.has(String(b.ticker || "").toUpperCase()) ? 0 : 1;
+        if (aHeld !== bHeld) return aHeld - bHeld;
+        return (a.prev_rank || 99) - (b.prev_rank || 99);
+      });
+      const heldCount = filtered.filter(d => _heldTickers.has(String(d.ticker || "").toUpperCase())).length;
+      const rows = sorted.map(d => {
         const tk = String(d.ticker || "");
+        const tkUpper = tk.toUpperCase();
+        const isHeld = _heldTickers.has(tkUpper);
         const name = String(d.name || "");
-        const rank = d.prev_rank != null ? `#${d.prev_rank}` : "—";
+        const rank = d.prev_rank != null ? `5/25 第 ${d.prev_rank} 名` : "上批次";
         const score = d.prev_score != null ? d.prev_score.toFixed(1) : "—";
-        const rating = String(d.prev_rating || "");
-        return `<li class="flex items-center gap-2 py-0.5">
-          <span class="font-mono text-xs font-semibold text-slate-700">${rank}</span>
+        const rating = _ratingLabelCN(d.prev_rating);
+        const heldBadge = isHeld
+          ? `<span class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-200 text-amber-900 align-middle ml-1">⚠️ 你持仓</span>`
+          : "";
+        const rowBg = isHeld ? "bg-amber-50 border-l-2 border-amber-400 pl-2" : "";
+        return `<li class="flex items-center gap-2 py-0.5 ${rowBg}">
+          <span class="font-mono text-[11px] text-slate-500 min-w-[80px]">${rank}</span>
           <span class="font-mono text-xs font-bold text-slate-900">${tk}</span>
-          <span class="text-xs text-slate-600">${name}</span>
-          <span class="ml-auto text-[11px] text-slate-500 font-mono">上次 score ${score} · ${rating}</span>
+          <span class="text-xs text-slate-600">${name}${heldBadge}</span>
+          <span class="ml-auto text-[11px] text-slate-500 font-mono">上次 综合 ${score} / ${rating}</span>
         </li>`;
       }).join("");
+      const titleSuffix = heldCount > 0
+        ? `<span class="text-[11px] font-bold text-amber-700 ml-2">⚠️ 含 ${heldCount} 只你持仓</span>`
+        : "";
       el.innerHTML = `<details class="bg-rose-50 border border-rose-200 rounded-lg p-3 mb-3 text-[12px] text-rose-900 leading-relaxed" open>
         <summary class="cursor-pointer font-bold">
           📉 ${_marketLabel(activeMarket)} 上批次在 Top、本批次跌出 (${filtered.length} 只)
+          ${titleSuffix}
           <span class="text-[11px] font-normal text-rose-600 ml-2">· 全市场 ${breakdown}</span>
         </summary>
-        <p class="mt-2 text-[11px] text-rose-700">这些票上次还在 ${filtered[0].prev_date || "上批次"} 推荐里，今早被模型替换出去。若你手上有，建议复查持有理由。</p>
+        <p class="mt-2 text-[11px] text-rose-700 leading-relaxed">
+          这些票上次（${filtered[0].prev_date || "上批次"}）还在推荐 Top 20 里，今早被新候选顶下去。<br>
+          <strong>跌出 Top 20 ≠ 退出科技 universe</strong>——只是排名滑出前 20，可能仍在 21-50 候选区。若你手上有，建议复查持有理由。
+        </p>
         <ul class="mt-2 divide-y divide-rose-100 bg-white rounded">${rows}</ul>
       </details>`;
     };
