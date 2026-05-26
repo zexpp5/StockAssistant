@@ -227,6 +227,112 @@ def _to_iso(d: Any) -> str | None:
     return s[:10]
 
 
+# ───────────── 红线 gate（step 1） ─────────────
+# 触发任一红线即标 verdict="不碰"；其它档位（只观察/可研究/可小仓试探）由 step 3 填。
+# 数据缺失（如 market_cap=None）默认不触发对应红线 —— 缺数据≠有问题。
+
+CN_ST_PREFIXES = ("ST", "*ST", "S*ST", "SST", "S ST")
+
+
+def _evaluate_cn_red_lines(item: dict, unlock_30d_map: dict[str, dict]) -> list[dict]:
+    """A 股次新池红线评估。unlock_30d_map: {code: {days, pct, stress}}"""
+    out: list[dict] = []
+    name = (item.get("name") or "").strip()
+    code = item.get("code") or ""
+    # ST / *ST 壳公司
+    if any(name.startswith(p) for p in CN_ST_PREFIXES) or "ST" in name[:4]:
+        out.append({
+            "key": "st",
+            "label": "ST 壳公司",
+            "detail": f"名称 {name} 被特别处理，退市风险显著",
+        })
+    # 30 天内大额解禁
+    u = unlock_30d_map.get(code)
+    if u:
+        out.append({
+            "key": "unlock_30d",
+            "label": "30 日内大额解禁",
+            "detail": f"{u['days']} 天后解禁 · 占流通 {u['pct']:.0f}% · 压力分 {u['stress']:.0f}",
+        })
+    return out
+
+
+def _evaluate_us_red_lines(item: dict, is_spac_flag: bool) -> list[dict]:
+    """美股次新池红线评估。"""
+    out: list[dict] = []
+    price = item.get("current_price")
+    mcap_m = item.get("market_cap_m")  # 已是 M 美元
+    dollar_vol = item.get("dollar_volume_30d")
+    industry = item.get("industry") or ""
+
+    if is_spac_flag:
+        out.append({
+            "key": "spac",
+            "label": "SPAC 空壳",
+            "detail": "发行价 $10 + 名称含 Acquisition / 后缀 U·WS — 业务未确定",
+        })
+    if price is not None and price < 1.0:
+        out.append({
+            "key": "penny",
+            "label": "仙股 (<$1)",
+            "detail": f"现价 ${price:.2f} — NASDAQ 持续 6 月 <$1 触发退市",
+        })
+    if mcap_m is not None and mcap_m < 50.0:
+        out.append({
+            "key": "micro",
+            "label": "微盘 (<$50M)",
+            "detail": f"市值 ${mcap_m:.0f}M — going concern 风险偏高",
+        })
+    if "壳公司" in industry or "Shell" in industry:
+        out.append({
+            "key": "shell",
+            "label": "壳公司",
+            "detail": f"yfinance 行业分类 = {industry}",
+        })
+    if dollar_vol is not None and dollar_vol < 200_000:
+        out.append({
+            "key": "low_liquidity",
+            "label": "低流动性",
+            "detail": f"30 日日均成交额 ${dollar_vol/1000:.0f}K — 卖出可能滑点严重",
+        })
+    return out
+
+
+def _apply_cn_red_lines(junior_pool: list[dict], unlock_radar: list[dict]) -> None:
+    """inplace 给 cn junior_pool 挂 red_lines / verdict。需要先调用此函数再 sort。
+
+    30 天大额解禁口径：days_to_unlock ≤ 30 且 (占流通 ≥ 30% 或 stress_score ≥ 65)。
+    同一只可能有多条解禁记录，取最紧迫（days 最小）的那条。
+    """
+    # 构造 30 天内紧迫解禁 map
+    unlock_map: dict[str, dict] = {}
+    for u in unlock_radar:
+        if u.get("days_to_unlock", 999) > 30:
+            continue
+        if u.get("pct_of_float", 0) < 30 and u.get("stress_score", 0) < 65:
+            continue
+        code = u.get("code")
+        if not code:
+            continue
+        prev = unlock_map.get(code)
+        if prev is None or u["days_to_unlock"] < prev["days"]:
+            unlock_map[code] = {
+                "days": u["days_to_unlock"],
+                "pct": u.get("pct_of_float", 0),
+                "stress": u.get("stress_score", 0),
+            }
+    n_bad = 0
+    for it in junior_pool:
+        rls = _evaluate_cn_red_lines(it, unlock_map)
+        it["red_lines"] = rls
+        it["verdict"] = "不碰" if rls else None
+        if rls:
+            n_bad += 1
+    # 重新排序：不碰沉底，同档内按分数降序
+    junior_pool.sort(key=lambda x: (1 if x.get("verdict") == "不碰" else 0, -x.get("score", 0)))
+    logger.info("[CN] 红线 gate: %d / %d 标 \"不碰\" (30 日解禁 + ST)", n_bad, len(junior_pool))
+
+
 def _board_of_cn(code: str) -> str:
     c = _norm6(code)
     if not c:
@@ -358,6 +464,22 @@ def _cn_junior_summary(
         # -20~+20 之间不啰嗦
 
     return " · ".join(parts)
+
+
+def _attach_percentile(items: list[dict], score_key: str = "score") -> None:
+    """假定 items 已按 score_key 降序排好。给每只 inplace 加 percentile 字段
+    (= 在池子内的"前 X%")。
+
+    用途：两个市场的打分公式不同(A 股 4 维 vs 美股 5 维),绝对分数不可横向比较；
+    percentile 把"位置"暴露出来 — "前 0.6%" vs "前 50%" 跨市场可读。
+
+    例: rank=1, total=159 → percentile=0.6(前 0.6%)
+    """
+    total = len(items)
+    if total == 0:
+        return
+    for i, x in enumerate(items):
+        x["percentile"] = round((i + 1) / total * 100, 1)
 
 
 def _load_cn_industry_cache() -> dict[str, str]:
@@ -615,6 +737,7 @@ def fetch_cn_junior_pool(holdings: set[str], watchlist: set[str],
             "in_watchlist": code in watchlist,
         })
     out.sort(key=lambda x: -x["score"])
+    _attach_percentile(out)
     return out
 
 
@@ -878,16 +1001,19 @@ def build_us_ipo_calendar(nasdaq_window: dict) -> dict:
 def fetch_us_junior_pool(holdings: set[str], watchlist: set[str],
                           nasdaq_priced: list[dict],
                           months_min: int = 6, months_max: int = 24,
-                          exclude_spac: bool = True,
-                          min_price_usd: float = 1.0,
-                          min_market_cap_usd: float = 50_000_000) -> list[dict]:
+                          hard_min_price_usd: float = 0.3,
+                          hard_min_market_cap_usd: float = 10_000_000) -> list[dict]:
     """美股次新股底部观察池 — 基于 NASDAQ 24 月 priced 列表。
 
-    质量闸门 (硬过滤,不入池):
-      - 现价 < min_price_usd ($1)        → 排除仙股 (NASDAQ < $1 持续 6 月触发退市)
-      - 市值 < min_market_cap_usd ($50M) → 排除超微盘 (going concern 风险)
-      - SPAC (issue=$10 + Acquisition 名)→ 排除空壳
-      - 上市 < 6 月 / > 24 月            → 不在"次新股"窗口
+    硬过滤 (彻底剔除,极端值才动手):
+      - 现价 < $0.3              → yfinance 脏数据 / 已实际退市
+      - 市值 < $10M              → 几乎不可交易
+      - 上市 < 6 月 / > 24 月    → 不在"次新股"窗口
+      - 完全无价                 → 无法分析
+
+    其它问题不剔除,改为红线软标记 (red_lines 字段, step 1 落地):
+      - SPAC / 仙股 (<$1) / 微盘 (<$50M) / 壳公司 / 低流动性
+      → 用户能看到"哪些被打回 + 为啥",而不是默默丢弃
 
     打分维度 (5 维,总分 100):
       - discount_to_issue (35):  跌破发行价越深越高分
@@ -897,7 +1023,7 @@ def fetch_us_junior_pool(holdings: set[str], watchlist: set[str],
       - in_your_pool      (10):  你的持仓/自选股加成
     """
     today = date.today()
-    # 过滤窗口 + 去掉 SPAC + 必须有 issue_price + 必须有 symbol
+    # 窗口过滤 + 必须有 issue_price + 必须有 symbol。SPAC 不在此剔除,改为下面红线评估。
     candidates: list[dict] = []
     for e in nasdaq_priced:
         sym = e.get("symbol")
@@ -917,9 +1043,13 @@ def fetch_us_junior_pool(holdings: set[str], watchlist: set[str],
         issue_price = _safe_float(e.get("issue_price"))
         if issue_price is None or issue_price <= 0:
             continue
-        if exclude_spac and _is_spac(e.get("name") or "", sym, issue_price):
-            continue
-        candidates.append({**e, "months_listed": months_listed, "days_listed": days_listed})
+        is_spac = _is_spac(e.get("name") or "", sym, issue_price)
+        candidates.append({
+            **e,
+            "months_listed": months_listed,
+            "days_listed": days_listed,
+            "_is_spac": is_spac,
+        })
 
     if not candidates:
         return []
@@ -960,8 +1090,8 @@ def fetch_us_junior_pool(holdings: set[str], watchlist: set[str],
 
     # 打分
     out: list[dict] = []
-    rejected_penny = 0
-    rejected_micro = 0
+    rejected_extreme_penny = 0
+    rejected_extreme_micro = 0
     rejected_no_price = 0
     for c in candidates:
         sym = c["symbol"]
@@ -977,17 +1107,16 @@ def fetch_us_junior_pool(holdings: set[str], watchlist: set[str],
         industry = meta.get("industry") or ""
         months_listed = c["months_listed"]
 
-        # ─── 质量闸门 ─── (硬过滤,不入池)
+        # ─── 硬过滤 ─── 只剔极端数据,其它走红线软标记
         if current_price is None:
             rejected_no_price += 1
             continue
-        if current_price < min_price_usd:
-            rejected_penny += 1
+        if current_price < hard_min_price_usd:
+            rejected_extreme_penny += 1
             continue
-        if market_cap is not None and market_cap < min_market_cap_usd:
-            rejected_micro += 1
+        if market_cap is not None and market_cap < hard_min_market_cap_usd:
+            rejected_extreme_micro += 1
             continue
-        # market_cap 为 None (yfinance 没拿到) 时不能判,默认放行 — 让流动性维度兜底
 
         # 派生:vs_issue / rebound_from_low / drawdown_from_high
         vs_issue_pct = None
@@ -1055,7 +1184,7 @@ def fetch_us_junior_pool(holdings: set[str], watchlist: set[str],
         if dollar_vol is not None and dollar_vol < 200_000:
             tags.append("低流动性")
 
-        out.append({
+        item = {
             "symbol": sym,
             "name": c.get("name") or "",
             "exchange": c.get("exchange") or "",
@@ -1088,11 +1217,20 @@ def fetch_us_junior_pool(holdings: set[str], watchlist: set[str],
             "tags": tags,
             "in_holdings": sym in holdings,
             "in_watchlist": sym in watchlist,
-        })
+        }
+        # 红线评估（step 1）
+        red_lines = _evaluate_us_red_lines(item, is_spac_flag=bool(c.get("_is_spac")))
+        item["red_lines"] = red_lines
+        item["verdict"] = "不碰" if red_lines else None
+        out.append(item)
 
-    out.sort(key=lambda x: -x["score"])
-    logger.info("US 次新股池 质量闸门: 候选 %d → 入池 %d (剔除: 仙股 %d / 微盘 %d / 无价 %d)",
-                len(candidates), len(out), rejected_penny, rejected_micro, rejected_no_price)
+    # 排序：先按 verdict（"不碰" 沉底），同档内按 score 降序
+    out.sort(key=lambda x: (1 if x.get("verdict") == "不碰" else 0, -x["score"]))
+    _attach_percentile(out)
+    n_bad = sum(1 for x in out if x.get("verdict") == "不碰")
+    logger.info("US 次新股池: 候选 %d → 入池 %d (其中标 \"不碰\" %d · 极端剔除: 仙股 %d / 微盘 %d / 无价 %d)",
+                len(candidates), len(out), n_bad,
+                rejected_extreme_penny, rejected_extreme_micro, rejected_no_price)
     return out
 
 
@@ -1150,6 +1288,8 @@ def build_radar() -> dict:
     logger.info("[CN]   → %d 只候选", len(cn_junior))
     logger.info("[CN] 补 industry 字段（缓存 7 天 + fail-soft）...")
     _enrich_cn_industry(cn_junior)
+    # step 1: 红线 gate — cross-ref 30 天大额解禁 + ST
+    _apply_cn_red_lines(cn_junior, cn_unlock)
 
     # —— 美股 (NASDAQ 公开 API + yfinance) ——
     logger.info("[US] 拉 NASDAQ IPO window (过去 24 月 priced + 未来 2 月 filed)...")
