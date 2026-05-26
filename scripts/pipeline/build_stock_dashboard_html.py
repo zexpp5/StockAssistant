@@ -1941,8 +1941,8 @@ function switchDiscoveryView(view) {
     <details class="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm">
       <summary class="cursor-pointer font-semibold text-slate-700 select-none">📖 怎么读这张表（每列含义 · 点击展开）</summary>
       <div class="mt-3 space-y-1.5 text-xs text-slate-700 leading-relaxed">
-        <div>• <strong>名称下小字</strong>：① 行业（数据源恢复后自动补上）；② <strong>一句话总结</strong> — 把这只目前在啥阶段、相对发行价/首日是涨是跌翻译成人话</div>
-        <div>• <strong>底部分</strong>：0..100 综合分。<span class="text-slate-500">分数高 ≠ 该买，只是更接近"被遗忘+已破发"的研究起点</span></div>
+        <div>• <strong>名称列</strong>下面 3 行小字：① <strong>申万行业</strong>（一级 / 二级，如"电力设备 / 其他电源设备"）；② <strong>#排名/总数 · 底部分 N</strong>（这只在全池中的位置）；③ <strong>一句话总结</strong>（阶段 + vs 发行 + vs 首日）</div>
+        <div>• <strong>底部分</strong>（第 3 列大字 badge ▼）：0..100 综合分，<strong>表格按此降序排</strong>。<span class="text-slate-500">分数高 ≠ 该买，只是更接近"被遗忘+已破发"的研究起点</span></div>
         <div>• <strong>vs 发行</strong>：现价相对发行价。<span class="text-rose-700">负数 = 已破发</span>（可能正筑底，也可能继续阴跌）；<span class="text-emerald-700">+200% = 主力强势</span>但解禁后可能砸盘</div>
         <div>• <strong>vs 首日收盘</strong>：现价相对首日爆炒后收盘价。次新股首日普遍翻倍，这里看"从爆炒高点跌了多少"；-70% 以上 ≈ 接近底部位置</div>
         <div>• <strong>板块</strong>：沪深主板（老股流动性好）/ 科创板·创业板（科技股 + 涨跌幅大）/ 其他（北交所，流动性差）</div>
@@ -5306,7 +5306,11 @@ function _renderJuniorTable_US() {
     if (v >= 1e3) return Math.round(v / 1e3) + "K";
     return String(v);
   };
+  // 全池排名（后端按 score 降序输出）
+  const rankMap = new Map(all.map((x, i) => [x.symbol, i + 1]));
+  const totalAll = all.length;
   const rows = list.slice(0, 200).map(x => {
+    const rank = rankMap.get(x.symbol) || 0;
     const poolTag = x.in_holdings ? `<span class="px-1.5 py-0.5 rounded text-[10px] bg-rose-100 text-rose-700">持仓</span>` :
                     x.in_watchlist ? `<span class="px-1.5 py-0.5 rounded text-[10px] bg-amber-100 text-amber-700">自选</span>` : "";
     const tags = (x.tags || []).map(t => `<span class="px-1.5 py-0.5 rounded text-[10px] bg-slate-100 text-slate-600 mr-1">${_esc(t)}</span>`).join("");
@@ -5320,31 +5324,33 @@ function _renderJuniorTable_US() {
     const reboundText = x.rebound_pct === null ? "—" : "+" + x.rebound_pct + "%";
     const bd = x.score_breakdown || {};
     const tooltip = `折发行 ${bd.discount_to_issue || 0} + 时间衰减 ${bd.time_decay || 0} + 流动性 ${bd.liquidity || 0} + 反弹奖励 ${bd.rebound_bonus || 0} + 池子 ${bd.in_your_pool || 0}`;
+    const sectorLine = `<div class="text-[10px] ${x.is_tech ? 'text-violet-700 font-semibold' : 'text-slate-500'}">${x.is_tech ? '🔬 ' : ''}${_esc(x.sector || "—")}${x.industry ? ' / ' + _esc(x.industry) : ''}</div>`;
+    const rankLine = `<div class="text-[11px] text-slate-600 mt-1"><span class="text-slate-500">#${rank}/${totalAll}</span> · <span class="text-slate-700">底部分 ${x.score}</span></div>`;
     return `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50 cursor-pointer" data-code="${_esc(x.symbol)}" data-name="${_esc(x.name || "")}" onclick="openStockDetail(this.dataset.code, this.dataset.name)">
-      <td class="py-2 px-3 font-mono font-bold text-slate-900">${_esc(x.symbol)}</td>
-      <td class="py-2 px-3 text-slate-800">${_esc(x.name || "")} ${poolTag}</td>
-      <td class="py-2 px-3 text-xs">
-        <div class="${x.is_tech ? 'text-violet-700 font-semibold' : 'text-slate-700'}">${x.is_tech ? '🔬 ' : ''}${_esc(x.sector || "—")}</div>
-        ${x.industry ? `<div class="text-[10px] text-slate-400 mt-0.5">${_esc(x.industry)}</div>` : ""}
+      <td class="py-2 px-3 font-mono font-bold text-slate-900 align-top">${_esc(x.symbol)}</td>
+      <td class="py-2 px-3 align-top">
+        <div class="text-slate-800">${_esc(x.name || "")} ${poolTag}</div>
+        ${sectorLine}
+        ${rankLine}
       </td>
-      <td class="py-2 px-3 text-right font-mono text-xs text-slate-600">${_mcap(x.market_cap_m)}</td>
-      <td class="py-2 px-3 text-xs text-slate-600">${_esc(x.ipo_date)} <span class="text-slate-400">(${x.months_listed}m)</span></td>
-      <td class="py-2 px-3 text-right font-mono text-slate-700">$${x.issue_price}</td>
-      <td class="py-2 px-3 text-right font-mono text-slate-700">${x.current_price ? "$" + x.current_price : "—"}</td>
-      <td class="py-2 px-3 text-right font-mono ${vsClass}">${vsText}</td>
-      <td class="py-2 px-3 text-right font-mono text-xs text-slate-500" title="${x.low_date ? '最低于 ' + x.low_date : ''}">${x.low_since_ipo ? "$" + x.low_since_ipo : "—"}</td>
-      <td class="py-2 px-3 text-right font-mono ${reboundClass}">${reboundText}</td>
-      <td class="py-2 px-3 text-right font-mono text-xs text-slate-500">${_vol(x.avg_volume_30d)}</td>
-      <td class="py-2 px-3 text-center" title="${tooltip}">${_ipoJuniorScoreBadge(x.score)}</td>
-      <td class="py-2 px-3 text-xs">${tags}</td>
+      <td class="py-2 px-3 text-center align-top" title="${tooltip}">${_ipoJuniorScoreBadge(x.score)}</td>
+      <td class="py-2 px-3 text-right font-mono text-xs text-slate-600 align-top">${_mcap(x.market_cap_m)}</td>
+      <td class="py-2 px-3 text-xs text-slate-600 align-top">${_esc(x.ipo_date)} <span class="text-slate-400">(${x.months_listed}m)</span></td>
+      <td class="py-2 px-3 text-right font-mono text-slate-700 align-top">$${x.issue_price}</td>
+      <td class="py-2 px-3 text-right font-mono text-slate-700 align-top">${x.current_price ? "$" + x.current_price : "—"}</td>
+      <td class="py-2 px-3 text-right font-mono ${vsClass} align-top">${vsText}</td>
+      <td class="py-2 px-3 text-right font-mono text-xs text-slate-500 align-top" title="${x.low_date ? '最低于 ' + x.low_date : ''}">${x.low_since_ipo ? "$" + x.low_since_ipo : "—"}</td>
+      <td class="py-2 px-3 text-right font-mono ${reboundClass} align-top">${reboundText}</td>
+      <td class="py-2 px-3 text-right font-mono text-xs text-slate-500 align-top">${_vol(x.avg_volume_30d)}</td>
+      <td class="py-2 px-3 text-xs align-top">${tags}</td>
     </tr>`;
   }).join("");
   el.innerHTML = `<table class="w-full text-sm">
     <thead class="text-xs text-slate-500 bg-slate-50 border-b border-slate-200">
       <tr>
         <th class="py-2 px-3 text-left">代码</th>
-        <th class="py-2 px-3 text-left">名称</th>
-        <th class="py-2 px-3 text-left">行业</th>
+        <th class="py-2 px-3 text-left">名称 · 行业 · 排名/底部分</th>
+        <th class="py-2 px-3 text-center" title="0..100,5 维加权（按此降序）">底部分 ▼</th>
         <th class="py-2 px-3 text-right">市值</th>
         <th class="py-2 px-3 text-left">上市日</th>
         <th class="py-2 px-3 text-right">发行价</th>
@@ -5353,7 +5359,6 @@ function _renderJuniorTable_US() {
         <th class="py-2 px-3 text-right" title="上市以来最低价">最低价</th>
         <th class="py-2 px-3 text-right" title="当前价 vs 最低价的反弹幅度">反弹</th>
         <th class="py-2 px-3 text-right" title="近 30 日均成交量">日均量</th>
-        <th class="py-2 px-3 text-center" title="0..100,5 维加权">底部分</th>
         <th class="py-2 px-3 text-left">标签</th>
       </tr>
     </thead>
@@ -5401,25 +5406,30 @@ function _renderJuniorTable() {
     el.innerHTML = `<div class="p-6 text-center text-sm text-slate-500">当前筛选条件下无候选标的。</div>`;
     return;
   }
+  // 全池排名：后端已按 score 降序输出，filter 不改变 code → rank 映射
+  const rankMap = new Map(all.map((x, i) => [x.code, i + 1]));
+  const totalAll = all.length;
   const rows = list.slice(0, 200).map(x => {
+    const rank = rankMap.get(x.code) || 0;
     const tags = (x.tags || []).map(t => `<span class="px-1.5 py-0.5 rounded text-[10px] bg-slate-100 text-slate-600 mr-1">${_esc(t)}</span>`).join("");
     const vsIssueClass = x.vs_issue_pct < -20 ? "text-rose-700 font-semibold" : x.vs_issue_pct < 0 ? "text-rose-600" : "text-emerald-700";
     const breakdown = x.score_breakdown || {};
     const tooltip = `折发行 ${breakdown.discount_to_issue || 0} + 时间衰减 ${breakdown.time_decay || 0} + 首日溢价 ${breakdown.first_day_premium || 0} + 较首日 ${breakdown.vs_first_close || 0}`;
+    const rankPrefix = `<span class="text-slate-500">#${rank}/${totalAll}</span> · <span class="text-slate-700">底部分 ${x.score}</span>`;
     return `<tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50 cursor-pointer" data-code="${_esc(x.code)}" data-name="${_esc(x.name || "")}" onclick="openStockDetail(this.dataset.code, this.dataset.name)">
       <td class="py-2 px-3 font-mono font-bold text-slate-900 align-top">${_esc(x.code)}</td>
       <td class="py-2 px-3 align-top">
         <div class="text-slate-800">${_esc(x.name || "")}</div>
         ${x.industry ? `<div class="text-[10px] text-slate-500 mt-0.5">${_esc(x.industry)}</div>` : ""}
-        ${x.summary ? `<div class="text-[11px] text-slate-600 mt-1 leading-snug">${_esc(x.summary)}</div>` : ""}
+        <div class="text-[11px] text-slate-600 mt-1 leading-snug">${rankPrefix}${x.summary ? " · " + _esc(x.summary) : ""}</div>
       </td>
+      <td class="py-2 px-3 text-center align-top" title="${tooltip}">${_ipoJuniorScoreBadge(x.score)}</td>
       <td class="py-2 px-3 text-xs text-slate-500 align-top">${_ipoBoardLabel(x.board)}</td>
       <td class="py-2 px-3 text-xs text-slate-600 align-top">${_esc(x.list_date)} <span class="text-slate-400">(${x.months_listed}月)</span></td>
       <td class="py-2 px-3 text-right font-mono text-slate-700 align-top">¥${x.issue_price}</td>
       <td class="py-2 px-3 text-right font-mono text-slate-700 align-top">¥${x.current_price}</td>
       <td class="py-2 px-3 text-right font-mono ${vsIssueClass} align-top">${x.vs_issue_pct > 0 ? "+" : ""}${x.vs_issue_pct}%</td>
       <td class="py-2 px-3 text-right font-mono text-slate-600 align-top">${x.vs_first_close_pct !== null ? (x.vs_first_close_pct > 0 ? "+" : "") + x.vs_first_close_pct + "%" : "—"}</td>
-      <td class="py-2 px-3 text-center align-top" title="${tooltip}">${_ipoJuniorScoreBadge(x.score)}</td>
       <td class="py-2 px-3 text-xs align-top">${tags}</td>
     </tr>`;
   }).join("");
@@ -5427,14 +5437,14 @@ function _renderJuniorTable() {
     <thead class="text-xs text-slate-500 bg-slate-50 border-b border-slate-200">
       <tr>
         <th class="py-2 px-3 text-left">代码</th>
-        <th class="py-2 px-3 text-left">名称</th>
+        <th class="py-2 px-3 text-left">名称 · 行业 · 排名/总结</th>
+        <th class="py-2 px-3 text-center" title="0..100，四维加权（按此降序）">底部分 ▼</th>
         <th class="py-2 px-3 text-left">板块</th>
         <th class="py-2 px-3 text-left">上市日</th>
         <th class="py-2 px-3 text-right">发行价</th>
         <th class="py-2 px-3 text-right">最新价</th>
         <th class="py-2 px-3 text-right">vs 发行</th>
         <th class="py-2 px-3 text-right">vs 首日收盘</th>
-        <th class="py-2 px-3 text-center" title="0..100，四维加权">底部分</th>
         <th class="py-2 px-3 text-left">标签</th>
       </tr>
     </thead>
@@ -5475,21 +5485,23 @@ function switchIpoMarket(market) {
       b.classList.toggle("font-semibold", active);
     }
   });
-  // 重置过滤器 + 隐藏 A 股专属过滤按钮
+  // 重置过滤器 + 按市场显示对应筛选按钮
   _unlockFilter = "all";
   _juniorFilter = "all";
   const isCN = market === "cn";
-  document.querySelectorAll(".unlock-filter-btn, .junior-filter-btn").forEach(el => {
+  const isUS = market === "us";
+  document.querySelectorAll(".unlock-filter-btn").forEach(el => {
     el.style.display = isCN ? "" : "none";
   });
-  // 「🔬 仅科技」A 股不显示：fetch_cn_junior_pool 不返回 is_tech，
-  // A 股 _renderJuniorTable 也未处理 tech 筛选 — 留按钮会让点击无反应。
-  // 补字段 = 定义"什么算科技股"的口径，是产品决策不应程序员私改。
-  const techBtn = document.getElementById("junior-filter-tech");
-  if (techBtn && isCN) techBtn.style.display = "none";
+  ["all", "tech", "broken", "star", "chinext", "main"].forEach(k => {
+    const b = document.getElementById("junior-filter-" + k);
+    if (!b) return;
+    const show = isCN ? k !== "tech" : (isUS ? ["all", "tech", "broken"].includes(k) : false);
+    b.style.display = show ? "" : "none";
+  });
   const hint = document.getElementById("ipo-market-hint");
   if (hint) {
-    if (market === "us") hint.textContent = "美股：IPO 日历 ✓ · 解禁数据未接入 · 次新股池仅 system_universe 范围";
+    if (market === "us") hint.textContent = "美股：IPO 日历 ✓ · 解禁数据未接入 · 次新股池来自 NASDAQ priced 24 月窗口";
     else if (market === "hk") hint.textContent = "港股：开源数据源受限，仅显示外链入口";
     else hint.textContent = "A 股：数据最全（IPO/解禁/次新股三件齐备）";
   }
@@ -9191,15 +9203,18 @@ function _newBadge(row) {
   const title = date ? `首次进入推荐：${date}` : `首次进入推荐`;
   return `<span title="${title}" class="inline-flex px-1.5 py-0.5 rounded border border-violet-300 bg-violet-50 text-violet-700 text-[10px] font-bold align-middle ml-1">🆕</span>`;
 }
-// runs >= 2 时也给"非首次"的票一个低调标记，告诉用户它出现了几次（避免只看到 🆕 黑白对比）
+// 「连 N 日」标记 — 从最新批次往前数连续在的天数（跌出过就清零）
+// 仅 consecutive >= 2 显示（连 1 日 = 等同没标，无信息量）
 function _appearanceBadge(row) {
   const totalRuns = (typeof DISCOVERY !== "undefined" && Number(DISCOVERY.appearance_total_runs)) || 0;
   if (totalRuns < 2) return "";
-  const cnt = Number(row && row.appearance_count);
-  if (!Number.isFinite(cnt) || cnt <= 1) return "";
+  const consec = Number(row && row.consecutive_runs);
+  if (!Number.isFinite(consec) || consec < 2) return "";
+  const cnt = Number(row && row.appearance_count) || consec;
   const date = row && row.first_seen_date;
-  const title = date ? `${date} 起累计 ${cnt} 次进入推荐` : `累计 ${cnt} 次进入推荐`;
-  return `<span title="${title}" class="inline-flex px-1.5 py-0.5 rounded border border-slate-200 bg-slate-50 text-slate-500 text-[10px] font-mono align-middle ml-1">${cnt}×</span>`;
+  const extraNote = cnt > consec ? `（累计 ${cnt} 次推荐，期间曾跌出又重新入选）` : "";
+  const title = (date ? `首次进入 ${date}` : "") + `；当前连续在 ${consec} 个批次未跌出${extraNote}`;
+  return `<span title="${title}" class="inline-flex px-1.5 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-emerald-700 text-[10px] font-semibold align-middle ml-1">连 ${consec} 日</span>`;
 }
 
 function _factorValue(row, keys) {
@@ -10511,10 +10526,15 @@ def _runtime_load_json(rel: str) -> dict:
 
 
 def _build_appearance_index() -> dict:
-    """ticker (uppercase) → {first_seen_run_id, first_seen_date, count} + _meta{total_runs}。
+    """ticker (uppercase) → {first_seen_run_id, first_seen_date, count, consecutive} + _meta{total_runs}。
 
-    用 recommendation_picks ⋈ recommendation_runs 算每只票出现过的 run 次数。
-    🆕 判定 = count == 1 且 total_runs >= 2（避免冷启动 60 只全标）。
+    用 recommendation_picks ⋈ recommendation_runs 算：
+      - count: 总共出现过几次
+      - consecutive: 从最新 run 往前数连续在的天数（跌出过就清零）
+      - first_seen_date / first_seen_run_id: 首次进入推荐的日期 / run_id
+
+    🆕 判定 = count == 1 且 total_runs >= 2（首次出现）。
+    「连 N 日」判定 = consecutive >= 2（连续 1 天无信息量）。
     """
     db_path = _duckdb_path()
     if not os.path.exists(db_path):
@@ -10526,18 +10546,23 @@ def _build_appearance_index() -> dict:
     try:
         con = duckdb.connect(db_path, read_only=True)
         try:
-            total_runs = con.execute("SELECT COUNT(*) FROM recommendation_runs").fetchone()[0]
-            # 每只票：首次 run_id + 首次日期 + 出现次数
+            total_runs = int(con.execute("SELECT COUNT(*) FROM recommendation_runs").fetchone()[0] or 0)
+            # 每只票：列出它出现过的 run 序号（DESC，用于算连续）+ 首次 run_id/date + 总次数
             rows = con.execute(
                 """
-                WITH picks AS (
-                    SELECT p.symbol, r.run_id, r.run_date, r.generated_at,
-                           ROW_NUMBER() OVER (PARTITION BY p.symbol ORDER BY r.generated_at ASC) AS rn
-                    FROM recommendation_picks p JOIN recommendation_runs r ON p.run_id = r.run_id
+                WITH ordered AS (
+                    SELECT r.run_id, r.run_date,
+                           ROW_NUMBER() OVER (ORDER BY r.generated_at ASC) AS rn
+                    FROM recommendation_runs r
+                ),
+                picks AS (
+                    SELECT p.symbol, o.rn, o.run_id, o.run_date
+                    FROM recommendation_picks p JOIN ordered o ON p.run_id = o.run_id
                 )
                 SELECT symbol,
-                       MAX(CASE WHEN rn = 1 THEN run_id END) AS first_run_id,
-                       MAX(CASE WHEN rn = 1 THEN CAST(run_date AS VARCHAR) END) AS first_date,
+                       array_agg(rn ORDER BY rn DESC) AS run_ranks,
+                       (SELECT p2.run_id FROM picks p2 WHERE p2.symbol = picks.symbol ORDER BY p2.rn ASC LIMIT 1) AS first_run_id,
+                       (SELECT CAST(p3.run_date AS VARCHAR) FROM picks p3 WHERE p3.symbol = picks.symbol ORDER BY p3.rn ASC LIMIT 1) AS first_date,
                        COUNT(*) AS cnt
                 FROM picks
                 GROUP BY symbol
@@ -10545,12 +10570,22 @@ def _build_appearance_index() -> dict:
             ).fetchall()
         finally:
             con.close()
-        out: dict = {"_meta": {"total_runs": int(total_runs or 0)}}
-        for symbol, first_run_id, first_date, cnt in rows:
+        out: dict = {"_meta": {"total_runs": total_runs}}
+        for symbol, run_ranks, first_run_id, first_date, cnt in rows:
             if not symbol:
                 continue
+            # 算 consecutive：从最新 run（rn = total_runs）开始往前看，期望 rn 严格递减
+            consecutive = 0
+            expected = total_runs
+            for rn in (run_ranks or []):
+                if int(rn) == expected:
+                    consecutive += 1
+                    expected -= 1
+                else:
+                    break
             out[str(symbol).upper()] = {
                 "count": int(cnt or 0),
+                "consecutive": consecutive,
                 "first_seen_run_id": first_run_id,
                 "first_seen_date": first_date,
             }
@@ -13856,6 +13891,7 @@ def build():
             ap = appearance_idx.get(tk_upper)
             if ap:
                 item["appearance_count"] = ap.get("count")
+                item["consecutive_runs"] = ap.get("consecutive")
                 item["first_seen_date"] = ap.get("first_seen_date")
                 item["first_seen_run_id"] = ap.get("first_seen_run_id")
             merged_candidates.append(item)
