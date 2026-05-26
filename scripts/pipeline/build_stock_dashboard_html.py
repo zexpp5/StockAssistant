@@ -1545,10 +1545,14 @@ function switchDiscoveryView(view) {
               <th class="px-3 py-2 text-left">公司名</th>
               <th class="px-3 py-2 text-right" title="capped_weight: Markowitz + 半 Kelly + ADV + 行业 cap 之后的最终权重">仓位%</th>
               <th class="px-3 py-2 text-right" title="按本金 50 万估算的金额(USD)">金额</th>
-              <th class="px-3 py-2 text-right" title="V2 推荐池综合分(估值+动量+数据质量+覆盖度)">V2 总分</th>
-              <th class="px-3 py-2 text-right" title="Piotroski F-Score: 9 项财务体检,得分越高越好">F</th>
+              <th class="px-3 py-2 text-right" title="V2 推荐池综合分(估值+动量+数据质量+覆盖度,满分 100)">V2 总分</th>
+              <th class="px-3 py-2 text-left" title="因子拆解: V=估值分 / M=动量分 / Q=质量分 (满分 100,越高越好)">因子拆解</th>
+              <th class="px-3 py-2 text-right" title="Piotroski F-Score 归一化到 0-100(原始 6/9→60, 8/9→80, 9/9→100),越高越稳">F</th>
+              <th class="px-3 py-2 text-right" title="入选时收盘价(USD)">入选价</th>
+              <th class="px-3 py-2 text-right" title="市值,单位 $B">市值</th>
               <th class="px-3 py-2 text-left">信号</th>
               <th class="px-3 py-2 text-left">主题</th>
+              <th class="px-3 py-2 text-left" title="V2 推荐依据(估值/动量/质量/覆盖度等关键指标)">推荐依据</th>
             </tr>
           </thead>
           <tbody id="today-plan-table-body" class="divide-y divide-slate-100"></tbody>
@@ -8935,25 +8939,53 @@ function renderTodayPlan() {
     return `<span class="text-[11px] text-slate-500">${sig}</span>`;
   };
 
+  // 单元格小工具
+  const fmtMcap = b => (b == null) ? '—' : (Number(b) / 1e9).toFixed(1);
+  const fmtEntryPrice = v => (v == null) ? '—' : '$' + Number(v).toFixed(2);
+  const fScoreBadge = v => {
+    if (v == null) return '<span class="text-slate-400">—</span>';
+    const n = Number(v);
+    const cls = n >= 80 ? 'text-emerald-600' : (n >= 50 ? 'text-amber-600' : 'text-rose-600');
+    return `<span class="${cls} font-mono font-semibold">${n.toFixed(0)}</span>`;
+  };
+  const factorMini = c => {
+    const parts = [];
+    if (c.valuation_score != null) parts.push(`<span title="估值分"><span class="text-slate-400">V</span> ${Number(c.valuation_score).toFixed(0)}</span>`);
+    if (c.momentum_score != null) parts.push(`<span title="动量分"><span class="text-slate-400">M</span> ${Number(c.momentum_score).toFixed(0)}</span>`);
+    if (c.quality_score != null) parts.push(`<span title="质量分"><span class="text-slate-400">Q</span> ${Number(c.quality_score).toFixed(0)}</span>`);
+    return parts.length ? `<div class="flex gap-2 text-[11px] font-mono text-slate-600">${parts.join('')}</div>` : '<span class="text-slate-400">—</span>';
+  };
+  const reasonSummary = c => {
+    if (typeof _reasonSummary === 'function') {
+      try { return _reasonSummary(c) || ''; } catch (e) {}
+    }
+    return c.recommendation_reason || '';
+  };
+
   tbody.innerHTML = sortedRows.map((r, i) => {
     const ticker = (r.ticker || '').toUpperCase();
     const cand = discoveryLookup[ticker] || {};
     const name = cand.name || ticker;
     const w = r.capped_weight || r.target_weight || r.weight || 0;
     const totalScore = cand.composite_z;  // DISCOVERY 里就是 V2 总分(0-100)
+    const fScore = cand.f_score;          // V2 归一化 0-100
     const theme = (typeof chainThemeFor === 'function' ? chainThemeFor(ticker) : '')
       || cand.sector || '';
     return `
-      <tr class="hover:bg-slate-50">
+      <tr class="hover:bg-slate-50 align-top">
         <td class="px-3 py-2 text-slate-500">${i + 1}</td>
         <td class="px-3 py-2 font-mono font-semibold text-violet-700">${ticker}</td>
         <td class="px-3 py-2 text-slate-800">${name}</td>
         <td class="px-3 py-2 text-right font-mono font-bold text-violet-900">${fmtPct(w)}</td>
         <td class="px-3 py-2 text-right font-mono text-slate-600">$${fmtAmt(r.amount)}</td>
         <td class="px-3 py-2 text-right font-mono text-slate-700">${fmtScore(totalScore)}</td>
-        <td class="px-3 py-2 text-right font-mono text-slate-600">${r.f_score != null ? Number(r.f_score).toFixed(0) : '—'}</td>
+        <td class="px-3 py-2">${factorMini(cand)}</td>
+        <td class="px-3 py-2 text-right">${fScoreBadge(fScore)}</td>
+        <td class="px-3 py-2 text-right font-mono text-slate-600">${fmtEntryPrice(cand.entry_price)}</td>
+        <td class="px-3 py-2 text-right font-mono text-slate-600">${fmtMcap(cand.market_cap_usd)}</td>
         <td class="px-3 py-2">${signalBadge(cand.signal)}</td>
         <td class="px-3 py-2 text-xs text-slate-600">${theme || '—'}</td>
+        <td class="px-3 py-2 text-xs text-slate-600 leading-relaxed" style="max-width:280px">${reasonSummary(cand) || '<span class="text-slate-400">—</span>'}</td>
       </tr>
     `;
   }).join('');
@@ -10309,23 +10341,24 @@ function _catalystActionBadge(catalyst) {
   const n = stats.n || 0;
   const mean = h5.mean;
   const hit = h5.hit_pos;
-  // 共用 badge 样式：粗框 + 较大字号 + 强对比色块 → 让 badge 视觉明显跳出
-  const baseCls = "inline-flex items-center px-2.5 py-1 rounded-md text-[12px] font-bold align-middle mx-2 border-2 shadow-sm";
-  // 样本不足明示
+  // 自带解释：让用户一眼看懂"43 次"是什么意思
+  const baseCls = "inline-block px-2.5 py-1 rounded-md text-[12px] align-middle mx-2 border-2 shadow-sm";
+  const meanStr = (mean >= 0 ? '+' : '') + mean.toFixed(1) + '%';
   if (n < 5) {
-    return `<span class="${baseCls} border-slate-300 bg-slate-100 text-slate-600" title="该类催化历史样本仅 ${n} 次,统计意义弱,不下结论">⚪ 样本不足 (${n}次)</span>`;
+    return `<span class="${baseCls} border-slate-300 bg-slate-100 text-slate-600" title="历史同类催化仅 ${n} 次,样本不够下结论">⚪ <b>样本不足</b> <span class="text-slate-500 text-[11px] font-normal">· 类似事件历史仅 ${n} 次</span></span>`;
   }
-  const tip = `该类催化历史 ${n} 次：第 5 天平均超额涨幅 ${(mean>=0?'+':'')+mean.toFixed(2)}%，命中率 ${hit.toFixed(1)}%`;
+  const tip = `历史同类催化 ${n} 次,事件后第 5 天股价平均超过大盘 ${meanStr},${hit.toFixed(0)}% 的样本是上涨的`;
+  const explain = `<span class="text-[11px] font-normal">· 类似事件 ${n} 次 / 5 天平均 <b>${meanStr}</b> / <b>${hit.toFixed(0)}%</b> 上涨</span>`;
   if (mean >= 3 && hit >= 60) {
-    return `<span class="${baseCls} border-emerald-500 bg-emerald-100 text-emerald-900" title="${tip}">🚀 该跟 (${n}次)</span>`;
+    return `<span class="${baseCls} border-emerald-500 bg-emerald-100 text-emerald-900 font-bold" title="${tip}">🚀 该跟 ${explain}</span>`;
   }
   if (mean > 0) {
-    return `<span class="${baseCls} border-emerald-400 bg-emerald-50 text-emerald-800" title="${tip}">📈 可关注 (${n}次)</span>`;
+    return `<span class="${baseCls} border-emerald-400 bg-emerald-50 text-emerald-800 font-bold" title="${tip}">📈 可关注 ${explain}</span>`;
   }
   if (mean < -3) {
-    return `<span class="${baseCls} border-rose-500 bg-rose-100 text-rose-900" title="${tip}">📉 回避 (${n}次)</span>`;
+    return `<span class="${baseCls} border-rose-500 bg-rose-100 text-rose-900 font-bold" title="${tip}">📉 回避 ${explain}</span>`;
   }
-  return `<span class="${baseCls} border-rose-300 bg-rose-50 text-rose-700" title="${tip}">↘️ 谨慎 (${n}次)</span>`;
+  return `<span class="${baseCls} border-rose-300 bg-rose-50 text-rose-700 font-bold" title="${tip}">↘️ 谨慎 ${explain}</span>`;
 }
 
 function _reasonSummary(row) {
@@ -10685,8 +10718,9 @@ function _reasonSummaryHtml(row) {
         <td class="px-2 py-1 text-xs text-slate-700 min-w-[260px] max-w-[360px] whitespace-normal leading-snug">${reasonText}</td>
         <td class="px-2 py-1 text-xs min-w-[180px] max-w-[260px] whitespace-normal leading-snug">${_riskSummaryHtml(c, 1)}</td>
         <td class="px-2 py-1 text-xs whitespace-nowrap">${etfs}</td>
-        <td class="px-2 py-1 text-center text-[10px] text-slate-500 whitespace-nowrap" title="${_esc(_discoveryTs.full)}">
-          <span class="${_discoveryTs.age.includes('⚠️') ? 'text-rose-600 font-medium' : ''}">🕐 ${_discoveryTs.short}</span>
+        <td class="px-2 py-1 text-center text-[10px] whitespace-nowrap" title="${_esc(_discoveryTs.full)}">
+          <div class="${_discoveryTs.age.includes('⚠️') ? 'text-rose-600 font-medium' : 'text-slate-500'}">🕐 ${_discoveryTs.short}</div>
+          <div class="${_discoveryTs.age.includes('⚠️') ? 'text-rose-500' : 'text-slate-400'}">${_discoveryTs.age}</div>
         </td>
         <td class="px-2 py-1 text-center">
           <button data-ticker="${tk}"
@@ -15366,14 +15400,15 @@ def build():
     # V2: V1 discovery_history/discovery_tracking 表已删；
     # AI 推荐历史从 recommendation_picks + pick_outcomes 注入前端。
     disc_hist = _runtime_v2_discovery_history()
-    # enrich: 给每条历史推荐补 quality_tag — 用当前 history_data 跑同样判断逻辑，
-    # 跟今日 Top 完全同源；两表名称列下方都能挂 ⚠️/✅ 胶囊
+    # enrich: 给每条历史推荐补 quality_tag — 用「当时往前 60d」的价格窗口（PIT 回溯）。
+    # 用 r.run_date 作为 as_of，避免显示"现在看这只票是追涨"而误导成"当时是追涨"。
     sys.path.insert(0, _REPO)
     from stock_research.core.quality_tag import classify_from_history as _qt_classify
     _hist_tickers = (history_data or {}).get("tickers") or {}
     for _h in disc_hist:
         _tk = str(_h.get("ticker") or _h.get("code") or "").upper()
-        _tag = _qt_classify(_tk, _h.get("score"), _hist_tickers, mode="score_0_100")
+        _tag = _qt_classify(_tk, _h.get("score"), _hist_tickers,
+                            mode="score_0_100", as_of_date=_h.get("run_date"))
         if _tag:
             _h["quality_tag"] = _tag.as_dict()
     print(f"  AI 推荐历史已加载 [V2 pick_outcomes] ({len(disc_hist)} 条)")
