@@ -1391,6 +1391,92 @@ function switchDiscoveryView(view) {
     <strong>怎么理解：</strong>这里是“如果我照模型买，会是什么样”的模拟账本。你的真钱股票请放到「我的持仓」；模拟仓里的买入价和股数由模型估算，不能当真实成交记录。
   </div>
 
+  <!-- ============ 📊 锁定追踪 (2026-05-27 从 AI 组合方案 tab 挪过来) ============
+       数据源: DuckDB snapshots 表的 plan_v6 (5-27 起的干净 V2 推荐池 snapshot)
+       行为: daily_refresh 每天自动累加 forward 数据点 · 不需要用户操作
+       目的: A 静态 vs C 动态对比 → 验证 AI 持续推荐的真实价值
+  -->
+  <section id="lock-tracking" class="bg-white border-2 border-violet-200 rounded-xl shadow-sm p-5 mb-6">
+    <header class="mb-4 flex items-start justify-between gap-3 flex-wrap">
+      <div>
+        <h3 class="text-lg font-bold text-slate-900">📊 锁定追踪 — 验证 AI 推荐的真实价值</h3>
+        <p class="text-sm text-slate-600 mt-1 leading-relaxed">
+          系统每天 daily_refresh 自动跑两条曲线 ——
+          <strong class="text-violet-700">A 静态</strong> = 锁定日那 15 只死守不动 ·
+          <strong class="text-orange-700">C 动态</strong> = 每周一按最新 AI 推荐换仓(扣 10bps 手续费)<br>
+          <strong class="text-emerald-700">C − A</strong> 这个差 = AI 持续推荐的真实 alpha。<span class="text-slate-500">你不用真的买,系统自己算。</span>
+        </p>
+      </div>
+      <div class="text-right text-xs text-slate-500 whitespace-nowrap">
+        <span id="locked-plan-meta">—</span>
+      </div>
+    </header>
+
+    <!-- A vs C 双卡片 -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
+      <div class="bg-violet-50 border-2 border-violet-300 rounded-xl p-4">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="text-xl">📦</span>
+          <h4 class="text-base font-bold text-violet-900">A 静态:锁定后不动</h4>
+        </div>
+        <p class="text-xs text-violet-700 leading-relaxed">锁定日那 15 只 · 0 手续费 · 测<strong>"那版选股力"</strong></p>
+      </div>
+      <div class="bg-orange-50 border-2 border-orange-300 rounded-xl p-4">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="text-xl">🔄</span>
+          <h4 class="text-base font-bold text-orange-900">C 动态:每周一调仓</h4>
+        </div>
+        <p class="text-xs text-orange-700 leading-relaxed">每周一按最新 AI 推荐换仓 · 扣 10bps · 测<strong>"AI 持续推荐力"</strong></p>
+      </div>
+    </div>
+
+    <!-- 核心 KPI: C - A spread -->
+    <div class="bg-gradient-to-r from-emerald-50 to-blue-50 border-2 border-emerald-300 rounded-xl p-4 mb-5 text-center">
+      <div class="text-[11px] uppercase tracking-widest text-emerald-700 font-bold mb-1">AI 持续调仓有没有额外价值</div>
+      <div class="text-3xl font-bold text-emerald-900">
+        <span id="ai-alpha-spread-display">—</span>
+        <span class="text-sm text-emerald-600 font-normal">= C 累计 − A 累计</span>
+      </div>
+      <div class="text-xs text-slate-600 mt-1">正数 = 调仓有价值 · 负数 = 调仓白调 · 0 = 持平。样本少时只看趋势,不下结论。</div>
+    </div>
+
+    <!-- inception banner: 锁定日 + 跟踪进度 -->
+    <div id="backtest-inception-banner" class="mb-4 hidden bg-violet-50 border-l-4 border-violet-500 rounded-r-lg p-3 text-sm text-slate-800"></div>
+
+    <!-- 调仓记录 -->
+    <div id="backtest-rebalance-log" class="mb-4"></div>
+
+    <!-- 关键指标卡 (累计/年化/Sharpe/...) -->
+    <div id="backtest-metrics" class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4"></div>
+
+    <!-- NAV 曲线 -->
+    <div class="bg-slate-50 rounded-xl border border-slate-200 p-4 mb-4">
+      <div class="flex items-center justify-between mb-3">
+        <h4 class="text-sm font-semibold text-slate-700">📈 NAV 曲线(起点 = 100,A 紫 / C 橙 / SPY 红)</h4>
+        <span id="backtest-coverage" class="text-xs text-slate-500"></span>
+      </div>
+      <div id="backtest-nav-chart" style="height:380px"></div>
+    </div>
+
+    <!-- 最近 60 天每日 P&L -->
+    <div class="bg-slate-50 rounded-xl border border-slate-200 p-4 mb-4">
+      <h4 class="text-sm font-semibold text-slate-700 mb-3">📅 最近 60 天每日 P&amp;L(绿 = 涨 / 红 = 跌)</h4>
+      <div id="backtest-daily-chart" style="height:260px"></div>
+    </div>
+
+    <!-- 公司名解析率告警 -->
+    <div id="backtest-name-warning" class="hidden bg-rose-50 border border-rose-300 rounded-lg p-3 text-xs text-rose-800 mb-4"></div>
+
+    <!-- 持仓贡献表 -->
+    <div class="bg-slate-50 rounded-xl border border-slate-200 p-4 mb-4">
+      <h4 class="text-sm font-semibold text-slate-700 mb-3">💼 单股贡献度(按贡献排序)</h4>
+      <div id="backtest-contrib-table" class="overflow-x-auto"></div>
+    </div>
+
+    <!-- 缺数据提示 -->
+    <div id="backtest-missing-warning" class="hidden bg-amber-50 border border-amber-300 rounded-lg p-3 text-xs text-amber-800"></div>
+  </section>
+
   <!-- 2026-05-21: "数据窗口/年化 95%/夏普 2.95/NVDA +330%" 黄底说明块已删除：
        1) 数字过时（V2 当前 Sharpe 2.55 而非 2.95）2) 内容是策略层 disclaimer，
        已合并到「AI 助手 → AI 组合方案」tab 顶部 v6 模型卡的 disclaimer 行 -->
@@ -1568,132 +1654,6 @@ function switchDiscoveryView(view) {
     </div>
   </section>
 
-  <!-- 下方现有内容: 已锁定方案的回测追踪 (NAV / Sharpe / 单股贡献) -->
-  <div class="mb-3 flex items-center gap-3 flex-wrap">
-    <h3 class="text-lg font-bold text-slate-900">📊 已锁定方案的回测追踪</h3>
-    <span id="locked-plan-meta" class="text-xs text-slate-500">—</span>
-  </div>
-  <p class="text-xs text-slate-500 mb-4">
-    这部分跟上方"今天 AI 推荐"<strong>不是同一套数据</strong> — 是首次锁定日那批组合的实盘跟踪。
-    为避免 look-ahead bias(用今天的股票回填历史曲线),锁定后的 NAV/Sharpe/贡献表<strong>冻结</strong>不会因为修候选池而变。
-  </p>
-
-  <div class="bg-white border border-slate-200 rounded-xl p-4 mb-5">
-    <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
-      <h3 class="text-base font-bold text-slate-900">先看这三件事</h3>
-      <span class="text-xs text-slate-500">这页用于“配仓 + 验证”，不是买卖确认单</span>
-    </div>
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-      <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
-        <div class="text-sm font-semibold text-slate-900">1. 今天目标组合</div>
-        <p class="text-xs text-slate-600 mt-1">看模型建议买哪些、各占多少、现金留多少。真正要不要买，还要结合买前研究。</p>
-      </div>
-      <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
-        <div class="text-sm font-semibold text-slate-900">2. 执行风险</div>
-        <p class="text-xs text-slate-600 mt-1">看是否现金过高、仓位太集中、数据不足或生产验收 WARN。这些会影响“今天能不能照着看”。</p>
-      </div>
-      <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
-        <div class="text-sm font-semibold text-slate-900">3. 策略验证</div>
-        <p class="text-xs text-slate-600 mt-1">看动态调仓 C 是否跑赢静态方案 A。样本不足时只当观察，不当结论。</p>
-      </div>
-    </div>
-  </div>
-
-  <!-- 🧪 v6 模型回测期望（技术自查，默认折叠）-->
-  <details id="v6-metrics-details" class="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-6" style="display:none">
-    <summary class="cursor-pointer list-none flex items-center justify-between gap-3 flex-wrap">
-      <span class="text-sm font-bold text-slate-900">模型预期指标（可选查看，主要给系统自查）</span>
-      <span class="text-xs text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded">不是收益承诺</span>
-    </summary>
-    <div id="v6-metrics-card" class="mt-4 bg-white border border-slate-200 rounded-lg p-4" style="display:none">
-      <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
-        <h3 class="text-sm font-bold text-slate-900">v6 优化器 sanity check（每日 rebalance 假设 · 基于过去 252 天均值）</h3>
-        <span class="text-xs text-slate-600 bg-slate-100 px-2 py-1 rounded">模型期望，非未来预测</span>
-      </div>
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-3" id="v6-metrics-content"></div>
-      <p class="text-xs text-slate-600 mt-3"><strong>怎么看</strong>：这里只检查优化器在历史均值和协方差假设下是否合理，例如收益/波动是否离谱。下面的 NAV 曲线是另一套口径：它用历史快照验证 A/C 方案的实际走势。两者服务不同目的，都不能当未来收益预测。</p>
-    </div>
-  </details>
-
-  <!-- 🆚 两个方案对比卡（让新人一眼看懂 "两个方案 + 比什么"）-->
-  <div class="mb-3">
-    <h3 class="text-base font-bold text-slate-900">策略验证：A 静态 vs C 动态</h3>
-    <p class="text-xs text-slate-500 mt-1">A 是对照组，C 是听 AI 调仓。比较 C − A，才知道 AI 动态调仓有没有额外价值。</p>
-  </div>
-  <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-    <!-- 方案 A · 静态死守（紫色，跟 NAV 曲线颜色一致） -->
-    <div class="bg-violet-50 border-2 border-violet-300 rounded-xl p-5">
-      <div class="flex items-center gap-2 mb-2">
-        <span class="text-2xl">📦</span>
-        <h3 class="text-lg font-bold text-violet-900">A 静态方案：锁定后不调仓</h3>
-      </div>
-      <p class="text-sm text-violet-800 font-medium mb-3">用来当对照组：如果只是买入一批股票不动，会怎样？</p>
-      <ul class="text-xs text-violet-700 space-y-1.5">
-        <li>✓ 锁定一批股票后不再调仓</li>
-        <li>✓ 0 手续费，适合作为干净基准</li>
-        <li>✓ 结果主要取决于锁定日那批股票本身</li>
-      </ul>
-    </div>
-
-    <!-- 方案 C · 动态调仓（橙色，跟 NAV 曲线颜色一致） -->
-    <div class="bg-orange-50 border-2 border-orange-300 rounded-xl p-5">
-      <div class="flex items-center gap-2 mb-2">
-        <span class="text-2xl">🔄</span>
-        <h3 class="text-lg font-bold text-orange-900">C 动态方案：按 AI 推荐调仓</h3>
-      </div>
-      <p class="text-sm text-orange-800 font-medium mb-3">用来验证 AI 是否真的增加价值：按最新推荐重新优化。</p>
-      <ul class="text-xs text-orange-700 space-y-1.5">
-        <li>✓ 定期用最新 AI 推荐生成目标组合</li>
-        <li>✓ 扣 10bps / 换股手续费</li>
-        <li>✓ 如果长期跑赢 A，才说明调仓有价值</li>
-      </ul>
-    </div>
-  </div>
-
-  <!-- 核心 KPI：C - A spread = AI alpha 的硬证据 -->
-  <div class="bg-gradient-to-r from-emerald-50 via-emerald-50 to-blue-50 border-2 border-emerald-300 rounded-xl p-5 mb-6 text-center">
-    <div class="text-[11px] uppercase tracking-widest text-emerald-700 font-bold mb-1">动态调仓有没有额外价值</div>
-    <div class="text-3xl md:text-4xl font-bold text-emerald-900 mb-1">
-      <span id="ai-alpha-spread-display">—</span>
-      <span class="text-sm text-emerald-600 font-normal">= C 累计 − A 累计</span>
-    </div>
-    <div class="text-xs text-slate-600 mt-2">正数表示动态调仓暂时跑赢静态方案；负数表示调仓没有覆盖手续费或选股效果不够。样本少时只看趋势，不下结论。</div>
-  </div>
-
-  <div id="backtest-inception-banner" class="mb-4 hidden bg-violet-50 border-l-4 border-violet-500 rounded-r-lg p-3 text-sm text-slate-800"></div>
-
-  <!-- A vs C 对比 + 调仓记录 -->
-  <div id="backtest-rebalance-log" class="mb-4"></div>
-
-  <!-- 关键指标卡 -->
-  <div id="backtest-metrics" class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4"></div>
-
-  <!-- NAV 曲线 -->
-  <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
-    <div class="flex items-center justify-between mb-3">
-      <h3 class="text-sm font-semibold text-slate-700">📈 NAV 曲线（起点 = 100，A 静态紫 / C 动态橙 / SPY 红）</h3>
-      <span id="backtest-coverage" class="text-xs text-slate-500"></span>
-    </div>
-    <div id="backtest-nav-chart" style="height:420px"></div>
-  </div>
-
-  <!-- 最近 60 天每日 P&L -->
-  <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
-    <h3 class="text-sm font-semibold text-slate-700 mb-3">📅 最近 60 天每日 P&amp;L（红 = 涨 / 绿 = 跌）</h3>
-    <div id="backtest-daily-chart" style="height:280px"></div>
-  </div>
-
-  <!-- 公司名解析率异常告警（hit_rate < 50% 时显示） -->
-  <div id="backtest-name-warning" class="hidden bg-rose-50 border border-rose-300 rounded-lg p-3 text-xs text-rose-800 mb-4"></div>
-
-  <!-- 持仓贡献表 -->
-  <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
-    <h3 class="text-sm font-semibold text-slate-700 mb-3">💼 单股贡献度（按贡献排序）</h3>
-    <div id="backtest-contrib-table" class="overflow-x-auto"></div>
-  </div>
-
-  <!-- 缺数据提示 -->
-  <div id="backtest-missing-warning" class="hidden bg-amber-50 border border-amber-300 rounded-lg p-3 text-xs text-amber-800"></div>
 </section>
 
 <!-- ============ 📊 专业分析 Tab ============ -->
@@ -1941,13 +1901,14 @@ function switchDiscoveryView(view) {
   </div>
 
   <div class="mt-4 bg-slate-50 border border-slate-200 rounded-lg p-3 text-[12px] text-slate-700 leading-relaxed">
-    <div class="font-bold mb-2">🏷️ 结论分档</div>
+    <div class="font-bold mb-2">🏷️ 结论分档（5 档 · ±1% noise 区单独成中性档）</div>
     <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
       <div><span class="text-emerald-700 font-bold">🚀 强正信号</span>：5 天平均超大盘 ≥ +3% 且 命中率 ≥ 60% → <strong>看到该跟</strong></div>
-      <div><span class="text-emerald-600">📈 弱正</span>：平均涨，但幅度或命中率不够强 → 可关注</div>
-      <div><span class="text-rose-500">↘️ 弱反向</span>：平均跌但跌幅 &lt; 3% → 谨慎</div>
-      <div><span class="text-rose-700 font-bold">📉 强反向</span>：平均跌幅 ≥ 3% → <strong>看到反而该回避</strong></div>
-      <div class="opacity-60 md:col-span-2 mt-1">⚠️ 灰色行：样本 &lt; 5 次，统计意义弱，只参考不下结论</div>
+      <div><span class="text-emerald-600">📈 弱正</span>：平均涨幅 &gt; 1% → 可关注</div>
+      <div><span class="text-slate-500">⚪ 中性 (noise)</span>：平均 ±1% 内 → 信号弱,不影响长期持有判断</div>
+      <div><span class="text-rose-500">↘️ 弱反向</span>：平均跌 1%~2% → 谨慎</div>
+      <div><span class="text-rose-700 font-bold">📉 强反向</span>：平均跌幅 ≥ 2% → <strong>看到反而该回避</strong></div>
+      <div class="opacity-60 mt-1">⚠️ 灰色行：样本 &lt; 5 次，统计意义弱，只参考不下结论</div>
     </div>
     <div class="mt-3 pt-2 border-t border-slate-200 text-[11px] text-slate-500">
       数据源：<code class="font-mono">data/latest/catalyst_validation.json</code>
@@ -5279,8 +5240,9 @@ function renderCatalystValidation() {
   const sigLabel = (mean, hit) => {
     if (mean == null) return '<span class="text-slate-400">—</span>';
     if (mean >= 3 && hit >= 60) return '<span class="text-emerald-700 font-bold">🚀 强正信号</span>';
-    if (mean > 0) return '<span class="text-emerald-600">📈 弱正</span>';
-    if (mean < -3) return '<span class="text-rose-700 font-bold">📉 强反向</span>';
+    if (mean > 1) return '<span class="text-emerald-600">📈 弱正</span>';
+    if (mean >= -1) return '<span class="text-slate-500">⚪ 中性 (noise)</span>';
+    if (mean < -2) return '<span class="text-rose-700 font-bold">📉 强反向</span>';
     return '<span class="text-rose-500">↘️ 弱反向</span>';
   };
   // 英文事件类型 → 中文（每条带一句"这是什么"）
@@ -5367,7 +5329,7 @@ function switchTab(tab) {
   window.scrollTo(0, 0);
   // tab 特定的延迟初始化
   if (tab === "real-holdings") setTimeout(async () => { await _ensureHoldingsLoaded(); renderRealHoldings(); }, 50);
-  if (tab === "portfolio") setTimeout(async () => { await _ensureHoldingsLoaded(); renderPortfolio(); }, 50);
+  if (tab === "portfolio") setTimeout(async () => { await _ensureHoldingsLoaded(); renderPortfolio(); renderPlanBacktest(); }, 50);
   if (tab === "backtest") setTimeout(renderPlanBacktest, 100);
   if (tab === "professional") setTimeout(renderProfessional, 50);
   if (tab === "db-explorer") setTimeout(loadDbExplorer, 50);
@@ -10349,13 +10311,18 @@ function _catalystActionBadge(catalyst) {
   }
   const tip = `历史同类催化 ${n} 次,事件后第 5 天股价平均超过大盘 ${meanStr},${hit.toFixed(0)}% 的样本是上涨的`;
   const explain = `<span class="text-[11px] font-normal">· 类似事件 ${n} 次 / 5 天平均 <b>${meanStr}</b> / <b>${hit.toFixed(0)}%</b> 上涨</span>`;
+  // 五档阈值：避免 -1% ~ +1% noise 区被渲染成红色"谨慎"跟"强买"评级打架
   if (mean >= 3 && hit >= 60) {
     return `<span class="${baseCls} border-emerald-500 bg-emerald-100 text-emerald-900 font-bold" title="${tip}">🚀 该跟 ${explain}</span>`;
   }
-  if (mean > 0) {
+  if (mean > 1) {
     return `<span class="${baseCls} border-emerald-400 bg-emerald-50 text-emerald-800 font-bold" title="${tip}">📈 可关注 ${explain}</span>`;
   }
-  if (mean < -3) {
+  if (mean >= -1) {
+    // 中性区（-1%~+1%）= 历史信号本质上是 noise,不影响长期持有判断
+    return `<span class="${baseCls} border-slate-300 bg-slate-50 text-slate-600" title="${tip} (短期 noise,不影响长期持有判断)">⚪ 中性 ${explain}</span>`;
+  }
+  if (mean < -2) {
     return `<span class="${baseCls} border-rose-500 bg-rose-100 text-rose-900 font-bold" title="${tip}">📉 回避 ${explain}</span>`;
   }
   return `<span class="${baseCls} border-rose-300 bg-rose-50 text-rose-700 font-bold" title="${tip}">↘️ 谨慎 ${explain}</span>`;
@@ -12953,11 +12920,14 @@ def _catalyst_action_label_py(catalyst: str, validation: dict) -> str:
     if n < 5:
         return f'<span class="inline-block px-2 py-0.5 rounded text-[11px] border border-slate-300 bg-slate-100 text-slate-600">⚪ 样本不足 · 仅 {n} 次</span>'
     explain = f'类似 {n} 次 · 5天平均 <b>{mean_str}</b> · <b>{int(hit)}%</b> 涨'
+    # 五档阈值：-1% ~ +1% noise 区显示为 ⚪ 中性灰色避免跟"强买"视觉打架
     if mean >= 3 and hit >= 60:
         return f'<span class="inline-block px-2 py-0.5 rounded text-[11px] border-2 border-emerald-500 bg-emerald-100 text-emerald-900 font-bold">🚀 该跟 · {explain}</span>'
-    if mean > 0:
+    if mean > 1:
         return f'<span class="inline-block px-2 py-0.5 rounded text-[11px] border-2 border-emerald-400 bg-emerald-50 text-emerald-800 font-bold">📈 可关注 · {explain}</span>'
-    if mean < -3:
+    if mean >= -1:
+        return f'<span class="inline-block px-2 py-0.5 rounded text-[11px] border border-slate-300 bg-slate-50 text-slate-600">⚪ 中性 · {explain}</span>'
+    if mean < -2:
         return f'<span class="inline-block px-2 py-0.5 rounded text-[11px] border-2 border-rose-500 bg-rose-100 text-rose-900 font-bold">📉 回避 · {explain}</span>'
     return f'<span class="inline-block px-2 py-0.5 rounded text-[11px] border-2 border-rose-300 bg-rose-50 text-rose-700 font-bold">↘️ 谨慎 · {explain}</span>'
 
