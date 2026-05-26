@@ -9966,7 +9966,7 @@ function _renderReasonPanel(c) {
       </div>
       <div>
         <div class="text-[11px] text-emerald-700 font-semibold mb-1">推荐依据</div>
-        <div class="text-sm text-slate-700 leading-snug">${_esc(_reasonSummary(c))}</div>
+        <div class="text-sm text-slate-700 leading-snug">${_reasonSummaryHtml(c)}</div>
       </div>
       <div>
         <div class="text-[11px] text-amber-700 font-semibold mb-1">风险提示</div>
@@ -10262,8 +10262,81 @@ function _riskSummaryHtml(row, maxItems = 1) {
   return `<span class="text-amber-700">${items.join("；")}</span>${more ? " " + more : ""}`;
 }
 
+// 从 catalyst 句子推断对应的 catalyst_validation 事件 key
+// 用于在每只票后面拼"该跟/可关注/谨慎/回避"动作建议
+function _inferCatalystEventKey(catalyst) {
+  if (!catalyst) return null;
+  const c = catalyst;
+  if (c.includes("📢 业绩预告")) return "earnings_preview";
+  if (c.includes("🤝 并购") || c.includes("🤝 收购完成")) return "ma_takeover";
+  if (c.includes("🛑 停牌") || c.includes("🛑 退市")) return "trading_halt";
+  if (c.includes("📜 重大订单") || c.includes("重大订单/合约")) return "major_order";
+  if (c.includes("📜 重大商业协议") || c.includes("📜 重大协议")) return "material_event::📜 重大协议";
+  if (c.includes("💰 回购")) return "buyback";
+  if (c.includes("📋 8-K 财报") || c.includes("📋 财报")) return "material_event::📋 财报";
+  if (c.includes("👥 股东权益变动") || c.includes("👥 大股东被动持仓")) return "passive_holder_change";
+  if (c.includes("🎯 大股东主动持仓")) return "active_holder_change";
+  if (c.includes("🟢 内部人净买入")) return "insider_net_buy";
+  if (c.includes("🔴 内部人净卖出")) return "insider_net_sell";
+  if (c.includes("🗳️ 股东大会") || c.includes("🗳️ 股东表决")) return "material_event::🗳️ 股东表决结果";
+  if (c.includes("👤 高管变动") || c.includes("8-K 高管")) return "material_event::👤 高管变动";
+  if (c.includes("⚠️ 裁员")) return "material_event::⚠️ 裁员/退出";
+  if (c.includes("⚠️ 资产减值")) return "material_event::⚠️ 资产减值";
+  if (c.includes("⚠️ 破产")) return "material_event::⚠️ 破产";
+  if (c.includes("📣 重大披露") || c.includes("📣 8-K 重大事件")) return "material_event::📣 重大披露";
+  if (c.includes("📰 其他事件")) return "material_event::📰 其他事件";
+  // 财报类（按 surprise 方向细分）
+  if (c.includes("EPS 实际") && c.includes("超预期")) {
+    const m = c.match(/超预期\s*\+(\d+(?:\.\d+)?)%/);
+    if (m) {
+      const surp = parseFloat(m[1]);
+      if (surp >= 10) return "earnings::✅ 超预期 >+10%";
+      return "earnings::↗️ 超预期 0~+10%";
+    }
+  }
+  if (c.includes("EPS 实际") && c.includes("差预期")) {
+    const m = c.match(/差预期\s*-?(\d+(?:\.\d+)?)%/);
+    if (m) {
+      const dec = parseFloat(m[1]);
+      if (dec >= 10) return "earnings::❌ 差预期 <-10%";
+      return "earnings::↘️ 差预期 -10%~0";
+    }
+  }
+  if (c.includes("财报：净利润同比")) return "earnings";
+  if (c.includes("财报临近") || c.includes("EPS 估")) return "earnings_announcement";
+  return null;
+}
+
+// 根据 catalyst 推断的 event key 查 catalyst_validation 给出动作建议 badge
+function _catalystActionBadge(catalyst) {
+  const key = _inferCatalystEventKey(catalyst);
+  if (!key) return "";
+  if (typeof CATALYST_VALIDATION === "undefined" || !CATALYST_VALIDATION || !CATALYST_VALIDATION.summary_by_type) return "";
+  const stats = CATALYST_VALIDATION.summary_by_type[key];
+  if (!stats || !stats.by_horizon || !stats.by_horizon["T+5"]) return "";
+  const h5 = stats.by_horizon["T+5"];
+  const n = stats.n || 0;
+  const mean = h5.mean;
+  const hit = h5.hit_pos;
+  // 样本不足明示
+  if (n < 5) {
+    return `<span class="inline-flex px-1.5 py-0.5 rounded border border-slate-200 bg-slate-50 text-slate-500 text-[10px] ml-1" title="该类催化历史样本仅 ${n} 次,统计意义弱,不下结论">样本不足 (${n}次)</span>`;
+  }
+  const tip = `该类催化历史 ${n} 次：第 5 天平均超额涨幅 ${(mean>=0?'+':'')+mean.toFixed(2)}%，命中率 ${hit.toFixed(1)}%`;
+  if (mean >= 3 && hit >= 60) {
+    return `<span class="inline-flex px-2 py-0.5 rounded font-bold bg-emerald-100 text-emerald-800 text-[11px] ml-1" title="${tip}">🚀 该跟 (${n}次)</span>`;
+  }
+  if (mean > 0) {
+    return `<span class="inline-flex px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 text-[11px] ml-1" title="${tip}">📈 可关注 (${n}次)</span>`;
+  }
+  if (mean < -3) {
+    return `<span class="inline-flex px-2 py-0.5 rounded font-bold bg-rose-100 text-rose-800 text-[11px] ml-1" title="${tip}">📉 回避 (${n}次)</span>`;
+  }
+  return `<span class="inline-flex px-2 py-0.5 rounded bg-rose-50 text-rose-600 text-[11px] ml-1" title="${tip}">↘️ 谨慎 (${n}次)</span>`;
+}
+
 function _reasonSummary(row) {
-  // catalyst（近 60d 财报超预期等）前缀，让用户先看到 why now
+  // 纯文本版（不带 HTML/badge），保留兼容老调用
   const catalyst = row && row.catalyst ? String(row.catalyst) : "";
   const catalystPrefix = catalyst ? `${catalyst} · ` : "";
   const explicit = row && row.recommendation_reason;
@@ -10295,6 +10368,24 @@ function _reasonSummary(row) {
   if (f.data_quality != null) parts.push(`数据 ${Number(f.data_quality).toFixed(0)}`);
   const body = parts.length ? parts.join(" / ") : (catalyst ? "" : "暂无结构化推荐理由");
   return `${catalystPrefix}${body}`;
+}
+
+// HTML 版：在催化句末尾拼上"该跟/可关注/谨慎/回避"动作建议 badge
+// 调用方不需要 _esc — 此函数内部已 _esc user content
+function _reasonSummaryHtml(row) {
+  const catalyst = row && row.catalyst ? String(row.catalyst) : "";
+  const actionBadge = catalyst ? _catalystActionBadge(catalyst) : "";
+  // 把纯文本版的 catalyst prefix 拆出来，剩下的部分用 _reasonSummary 复用
+  const fullText = _reasonSummary(row);  // 含 "catalyst · body"
+  // 去掉前面的 catalyst（如果有），剩下 body
+  let bodyPart = fullText;
+  if (catalyst && fullText.startsWith(catalyst)) {
+    bodyPart = fullText.slice(catalyst.length).replace(/^\s*·\s*/, "");
+  }
+  const catalystHtml = catalyst ? `${_esc(catalyst)}${actionBadge}` : "";
+  const bodyHtml = _esc(bodyPart);
+  if (catalystHtml && bodyHtml) return `${catalystHtml} · ${bodyHtml}`;
+  return catalystHtml || bodyHtml;
 }
 
 (function renderDiscovery() {
@@ -10550,7 +10641,7 @@ function _reasonSummary(row) {
       const scoreText = Number.isFinite(scoreNum) ? (scoreNum >= 0 ? "+" : "") + scoreNum.toFixed(2) : "—";
       const zColor = scoreNum > 0 ? "text-emerald-600 font-bold" : (Number.isFinite(scoreNum) ? "text-rose-600" : "text-slate-400");
       const etfs = (c.etfs || []).map(e => `<span class="inline-block px-1.5 py-0.5 mr-1 text-xs bg-indigo-100 text-indigo-700 rounded">${e}</span>`).join("");
-      const reasonText = _reasonSummary(c);
+      const reasonText = _reasonSummaryHtml(c);
       const entryText = _fmtEntryPrice(c);
       const factorHtml = _factorBreakdownHtml(c);
       const market = (() => {
@@ -10598,7 +10689,7 @@ function _reasonSummary(row) {
         <td class="px-3 py-2 text-right">${_fmtAlpha(alpha5)}</td>
         <td class="px-3 py-2 text-right">${_fmtAlpha(alpha20)}</td>
         <td class="px-3 py-2 text-right">${_fmtAlpha(alpha60)}</td>
-        <td class="px-3 py-2 text-xs text-slate-700 min-w-[260px] leading-snug">${_esc(reasonText)}</td>
+        <td class="px-3 py-2 text-xs text-slate-700 min-w-[260px] leading-snug">${reasonText}</td>
         <td class="disc-cell-wrap px-3 py-2 text-xs min-w-[200px] max-w-[320px] leading-snug">${_riskSummaryHtml(c, 1)}</td>
         <td class="px-3 py-2">${etfs}</td>
         <td class="px-3 py-2 text-center text-xs whitespace-nowrap" title="${_esc(_discoveryTs.full)}">
@@ -10752,7 +10843,11 @@ function _reasonSummary(row) {
           return `<tr class="hover:bg-slate-50">
             <td class="px-2 py-1 font-mono text-xs text-slate-500">#${r.rank}</td>
             <td class="px-2 py-1 font-mono text-xs font-bold">${r.ticker}${newTag}</td>
-            <td class="px-2 py-1 text-xs text-slate-700 max-w-[180px] truncate">${r.name || ""}</td>
+            <td class="px-2 py-1 text-xs text-slate-700 min-w-[180px]">
+              <div class="truncate max-w-[200px]">${r.name || ""}</div>
+              ${r.quality_tag ? `<div class="mt-0.5">${_qualityTagHtml(r.quality_tag)}</div>` : ""}
+              <div class="mt-0.5">${stockPill(r.ticker, {layout: "mini"})}</div>
+            </td>
             <td class="px-2 py-1 text-xs whitespace-nowrap">${_signalBadge(r)}</td>
             <td class="px-2 py-1 text-xs whitespace-nowrap">${market}</td>
             <td class="px-2 py-1 text-xs text-slate-600 whitespace-nowrap">${theme || "—"}</td>
@@ -10764,7 +10859,7 @@ function _reasonSummary(row) {
             <td class="px-2 py-1 text-right text-xs">${a5}</td>
             <td class="px-2 py-1 text-right text-xs">${a20}</td>
             <td class="px-2 py-1 text-right text-xs">${a60}</td>
-            <td class="px-2 py-1 text-xs text-slate-700 min-w-[260px] max-w-[360px] whitespace-normal leading-snug">${_esc(_reasonSummary(r))}</td>
+            <td class="px-2 py-1 text-xs text-slate-700 min-w-[260px] max-w-[360px] whitespace-normal leading-snug">${_reasonSummaryHtml(r)}</td>
             <td class="px-2 py-1 text-xs min-w-[180px] max-w-[260px] whitespace-normal leading-snug">${_riskSummaryHtml(r, 1)}</td>
             <td class="px-2 py-1 text-xs whitespace-nowrap">${etfs}</td>
             <td class="px-2 py-1 text-center text-[10px] text-slate-500 whitespace-nowrap" title="本批次推荐时间">${r.run_date || d || "—"}</td>
@@ -15279,6 +15374,16 @@ def build():
     # V2: V1 discovery_history/discovery_tracking 表已删；
     # AI 推荐历史从 recommendation_picks + pick_outcomes 注入前端。
     disc_hist = _runtime_v2_discovery_history()
+    # enrich: 给每条历史推荐补 quality_tag — 用当前 history_data 跑同样判断逻辑，
+    # 跟今日 Top 完全同源；两表名称列下方都能挂 ⚠️/✅ 胶囊
+    sys.path.insert(0, _REPO)
+    from stock_research.core.quality_tag import classify_from_history as _qt_classify
+    _hist_tickers = (history_data or {}).get("tickers") or {}
+    for _h in disc_hist:
+        _tk = str(_h.get("ticker") or _h.get("code") or "").upper()
+        _tag = _qt_classify(_tk, _h.get("score"), _hist_tickers, mode="score_0_100")
+        if _tag:
+            _h["quality_tag"] = _tag.as_dict()
     print(f"  AI 推荐历史已加载 [V2 pick_outcomes] ({len(disc_hist)} 条)")
     html = html.replace("{DISCOVERY_HISTORY_JSON}", json.dumps(disc_hist, ensure_ascii=False, default=str))
 
