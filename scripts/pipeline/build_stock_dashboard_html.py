@@ -1421,32 +1421,35 @@ function switchDiscoveryView(view) {
       </div>
     </header>
 
-    <!-- A vs C 双卡片 -->
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
-      <div class="bg-violet-50 border-2 border-violet-300 rounded-xl p-4">
-        <div class="flex items-center gap-2 mb-1">
-          <span class="text-xl">📦</span>
-          <h4 class="text-base font-bold text-violet-900">A 静态:锁定后不动</h4>
+    <!-- A vs C vs Spread 三栏合并 (2026-05-27: 之前是三个独立卡,显得散 → 改成统一外框 3 grid) -->
+    <div class="bg-gradient-to-r from-violet-50 via-orange-50 to-emerald-50 border border-slate-200 rounded-xl p-4 mb-5">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 items-stretch">
+        <!-- A 静态 -->
+        <div class="bg-white border border-violet-300 rounded-lg p-3">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="text-lg">📦</span>
+            <h4 class="text-sm font-bold text-violet-900">A 静态:锁定不动</h4>
+          </div>
+          <p class="text-xs text-violet-700 leading-relaxed">锁定日那 15 只 · 0 手续费 · 测<strong>"那版选股力"</strong></p>
         </div>
-        <p class="text-xs text-violet-700 leading-relaxed">锁定日那 15 只 · 0 手续费 · 测<strong>"那版选股力"</strong></p>
-      </div>
-      <div class="bg-orange-50 border-2 border-orange-300 rounded-xl p-4">
-        <div class="flex items-center gap-2 mb-1">
-          <span class="text-xl">🔄</span>
-          <h4 class="text-base font-bold text-orange-900">C 动态:每周一调仓</h4>
+        <!-- C 动态 -->
+        <div class="bg-white border border-orange-300 rounded-lg p-3">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="text-lg">🔄</span>
+            <h4 class="text-sm font-bold text-orange-900">C 动态:周一调仓</h4>
+          </div>
+          <p class="text-xs text-orange-700 leading-relaxed">每周一按最新 AI 推荐换仓 · 扣 10bps · 测<strong>"AI 持续推荐力"</strong></p>
         </div>
-        <p class="text-xs text-orange-700 leading-relaxed">每周一按最新 AI 推荐换仓 · 扣 10bps · 测<strong>"AI 持续推荐力"</strong></p>
+        <!-- C − A spread = 核心 KPI -->
+        <div class="bg-white border-2 border-emerald-400 rounded-lg p-3 text-center flex flex-col justify-center">
+          <div class="text-[10px] uppercase tracking-widest text-emerald-700 font-bold mb-1">C − A = AI 调仓额外价值</div>
+          <div class="text-2xl font-bold text-emerald-900">
+            <span id="ai-alpha-spread-display">—</span>
+          </div>
+          <p class="text-[10px] text-slate-500 mt-0.5">正=有价值 / 负=白调 / 0=持平</p>
+        </div>
       </div>
-    </div>
-
-    <!-- 核心 KPI: C - A spread -->
-    <div class="bg-gradient-to-r from-emerald-50 to-blue-50 border-2 border-emerald-300 rounded-xl p-4 mb-5 text-center">
-      <div class="text-[11px] uppercase tracking-widest text-emerald-700 font-bold mb-1">AI 持续调仓有没有额外价值</div>
-      <div class="text-3xl font-bold text-emerald-900">
-        <span id="ai-alpha-spread-display">—</span>
-        <span class="text-sm text-emerald-600 font-normal">= C 累计 − A 累计</span>
-      </div>
-      <div class="text-xs text-slate-600 mt-1">正数 = 调仓有价值 · 负数 = 调仓白调 · 0 = 持平。样本少时只看趋势,不下结论。</div>
+      <p class="text-[11px] text-slate-500 text-center mt-3">样本少时只看趋势,不下结论</p>
     </div>
 
     <!-- inception banner: 锁定日 + 跟踪进度 -->
@@ -1458,29 +1461,38 @@ function switchDiscoveryView(view) {
     <!-- 关键指标卡 (累计/年化/Sharpe/...) -->
     <div id="backtest-metrics" class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4"></div>
 
-    <!-- NAV 曲线 -->
-    <div class="bg-slate-50 rounded-xl border border-slate-200 p-4 mb-4">
-      <div class="flex items-center justify-between mb-3">
-        <h4 class="text-sm font-semibold text-slate-700">📈 NAV 曲线(起点 = 100,A 紫 / C 橙 / SPY 红)</h4>
-        <span id="backtest-coverage" class="text-xs text-slate-500"></span>
+    <!-- 详细图表 + 贡献表 默认折叠(锁定 0 天时没数据,展开看就行) -->
+    <details class="bg-slate-50 rounded-xl border border-slate-200 mb-4">
+      <summary class="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-slate-700 flex items-center justify-between hover:bg-slate-100 rounded-xl">
+        <span>📈 详细图表 + 贡献表 (NAV 曲线 · 60 天 P&amp;L · 单股贡献)</span>
+        <span class="text-xs text-slate-500">▼ 点击展开</span>
+      </summary>
+      <div class="px-4 pb-4 pt-2 space-y-4">
+        <!-- NAV 曲线 -->
+        <div class="bg-white rounded-lg border border-slate-200 p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h4 class="text-sm font-semibold text-slate-700">📈 NAV 曲线(起点 = 100,A 紫 / C 橙 / SPY 红)</h4>
+            <span id="backtest-coverage" class="text-xs text-slate-500"></span>
+          </div>
+          <div id="backtest-nav-chart" style="height:380px"></div>
+        </div>
+        <!-- 最近 60 天每日 P&L -->
+        <div class="bg-white rounded-lg border border-slate-200 p-4">
+          <h4 class="text-sm font-semibold text-slate-700 mb-3">📅 最近 60 天每日 P&amp;L(绿 = 涨 / 红 = 跌)</h4>
+          <div id="backtest-daily-chart" style="height:260px"></div>
+        </div>
+        <!-- 公司名解析率告警 -->
+        <div id="backtest-name-warning" class="hidden bg-rose-50 border border-rose-300 rounded-lg p-3 text-xs text-rose-800"></div>
+        <!-- 持仓贡献表 (仅 A 静态 — C 动态因每周换股无法稳定归到单只) -->
+        <div class="bg-white rounded-lg border border-slate-200 p-4">
+          <div class="flex items-center gap-2 mb-3">
+            <h4 class="text-sm font-semibold text-slate-700">💼 单股贡献度(按贡献排序)</h4>
+            <span class="inline-flex px-2 py-0.5 rounded text-[10px] font-bold bg-violet-100 text-violet-800 ring-1 ring-violet-300" title="这张表只展示 A 静态(锁定后不动)的单股贡献。C 动态每周换股,贡献度无法稳定归到单只股票,所以只有 NAV/α 汇总">📦 仅 A 静态</span>
+          </div>
+          <div id="backtest-contrib-table" class="overflow-x-auto"></div>
+        </div>
       </div>
-      <div id="backtest-nav-chart" style="height:380px"></div>
-    </div>
-
-    <!-- 最近 60 天每日 P&L -->
-    <div class="bg-slate-50 rounded-xl border border-slate-200 p-4 mb-4">
-      <h4 class="text-sm font-semibold text-slate-700 mb-3">📅 最近 60 天每日 P&amp;L(绿 = 涨 / 红 = 跌)</h4>
-      <div id="backtest-daily-chart" style="height:260px"></div>
-    </div>
-
-    <!-- 公司名解析率告警 -->
-    <div id="backtest-name-warning" class="hidden bg-rose-50 border border-rose-300 rounded-lg p-3 text-xs text-rose-800 mb-4"></div>
-
-    <!-- 持仓贡献表 -->
-    <div class="bg-slate-50 rounded-xl border border-slate-200 p-4 mb-4">
-      <h4 class="text-sm font-semibold text-slate-700 mb-3">💼 单股贡献度(按贡献排序)</h4>
-      <div id="backtest-contrib-table" class="overflow-x-auto"></div>
-    </div>
+    </details>
 
     <!-- 缺数据提示 -->
     <div id="backtest-missing-warning" class="hidden bg-amber-50 border border-amber-300 rounded-lg p-3 text-xs text-amber-800"></div>
@@ -1539,11 +1551,14 @@ function switchDiscoveryView(view) {
        (它是 plan_v6 策略的回测期望指标，跟"真实持仓"语义不同；放这里容易让新人
         误以为是自己持仓的预期回报) -->
 
-  <!-- 三层警戒线进度条 -->
-  <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
-    <h3 class="text-sm font-semibold text-slate-700 mb-3">⚠️ 模拟账户风控线（基于本金 <span data-cfg="total_capital">50 万</span>）</h3>
-    <div id="alert-line" class="space-y-2"></div>
-  </div>
+  <!-- 三层警戒线进度条 (默认折叠) -->
+  <details class="bg-white rounded-xl shadow-sm border border-slate-200 mb-4">
+    <summary class="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-slate-700 flex items-center justify-between hover:bg-slate-50 rounded-xl">
+      <span>⚠️ 模拟账户风控线 (基于本金 <span data-cfg="total_capital">50 万</span>)</span>
+      <span class="text-xs text-slate-500">▼ 点击展开</span>
+    </summary>
+    <div id="alert-line" class="space-y-2 px-4 pb-4 pt-2"></div>
+  </details>
 
   <!-- 持仓列表（横向滚动 · 第一列 sticky 不随滑动） -->
   <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
@@ -1583,16 +1598,10 @@ function switchDiscoveryView(view) {
     </table>
   </div>
 
-  <!-- 仓位健康度饼图 -->
-  <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-      <h3 class="text-sm font-semibold text-slate-700 mb-2">📊 AI 模拟仓分布</h3>
-      <div id="chart-allocation" style="height:280px"></div>
-    </div>
-    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-      <h3 class="text-sm font-semibold text-slate-700 mb-2">📈 AI 模拟主题分布</h3>
-      <div id="chart-theme" style="height:280px"></div>
-    </div>
+  <!-- 主题分布柱图 (2026-05-27: 行业分布 chart-allocation 已删 — 与持仓表行业列重复) -->
+  <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mt-4">
+    <h3 class="text-sm font-semibold text-slate-700 mb-2">📈 AI 模拟主题分布</h3>
+    <div id="chart-theme" style="height:280px"></div>
   </div>
 
   <p class="text-xs text-slate-500 mt-4">
@@ -1601,6 +1610,8 @@ function switchDiscoveryView(view) {
     <button onclick="importHoldings()" class="text-violet-600 hover:underline">导入 JSON</button> ·
     <button onclick="clearHoldings()" class="text-rose-600 hover:underline">清空模拟仓</button>
   </p>
+
+  </div>  <!-- /#portfolio-sub-sim -->
 </section>
 
 <!-- ============ 🤖 AI 组合方案 Tab ============ -->
@@ -5125,6 +5136,32 @@ let _hubSubCurrent = "self";
 let _hubAllChip = "all";  // 全部股票 子 tab 内的范围 chip (初始默认 "全部")
 try { _hubSubCurrent = localStorage.getItem("hub_sub") || "self"; } catch (e) {}
 
+// ============ 🧪 AI 方案模拟 sub-tab 切换 (2026-05-27) ============
+// tracking: 系统自动跑的 A/C 对比追踪 · sim: 用户手动按按钮的 model_sim_holdings
+let _ptfSubCurrent = "tracking";
+try { _ptfSubCurrent = localStorage.getItem("ptf_sub") || "tracking"; } catch (e) {}
+
+function switchPortfolioSub(sub) {
+  _ptfSubCurrent = sub;
+  try { localStorage.setItem("ptf_sub", sub); } catch (e) {}
+  const tracking = document.getElementById("portfolio-sub-tracking");
+  const sim = document.getElementById("portfolio-sub-sim");
+  const refreshBtn = document.getElementById("ptf-refresh-sim-btn");
+  if (tracking) tracking.style.display = (sub === "tracking") ? "" : "none";
+  if (sim) sim.style.display = (sub === "sim") ? "" : "none";
+  // 顶部刷新按钮只在"我的模拟仓"sub-tab 显示 (它只影响 model_sim_holdings)
+  if (refreshBtn) refreshBtn.style.display = (sub === "sim") ? "" : "none";
+  // sub-tab 按钮 active 样式
+  document.querySelectorAll(".ptf-sub-btn").forEach(b => {
+    const active = b.id === "ptf-sub-btn-" + sub;
+    b.classList.toggle("border-violet-500", active);
+    b.classList.toggle("text-violet-700", active);
+    b.classList.toggle("border-transparent", !active);
+    b.classList.toggle("text-slate-500", !active);
+    b.classList.toggle("hover:text-violet-600", !active);
+  });
+}
+
 // resetAllChip=true: 用户点击 "全部股票" 子 tab 按钮时, 重置 chip 到 "全部" (per 用户指令)
 // resetAllChip=false (默认): 程序化调用 (hash 跳转 / 内部 setTimeout), 保留 _hubAllChip 现状
 function switchHubSub(sub, resetAllChip) {
@@ -5348,7 +5385,7 @@ function switchTab(tab) {
   window.scrollTo(0, 0);
   // tab 特定的延迟初始化
   if (tab === "real-holdings") setTimeout(async () => { await _ensureHoldingsLoaded(); renderRealHoldings(); }, 50);
-  if (tab === "portfolio") setTimeout(async () => { await _ensureHoldingsLoaded(); renderPortfolio(); renderPlanBacktest(); }, 50);
+  if (tab === "portfolio") setTimeout(async () => { switchPortfolioSub(_ptfSubCurrent); await _ensureHoldingsLoaded(); renderPortfolio(); renderPlanBacktest(); }, 50);
   if (tab === "backtest") setTimeout(renderPlanBacktest, 100);
   if (tab === "professional") setTimeout(renderProfessional, 50);
   if (tab === "db-explorer") setTimeout(loadDbExplorer, 50);
@@ -8227,23 +8264,8 @@ async function renderPortfolio() {
 
   _renderAccountRiskLine("alert-line", portfolio_value, "生成模拟仓后会显示模型账户风控线", "模拟账户");
 
-  // 仓位分布饼图
-  // 2026-05-21: 饼图改横向柱状图（按 value 从大到小，从上到下排）
-  const _allocSorted = [...stockAlloc].sort((a, b) => a.value - b.value);  // echarts y 轴从下到上，所以升序
-  const _allocTotal = _allocSorted.reduce((s, x) => s + x.value, 0);
-  echarts.init(document.getElementById("chart-allocation")).setOption({
-    tooltip: { trigger: "axis", axisPointer: { type: "shadow" },
-      formatter: p => `${p[0].name}<br/>${p[0].value.toLocaleString()} RMB (${(p[0].value / _allocTotal * 100).toFixed(1)}%)` },
-    grid: { left: 100, right: 50, top: 10, bottom: 20 },
-    xAxis: { type: "value", axisLabel: { formatter: v => (v / 1000).toFixed(0) + "k" } },
-    yAxis: { type: "category", data: _allocSorted.map(x => x.name), axisLabel: { fontSize: 11 } },
-    series: [{
-      name: "持仓", type: "bar",
-      data: _allocSorted.map(x => x.value),
-      itemStyle: { color: "#8b5cf6" },
-      label: { show: true, position: "right", formatter: p => (p.value / _allocTotal * 100).toFixed(1) + "%", fontSize: 11 },
-    }]
-  });
+  // 仓位分布柱图 (2026-05-27: chart-allocation DOM 已删 — 与持仓表行业列重复)
+  // 保留 _allocSorted/_allocTotal 给后续可能引用,但不渲染图表
 
   const _themeArr = Object.entries(themeAlloc).map(([k, v]) => ({ name: k, value: v })).sort((a, b) => a.value - b.value);
   const _themeTotal = _themeArr.reduce((s, x) => s + x.value, 0);
@@ -12669,8 +12691,12 @@ def _latest_defense_snapshot_payload() -> dict | None:
     return _runtime_load_json("data/latest/realtime_defense.json") or None
 
 
-def _defense_signal_explainer_html(*, compact: bool = False) -> str:
-    """飞书「防御信号升档」卡片的中文说明 + 当前档位（写入看板）。"""
+def _defense_signal_explainer_html(*, compact: bool = False, stale_strip: str = "") -> str:
+    """飞书「防御信号升档」卡片的中文说明 + 当前档位（写入看板）。
+
+    compact + stale_strip：合并模式，stale_strip 渲染在卡顶部（生产验收快照过期提示）。
+    避免「快照过期红卡」+「防御黄卡」两块分散看不懂的体验问题。
+    """
     state = _runtime_load_json("data/defense_watcher_state.json") or {}
     defense = _latest_defense_snapshot_payload() or {}
     watcher_sev = str(state.get("last_severity") or "—")
@@ -12724,6 +12750,7 @@ def _defense_signal_explainer_html(*, compact: bool = False) -> str:
     if compact:
         return f"""
   <div class="mb-6 rounded-xl border border-orange-200 bg-orange-50/80 p-4">
+    {stale_strip}
     <div class="flex items-start justify-between gap-3 flex-wrap">
       <div>
         <h3 class="text-sm font-bold text-orange-950">🛡️ 飞书「防御信号升档」是什么？</h3>
@@ -12776,12 +12803,12 @@ def _defense_signal_explainer_html(*, compact: bool = False) -> str:
 """
 
 
-def _stale_acceptance_banner_html(acceptance: dict) -> str:
-    """B 红条：检测 production_acceptance_check.json 是否落后于 data/latest/*.json。
+def _stale_acceptance_strip_html(acceptance: dict) -> str:
+    """B 红条 strip 版本：作为「系统体检 + 防御」合并卡顶部子区域（不再独立成卡）。
 
     2026-05-25 事故复盘：手工 retry 某一步后忘了重跑 acceptance check,
     dashboard 显示满屏过时 FAIL 误报让用户以为系统挂了。这里加 30 分钟阈值,
-    超过就在顶部显示红条 + 修复命令,让用户视觉直接知道"不是真挂"。
+    超过就在合并卡顶部显示红 strip + 修复命令。
     """
     acc_at = acceptance.get("generated_at")
     if not acc_at:
@@ -12811,15 +12838,13 @@ def _stale_acceptance_banner_html(acceptance: dict) -> str:
     if delta_min < 30:
         return ""
     return f"""
-  <div class="mb-5 rounded-xl border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-900">
-    <div class="font-semibold mb-1">❗ 生产验收快照已过时 {int(delta_min)} 分钟，下方 FAIL/WARN 可能是误报</div>
-    <div class="text-rose-800">
-      数据文件已比快照新（最新文件 {html_lib.escape(latest_dt.strftime('%m-%d %H:%M'))} · 快照 {html_lib.escape(acc_dt.strftime('%m-%d %H:%M'))}）。
-      手工 retry 某一步后，在仓库根目录跑：
-      <code class="bg-white px-2 py-0.5 rounded font-mono text-xs">python3 scripts/tools/production_acceptance_check.py &amp;&amp; ./build_dashboard.sh</code>
-    </div>
-  </div>
-"""
+    <div class="rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-xs text-rose-900 mb-3">
+      <div class="font-semibold mb-0.5">❗ 生产验收快照已过时 {int(delta_min)} 分钟，下方 FAIL/WARN 可能是误报</div>
+      <div class="text-rose-800">
+        最新文件 {html_lib.escape(latest_dt.strftime('%m-%d %H:%M'))} · 快照 {html_lib.escape(acc_dt.strftime('%m-%d %H:%M'))}。retry 后跑：
+        <code class="bg-white px-1.5 py-0.5 rounded font-mono">python3 scripts/tools/production_acceptance_check.py &amp;&amp; ./build_dashboard.sh</code>
+      </div>
+    </div>"""
 
 
 def _weekly_self_review_panel_html() -> str:
@@ -13009,22 +13034,22 @@ def _today_catalyst_movement_html() -> str:
 
     # 渲染一只票的行
     def _row_html(tk: str, name: str, catalyst: str, extra: str = "") -> str:
-        """紧凑卡片：用于 2 列 grid 布局。一只票 = 一个 cell。"""
+        """超紧凑 card：用于 3 列 grid。代码+名称一行；催化 truncate 一行（hover 看全）；extra 可选。"""
         market = _market_label_py(tk)
-        action = _catalyst_action_label_py(catalyst, validation) if catalyst else ""
-        held_warn = "<span class='inline-block px-1 py-0 rounded text-[9px] font-bold bg-amber-200 text-amber-900 ml-1'>⚠️持仓</span>" if tk.upper() in held else ""
-        catalyst_disp = html_lib.escape(catalyst) if catalyst else "<span class='text-slate-400 text-[11px]'>(无近期催化)</span>"
-        # 紧凑卡片：第 1 行 ticker+name；第 2 行催化句+badge；第 3 行 extra (如跃升/跌出数据)
+        action_inline = _catalyst_action_label_py(catalyst, validation) if catalyst else ""
+        held_warn = "<span class='inline-block px-1 py-0 rounded text-[9px] font-bold bg-amber-200 text-amber-900 ml-1'>⚠️</span>" if tk.upper() in held else ""
+        catalyst_disp = html_lib.escape(catalyst) if catalyst else '<span class="text-slate-300">—</span>'
+        cat_title = html_lib.escape(catalyst) if catalyst else "无近期催化"
         return f"""
-        <div class="bg-white rounded-md border border-slate-200 px-2.5 py-1.5 text-[12px] leading-tight">
-          <div class="flex items-baseline gap-1.5 mb-0.5">
-            <span class="text-[9px] text-slate-400 font-mono">{market}</span>
-            <span class="font-mono font-bold text-slate-900">{html_lib.escape(tk)}</span>
-            <span class="text-slate-700 truncate">{html_lib.escape(name or '')}</span>
+        <div class="bg-white rounded border border-slate-200 px-2 py-1 text-[11px] leading-tight" title="{cat_title}">
+          <div class="flex items-baseline gap-1 mb-0.5 overflow-hidden">
+            <span class="text-[8px] text-slate-400 font-mono shrink-0">{market}</span>
+            <span class="font-mono font-bold text-slate-900 shrink-0">{html_lib.escape(tk)}</span>
+            <span class="text-slate-700 truncate flex-1 min-w-0">{html_lib.escape(name or '')}</span>
             {held_warn}
           </div>
-          <div class="text-[11px] text-slate-600 truncate" title="{html_lib.escape(catalyst)}">{catalyst_disp}</div>
-          {('<div class="mt-0.5">' + action + '</div>') if action else ''}
+          <div class="text-[10.5px] text-slate-500 truncate">{catalyst_disp}</div>
+          {('<div class="mt-0.5 scale-90 origin-left">' + action_inline + '</div>') if action_inline else ''}
           {extra}
         </div>"""
 
@@ -13041,7 +13066,7 @@ def _today_catalyst_movement_html() -> str:
         new_html = f"""
     <div class="mb-3">
       <div class="font-bold text-violet-900 text-[13px] mb-1.5">🆕 今日新进入推荐 <span class="text-slate-500 font-normal">({len(new_items)} 只){more}</span></div>
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-2">{''.join(rows)}</div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">{''.join(rows)}</div>
     </div>"""
 
     # 📈 跃升
@@ -13065,7 +13090,7 @@ def _today_catalyst_movement_html() -> str:
         rise_html = f"""
     <div class="mb-3">
       <div class="font-bold text-amber-900 text-[13px] mb-1.5">📈 今日排名跃升 <span class="text-slate-500 font-normal">({len(rise_items)} 只){more}</span></div>
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-2">{''.join(rows)}</div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">{''.join(rows)}</div>
     </div>"""
 
     # 📉 跌出
@@ -13087,7 +13112,7 @@ def _today_catalyst_movement_html() -> str:
         drop_html = f"""
     <div class="mb-2">
       <div class="font-bold text-rose-900 text-[13px] mb-1.5">📉 今日跌出推荐 <span class="text-slate-500 font-normal">({len(dropouts)} 只){warn}{more}</span></div>
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-2">{''.join(rows)}</div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">{''.join(rows)}</div>
     </div>"""
 
     if not (new_html or rise_html or drop_html):
@@ -13368,9 +13393,7 @@ def today_decision_panel_html() -> str:
 
   {_weekly_self_review_panel_html()}
 
-  {_stale_acceptance_banner_html(acceptance)}
-
-  {_defense_signal_explainer_html(compact=True)}
+  {_defense_signal_explainer_html(compact=True, stale_strip=_stale_acceptance_strip_html(acceptance))}
 
   {empty_state_banner}
 
