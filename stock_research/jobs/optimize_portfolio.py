@@ -349,11 +349,14 @@ def _portfolio_stats_for_weights(
 # ─────────── 数据获取 ───────────
 
 def _load_factor_scores(market_scope: str = "US") -> dict | None:
-    """读 daily_picks_v5 / build_plan_a_v5 共享的 factor_scores_today.json 缓存。
+    """AI 组合方案候选池 = 系统 V2 AI 推荐池 (recommendation_picks)。
 
-    fallback：当缓存缺失（v5 因 watchlist 空未产 cache）时，从 V2 recommendation_picks
-    构造一个轻量版 factors 列表，仅用于驱动 risk-aware 组合优化，跳过 combine_factors。
-    V2 design 要求 AI 组合方案 candidate 池来自系统 AI 推荐池，而不是 watchlist。
+    Why: 历史版本主路径走 daily_picks_v5 写的 factor_scores_today.json cache,
+    但 daily_picks_v5 只覆盖手动 watchlist —— 让组合方案变成"在自选股里挑",违背
+    产品三层架构(自选股 ≠ AI 推荐)。修正后：候选池始终来自 V2 系统 AI 推荐池;
+    cache 仅做 enrichment(若 V2 推荐池在 cache 中 ≥90% 命中,走完整 combine_factors
+    + 中性化路径;否则走 V2 lite —— 用 V2 total_score 排序,跳过 combine_factors,
+    但风险感知优化器、Markowitz、相关性剪枝、ADV/行业 cap 仍生效)。
     """
     market_scope = str(market_scope or "US").upper()
 
@@ -363,49 +366,62 @@ def _load_factor_scores(market_scope: str = "US") -> dict | None:
         market = (explicit_market or _infer_market(ticker)).upper()
         return market == market_scope
 
-    cache = _REPO_ROOT / "data" / "latest" / "factor_scores_today.json"
-    if cache.exists():
-        with open(cache, encoding="utf-8") as f:
-            data = json.load(f)
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        cache_date = (data.get("date") or "")[:10]
-        raw_factors = data.get("factors") or []
-        raw_signals = data.get("signals") or []
-        factors = [
-            f for f in raw_factors
-            if _in_scope(str(f.get("ticker") or f.get("symbol") or ""))
-        ]
-        signals = [
-            s for s in raw_signals
-            if _in_scope(str(s.get("ticker") or s.get("symbol") or ""))
-        ]
-        factors_n = len(factors)
-        # cache 当天 + 覆盖足够（≥5 只）才使用；否则走 V2 fallback
-        if cache_date == today_str and factors_n >= 5:
-            data["factors"] = factors
-            data["signals"] = signals
-            data["market_scope"] = market_scope
-            return data
-        logger.info(
-            "factor_scores cache 已过期或 %s 覆盖不足（date=%s, factors=%d）→ V2 fallback",
-            market_scope, cache_date or "?", factors_n,
-        )
-
-    # V2 fallback：用最新 recommendation_picks 作为候选池
+    # ────── 1. 候选池：V2 recommendation_picks(主路径,不再从 cache 取候选) ──────
     try:
         import sys as _sys
         _sys.path.insert(0, str(_REPO_ROOT / "scripts" / "lib"))
         from stock_db import fetch_latest_recommendation_picks  # type: ignore
     except Exception as e:
-        logger.error("fallback 加载 stock_db 失败: %s", e)
+        logger.error("加载 stock_db 失败: %s", e)
         return None
     picks = [
         p for p in fetch_latest_recommendation_picks()
         if _in_scope(str(p.get("symbol") or ""), str(p.get("market") or ""))
     ]
     if not picks:
-        logger.error("缓存 %s 不存在 且 recommendation_picks 无 %s 最新 run", cache, market_scope)
+        logger.error("V2 recommendation_picks 无 %s 最新 run", market_scope)
         return None
+    pick_symbols = {p["symbol"] for p in picks}
+
+    # ────── 2. cache enrichment：检查 V2 推荐池在 cache 中的命中率 ──────
+    cache_path = _REPO_ROOT / "data" / "latest" / "factor_scores_today.json"
+    cache_factors: dict = {}
+    cache_signals: dict = {}
+    if cache_path.exists():
+        with open(cache_path, encoding="utf-8") as f:
+            cache_data = json.load(f)
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        if (cache_data.get("date") or "")[:10] == today_str:
+            for fac in (cache_data.get("factors") or []):
+                tk = fac.get("ticker") or fac.get("symbol")
+                if tk and tk in pick_symbols:
+                    cache_factors[tk] = fac
+            for sig in (cache_data.get("signals") or []):
+                tk = sig.get("ticker") or sig.get("symbol")
+                if tk and tk in pick_symbols:
+                    cache_signals[tk] = sig
+
+    hit_ratio = len(cache_factors) / max(1, len(picks))
+
+    # ────── 3a. cache ≥90% 命中 → 走完整因子路径(Piotroski + 中性化) ──────
+    if hit_ratio >= 0.9:
+        factors = [cache_factors[p["symbol"]] for p in picks if p["symbol"] in cache_factors]
+        signals = [cache_signals.get(p["symbol"], {"ticker": p["symbol"], "analyst": None})
+                   for p in picks if p["symbol"] in cache_factors]
+        logger.info(
+            "AI 组合候选池 %s：V2 推荐池 %d 只,cache 命中 %d/%d (%.0f%%) → 完整因子模式",
+            market_scope, len(factors), len(cache_factors), len(picks), hit_ratio * 100,
+        )
+        return {
+            "factors": factors,
+            "signals": signals,
+            "v2_universe_run_id": picks[0].get("run_id"),
+            "v2_universe_run_date": str(picks[0].get("run_date")),
+            "v2_universe_count": len(picks),
+            "market_scope": market_scope,
+        }
+
+    # ────── 3b. cache 命中不足 → V2 lite：用 total_score 当 composite ──────
     factors = []
     signals = []
     for p in picks:
@@ -420,15 +436,18 @@ def _load_factor_scores(market_scope: str = "US") -> dict | None:
         })
         signals.append({"ticker": ticker, "analyst": None})
     logger.info(
-        "factor_scores cache 缺失 → fallback 用 V2 recommendation_picks（run=%s, %d 只）",
-        picks[0].get("run_id"), len(picks),
+        "AI 组合候选池 %s：V2 推荐池 %d 只,cache 命中 %d/%d (%.0f%%) → V2 lite 模式",
+        market_scope, len(factors), len(cache_factors), len(picks), hit_ratio * 100,
     )
     return {
         "factors": factors,
         "signals": signals,
-        "fallback_v2": True,
+        "fallback_v2": True,  # 保留旧名,触发 run() 中的 lite 分支
         "fallback_run_id": picks[0].get("run_id"),
         "fallback_run_date": str(picks[0].get("run_date")),
+        "v2_universe_run_id": picks[0].get("run_id"),
+        "v2_universe_run_date": str(picks[0].get("run_date")),
+        "v2_universe_count": len(picks),
         "market_scope": market_scope,
     }
 
@@ -1065,6 +1084,14 @@ def run(capital: float = DEFAULT_CAPITAL,
             "turnover": round(cost["turnover"], 4),
         },
         "risk_aware": risk_aware_meta,
+        "candidate_universe": {
+            "source": "v2_recommendation_picks",
+            "run_id": cached.get("v2_universe_run_id"),
+            "run_date": cached.get("v2_universe_run_date"),
+            "market_scope": market_scope,
+            "count": cached.get("v2_universe_count"),
+            "mode": "v2_lite" if fallback_v2 else "full_factor",
+        },
         "plan_v5": plan_v5,
         "plan_v6": plan,
         "plan": plan,
