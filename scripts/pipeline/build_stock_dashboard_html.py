@@ -12959,9 +12959,10 @@ def _today_catalyst_movement_html() -> str:
   </div>"""
 
     tickers = appearance.get("tickers") or {}
-    # 加载 candidate 元信息用于补 name / catalyst（v2 实际推荐池）
+    # 加载 candidate 元信息用于补 name (v2 实际推荐池) + catalyst index 拿催化句
     v2 = _runtime_v2_recommendations() or []
     cand_meta = {(c.get("ticker") or "").upper(): c for c in v2 if c.get("ticker")}
+    catalyst_idx = _build_catalyst_index()  # ticker → "📰 ..."
 
     # 三类列表
     new_items = []
@@ -13013,7 +13014,7 @@ def _today_catalyst_movement_html() -> str:
         rows = []
         for tk, info, c in new_items[:10]:
             name = c.get("name") or ""
-            catalyst = c.get("catalyst") or ""
+            catalyst = catalyst_idx.get(tk.upper()) or ""
             rows.append(_row_html(tk, name, catalyst))
         more = f' <span class="text-xs text-slate-500">+{len(new_items)-10} 只...</span>' if len(new_items) > 10 else ""
         new_html = f"""
@@ -13029,7 +13030,7 @@ def _today_catalyst_movement_html() -> str:
         rows = []
         for tk, info, c in rise_items[:10]:
             name = c.get("name") or ""
-            catalyst = c.get("catalyst") or ""
+            catalyst = catalyst_idx.get(tk.upper()) or ""
             rank_up = info.get("rank_up") or 0
             score_up = info.get("score_up") or 0
             extra_parts = []
