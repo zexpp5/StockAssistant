@@ -1377,19 +1377,28 @@ function switchDiscoveryView(view) {
 
 <!-- ============ 🧪 AI 方案模拟 Tab ============ -->
 <section id="portfolio" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
-  <div class="flex items-center justify-between mb-4">
+  <div class="flex items-start justify-between mb-3 gap-3 flex-wrap">
     <div>
       <h2 class="text-2xl font-bold text-slate-900">🧪 AI 方案模拟</h2>
-      <p class="text-sm text-slate-600 mt-1">这里只看 AI 组合方案生成的模拟仓（DuckDB model_sim_holdings），用于观察模型能力。<strong class="text-rose-600">不是你的真实持仓</strong>。</p>
+      <p class="text-sm text-slate-600 mt-1">两件事:<strong>锁定追踪</strong>(系统自动验证 AI alpha) · <strong>我的模拟仓</strong>(你按按钮假装下单跟踪 P&amp;L)。<strong class="text-rose-600">都不是真实持仓</strong>。</p>
     </div>
-    <div class="flex gap-2">
-      <button onclick="loadPlanAv6()" title="用当前 AI 组合方案刷新推荐模拟仓，不会覆盖你的真实持仓" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-lg text-sm font-medium">📋 用 AI 组合方案刷新模拟仓</button>
-    </div>
+    <button id="ptf-refresh-sim-btn" onclick="loadPlanAv6()" title="用当前 AI 组合方案刷新模拟仓 — 只影响『我的模拟仓』sub-tab" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap" style="display:none">📋 刷新模拟仓</button>
   </div>
 
-  <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 mb-5 text-sm text-amber-900">
-    <strong>怎么理解：</strong>这里是“如果我照模型买，会是什么样”的模拟账本。你的真钱股票请放到「我的持仓」；模拟仓里的买入价和股数由模型估算，不能当真实成交记录。
+  <!-- sub-tab 切换器 (2026-05-27): 把两件事彻底分开 -->
+  <div class="mb-5 border-b border-slate-200 flex gap-1">
+    <button onclick="switchPortfolioSub('tracking')" id="ptf-sub-btn-tracking"
+            class="ptf-sub-btn px-4 py-2 text-sm font-medium border-b-2 transition">
+      📊 锁定追踪 <span class="text-[11px] text-slate-400 ml-1">自动</span>
+    </button>
+    <button onclick="switchPortfolioSub('sim')" id="ptf-sub-btn-sim"
+            class="ptf-sub-btn px-4 py-2 text-sm font-medium border-b-2 transition">
+      🎯 我的模拟仓 <span class="text-[11px] text-slate-400 ml-1">手动</span>
+    </button>
   </div>
+
+  <!-- ============ sub-tab 1: 📊 锁定追踪 wrapper ============ -->
+  <div id="portfolio-sub-tracking">
 
   <!-- ============ 📊 锁定追踪 (2026-05-27 从 AI 组合方案 tab 挪过来) ============
        数据源: DuckDB snapshots 表的 plan_v6 (5-27 起的干净 V2 推荐池 snapshot)
@@ -1476,6 +1485,16 @@ function switchDiscoveryView(view) {
     <!-- 缺数据提示 -->
     <div id="backtest-missing-warning" class="hidden bg-amber-50 border border-amber-300 rounded-lg p-3 text-xs text-amber-800"></div>
   </section>
+
+  </div>  <!-- /#portfolio-sub-tracking -->
+
+  <!-- ============ sub-tab 2: 🎯 我的模拟仓 wrapper (默认隐藏) ============ -->
+  <div id="portfolio-sub-sim" style="display:none">
+
+    <!-- 简化 disclaimer: 一行 -->
+    <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 mb-4 text-sm text-amber-900">
+      💡 这里是"如果照模型买,会怎样"的模拟账本 · 买入价/股数由模型估算 · <strong class="text-rose-700">不是真实成交</strong>。
+    </div>
 
   <!-- 2026-05-21: "数据窗口/年化 95%/夏普 2.95/NVDA +330%" 黄底说明块已删除：
        1) 数字过时（V2 当前 Sharpe 2.55 而非 2.95）2) 内容是策略层 disclaimer，
@@ -12990,21 +13009,23 @@ def _today_catalyst_movement_html() -> str:
 
     # 渲染一只票的行
     def _row_html(tk: str, name: str, catalyst: str, extra: str = "") -> str:
-        ticker_disp = tk
+        """紧凑卡片：用于 2 列 grid 布局。一只票 = 一个 cell。"""
         market = _market_label_py(tk)
         action = _catalyst_action_label_py(catalyst, validation) if catalyst else ""
-        held_warn = " <span class='inline-block px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-200 text-amber-900'>⚠️ 你持仓</span>" if tk.upper() in held else ""
-        catalyst_disp = html_lib.escape(catalyst) if catalyst else "<span class='text-slate-400 text-xs'>(无近期催化)</span>"
+        held_warn = "<span class='inline-block px-1 py-0 rounded text-[9px] font-bold bg-amber-200 text-amber-900 ml-1'>⚠️持仓</span>" if tk.upper() in held else ""
+        catalyst_disp = html_lib.escape(catalyst) if catalyst else "<span class='text-slate-400 text-[11px]'>(无近期催化)</span>"
+        # 紧凑卡片：第 1 行 ticker+name；第 2 行催化句+badge；第 3 行 extra (如跃升/跌出数据)
         return f"""
-        <div class="flex items-start gap-3 py-2 border-b border-slate-100 last:border-0">
-          <span class="text-[10px] font-mono text-slate-400 min-w-[36px] mt-1">{market}</span>
-          <span class="font-mono font-bold text-slate-900 min-w-[100px] mt-1">{html_lib.escape(ticker_disp)}</span>
-          <span class="text-sm text-slate-700 min-w-[120px] mt-1">{html_lib.escape(name or '')}{held_warn}</span>
-          <div class="flex-1">
-            <div class="text-xs text-slate-600">{catalyst_disp}</div>
-            <div class="mt-1">{action}</div>
-            {extra}
+        <div class="bg-white rounded-md border border-slate-200 px-2.5 py-1.5 text-[12px] leading-tight">
+          <div class="flex items-baseline gap-1.5 mb-0.5">
+            <span class="text-[9px] text-slate-400 font-mono">{market}</span>
+            <span class="font-mono font-bold text-slate-900">{html_lib.escape(tk)}</span>
+            <span class="text-slate-700 truncate">{html_lib.escape(name or '')}</span>
+            {held_warn}
           </div>
+          <div class="text-[11px] text-slate-600 truncate" title="{html_lib.escape(catalyst)}">{catalyst_disp}</div>
+          {('<div class="mt-0.5">' + action + '</div>') if action else ''}
+          {extra}
         </div>"""
 
     # 🆕 新进入
@@ -13018,9 +13039,9 @@ def _today_catalyst_movement_html() -> str:
             rows.append(_row_html(tk, name, catalyst))
         more = f' <span class="text-xs text-slate-500">+{len(new_items)-10} 只...</span>' if len(new_items) > 10 else ""
         new_html = f"""
-    <div class="mb-5">
-      <div class="font-bold text-violet-900 text-sm mb-2">🆕 今日新进入推荐 <span class="text-slate-500 font-normal">({len(new_items)} 只){more}</span></div>
-      <div class="bg-white rounded-lg border border-violet-200 px-3">{''.join(rows)}</div>
+    <div class="mb-3">
+      <div class="font-bold text-violet-900 text-[13px] mb-1.5">🆕 今日新进入推荐 <span class="text-slate-500 font-normal">({len(new_items)} 只){more}</span></div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-2">{''.join(rows)}</div>
     </div>"""
 
     # 📈 跃升
@@ -13038,13 +13059,13 @@ def _today_catalyst_movement_html() -> str:
                 extra_parts.append(f"排名 {info.get('prev_rank')}→{info.get('cur_rank')} (+{rank_up})")
             if score_up and score_up >= 2:
                 extra_parts.append(f"评分 +{score_up:.1f}")
-            extra = f'<div class="text-[11px] text-amber-700 mt-1">📈 ' + " · ".join(extra_parts) + '</div>' if extra_parts else ""
+            extra = f'<div class="text-[11px] text-amber-700 mt-0.5">📈 ' + " · ".join(extra_parts) + '</div>' if extra_parts else ""
             rows.append(_row_html(tk, name, catalyst, extra))
         more = f' <span class="text-xs text-slate-500">+{len(rise_items)-10} 只...</span>' if len(rise_items) > 10 else ""
         rise_html = f"""
-    <div class="mb-5">
-      <div class="font-bold text-amber-900 text-sm mb-2">📈 今日排名跃升 <span class="text-slate-500 font-normal">({len(rise_items)} 只){more}</span></div>
-      <div class="bg-white rounded-lg border border-amber-200 px-3">{''.join(rows)}</div>
+    <div class="mb-3">
+      <div class="font-bold text-amber-900 text-[13px] mb-1.5">📈 今日排名跃升 <span class="text-slate-500 font-normal">({len(rise_items)} 只){more}</span></div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-2">{''.join(rows)}</div>
     </div>"""
 
     # 📉 跌出
@@ -13058,15 +13079,15 @@ def _today_catalyst_movement_html() -> str:
             name = d.get("name") or ""
             prev_rank = d.get("prev_rank")
             prev_score = d.get("prev_score")
-            extra = f'<div class="text-[11px] text-rose-700 mt-1">📉 上次第 {prev_rank} 名 · 综合 {prev_score}</div>' if prev_rank else ""
+            extra = f'<div class="text-[11px] text-rose-700 mt-0.5">📉 上次第 {prev_rank} 名 · 综合 {prev_score}</div>' if prev_rank else ""
             rows.append(_row_html(tk, name, "", extra))
         held_in_drop = sum(1 for d in dropouts if (d.get("ticker") or "").upper() in held)
         warn = f' <span class="text-xs text-amber-700 font-bold">⚠️ 含 {held_in_drop} 只你持仓</span>' if held_in_drop else ""
         more = f' <span class="text-xs text-slate-500">+{len(dropouts)-10} 只...</span>' if len(dropouts) > 10 else ""
         drop_html = f"""
-    <div class="mb-3">
-      <div class="font-bold text-rose-900 text-sm mb-2">📉 今日跌出推荐 <span class="text-slate-500 font-normal">({len(dropouts)} 只){warn}{more}</span></div>
-      <div class="bg-white rounded-lg border border-rose-200 px-3">{''.join(rows)}</div>
+    <div class="mb-2">
+      <div class="font-bold text-rose-900 text-[13px] mb-1.5">📉 今日跌出推荐 <span class="text-slate-500 font-normal">({len(dropouts)} 只){warn}{more}</span></div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-2">{''.join(rows)}</div>
     </div>"""
 
     if not (new_html or rise_html or drop_html):
