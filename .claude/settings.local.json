@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -sL -o /tmp/hkex_news.html -w 'final %{url_effective}\\\\nsize %{size_download}\\\\n' -H 'User-Agent: Mozilla/5.0' https://www.hkex.com.hk/News/News-Release)",
+      "Bash(grep -oE 'fetch\\\\\\(\"[^\"]+\"|/api/[a-zA-Z/_?=&-]{10,80}|sitecore/[^\"]+' /tmp/hkex_news.html)",
+      "Bash(grep -oE 'data-[a-z]+=\"[^\"]{10,80}\"|<script[^>]*src=\"[^\"]+/api[^\"]+\"|window\\\\.[A-Z_]+\\\\s*=' /tmp/hkex_news.html)",
+      "Bash(/opt/homebrew/bin/python3 scripts/pipeline/build_stock_dashboard_html.py)",
+      "Bash(/opt/anaconda3/bin/python -m pytest tests/test_quality_tag.py -v)",
+      "Bash(grep -oE 'CATALYST_VALIDATION = \\\\{\"[a-z_]{8,30}\":' stock_dashboard.html)",
+      "Bash(/opt/homebrew/bin/python3 -c ' *)",
+      "Bash(/opt/homebrew/bin/python3)",
+      "Bash(curl -s -o /dev/null -w \"github: %{http_code}\\\\n\" https://github.com)",
+      "Bash(git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=20 push)",
+      "Bash(/opt/homebrew/bin/python3 -m stock_research.jobs.optimize_portfolio)",
+      "Bash(lsof -iTCP:8000 -sTCP:LISTEN)",
+      "Bash(curl -s -o /dev/null -w \"http %{http_code} | size %{size_download}\\\\n\" \"http://127.0.0.1:8000/stock_dashboard.html\")",
+      "Bash(grep -n \"}\\)\\(\\);\\\\|}\\\\\\)\\(\\);\\\\s*$\" stock_dashboard.html)",
+      "Bash(awk -F: '$1 > 13318 && $1 < 13700 {print}')",
+      "Bash(awk 'NR>=13318 && NR<=13800 && /^\\\\}\\\\\\)\\\\\\(\\\\\\)/{print NR\": \"$0; exit}' stock_dashboard.html)",
+      "Bash(awk 'NR>=13318 && NR<=14000{print NR\": \"$0}' stock_dashboard.html)",
+      "Bash(\"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\" --headless --disable-gpu --dump-dom \"http://127.0.0.1:8000/stock_dashboard.html#watchlist-hub\")",
+      "Bash(\"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\" --headless --disable-gpu --dump-dom \"http://127.0.0.1:8000/stock_dashboard.html#backtest\")",
+      "Bash(\"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\" --headless --disable-gpu --virtual-time-budget=3000 --dump-dom \"http://127.0.0.1:8000/stock_dashboard.html#backtest\")",
+      "Bash(grep -n \"as_of_date=_h.get\\\\|<div class=.\\\\${_discoveryTs.age\" scripts/pipeline/build_stock_dashboard_html.py)",
+      "Bash(sed -n '15405,15415p')",
+      "Bash(sed -n '15405,15415p' scripts/pipeline/build_stock_dashboard_html.py)",
+      "Bash(grep -n \"return f\\\\\"\\\\\"\\\\\"$\\\\|return f'''$\\\\|^    return f\" scripts/pipeline/build_stock_dashboard_html.py)",
+      "Bash(awk 'NR>12900 && NR<13300 && /return f/ {print NR\": \"$0}' scripts/pipeline/build_stock_dashboard_html.py)",
+      "Bash(\"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\" --headless --disable-gpu --virtual-time-budget=3000 --dump-dom \"http://127.0.0.1:8000/stock_dashboard.html#portfolio\")",
+      "Bash(\"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\" --headless --disable-gpu --virtual-time-budget=2000 --dump-dom \"http://127.0.0.1:8000/stock_dashboard.html#backtest\")",
+      "Bash(awk '{print $9, $6, $7, $8}')",
+      "Bash(ps -o pid,ppid,etime,command -p 5334,5335,99514)",
+      "Bash(sample 99514 2 -mayDie)",
+      "Bash(ps -o pid,stat,etime,wchan,command -p 99514)",
+      "Bash(bash --version)"
+    ]
+  }
+}
