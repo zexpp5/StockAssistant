@@ -1228,6 +1228,63 @@ _sys.exit(rc)
         from stock_research.jobs.real_holding_review import build_real_holding_review
         return _json_any(build_real_holding_review(persist=True))
 
+    @app.get("/api/real-holdings/equity-curve")
+    def real_holdings_equity_curve(days: int = 90) -> dict[str, Any]:
+        """账户净值曲线：每日 total_value/total_cost/pnl，按 as_of_date 升序。
+
+        同一天有多次 review run 时取 generated_at 最晚的那次（日终快照）。
+        """
+        import stock_db
+        days_clamped = max(7, min(int(days), 730))
+        conn = stock_db.get_db(read_only=True)
+        try:
+            rows = conn.execute(
+                """
+                WITH latest_run_per_day AS (
+                    SELECT review_run_id, as_of_date
+                    FROM (
+                        SELECT review_run_id, as_of_date, generated_at,
+                               ROW_NUMBER() OVER (PARTITION BY as_of_date ORDER BY generated_at DESC) AS rn
+                        FROM real_holding_review_runs
+                        WHERE status = 'generated'
+                          AND as_of_date >= CURRENT_DATE - INTERVAL (? * 1) DAY
+                    )
+                    WHERE rn = 1
+                )
+                SELECT r.as_of_date,
+                       SUM(i.current_value_rmb) AS total_value_rmb,
+                       SUM(i.cost_rmb_locked)   AS total_cost_rmb,
+                       COUNT(*)                 AS holding_count
+                FROM real_holding_review_items i
+                JOIN latest_run_per_day r ON i.review_run_id = r.review_run_id
+                GROUP BY r.as_of_date
+                ORDER BY r.as_of_date ASC
+                """,
+                [days_clamped],
+            ).fetchall()
+        finally:
+            conn.close()
+
+        points = []
+        for as_of_date, total_value, total_cost, holding_count in rows:
+            tv = float(total_value or 0.0)
+            tc = float(total_cost or 0.0)
+            pnl = tv - tc
+            pnl_pct = (pnl / tc * 100.0) if tc > 0 else None
+            points.append({
+                "as_of_date": as_of_date.isoformat() if hasattr(as_of_date, "isoformat") else str(as_of_date),
+                "total_value_rmb": round(tv, 2),
+                "total_cost_rmb": round(tc, 2),
+                "pnl_rmb": round(pnl, 2),
+                "pnl_pct": round(pnl_pct, 4) if pnl_pct is not None else None,
+                "holding_count": int(holding_count or 0),
+            })
+        return _json_any({
+            "days": days_clamped,
+            "point_count": len(points),
+            "points": points,
+        })
+
     @app.get("/api/real-holdings/daily-review/history")
     def real_holdings_daily_review_history(
         symbol: str | None = None,

@@ -760,7 +760,18 @@ def _build_item(
         reasons.append("暂无当日股票评分,结论降级为观察")
         data_flags.append("no_model_score")
     if price and current_price is not None:
-        reasons.append(f"最新行情 {price.get('trade_date')} · {current_price:.2f} {current_currency}")
+        # 当 close == prev_close 且日变动为 0，说明 yfinance 拉的是 prev_close（多发生在
+        # 港股/A 股开盘前的早报时点）。文案区分"前收"vs"最新"，避免误导。
+        is_stale_prev_close = (
+            prev_close is not None
+            and prev_close > 0
+            and abs(current_price - prev_close) < 1e-6
+            and (day_change_pct is None or abs(day_change_pct) < 1e-6)
+        )
+        if is_stale_prev_close and prev_trade_date:
+            reasons.append(f"前收价 {prev_trade_date} · {current_price:.2f} {current_currency}（盘前/未开盘，待盘中刷新）")
+        else:
+            reasons.append(f"最新行情 {price.get('trade_date')} · {current_price:.2f} {current_currency}")
     else:
         reasons.append("暂无最新行情,市值暂用锁定成本估算")
         data_flags.append("missing_price")
@@ -915,7 +926,8 @@ def build_real_holding_review(*, persist: bool = True) -> dict[str, Any]:
             )
 
         today = date.today().isoformat()
-        review_run_id = "realhold_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+        now = datetime.now()
+        review_run_id = "realhold_" + now.strftime("%Y%m%d_%H%M%S")
         data_quality = "OK"
         if any(i.get("data_flags") for i in items):
             data_quality = "WARN"
@@ -924,6 +936,7 @@ def build_real_holding_review(*, persist: bool = True) -> dict[str, Any]:
         run = {
             "review_run_id": review_run_id,
             "as_of_date": today,
+            "generated_at": now.isoformat(timespec="seconds"),
             "status": "generated",
             "holding_count": len(items),
             "data_quality": data_quality,

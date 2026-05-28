@@ -1198,32 +1198,47 @@ function switchDiscoveryView(view) {
       <h2 class="text-2xl font-bold text-slate-900">💼 我的持仓</h2>
       <p class="text-sm text-slate-600 mt-1">这里记录你实际已经买入的股票，用来对账成本、市值、盈亏、风控线，以及和 AI 目标仓位的差距。</p>
     </div>
-    <div class="flex gap-2 flex-wrap">
-      <button onclick="fetchHoldingsPricesNow()" title="立刻拉一次行情,1-2 分钟后现价就到(也可以等明早 08:30 daily_refresh 自动拉)"
-              class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap border border-slate-300">
-        📈 立刻拉行情
-      </button>
-      <button onclick="syncHoldingsToWatchlist()" title="把已录入的持仓批量加进自选股池,触发评级(给方案 A 之前录入的老持仓补救)"
-              class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap border border-slate-300">
-        🔄 同步现有持仓到自选股
-      </button>
-      <button onclick="openHoldingModal()" class="bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap shadow-sm">
-        + 录入持仓
-      </button>
+    <div class="flex flex-col items-end gap-2">
+      <div class="flex gap-2 flex-wrap justify-end">
+        <button onclick="fetchHoldingsPricesNow()" title="立刻拉一次行情,1-2 分钟后现价就到(也可以等明早 08:30 daily_refresh 自动拉)"
+                class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap border border-slate-300">
+          📈 立刻拉行情
+        </button>
+        <button onclick="syncHoldingsToWatchlist()" title="把已录入的持仓批量加进自选股池,触发评级(给方案 A 之前录入的老持仓补救)"
+                class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap border border-slate-300">
+          🔄 同步现有持仓到自选股
+        </button>
+        <button onclick="openHoldingModal()" class="bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap shadow-sm">
+          + 录入持仓
+        </button>
+      </div>
+      <span id="real-holdings-as-of-big" class="inline-flex items-center gap-1 px-3 py-1 rounded-md text-sm font-medium border" style="display:none"></span>
     </div>
   </div>
 
   <div id="real-holdings-summary" class="mb-3"></div>
   <div id="real-asset-summary" class="hidden"></div>
 
-  <!-- 今日持仓体检 · 持仓评分/建议聚合(/api/real-holdings/daily-review/latest) -->
-  <div id="real-holdings-verdict-card" class="bg-white rounded-xl shadow-sm border border-slate-200 px-4 py-3 mb-3" style="display:none">
-    <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
-      <h3 class="text-sm font-semibold text-slate-700">🩺 今日持仓体检 <span id="verdict-as-of" class="text-[11px] font-normal text-slate-400 ml-1"></span></h3>
-      <span class="text-[11px] text-slate-400">参考意见，不构成买卖指令</span>
+  <!-- 账户净值曲线 + 今日持仓体检 左右并排 -->
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
+    <!-- 账户净值曲线(/api/real-holdings/equity-curve) -->
+    <div id="real-holdings-equity-card" class="bg-white rounded-xl shadow-sm border border-slate-200 px-4 py-3" style="display:none">
+      <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
+        <h3 class="text-sm font-semibold text-slate-700">📈 账户净值走势 <span id="equity-curve-range" class="text-[11px] font-normal text-slate-400 ml-1"></span></h3>
+        <span id="equity-curve-latest" class="text-[11px] text-slate-500"></span>
+      </div>
+      <div id="real-holdings-equity-chart" style="width:100%;height:180px"></div>
     </div>
-    <div id="verdict-chips" class="flex flex-wrap gap-1.5 mb-2"></div>
-    <div id="verdict-detail" class="text-xs text-slate-600 space-y-1"></div>
+
+    <!-- 今日持仓体检 · 持仓评分/建议聚合(/api/real-holdings/daily-review/latest) -->
+    <div id="real-holdings-verdict-card" class="bg-white rounded-xl shadow-sm border border-slate-200 px-4 py-3" style="display:none">
+      <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
+        <h3 class="text-sm font-semibold text-slate-700">🩺 今日持仓体检 <span id="verdict-as-of" class="text-[11px] font-normal text-slate-400 ml-1"></span></h3>
+        <span class="text-[11px] text-slate-400">参考意见，不构成买卖指令</span>
+      </div>
+      <div id="verdict-chips" class="flex flex-wrap gap-1.5 mb-2"></div>
+      <div id="verdict-detail" class="text-xs text-slate-600 space-y-1"></div>
+    </div>
   </div>
 
   <div class="flex items-center justify-between gap-3 mb-3 flex-wrap">
@@ -6897,6 +6912,95 @@ async function _loadRealHoldingReview() {
 
 // 历史轨迹 (近 14 日) — 用于回答「这只票今天 action 为什么变了」。
 // 单次请求一次性拿回全部持仓,避免每行 fetch。
+async function _loadAndRenderEquityCurve() {
+  const card = document.getElementById("real-holdings-equity-card");
+  const chartEl = document.getElementById("real-holdings-equity-chart");
+  if (!card || !chartEl || typeof echarts === "undefined") return null;
+  try {
+    const r = await fetch(WATCHLIST_API_BASE + "/api/real-holdings/equity-curve?days=90");
+    if (!r.ok) { card.style.display = "none"; return null; }
+    const data = await r.json();
+    const pts = (data && data.points) || [];
+    if (pts.length < 2) { card.style.display = "none"; return null; }
+    card.style.display = "";
+
+    const dates = pts.map(p => p.as_of_date);
+    const values = pts.map(p => p.total_value_rmb);
+    const cost = pts[0].total_cost_rmb;
+    const latest = pts[pts.length - 1];
+    const first = pts[0];
+
+    const rangeEl = document.getElementById("equity-curve-range");
+    const latestEl = document.getElementById("equity-curve-latest");
+    if (rangeEl) rangeEl.textContent = `${first.as_of_date} → ${latest.as_of_date} · ${pts.length} 个交易日`;
+    if (latestEl) {
+      const pnlSign = latest.pnl_rmb >= 0 ? "+" : "";
+      const pctSign = latest.pnl_pct >= 0 ? "+" : "";
+      const color = latest.pnl_rmb >= 0 ? "text-emerald-700" : "text-rose-700";
+      latestEl.innerHTML = `最新持仓市值 <strong class="text-slate-800">${latest.total_value_rmb.toLocaleString(undefined, {maximumFractionDigits:0})}</strong> RMB · <span class="${color}">${pnlSign}${latest.pnl_rmb.toLocaleString(undefined, {maximumFractionDigits:0})} (${pctSign}${latest.pnl_pct.toFixed(2)}%)</span>`;
+    }
+
+    const minV = Math.min(...values, cost);
+    const maxV = Math.max(...values, cost);
+    const pad = Math.max((maxV - minV) * 0.15, cost * 0.005);
+    const isUp = latest.pnl_rmb >= 0;
+    const lineColor = isUp ? "#059669" : "#e11d48";
+    const areaColor = isUp ? "rgba(5,150,105,0.12)" : "rgba(225,29,72,0.10)";
+
+    const inst = echarts.getInstanceByDom(chartEl) || echarts.init(chartEl);
+    inst.setOption({
+      grid: {left: 60, right: 16, top: 18, bottom: 28},
+      tooltip: {
+        trigger: "axis",
+        formatter: (params) => {
+          const p = params[0];
+          const i = p.dataIndex;
+          const pt = pts[i];
+          const sign = pt.pnl_rmb >= 0 ? "+" : "";
+          const pctSign = pt.pnl_pct >= 0 ? "+" : "";
+          return `${pt.as_of_date}<br/>持仓市值 <b>${pt.total_value_rmb.toLocaleString(undefined, {maximumFractionDigits:0})}</b> RMB<br/>盈亏 ${sign}${pt.pnl_rmb.toLocaleString(undefined, {maximumFractionDigits:0})} (${pctSign}${pt.pnl_pct.toFixed(2)}%)`;
+        },
+      },
+      xAxis: {
+        type: "category",
+        data: dates,
+        axisLabel: {fontSize: 10, color: "#64748b"},
+        axisLine: {lineStyle: {color: "#cbd5e1"}},
+      },
+      yAxis: {
+        type: "value",
+        min: minV - pad,
+        max: maxV + pad,
+        axisLabel: {fontSize: 10, color: "#64748b", formatter: (v) => (v / 1000).toFixed(0) + "k"},
+        splitLine: {lineStyle: {color: "#f1f5f9"}},
+      },
+      series: [
+        {
+          name: "持仓市值",
+          type: "line",
+          data: values,
+          smooth: true,
+          symbol: "circle",
+          symbolSize: 5,
+          lineStyle: {color: lineColor, width: 2},
+          itemStyle: {color: lineColor},
+          areaStyle: {color: areaColor},
+          markLine: {
+            silent: true,
+            symbol: "none",
+            data: [{yAxis: cost, label: {formatter: `成本 ${cost.toLocaleString(undefined, {maximumFractionDigits:0})}`, position: "insideStartTop", fontSize: 10, color: "#94a3b8"}}],
+            lineStyle: {color: "#94a3b8", type: "dashed", width: 1},
+          },
+        },
+      ],
+    }, true);
+    return pts;
+  } catch (e) {
+    if (card) card.style.display = "none";
+    return null;
+  }
+}
+
 async function _loadRealHoldingReviewHistory() {
   try {
     const r = await fetch(WATCHLIST_API_BASE + "/api/real-holdings/daily-review/history?days=14");
@@ -6987,16 +7091,22 @@ function _fmtGeneratedAt(value) {
 function _renderRealHoldingDataAsof() {
   const el = document.getElementById("real-holding-data-asof");
   const adviceEl = document.getElementById("real-holding-advice-asof");
+  const bigEl = document.getElementById("real-holdings-as-of-big");
   const run = (_realHoldingReviewCache && _realHoldingReviewCache.run) || null;
   const status = _realHoldingReviewCache && _realHoldingReviewCache.status;
   if (status === "missing" || !run || !run.as_of_date) {
     if (el) el.innerHTML = `<span class="text-rose-600">⚠ 今日体检未生成 · 等待 daily_refresh 或 POST run</span>`;
     if (adviceEl) adviceEl.innerHTML = `<span class="text-rose-500">尚未生成</span>`;
+    if (bigEl) {
+      bigEl.style.display = "inline-flex";
+      bigEl.className = "inline-flex items-center gap-1 px-3 py-1 rounded-md text-sm font-medium border bg-rose-50 text-rose-700 border-rose-200";
+      bigEl.textContent = "⚠ 今日体检未生成";
+    }
     return;
   }
   const asOf = String(run.as_of_date).slice(0, 10);
   const today = new Date().toISOString().slice(0, 10);
-  const generatedFull = _fmtGeneratedAt(run.generated_at);
+  const generatedFull = _fmtGeneratedAt(run.generated_at);  // "YYYY-MM-DD HH:MM:SS"
   const hms = generatedFull.length >= 19 ? generatedFull.slice(11, 19) : "";
   if (el) {
     if (asOf === today) {
@@ -7009,6 +7119,19 @@ function _renderRealHoldingDataAsof() {
   if (adviceEl) {
     const stamp = generatedFull || asOf;
     adviceEl.textContent = "生成于 " + stamp;
+  }
+  if (bigEl) {
+    bigEl.style.display = "inline-flex";
+    if (asOf === today) {
+      bigEl.className = "inline-flex items-center gap-1 px-3 py-1 rounded-md text-sm font-medium border bg-emerald-50 text-emerald-700 border-emerald-200";
+      bigEl.title = "盘中每整点自动刷新 (intraday_holdings launchd)";
+      bigEl.textContent = "🕐 数据更新 " + (generatedFull || asOf);
+    } else {
+      const lag = Math.max(0, Math.floor((new Date(today) - new Date(asOf)) / 86400000));
+      bigEl.className = "inline-flex items-center gap-1 px-3 py-1 rounded-md text-sm font-medium border bg-amber-50 text-amber-800 border-amber-200";
+      bigEl.title = "数据不是今天的，可能 launchd 没跑起来";
+      bigEl.textContent = "⚠ 数据 " + (generatedFull || asOf) + " · 落后 " + lag + " 天";
+    }
   }
 }
 
@@ -7276,7 +7399,7 @@ function _renderVerdictAggregateCard() {
     const today = new Date().toISOString().slice(0, 10);
     const hms = genFull.length >= 19 ? genFull.slice(11, 19) : "";
     if (asOfDate && asOfDate === today) {
-      asOfEl.innerHTML = `<span class="text-emerald-700">✓ 今日 ${_esc(hms || "已更新")}</span>`;
+      asOfEl.innerHTML = `<span class="text-emerald-700">✓ ${_esc(genFull || asOfDate)}</span>`;
     } else if (asOfDate) {
       const lag = Math.max(0, Math.floor((new Date(today) - new Date(asOfDate)) / 86400000));
       asOfEl.innerHTML = `<span class="text-amber-700">⚠ ${_esc(asOfDate)} · 落后 ${lag} 天</span>`;
@@ -7847,12 +7970,13 @@ function _lockedCostRmbForHolding(h, code, cur) {
 }
 
 async function renderRealHoldings() {
-  // 并行拉 holdings + verdict + daily review — 同源后端单一计算源,前端不重算
-  const [hRes, _vRes, _rRes, _histRes] = await Promise.all([
+  // 并行拉 holdings + verdict + daily review + equity curve — 同源后端单一计算源,前端不重算
+  const [hRes, _vRes, _rRes, _histRes, _eqRes] = await Promise.all([
     fetch(WATCHLIST_API_BASE + "/api/real-holdings").catch(() => null),
     _loadHoldingsVerdict(),
     _loadRealHoldingReview(),
     _loadRealHoldingReviewHistory(),
+    _loadAndRenderEquityCurve(),
   ]);
   const holdingsFetchFailed = !hRes || !hRes.ok;
   try { if (hRes && hRes.ok) _realHoldingsCache = await hRes.json(); } catch (e) {}
@@ -8014,30 +8138,29 @@ async function renderRealHoldings() {
         </div>
         <span class="text-[11px] text-slate-500">${aiCoverageLabel}${coveredByAi.length ? " " + totalDiffText : ""}</span>
       </div>
-      <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
-        <!-- 背景信息: 总资产 / 现金 灰底弱化 -->
-        <div class="rounded-lg bg-slate-50 px-3 py-2 border border-slate-100">
-          <div class="text-base font-semibold text-slate-700 leading-tight">${realAccountValue.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
-          <div class="text-[11px] text-slate-400">总资产 RMB</div>
+      <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-2 items-stretch">
+        <!-- 背景信息: 总资产/持仓市值/现金 弱化压缩到 1 列宽 -->
+        <div class="lg:col-span-1 rounded-lg bg-slate-50 px-2.5 py-1.5 border border-slate-100">
+          <div class="text-sm font-semibold text-slate-700 leading-tight">${realAccountValue.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
+          <div class="text-[10px] text-slate-400 mt-0.5">总资产 RMB</div>
         </div>
-        <!-- 重点 1: 持仓市值 蓝色调高亮 -->
-        <div class="rounded-lg bg-sky-50 px-3 py-2 border border-sky-200">
-          <div class="text-xl font-bold text-sky-900 leading-tight">${totalValue.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
-          <div class="text-[11px] text-sky-700">${valueLabel}</div>
+        <div class="lg:col-span-1 rounded-lg bg-sky-50 px-2.5 py-1.5 border border-sky-200">
+          <div class="text-sm font-semibold text-sky-900 leading-tight">${totalValue.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
+          <div class="text-[10px] text-sky-700 mt-0.5">${valueLabel}</div>
         </div>
-        <div class="rounded-lg bg-slate-50 px-3 py-2 border border-slate-100">
-          <div class="text-base font-semibold text-slate-700 leading-tight">${realCash.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
-          <div class="text-[11px] text-slate-400">估算现金 RMB</div>
+        <div class="lg:col-span-1 rounded-lg bg-slate-50 px-2.5 py-1.5 border border-slate-100">
+          <div class="text-sm font-semibold text-slate-700 leading-tight">${realCash.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
+          <div class="text-[10px] text-slate-400 mt-0.5">估算现金 RMB</div>
         </div>
-        <!-- 重点 2: 今日盈亏 涨绿/跌红 -->
-        <div class="rounded-lg ${hasDayChange ? (totalDayChange >= 0 ? "bg-emerald-50 border-emerald-200" : "bg-rose-50 border-rose-200") : "bg-slate-50 border-slate-100"} px-3 py-2 border" title="今日盈亏 = 最近一次有效收盘 vs 前一日收盘${hasDayChange ? "" : "(暂无 prev_close 数据)"}">
-          <div class="text-xl font-bold ${hasDayChange ? dayPnlColor : "text-slate-400"} leading-tight">${hasDayChange ? (totalDayChange >= 0 ? "+" : "") + totalDayChange.toLocaleString(undefined, {maximumFractionDigits:0}) : "—"}</div>
-          <div class="text-[11px] ${hasDayChange ? (totalDayChange >= 0 ? "text-emerald-700" : "text-rose-700") : "text-slate-400"}">今日盈亏${hasDayChange ? ` · ${dayChangePct >= 0 ? "+" : ""}${dayChangePct.toFixed(2)}%${dayCoverageLabel}` : " · 数据未就绪"}</div>
+        <!-- 重点 1: 今日盈亏 占 2 列宽 + 大字 -->
+        <div class="lg:col-span-2 rounded-lg ${hasDayChange ? (totalDayChange >= 0 ? "bg-emerald-50 border-emerald-200" : "bg-rose-50 border-rose-200") : "bg-slate-50 border-slate-100"} px-4 py-3 border" title="今日盈亏 = 最近一次有效收盘 vs 前一日收盘${hasDayChange ? "" : "(暂无 prev_close 数据)"}">
+          <div class="text-3xl font-bold ${hasDayChange ? dayPnlColor : "text-slate-400"} leading-tight">${hasDayChange ? (totalDayChange >= 0 ? "+" : "") + totalDayChange.toLocaleString(undefined, {maximumFractionDigits:0}) : "—"}</div>
+          <div class="text-xs font-medium ${hasDayChange ? (totalDayChange >= 0 ? "text-emerald-700" : "text-rose-700") : "text-slate-400"} mt-1">今日盈亏${hasDayChange ? ` · ${dayChangePct >= 0 ? "+" : ""}${dayChangePct.toFixed(2)}%${dayCoverageLabel}` : " · 数据未就绪"}</div>
         </div>
-        <!-- 重点 3: 累计盈亏 涨绿/跌红 -->
-        <div class="rounded-lg ${totalPnl >= 0 ? "bg-emerald-50 border-emerald-200" : "bg-rose-50 border-rose-200"} px-3 py-2 border">
-          <div class="text-xl font-bold ${pnlColor} leading-tight">${totalPnl >= 0 ? "+" : ""}${totalPnl.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
-          <div class="text-[11px] ${totalPnl >= 0 ? "text-emerald-700" : "text-rose-700"}">累计盈亏 · ${totalPnlPct >= 0 ? "+" : ""}${totalPnlPct.toFixed(2)}%</div>
+        <!-- 重点 2: 累计盈亏 占 2 列宽 + 大字 -->
+        <div class="lg:col-span-2 rounded-lg ${totalPnl >= 0 ? "bg-emerald-50 border-emerald-200" : "bg-rose-50 border-rose-200"} px-4 py-3 border">
+          <div class="text-3xl font-bold ${pnlColor} leading-tight">${totalPnl >= 0 ? "+" : ""}${totalPnl.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
+          <div class="text-xs font-medium ${totalPnl >= 0 ? "text-emerald-700" : "text-rose-700"} mt-1">累计盈亏 · ${totalPnlPct >= 0 ? "+" : ""}${totalPnlPct.toFixed(2)}%</div>
         </div>
       </div>
       <div class="mt-3">
