@@ -572,19 +572,21 @@ def _suggest_size_advisory(
     target_weight: float | None,
     total_capital: float,
     treatment_class: str,
+    is_fallback_pick: bool = False,
 ) -> dict[str, Any] | None:
     """把 verdict 转成可参考的规模提示（advisory，不自动下单）。"""
     if treatment_class in {"data_blocked", "risk_only"} and action in {"补数据", "仅风控跟踪"}:
+        # 2026-05-29: 不再因为占比 ≥ 25% 自动建议减仓。
+        # 保留 over_hard_cap 提示让前端显示「仓位偏重」红字，但动作档保持 hold。
         if current_weight is not None and current_weight >= float(rules.get("hard_single_cap_pct", 0.25)):
             hard = float(rules.get("hard_single_cap_pct", 0.25))
-            trim_rmb = max(0.0, current_value_rmb - hard * total_capital)
             return {
                 "advisory_only": True,
-                "direction": "trim",
-                "suggested_action_rmb": round(trim_rmb, 2) if trim_rmb > 0 else None,
+                "direction": "hold",
+                "suggested_action_rmb": None,
                 "suggested_shares": None,
                 "suggested_batches": int(rules.get("suggested_batches", 3)),
-                "suggested_batch_note": f"可考虑分{int(rules.get('suggested_batches', 3))}批减仓，每批不超过建议变动额的 1/3",
+                "suggested_batch_note": "仓位偏重提示（不是减仓建议）",
                 "kelly_cap_pct": None,
                 "hard_cap_pct": hard,
                 "over_hard_cap": True,
@@ -614,7 +616,12 @@ def _suggest_size_advisory(
         "lot_size": lot,
     }
 
-    if over_hard or action in DISOBEDIENT_ACTIONS:
+    # 2026-05-29: 不再因为占比 ≥ 25% 自动建议减仓。
+    # over_hard_cap 仍写入 advisory（前端显示「仓位偏重」红字提示），
+    # 但 direction=trim 仅对 DISOBEDIENT_ACTIONS（违规清单）触发。
+    # 进一步：fallback 评分（universe_scope=manual_watchlist，非 V2 系统推荐池）
+    # 不触发 trim — 因子尺子可能不适用（如 popmart 用 HK 科技因子）。
+    if action in DISOBEDIENT_ACTIONS and not is_fallback_pick:
         trim_to = min(hard_cap, kelly_pct) if target_weight is None else min(
             hard_cap, max(target_weight, kelly_pct)
         )
@@ -627,6 +634,16 @@ def _suggest_size_advisory(
             "direction": "trim",
             "suggested_action_rmb": round(trim_rmb, 2) if trim_rmb > 0 else None,
             "suggested_shares": trim_shares if trim_shares > 0 else None,
+        })
+        return advisory
+
+    # over_hard 单独路径：动作档 hold（仓位偏重提示），不出减仓数量
+    if over_hard:
+        advisory.update({
+            "direction": "hold",
+            "suggested_action_rmb": None,
+            "suggested_shares": None,
+            "suggested_batch_note": "仓位偏重提示（不是减仓建议）",
         })
         return advisory
 
@@ -808,6 +825,9 @@ def _build_item(
     if pnl_pct is not None and pnl_pct <= float(rules["loss_review_pct"]):
         risk_flags.append(f"浮亏超过 {abs(float(rules['loss_review_pct'])):.0f}%,优先风险复查")
 
+    is_fallback_pick = bool(pick and (pick.get("universe_scope") == "manual_watchlist"))
+    if is_fallback_pick and action in DISOBEDIENT_ACTIONS:
+        reasons.append("⚠️ 该评分由因子缓存 fallback 算出（不在系统主推荐池），减仓动作降级为提示，决策请你自己判断")
     size_advisory = _suggest_size_advisory(
         rules=rules,
         action=action,
@@ -820,6 +840,7 @@ def _build_item(
         target_weight=target_weight,
         total_capital=total_capital,
         treatment_class=treatment_class,
+        is_fallback_pick=is_fallback_pick,
     )
     if size_advisory and size_advisory.get("over_hard_cap") and not any("25%" in f for f in risk_flags):
         risk_flags.append("单一持仓超过总资产 25%（建议规模已按红线折算）")

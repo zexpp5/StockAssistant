@@ -7203,7 +7203,7 @@ function _suggestedSizeCell(item) {
   const batches = adv.suggested_batches || 3;
   const note = adv.suggested_batch_note || `可考虑分${batches}批`;
   const capLine = adv.over_hard_cap
-    ? `<div class="text-[10px] text-rose-600">超25%红线</div>`
+    ? `<div class="text-[10px] text-amber-600" title="模板上限 25%，是否减仓由你判断">仓位偏重（&gt;25%）</div>`
     : (adv.kelly_cap_pct != null ? `<div class="text-[10px] text-slate-400">Kelly上限 ${(adv.kelly_cap_pct * 100).toFixed(1)}%</div>` : "");
   const sizeLine = shares != null
     ? `<div class="font-mono text-slate-800">≈ ${shares} 股</div>`
@@ -9044,17 +9044,17 @@ function renderTodayPlan() {
         <div class="text-2xl font-bold text-slate-900">${grossPct}%</div>
         <div class="text-[11px] text-slate-600 mt-0.5">总仓位 · 现金 ${cashPct}%</div>
       </div>
-      <div class="bg-slate-50 rounded-lg p-3 text-center" title="= (回测年化收益 − 无风险) / 回测年化波动. 同样是 lookback 期回看,不是预测.">
+      <div class="bg-slate-50 rounded-lg p-3 text-center cursor-help" title="= (回测年化收益 − 无风险) / 回测年化波动. 同样是 lookback 期回看,不是预测.">
         <div class="text-2xl font-bold text-slate-900">${sharpe}</div>
-        <div class="text-[11px] text-slate-600 mt-0.5">回测 Sharpe <span class="text-slate-400">回看 ≠ 预测</span></div>
+        <div class="text-[11px] text-slate-600 mt-0.5"><span class="underline decoration-dotted decoration-slate-400 underline-offset-2">回测 Sharpe</span> <span class="text-slate-400">回看 ≠ 预测 ⓘ</span></div>
       </div>
-      <div class="bg-slate-50 rounded-lg p-3 text-center" title="= 过去 ~6 个月日均收益 × 252 + 现金 × 无风险年化. 不扣 alpha decay,不是未来预测 — momentum 票回看年化常 50%+,但不代表未来会复制. 真实跟踪看下方『锁定追踪』C 动态曲线.">
+      <div class="bg-slate-50 rounded-lg p-3 text-center cursor-help" title="= 过去 ~6 个月日均收益 × 252 + 现金 × 无风险年化. 不扣 alpha decay,不是未来预测 — momentum 票回看年化常 50%+,但不代表未来会复制. 真实跟踪看下方『锁定追踪』C 动态曲线.">
         <div class="text-2xl font-bold text-slate-900">${annRet}</div>
-        <div class="text-[11px] text-slate-600 mt-0.5">回测年化 <span class="text-slate-400">回看 ≠ 预测</span></div>
+        <div class="text-[11px] text-slate-600 mt-0.5"><span class="underline decoration-dotted decoration-slate-400 underline-offset-2">回测年化</span> <span class="text-slate-400">回看 ≠ 预测 ⓘ</span></div>
       </div>
-      <div class="bg-slate-50 rounded-lg p-3 text-center" title="回测年化波动率 (lookback 期日收益标准差 × √252). α=扣完成本后的 net alpha.">
+      <div class="bg-slate-50 rounded-lg p-3 text-center cursor-help" title="回测年化波动率 (lookback 期日收益标准差 × √252). α=扣完成本后的 net alpha.">
         <div class="text-2xl font-bold text-slate-900">${annVol}</div>
-        <div class="text-[11px] text-slate-600 mt-0.5">回测波动 · α ${netAlpha}</div>
+        <div class="text-[11px] text-slate-600 mt-0.5"><span class="underline decoration-dotted decoration-slate-400 underline-offset-2">回测波动</span> <span class="text-slate-400">· α ${netAlpha} ⓘ</span></div>
       </div>
     `;
   }
