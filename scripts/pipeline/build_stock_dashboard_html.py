@@ -382,12 +382,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <a href="#watchlist-hub" data-tab="watchlist-hub" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">📊 股票池</a>
     </div>
 
-    <!-- AI 工作台 = 选股 → 配仓 → 验证 一条工作流 (2026-05-27 三兄弟归位) -->
+    <!-- AI 工作台 = 选股 → 配仓 → 验证 一条工作流 (2026-05-27 单 tab + 顶部 pill 切换) -->
     <div class="mb-4">
-      <div class="text-base font-bold text-slate-800 mb-2 px-2">🧠 AI 工作台</div>
-      <a href="#discovery" data-tab="discovery" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">① 🔍 AI 选股</a>
-      <a href="#backtest" data-tab="backtest" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">② ⚖️ AI 配仓</a>
-      <a href="#portfolio" data-tab="portfolio" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">③ 🧪 AI 验证</a>
+      <a href="#ai-workbench" data-tab="ai-workbench" class="tab-link block px-2 py-1.5 text-base font-bold text-slate-800 hover:text-violet-600 hover:bg-violet-50 rounded transition">🧠 AI 工作台</a>
     </div>
 
     <!-- 深度研究 = 买前解释和审查 (IPO & 次新 已并入 📊 股票池) -->
@@ -919,21 +916,54 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 </section>
 
-<!-- ============ ① 🔍 AI 选股 Tab (2026-05-27 从 watchlist-hub 抽出,升一级) ============ -->
-<section id="discovery" class="max-w-7xl mx-auto px-6 py-10 bg-gradient-to-br from-sky-50 to-indigo-50 rounded-2xl my-6">
-  <!-- 🧠 AI 工作台 workflow breadcrumb — ① 高亮 -->
-  <nav class="mb-4 flex items-center gap-2 text-sm flex-wrap">
-    <span class="text-slate-400 text-xs">🧠 AI 工作台</span>
-    <span class="text-slate-300">/</span>
-    <span class="px-2.5 py-1 rounded-full font-medium bg-violet-600 text-white">① 🔍 选股</span>
-    <span class="text-slate-300">→</span>
-    <a href="#backtest" class="px-2.5 py-1 rounded-full text-slate-500 hover:text-violet-700 hover:bg-violet-50 transition">② ⚖️ 配仓</a>
-    <span class="text-slate-300">→</span>
-    <a href="#portfolio" class="px-2.5 py-1 rounded-full text-slate-500 hover:text-violet-700 hover:bg-violet-50 transition">③ 🧪 验证</a>
-  </nav>
-  <div class="mb-5">
-    <h2 class="text-2xl font-bold text-slate-900">① 🔍 AI 选股</h2>
-    <p class="text-sm text-slate-600 mt-1">这块只回答:<strong>哪些标的值得研究?</strong> 系统每天扫全池给横向排名 + 入选理由。下一步进 <a href="#backtest" class="text-violet-700 hover:underline font-medium">② AI 配仓</a> 把这批挑出 ~15 只 + 算仓位。</p>
+<!-- ============ 🧠 AI 工作台 父 header (2026-05-27 单 tab 整合) ============
+     pill 切换 ① 选股 / ② 配仓 / ③ 验证, 三个 section 物理上仍独立 (#discovery/#backtest/#portfolio),
+     由 switchAiSub() 控制只显示当前 sub. _aiSubCurrent 持久化到 localStorage. -->
+<section id="ai-workbench-header" class="max-w-7xl mx-auto px-6 pt-10 pb-2" style="display:none">
+  <div class="mb-4">
+    <div class="flex items-center gap-3 mb-2">
+      <span class="text-3xl">🧠</span>
+      <h2 class="text-2xl font-bold text-slate-900">AI 工作台</h2>
+      <span class="text-xs text-slate-500 ml-1">选股 → 配仓 → 验证 一条工作流</span>
+    </div>
+  </div>
+  <!-- pill 切换器: 当前 step 紫色填充 + 下挂 KPI; 兄弟 step 灰底可点跳 -->
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-2 mb-2">
+    <button onclick="switchAiSub('discovery')" id="ai-sub-btn-discovery"
+            class="ai-sub-btn group flex items-center gap-3 px-4 py-3 rounded-xl border-2 border-slate-200 bg-white text-slate-700 hover:border-violet-400 transition text-left">
+      <span class="text-2xl">🔍</span>
+      <div class="flex-1 min-w-0">
+        <div class="text-[11px] uppercase tracking-widest text-slate-500 font-semibold">第一步 ①</div>
+        <div class="text-base font-bold">AI 选股</div>
+        <div class="text-[11px] text-slate-500 truncate" id="ai-sub-kpi-discovery">— 候选</div>
+      </div>
+    </button>
+    <button onclick="switchAiSub('backtest')" id="ai-sub-btn-backtest"
+            class="ai-sub-btn group flex items-center gap-3 px-4 py-3 rounded-xl border-2 border-slate-200 bg-white text-slate-700 hover:border-violet-400 transition text-left">
+      <span class="text-2xl">⚖️</span>
+      <div class="flex-1 min-w-0">
+        <div class="text-[11px] uppercase tracking-widest text-slate-500 font-semibold">第二步 ②</div>
+        <div class="text-base font-bold">AI 配仓</div>
+        <div class="text-[11px] text-slate-500 truncate" id="ai-sub-kpi-backtest">— 目标</div>
+      </div>
+    </button>
+    <button onclick="switchAiSub('portfolio')" id="ai-sub-btn-portfolio"
+            class="ai-sub-btn group flex items-center gap-3 px-4 py-3 rounded-xl border-2 border-slate-200 bg-white text-slate-700 hover:border-violet-400 transition text-left">
+      <span class="text-2xl">🧪</span>
+      <div class="flex-1 min-w-0">
+        <div class="text-[11px] uppercase tracking-widest text-slate-500 font-semibold">第三步 ③</div>
+        <div class="text-base font-bold">AI 验证</div>
+        <div class="text-[11px] text-slate-500 truncate" id="ai-sub-kpi-portfolio">— C−A</div>
+      </div>
+    </button>
+  </div>
+  <p class="text-xs text-slate-500 px-1 mb-0">点 pill 切换;每步下方有完整面板. 三步都是模型方案,<strong class="text-rose-600">不是真实账户,不会自动下单</strong>.</p>
+</section>
+
+<!-- ============ ① 🔍 AI 选股 Tab (2026-05-27 作为 AI 工作台 sub) ============ -->
+<section id="discovery" class="max-w-7xl mx-auto px-6 py-6 bg-gradient-to-br from-sky-50 to-indigo-50 rounded-2xl my-3">
+  <div class="mb-4">
+    <p class="text-sm text-slate-600"><strong>这块只回答:哪些标的值得研究?</strong> 系统每天扫全池给横向排名 + 入选理由. 下一步点上方 ② <strong>AI 配仓</strong> 把这批挑出 ~15 只 + 算仓位.</p>
   </div>
   <!-- 2026-05-26: 移除 discovery-meta + discovery-accuracy 两条系统信息行 (用户反馈无用); JS 仍可安全空操作 -->
 
@@ -1388,21 +1418,10 @@ function switchDiscoveryView(view) {
 </section>
 
 <!-- ============ ③ 🧪 AI 验证 Tab (原 AI 方案模拟) ============ -->
-<section id="portfolio" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
-  <!-- 🧠 AI 工作台 workflow breadcrumb — ③ 高亮 -->
-  <nav class="mb-4 flex items-center gap-2 text-sm flex-wrap">
-    <span class="text-slate-400 text-xs">🧠 AI 工作台</span>
-    <span class="text-slate-300">/</span>
-    <a href="#discovery" class="px-2.5 py-1 rounded-full text-slate-500 hover:text-violet-700 hover:bg-violet-50 transition">① 🔍 选股</a>
-    <span class="text-slate-300">→</span>
-    <a href="#backtest" class="px-2.5 py-1 rounded-full text-slate-500 hover:text-violet-700 hover:bg-violet-50 transition">② ⚖️ 配仓</a>
-    <span class="text-slate-300">→</span>
-    <span class="px-2.5 py-1 rounded-full font-medium bg-violet-600 text-white">③ 🧪 验证</span>
-  </nav>
+<section id="portfolio" class="max-w-7xl mx-auto px-6 py-6 my-3" style="display:none">
   <div class="flex items-start justify-between mb-3 gap-3 flex-wrap">
     <div>
-      <h2 class="text-2xl font-bold text-slate-900">③ 🧪 AI 验证</h2>
-      <p class="text-sm text-slate-600 mt-1">这块只回答:<strong>这套 AI 方案到底有没有用?</strong> 两件事:<strong>锁定追踪</strong>(系统自动跑 A 静态 vs C 动态 双曲线) · <strong>我的模拟仓</strong>(你按按钮假装下单跟 P&amp;L)。<strong class="text-rose-600">都不是真实持仓</strong>。</p>
+      <p class="text-sm text-slate-600"><strong>这块只回答:这套 AI 方案到底有没有用?</strong> 两件事:<strong>锁定追踪</strong>(系统自动跑 A 静态 vs C 动态 双曲线) · <strong>我的模拟仓</strong>(你按按钮假装下单跟 P&amp;L). <strong class="text-rose-600">都不是真实持仓</strong>.</p>
     </div>
     <button id="ptf-refresh-sim-btn" onclick="loadPlanAv6()" title="用当前 AI 配仓刷新模拟仓 — 只影响『我的模拟仓』sub-tab" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap" style="display:none">📋 刷新模拟仓</button>
   </div>
@@ -1637,20 +1656,9 @@ function switchDiscoveryView(view) {
 </section>
 
 <!-- ============ 🤖 AI 组合方案 Tab ============ -->
-<section id="backtest" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
-  <!-- 🧠 AI 工作台 workflow breadcrumb — ② 高亮 -->
-  <nav class="mb-4 flex items-center gap-2 text-sm flex-wrap">
-    <span class="text-slate-400 text-xs">🧠 AI 工作台</span>
-    <span class="text-slate-300">/</span>
-    <a href="#discovery" class="px-2.5 py-1 rounded-full text-slate-500 hover:text-violet-700 hover:bg-violet-50 transition">① 🔍 选股</a>
-    <span class="text-slate-300">→</span>
-    <span class="px-2.5 py-1 rounded-full font-medium bg-violet-600 text-white">② ⚖️ 配仓</span>
-    <span class="text-slate-300">→</span>
-    <a href="#portfolio" class="px-2.5 py-1 rounded-full text-slate-500 hover:text-violet-700 hover:bg-violet-50 transition">③ 🧪 验证</a>
-  </nav>
-  <div class="mb-6">
-    <h2 class="text-2xl font-bold text-slate-900">② ⚖️ AI 配仓</h2>
-    <p class="text-sm text-slate-600 mt-1">这块只回答:<strong>按什么比例配?</strong> 从 <a href="#discovery" class="text-violet-700 hover:underline font-medium">① AI 选股</a> 的候选池里挑 ~15 只 + 算每只目标仓位。下一步进 <a href="#portfolio" class="text-violet-700 hover:underline font-medium">③ AI 验证</a> 看这套方案过去 N 天的实际表现。<strong class="text-rose-600">不是真实账户,不会自动下单</strong>。</p>
+<section id="backtest" class="max-w-7xl mx-auto px-6 py-6 my-3" style="display:none">
+  <div class="mb-4">
+    <p class="text-sm text-slate-600"><strong>这块只回答:按什么比例配?</strong> 从 ① 选股 的候选池里挑 ~15 只 + 算每只目标仓位. 下一步点上方 ③ <strong>AI 验证</strong> 看这套方案过去 N 天的实际表现.</p>
   </div>
 
   <!-- 候选池溯源条 (2026-05-27): 让用户看见组合是从哪个池子里挑出来的 -->
@@ -5097,9 +5105,15 @@ const TAB_SECTIONS = {
   about: ["about"],
   overview: ["hero", "stress-test", "thesis", "evolution", "scarce", "events", "hundred-x"],
   "real-holdings": ["real-holdings"],
-  portfolio: ["portfolio"],
+  // 🧠 AI 工作台 (2026-05-27 单 tab + pill 切换 ①选股 ②配仓 ③验证)
+  //   父 section: ai-workbench-header (pill + 标题)
+  //   三个子 section: discovery / backtest / portfolio (switchAiSub 控制可见性)
+  "ai-workbench": ["ai-workbench-header", "discovery", "backtest", "portfolio"],
+  // 老 tab id 保留为 alias — switchTab(legacy) 也能进 ai-workbench (route 由 getTabFromHash 处理 hash 入口)
+  portfolio: ["ai-workbench-header", "discovery", "backtest", "portfolio"],
+  discovery: ["ai-workbench-header", "discovery", "backtest", "portfolio"],
+  backtest: ["ai-workbench-header", "discovery", "backtest", "portfolio"],
   picks: ["picks-review"],
-  discovery: ["discovery"],
   "buy-research": ["valuation", "audit-panel"],
   audit: ["valuation", "audit-panel"],
   valuation: ["valuation", "audit-panel"],
@@ -5109,7 +5123,6 @@ const TAB_SECTIONS = {
   "catalyst-validation": ["catalyst-validation"],
   // ipo-junior = 「📅 IPO & 次新股」· 三子区：IPO 日历 / 解禁雷达 / 次新股底部观察池
   "ipo-junior": ["ipo-junior"],
-  backtest: ["backtest"],
   professional: ["professional"],
   "db-explorer": ["db-explorer"],
   // stock-detail 是 db-explorer 详情面板的「📊 看完整历史」按钮跳到的子页，
@@ -5169,6 +5182,54 @@ try {
   // 2026-05-27: 旧 localStorage 里残留的 recommend 值,迁移到 self (AI 推荐已抽出为一级 tab)
   if (_hubSubCurrent === "recommend") _hubSubCurrent = "self";
 } catch (e) {}
+
+// ============ 🧠 AI 工作台 sub 切换 (2026-05-27) ============
+// discovery: ① 选股 · backtest: ② 配仓 · portfolio: ③ 验证
+let _aiSubCurrent = "discovery";
+try {
+  const v = localStorage.getItem("ai_sub");
+  if (v === "discovery" || v === "backtest" || v === "portfolio") _aiSubCurrent = v;
+} catch (e) {}
+
+function switchAiSub(sub) {
+  if (sub !== "discovery" && sub !== "backtest" && sub !== "portfolio") sub = "discovery";
+  _aiSubCurrent = sub;
+  try { localStorage.setItem("ai_sub", sub); } catch (e) {}
+  // 三个子 section 互斥可见
+  ["discovery", "backtest", "portfolio"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = (id === sub) ? "" : "none";
+  });
+  // pill 按钮 active 样式 — current 紫色填充, 兄弟灰底可点
+  document.querySelectorAll(".ai-sub-btn").forEach(b => {
+    const active = b.id === "ai-sub-btn-" + sub;
+    b.classList.toggle("bg-violet-600", active);
+    b.classList.toggle("text-white", active);
+    b.classList.toggle("border-violet-600", active);
+    b.classList.toggle("shadow-md", active);
+    b.classList.toggle("bg-white", !active);
+    b.classList.toggle("text-slate-700", !active);
+    b.classList.toggle("border-slate-200", !active);
+    b.classList.toggle("hover:border-violet-400", !active);
+    // active pill 内部文字色统一为白色 (覆盖默认 slate-500)
+    b.querySelectorAll("div").forEach(d => {
+      d.classList.toggle("text-violet-100", active && d.className.includes("text-slate-500"));
+    });
+  });
+  // 更新 hash 但不触发 hashchange (避免循环)
+  const newHash = "#ai-workbench/" + sub;
+  if (location.hash !== newHash) {
+    history.replaceState(null, "", newHash);
+  }
+  // sub 特定 lazy load — discovery 是 IIFE 自执行,backtest/portfolio 需要触发渲染
+  if (sub === "backtest") setTimeout(renderPlanBacktest, 50);
+  if (sub === "portfolio") setTimeout(async () => {
+    switchPortfolioSub(_ptfSubCurrent);
+    await _ensureHoldingsLoaded();
+    renderPortfolio();
+    renderPlanBacktest();
+  }, 50);
+}
 
 // ============ 🧪 AI 方案模拟 sub-tab 切换 (2026-05-27) ============
 // tracking: 系统自动跑的 A/C 对比追踪 · sim: 用户手动按按钮的 model_sim_holdings
@@ -5395,6 +5456,13 @@ function renderCatalystValidation() {
 }
 
 function switchTab(tab) {
+  // 2026-05-27: 三个老 AI tab id 统一归一化到 ai-workbench (sub 由 switchAiSub 决定),
+  // 这样侧栏 active 高亮 / _currentTab / TAB_SECTIONS 都走单一来源
+  let _aiSubFromLegacy = null;
+  if (tab === "discovery" || tab === "backtest" || tab === "portfolio") {
+    _aiSubFromLegacy = tab;
+    tab = "ai-workbench";
+  }
   _currentTab = tab;  // 记当前 tab,openStockDetail 用来计算返回目标
   // 收集所有需要管理的 section id
   const allSections = new Set();
@@ -5419,8 +5487,11 @@ function switchTab(tab) {
   window.scrollTo(0, 0);
   // tab 特定的延迟初始化
   if (tab === "real-holdings") setTimeout(async () => { await _ensureHoldingsLoaded(); renderRealHoldings(); }, 50);
-  if (tab === "portfolio") setTimeout(async () => { switchPortfolioSub(_ptfSubCurrent); await _ensureHoldingsLoaded(); renderPortfolio(); renderPlanBacktest(); }, 50);
-  if (tab === "backtest") setTimeout(renderPlanBacktest, 100);
+  // 🧠 AI 工作台:统一进 ai-workbench 后由 switchAiSub 决定显示哪个 sub
+  if (tab === "ai-workbench") {
+    const sub = _aiSubFromLegacy || _aiSubCurrent;
+    setTimeout(() => switchAiSub(sub), 50);
+  }
   if (tab === "professional") setTimeout(renderProfessional, 50);
   if (tab === "db-explorer") setTimeout(loadDbExplorer, 50);
   if (tab === "chain") setTimeout(loadChainOverview, 50);
@@ -5442,9 +5513,20 @@ function getTabFromHash() {
     return "init-config";
   }
   // 老 hash 兼容：ipo-junior / db-explorer → 📊 股票池 (2026-05-26 重定向)
-  // #discovery 自 2026-05-27 起为一级 tab,不再 alias 到 watchlist-hub
   if (h === "ipo-junior")  { _hubSubCurrent = "all"; _hubAllChip = "ipo"; return "watchlist-hub"; }
   if (h === "db-explorer") { _hubSubCurrent = "all"; _hubAllChip = "all"; return "watchlist-hub"; }
+  // 🧠 AI 工作台 (2026-05-27): 三个老 hash 都映射到 ai-workbench + 设置 sub
+  //   #ai-workbench/discovery / #ai-workbench/backtest / #ai-workbench/portfolio 新路径
+  //   旧 #discovery / #backtest / #portfolio 兜底 (深链不破)
+  if (h === "discovery") { _aiSubCurrent = "discovery"; return "ai-workbench"; }
+  if (h === "backtest")  { _aiSubCurrent = "backtest";  return "ai-workbench"; }
+  if (h === "portfolio") { _aiSubCurrent = "portfolio"; return "ai-workbench"; }
+  if (h.startsWith("ai-workbench/")) {
+    const sub = h.split("/")[1];
+    if (sub === "discovery" || sub === "backtest" || sub === "portfolio") _aiSubCurrent = sub;
+    return "ai-workbench";
+  }
+  if (h === "ai-workbench") return "ai-workbench";
   // 老 hash 兼容：个股研究 / 买前审查 → 买前研究工作台
   if (h === "valuation" || h === "audit") return "buy-research";
   // 老 hash 兼容：themes / chain-overview / landscape → chain（2026-05-11 合并 + 改名后）
@@ -13285,8 +13367,8 @@ def today_decision_panel_html() -> str:
 
     cards_html = "".join([
         card("系统可用性", overall, overall_text, "#runtime-status", "查看系统状态"),
-        card("① AI 选股", "OK" if discovery_n else "WARN", f"{discovery_n} 只系统池候选；来源不包含手动自选股池。", "#discovery", "打开 AI 选股"),
-        card("② AI 配仓", plan_status, f"{plan_detail}；调仓清单：{trade_text}。", "#backtest", "查看 AI 配仓"),
+        card("① AI 选股", "OK" if discovery_n else "WARN", f"{discovery_n} 只系统池候选；来源不包含手动自选股池。", "#ai-workbench/discovery", "打开 AI 选股"),
+        card("② AI 配仓", plan_status, f"{plan_detail}；调仓清单：{trade_text}。", "#ai-workbench/backtest", "查看 AI 配仓"),
         card("已拉取股票池", "OK" if pool_total else "WARN", market_line, "#db-explorer", "查看股票池"),
     ])
 
@@ -13466,11 +13548,11 @@ def today_decision_panel_html() -> str:
         </div>
         <div class="border-l-4 border-sky-400 pl-3">
           <div class="font-semibold text-slate-900">2. 再看选谁 <span class="text-[10px] text-violet-600 font-mono">①</span></div>
-          <div class="text-xs text-slate-500"><a href="#discovery" class="text-violet-700 hover:underline">AI 选股</a> 回答「哪些标的值得研究」。</div>
+          <div class="text-xs text-slate-500"><a href="#ai-workbench/discovery" class="text-violet-700 hover:underline">AI 选股</a> 回答「哪些标的值得研究」。</div>
         </div>
         <div class="border-l-4 border-emerald-400 pl-3">
           <div class="font-semibold text-slate-900">3. 最后看怎么买 <span class="text-[10px] text-violet-600 font-mono">②③</span></div>
-          <div class="text-xs text-slate-500"><a href="#backtest" class="text-violet-700 hover:underline">AI 配仓</a> 算目标仓位，<a href="#portfolio" class="text-violet-700 hover:underline">AI 验证</a> 看历史表现。</div>
+          <div class="text-xs text-slate-500"><a href="#ai-workbench/backtest" class="text-violet-700 hover:underline">AI 配仓</a> 算目标仓位，<a href="#ai-workbench/portfolio" class="text-violet-700 hover:underline">AI 验证</a> 看历史表现。</div>
         </div>
         <div class="border-l-4 border-orange-400 pl-3">
           <div class="font-semibold text-slate-900">4. 飞书橙卡 ≠ 个股指令</div>

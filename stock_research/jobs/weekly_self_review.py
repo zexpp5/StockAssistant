@@ -31,6 +31,13 @@ STATE_BACKUP_DIR = REPO / "state_backup"
 
 DEFAULT_TOP_N = 10
 
+# 生产统计起点：5-25 12:10 cutoff 前的所有数据视为已废（V1 + 打分公式迭代期）。
+# trailing return / 任何"过去 N 日表现"口径都必须以此为最早 baseline，
+# 否则 5-21~5-24 的废数据会污染计算结果。
+PRODUCTION_METRICS_START_DATE = date.fromisoformat(
+    os.environ.get("STOCK_ASSISTANT_METRICS_START_DATE", "2026-05-25")
+)
+
 
 def _load_dotenv(path: Path) -> None:
     if not path.is_file():
@@ -191,17 +198,27 @@ def _latest_prices_by_symbol(conn, symbols: list[str]) -> dict[str, dict[str, An
 
 def _trailing_returns_by_symbol(
     conn, symbols: list[str], *, lookback_trade_days: int = 5,
+    start_floor: date | None = None,
 ) -> dict[str, dict[str, Any]]:
     """每只 symbol 的过去 N 个交易日 trailing 累计涨跌幅，直接从 price_daily 算。
 
     与 pick_outcomes 不同：这是市场回报口径（lookback 窗口固定 = N 个交易日），
     不依赖 pick 时点，picks 当天就有值。N 由 price_daily 实际行数封顶 —— 数据
     不足时退化为「目前能看到的最长窗口」并把实际跨度写进 lookback_trade_days。
+
+    start_floor：trade_date 下限。给 5-25 cutoff 用 —— 之前的行情虽在表里，
+    但视为"已废"不能作为 baseline，否则统计被 V1 时期数据污染。
     """
     if not symbols:
         return {}
     placeholders = ",".join(["?"] * len(symbols))
     baseline_rn = lookback_trade_days + 1
+    floor_clause = ""
+    params: list[Any] = [*symbols]
+    if start_floor is not None:
+        floor_clause = "AND trade_date >= ?"
+        params.append(start_floor)
+    params.append(baseline_rn)
     rows = conn.execute(
         f"""
         SELECT symbol, rn, close, trade_date FROM (
@@ -209,10 +226,11 @@ def _trailing_returns_by_symbol(
                  ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY trade_date DESC) AS rn
           FROM price_daily
           WHERE symbol IN ({placeholders}) AND interval = '1d' AND close IS NOT NULL
+            {floor_clause}
         ) t
         WHERE rn <= ?
         """,
-        [*symbols, baseline_rn],
+        params,
     ).fetchall()
     by_sym: dict[str, list[tuple[int, float, Any]]] = {}
     for sym, rn, close, td in rows:
@@ -512,7 +530,11 @@ def build_weekly_self_review(
                     all_symbols.add(str(row["symbol"]))
         prices = _latest_prices_by_symbol(conn, sorted(all_symbols))
         info = _lookup_symbol_info(conn, sorted(all_symbols))
-        trailing = _trailing_returns_by_symbol(conn, sorted(all_symbols), lookback_trade_days=5)
+        trailing = _trailing_returns_by_symbol(
+            conn, sorted(all_symbols),
+            lookback_trade_days=5,
+            start_floor=PRODUCTION_METRICS_START_DATE,
+        )
 
         def _apply_enrich(bucket: list[dict]) -> list[dict]:
             out: list[dict] = []
@@ -569,7 +591,7 @@ def build_weekly_self_review(
 def _markdown_report(payload: dict[str, Any]) -> str:
     s = payload.get("summary") or {}
     lines = [
-        f"# 周末复盘 · {payload.get('week_label')}",
+        f"# 上周复盘 · {payload.get('week_label')}",
         "",
         f"区间：{payload.get('week_start')} ~ {payload.get('week_end')}  ",
         f"生成：{payload.get('generated_at')}  ",
@@ -614,10 +636,17 @@ def _markdown_report(payload: dict[str, Any]) -> str:
 def _build_feishu_card(payload: dict[str, Any]) -> dict:
     s = payload.get("summary") or {}
     week_label = payload.get("week_label", "")
+    aligned_n = int(s.get("aligned") or 0)
+    missed_n = int(s.get("missed") or 0)
+    disobeyed_n = int(s.get("disobeyed") or 0)
     lines = [
-        f"**错过** {s.get('missed', 0)} · **没听话** {s.get('disobeyed', 0)} · **对齐** {s.get('aligned', 0)}",
+        f"**错过** {missed_n} · **没听话** {disobeyed_n} · **对齐** {aligned_n}",
         "",
     ]
+    # 解释「对齐 0」的常见情形：持仓与模型推荐零重合 ≠ 复盘没意义
+    if aligned_n == 0 and missed_n > 0 and disobeyed_n == 0:
+        lines.append("> 你的持仓与上周模型推荐**零重合** —— 不是没复盘，是模型推的方向与你实际持仓的方向不同。")
+        lines.append("")
     for title, key in (("错过", "missed"), ("没听话", "disobeyed")):
         rows = payload.get(key) or []
         if not rows:
@@ -647,7 +676,7 @@ def _build_feishu_card(payload: dict[str, Any]) -> dict:
         "card": {
             "config": {"wide_screen_mode": True},
             "header": {
-                "title": {"tag": "plain_text", "content": f"📋 周末复盘 · {week_label}"},
+                "title": {"tag": "plain_text", "content": f"📋 上周复盘 · {week_label}"},
                 "subtitle": {"tag": "plain_text", "content": "动作 vs 信号 · advisory"},
                 "template": "purple",
             },
@@ -696,13 +725,19 @@ def persist_weekly_review(payload: dict[str, Any]) -> tuple[Path, Path]:
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-    p = argparse.ArgumentParser(description="周末复盘：模型推 vs 你做")
-    p.add_argument("--date", default=None, help="参考日期 YYYY-MM-DD（默认今天）")
+    p = argparse.ArgumentParser(description="周复盘：模型推了什么 vs 你做了什么（默认看上一周）")
+    p.add_argument("--date", default=None,
+                   help="参考日期 YYYY-MM-DD（落在哪一周就复盘哪一周；默认 = 今天-7d，即上一周）")
     p.add_argument("--top-n", type=int, default=DEFAULT_TOP_N)
     p.add_argument("--dry-run", action="store_true", help="只写本地文件，不推飞书")
     p.add_argument("--push", action="store_true", help="推送到飞书 webhook")
     args = p.parse_args()
-    ref = date.fromisoformat(args.date[:10]) if args.date else None
+    if args.date:
+        ref = date.fromisoformat(args.date[:10])
+    else:
+        # 复盘 = 看过去；不传 --date 时默认拉「上一周」（今天-7d 所在的那个 ISO 周）。
+        # 周一跑：上周一~上周日；周六跑：本周一~本周日（其实是上周，因为还没到下周一）。
+        ref = date.today() - timedelta(days=7)
     payload = build_weekly_self_review(ref_date=ref, top_n=args.top_n)
     json_path, md_path = persist_weekly_review(payload)
     logger.info("已写入 %s", json_path)

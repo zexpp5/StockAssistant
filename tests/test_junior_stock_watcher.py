@@ -19,6 +19,7 @@ from stock_research.jobs.junior_stock_watcher import (  # type: ignore
     _board_of_cn,
     _cn_junior_summary,
     _enrich_cn_industry,
+    build_us_ipo_calendar,
     fetch_cn_junior_pool,
     fetch_cn_unlock_radar,
 )
@@ -45,6 +46,22 @@ class BoardClassificationTest(unittest.TestCase):
     def test_other_fallback(self):
         self.assertEqual(_board_of_cn("123456"), "other")
         self.assertEqual(_board_of_cn(""), "other")
+
+
+class UsIpoCalendarTest(unittest.TestCase):
+    def test_recently_listed_excludes_awaiting_window(self):
+        today = date.today()
+        out = build_us_ipo_calendar({
+            "filed": [],
+            "priced": [
+                {"symbol": "FRESH", "priced_date": today.isoformat()},
+                {"symbol": "OLDER", "priced_date": (today - timedelta(days=8)).isoformat()},
+                {"symbol": "STALE", "priced_date": (today - timedelta(days=31)).isoformat()},
+            ],
+        })
+
+        self.assertEqual([x["symbol"] for x in out["awaiting_listing"]], ["FRESH"])
+        self.assertEqual([x["symbol"] for x in out["recently_listed"]], ["OLDER"])
 
 
 class UnlockStressScoreTest(unittest.TestCase):
@@ -342,6 +359,165 @@ class EnrichCnIndustryFailSoftTest(unittest.TestCase):
             _enrich_cn_industry(items)
         # 申万门类 / 次类，罗马数字 Ⅱ 剥掉
         self.assertEqual(items[0]["industry"], "电力设备 / 其他电源设备")
+
+
+class OwnershipLookthroughTest(unittest.TestCase):
+    """股权穿透 nature 推断 + 60d 解禁挂卡。"""
+
+    def setUp(self):
+        from stock_research.core import ownership_lookthrough as olt
+        self.olt = olt
+
+    def _holders_df(self, rows):
+        return pd.DataFrame(rows)
+
+    def test_natural_person_first_holder(self):
+        """自然人持股 ≥ 20% → 民营。"""
+        df = self._holders_df([
+            {"股东名称": "陈天石", "持股比例": 28.35, "股本性质": "流通A股"},
+            {"股东名称": "北京中科算源资产管理有限公司", "持股比例": 15.57, "股本性质": "流通A股"},
+            {"股东名称": "香港中央结算有限公司", "持股比例": 2.55, "股本性质": "流通A股"},
+        ])
+        holders = self.olt._parse_holders_df(df)
+        nature, name, top5 = self.olt._infer_nature(holders)
+        self.assertEqual(nature, "民营")
+        self.assertEqual(name, "陈天石")
+        self.assertGreater(top5, 40)
+
+    def test_natural_person_below_30pct_still_private(self):
+        """自然人 < 30%、top5 < 50% 仍判民营（次新股创始人常见）。"""
+        df = self._holders_df([
+            {"股东名称": "蔡向挺", "持股比例": 22.0, "股本性质": "流通A股"},
+            {"股东名称": "上海某某投资合伙(有限合伙)", "持股比例": 12.0, "股本性质": "流通A股"},
+            {"股东名称": "杭州某私募基金", "持股比例": 5.0, "股本性质": "流通A股"},
+        ])
+        holders = self.olt._parse_holders_df(df)
+        nature, name, _ = self.olt._infer_nature(holders)
+        self.assertEqual(nature, "民营")
+        self.assertEqual(name, "蔡向挺")
+
+    def test_soe_central_keyword(self):
+        df = self._holders_df([
+            {"股东名称": "中国电子信息产业集团有限公司", "持股比例": 45.0, "股本性质": "流通A股"},
+            {"股东名称": "香港中央结算有限公司", "持股比例": 5.0, "股本性质": "流通A股"},
+        ])
+        holders = self.olt._parse_holders_df(df)
+        nature, _, _ = self.olt._infer_nature(holders)
+        self.assertEqual(nature, "国资")
+
+    def test_soe_local_strong_keyword(self):
+        df = self._holders_df([
+            {"股东名称": "上海国有资产经营有限公司", "持股比例": 38.0, "股本性质": "流通A股"},
+        ])
+        holders = self.olt._parse_holders_df(df)
+        nature, _, _ = self.olt._infer_nature(holders)
+        self.assertEqual(nature, "国资")
+
+    def test_local_holding_not_soe_false_positive(self):
+        """民企"杭州XX控股"不应被误判国资。"""
+        df = self._holders_df([
+            {"股东名称": "杭州福斯达控股有限公司", "持股比例": 35.0, "股本性质": "流通A股"},
+        ])
+        holders = self.olt._parse_holders_df(df)
+        nature, _, _ = self.olt._infer_nature(holders)
+        self.assertNotEqual(nature, "国资")
+
+    def test_foreign_holder(self):
+        df = self._holders_df([
+            {"股东名称": "ABC HOLDINGS (BVI) LIMITED", "持股比例": 55.0, "股本性质": "流通A股"},
+        ])
+        holders = self.olt._parse_holders_df(df)
+        nature, _, _ = self.olt._infer_nature(holders)
+        self.assertEqual(nature, "外资")
+
+    def test_passive_holders_skipped(self):
+        """第一大股东是托管/公募/汇金时,应跳过看下一个。"""
+        df = self._holders_df([
+            {"股东名称": "香港中央结算有限公司", "持股比例": 18.0, "股本性质": "流通A股"},
+            {"股东名称": "中央汇金资产管理有限责任公司", "持股比例": 12.0, "股本性质": "流通A股"},
+            {"股东名称": "张三", "持股比例": 8.0, "股本性质": "流通A股"},
+        ])
+        holders = self.olt._parse_holders_df(df)
+        nature, name, _ = self.olt._infer_nature(holders)
+        self.assertEqual(nature, "民营")
+        self.assertEqual(name, "张三")
+
+    def test_nan_pct_safe(self):
+        """部分股东 pct 是 NaN（akshare 实际返回） — top5 不应变 NaN。"""
+        df = self._holders_df([
+            {"股东名称": "陈天石", "持股比例": 28.35, "股本性质": "流通A股"},
+            {"股东名称": "某基金", "持股比例": float("nan"), "股本性质": "流通A股"},
+            {"股东名称": "某ETF", "持股比例": float("nan"), "股本性质": "流通A股"},
+        ])
+        holders = self.olt._parse_holders_df(df)
+        _, _, top5 = self.olt._infer_nature(holders)
+        self.assertEqual(top5, 28.35)  # 不是 NaN
+
+    def test_unknown_legal_person(self):
+        """识别不出 nature 的法人 → unknown,而不是错判国资。"""
+        df = self._holders_df([
+            {"股东名称": "贵州某非典型实业(集团)有限公司", "持股比例": 35.0, "股本性质": "流通A股"},
+        ])
+        holders = self.olt._parse_holders_df(df)
+        nature, _, _ = self.olt._infer_nature(holders)
+        self.assertEqual(nature, "unknown")
+
+
+class Unlock60dMapTest(unittest.TestCase):
+    def test_60d_map_includes_30d(self):
+        from stock_research.jobs.junior_stock_watcher import _build_unlock_60d_map
+        radar = [
+            {"code": "600001", "days_to_unlock": 15, "pct_of_float": 25.0, "unlock_date": "2026-06-10"},
+            {"code": "600001", "days_to_unlock": 45, "pct_of_float": 35.0, "unlock_date": "2026-07-10"},
+            {"code": "600002", "days_to_unlock": 80, "pct_of_float": 50.0, "unlock_date": "2026-08-14"},  # 超 60d
+            {"code": "600003", "days_to_unlock": 5,  "pct_of_float": 60.0, "unlock_date": "2026-05-31"},
+        ]
+        m = _build_unlock_60d_map(radar)
+        # 600001 应该取占比更高的 45 天那条
+        self.assertIn("600001", m)
+        self.assertEqual(m["600001"]["pct"], 35.0)
+        self.assertEqual(m["600001"]["days"], 45)
+        # 600002 超 60 天被排除
+        self.assertNotIn("600002", m)
+        # 600003 收录
+        self.assertIn("600003", m)
+
+
+class AuditCardWith60dTest(unittest.TestCase):
+    def test_audit_card_appends_60d_warning(self):
+        from stock_research.jobs.junior_stock_watcher import _build_audit_card
+        item = {
+            "tier": "可研究",
+            "vs_issue_pct": -25,
+            "percentile": 12,
+            "months_listed": 20,
+            "readiness_score": 50,
+            "low_30d": 10.5,
+            "low_since_ipo": 9.8,
+            "first_close": 18.5,
+            "unlock_60d_pct": 22.5,
+            "unlock_60d_date": "2026-07-15",
+        }
+        card = _build_audit_card(item, market="cn")
+        self.assertIsNotNone(card)
+        self.assertIn("60 日解禁压力 22%", card["whats_missing"])
+        self.assertIn("2026-07-15", card["whats_missing"])
+
+    def test_audit_card_skips_low_60d(self):
+        """60d < 15% 不追加提示（避免噪音）。"""
+        from stock_research.jobs.junior_stock_watcher import _build_audit_card
+        item = {
+            "tier": "可研究",
+            "vs_issue_pct": -25,
+            "percentile": 12,
+            "months_listed": 20,
+            "readiness_score": 70,
+            "unlock_60d_pct": 8.0,
+            "unlock_60d_date": "2026-07-15",
+        }
+        card = _build_audit_card(item, market="cn")
+        self.assertIsNotNone(card)
+        self.assertNotIn("60 日解禁", card["whats_missing"] or "")
 
 
 if __name__ == "__main__":

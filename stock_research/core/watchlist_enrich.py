@@ -340,7 +340,26 @@ def enrich_one(code: str, name: str | None = None) -> dict[str, Any]:
     industry = info.get("industry") or ""
     long_business = info.get("longBusinessSummary") or ""
 
-    out["name"] = name or long_name or code
+    # A 股 yfinance 返回英文公司名（"Ningbo Deye Technology Group Co., Ltd."），
+    # 走 system_universe（akshare 拉的中文官方名）优先，落库就是中文。
+    su_name: str | None = None
+    if market.startswith("A股"):
+        try:
+            from stock_db import get_db
+            _conn = get_db(read_only=True)
+            row = _conn.execute(
+                "SELECT name FROM system_universe "
+                "WHERE symbol = ? AND name IS NOT NULL AND name != '' AND name != ? LIMIT 1",
+                [code, code],
+            ).fetchone()
+            _conn.close()
+            if row and row[0]:
+                su_name = row[0]
+                meta["sources"].append("name: system_universe (akshare CN)")
+        except Exception as e:
+            meta["warnings"].append(f"system_universe name lookup failed: {e}")
+
+    out["name"] = name or su_name or long_name or code
     if industry or sector:
         out["industry"] = industry or sector
     if long_business:
