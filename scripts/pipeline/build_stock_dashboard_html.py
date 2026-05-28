@@ -6916,10 +6916,23 @@ async function _loadAndRenderEquityCurve() {
   const card = document.getElementById("real-holdings-equity-card");
   const chartEl = document.getElementById("real-holdings-equity-chart");
   if (!card || !chartEl || typeof echarts === "undefined") return null;
+  const rangeEl0 = document.getElementById("equity-curve-range");
+  const latestEl0 = document.getElementById("equity-curve-latest");
   try {
     const r = await fetch(WATCHLIST_API_BASE + "/api/real-holdings/equity-curve?days=90");
-    if (!r.ok) { card.style.display = "none"; return null; }
-    const data = await r.json();
+    let data = null;
+    if (r.ok) { try { data = await r.json(); } catch (e) {} }
+    // DB 锁冲突等可恢复错误 -> 显示提示而不是隐藏整个卡片
+    if (!r.ok || (data && data.status === "db_busy")) {
+      card.style.display = "";
+      chartEl.innerHTML = `<div class="flex items-center justify-center h-full text-xs text-slate-400">
+        ⏳ ${(data && data.message) || "净值曲线暂不可用 (HTTP " + r.status + ")"}<br/>30 秒后会自动重试
+      </div>`;
+      if (rangeEl0) rangeEl0.textContent = "";
+      if (latestEl0) latestEl0.textContent = "";
+      setTimeout(_loadAndRenderEquityCurve, 30000);
+      return null;
+    }
     const pts = (data && data.points) || [];
     if (pts.length < 2) { card.style.display = "none"; return null; }
     card.style.display = "";
@@ -6948,6 +6961,10 @@ async function _loadAndRenderEquityCurve() {
     const areaColor = isUp ? "rgba(5,150,105,0.12)" : "rgba(225,29,72,0.10)";
 
     const inst = echarts.getInstanceByDom(chartEl) || echarts.init(chartEl);
+    if (!chartEl._resizeBound) {
+      window.addEventListener("resize", () => { try { inst.resize(); } catch (e) {} });
+      chartEl._resizeBound = true;
+    }
     inst.setOption({
       grid: {left: 60, right: 16, top: 18, bottom: 28},
       tooltip: {
@@ -7122,15 +7139,28 @@ function _renderRealHoldingDataAsof() {
   }
   if (bigEl) {
     bigEl.style.display = "inline-flex";
-    if (asOf === today) {
-      bigEl.className = "inline-flex items-center gap-1 px-3 py-1 rounded-md text-sm font-medium border bg-emerald-50 text-emerald-700 border-emerald-200";
-      bigEl.title = "盘中每整点自动刷新 (intraday_holdings launchd)";
-      bigEl.textContent = "🕐 数据更新 " + (generatedFull || asOf);
-    } else {
+    // 计算"距上次刷新过去多久"：用 generated_at 原始 ISO 与本地时间比；
+    // 超过 2h 就当 launchd 可能挂了 → 黄色提示，不论日期是否今天。
+    let ageMinutes = Infinity;
+    if (run.generated_at) {
+      const t = Date.parse(String(run.generated_at).replace(" ", "T"));
+      if (!isNaN(t)) ageMinutes = Math.max(0, Math.floor((Date.now() - t) / 60000));
+    }
+    const tooOld = ageMinutes > 120;
+    if (asOf !== today) {
       const lag = Math.max(0, Math.floor((new Date(today) - new Date(asOf)) / 86400000));
       bigEl.className = "inline-flex items-center gap-1 px-3 py-1 rounded-md text-sm font-medium border bg-amber-50 text-amber-800 border-amber-200";
       bigEl.title = "数据不是今天的，可能 launchd 没跑起来";
       bigEl.textContent = "⚠ 数据 " + (generatedFull || asOf) + " · 落后 " + lag + " 天";
+    } else if (tooOld) {
+      bigEl.className = "inline-flex items-center gap-1 px-3 py-1 rounded-md text-sm font-medium border bg-amber-50 text-amber-800 border-amber-200";
+      const ageH = (ageMinutes / 60).toFixed(1);
+      bigEl.title = `intraday_holdings cron 期望每小时跑一次，但距上次刷新已 ${ageH}h，疑似挂了或闭市跳过`;
+      bigEl.textContent = `⚠ 数据 ${generatedFull} · ${ageH}h 未刷新`;
+    } else {
+      bigEl.className = "inline-flex items-center gap-1 px-3 py-1 rounded-md text-sm font-medium border bg-emerald-50 text-emerald-700 border-emerald-200";
+      bigEl.title = `盘中每整点自动刷新 (intraday_holdings launchd) · 距上次 ${ageMinutes} 分钟`;
+      bigEl.textContent = "🕐 数据更新 " + (generatedFull || asOf);
     }
   }
 }
@@ -8138,7 +8168,7 @@ async function renderRealHoldings() {
         </div>
         <span class="text-[11px] text-slate-500">${aiCoverageLabel}${coveredByAi.length ? " " + totalDiffText : ""}</span>
       </div>
-      <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-2 items-stretch">
+      <div class="grid grid-cols-2 lg:grid-cols-7 gap-2 items-stretch">
         <!-- 背景信息: 总资产/持仓市值/现金 弱化压缩到 1 列宽 -->
         <div class="lg:col-span-1 rounded-lg bg-slate-50 px-2.5 py-1.5 border border-slate-100">
           <div class="text-sm font-semibold text-slate-700 leading-tight">${realAccountValue.toLocaleString(undefined, {maximumFractionDigits:0})}</div>

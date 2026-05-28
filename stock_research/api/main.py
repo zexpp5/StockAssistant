@@ -58,6 +58,29 @@ def create_app():
         allow_headers=["*"],
     )
 
+    # DuckDB 写锁冲突（refresh_system_universe_v2 / daily_refresh.sh 等长进程占锁）
+    # 统一返回 200 + status=db_busy，让前端兜底显示"稍后重试"而不是 500 把卡片打没。
+    try:
+        import duckdb as _duckdb_for_handler
+        from fastapi.responses import JSONResponse as _JSONResponse
+
+        @app.exception_handler(_duckdb_for_handler.IOException)
+        async def _duckdb_lock_handler(request, exc):
+            msg = str(exc)
+            if "lock" in msg.lower():
+                return _JSONResponse(
+                    status_code=200,
+                    content={
+                        "status": "db_busy",
+                        "message": "DuckDB 写锁被其他进程占用，请稍后刷新",
+                        "_path": str(getattr(request, "url", "")),
+                    },
+                )
+            # 其他 IO 错误照常抛 500
+            return _JSONResponse(status_code=500, content={"detail": msg})
+    except Exception:
+        pass
+
     # ────────── 健康检查 ──────────
     @app.get("/health")
     def health():
@@ -1233,11 +1256,14 @@ _sys.exit(rc)
         """账户净值曲线：每日 total_value/total_cost/pnl，按 as_of_date 升序。
 
         同一天有多次 review run 时取 generated_at 最晚的那次（日终快照）。
+        DB 写锁被其他进程占用时返回 status=db_busy，让前端显示"30s 后重试"。
         """
         import stock_db
+        import duckdb as _duckdb
         days_clamped = max(7, min(int(days), 730))
-        conn = stock_db.get_db(read_only=True)
+        conn = None
         try:
+            conn = stock_db.get_db(read_only=True)
             rows = conn.execute(
                 """
                 WITH latest_run_per_day AS (
@@ -1262,8 +1288,20 @@ _sys.exit(rc)
                 """,
                 [days_clamped],
             ).fetchall()
+        except _duckdb.IOException as exc:
+            # DuckDB 文件级写锁冲突: 不抛 500,前端可以等下次轮询自愈
+            if "lock" in str(exc).lower():
+                return _json_any({
+                    "days": days_clamped,
+                    "point_count": 0,
+                    "points": [],
+                    "status": "db_busy",
+                    "message": "DuckDB 写锁被其他进程占用，请稍后刷新",
+                })
+            raise
         finally:
-            conn.close()
+            if conn is not None:
+                conn.close()
 
         points = []
         for as_of_date, total_value, total_cost, holding_count in rows:
