@@ -71,6 +71,44 @@ def _score_one_year_momentum(value: Any) -> float:
     return 25.0
 
 
+def _score_reversal(row: dict[str, Any]) -> float:
+    """1 月反转分（mean reversion）— 最近 1 月跌得多 → 高分；涨得多 → 低分。
+
+    定义跟 scripts/lib/factor_model.reversal_1m 一致：reversal_raw = -one_month_pct。
+    映射：跌 15% → 100；持平 → 50；涨 15% → 0；线性 clip。
+    缺数据 → 45（中性偏低，避免无数据撑高分）。
+
+    Why: calibrated_factor_weights.json 的 IC audit 判定 reversal 🟢 strong
+    (IC=0.062, hit_rate=72.2%)，是 V2 当前唯一被独立验证的 alpha 来源。
+    """
+    try:
+        x = float(row.get("one_month_pct"))
+    except (TypeError, ValueError):
+        return 45.0
+    return _clip(50.0 - x * (50.0 / 15.0))
+
+
+def _load_reversal_weight() -> float:
+    """从 calibrated_factor_weights.json 读 reversal 启用状态。
+
+    selected=True → V2 给 reversal 0.15 权重（从 valuation 0.65 切下来）。
+    selected=False（IC 失效） → 不用，权重 0（valuation 回到 0.65）。
+    文件缺失 / 解析失败 → 保守按 0（保持现状）。
+
+    返回值是 V2 公式里 reversal 的子权重，**不是** calibrated 的原始 weight。
+    """
+    path = REPO / "data" / "calibrated_factor_weights.json"
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        diag = (data.get("diagnostics") or {}).get("reversal") or {}
+        if diag.get("selected"):
+            return 0.15
+    except Exception:
+        pass
+    return 0.0
+
+
 def _score_momentum(row: dict[str, Any]) -> float:
     parts = []
     for key, weight, lo, hi in (
@@ -103,21 +141,30 @@ def _factor_scores(row: dict[str, Any]) -> dict[str, float]:
     tpe_score = _score_lower_better(row.get("trailing_pe"), good=25.0, bad=100.0)
     valuation = 0.45 * peg_score + 0.35 * fpe_score + 0.20 * tpe_score
     momentum = _score_momentum(row)
+    reversal = _score_reversal(row)
     coverage_fields = (
         "close", "market_cap", "forward_pe", "trailing_pe", "peg_ratio",
         "ytd_pct", "one_week_pct", "one_month_pct", "one_year_pct",
     )
     coverage = sum(1 for key in coverage_fields if row.get(key) is not None) / len(coverage_fields)
     data_quality = coverage * 100.0
-    # 2026-05-26: momentum 0.42→0.15、valuation 0.38→0.65。
-    # 理由：calibrated_factor_weights.json 的 IC 审计判定 momentum 已失效
-    # (mean IC=0.004, hit_rate=44%, 🔴 decayed)，原 0.42 权重会把"已经涨上来的票"
-    # 推成 strong_buy（典型案例：5-26 京东方 60d +20.6% 排第 2）。valuation 是三因子
-    # 里唯一未被反证有效的（PEG/PE 长期稳定），承接砍下来的权重。
-    total = 0.15 * momentum + 0.65 * valuation + 0.20 * data_quality
+    # 2026-05-26: momentum 0.42→0.15、valuation 0.38→0.65（IC 审计判 momentum 失效）。
+    # 2026-05-27: 引入 reversal 因子 — calibrated_factor_weights.json 判 reversal
+    # 🟢 strong (IC=0.062, hit=72.2%)，是 V2 唯一被独立验证的 alpha。reversal 子权重
+    # 0.15 由 _load_reversal_weight() 从 calibrated 读，IC 失效时自动归零、回到
+    # 旧公式 (0.15·mom + 0.65·val + 0.20·dq)，跟 IC audit 单一来源对齐。
+    rev_w = _load_reversal_weight()
+    val_w = 0.65 - rev_w  # reversal 从 valuation 切，保持总权重 1.0
+    total = (
+        0.15 * momentum
+        + val_w * valuation
+        + rev_w * reversal
+        + 0.20 * data_quality
+    )
     scores: dict[str, Any] = {
         "valuation": round(valuation, 2),
         "momentum": round(momentum, 2),
+        "reversal": round(reversal, 2),
         "data_quality": round(data_quality, 2),
         "coverage": round(coverage, 4),
         "total": round(total, 2),
