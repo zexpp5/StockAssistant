@@ -378,24 +378,24 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <!-- 我的池子 = 真实持仓 + 股票池 (我关注的 / 全部股票) — AI 推荐已独立到「AI 工作台」 -->
     <div class="mb-4">
       <div class="text-base font-bold text-slate-800 mb-2 px-2">🗂️ 我的池子</div>
-      <a href="#real-holdings" data-tab="real-holdings" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">💼 我的持仓</a>
-      <a href="#watchlist-hub" data-tab="watchlist-hub" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">📊 股票池</a>
+      <a href="#real-holdings" data-tab="real-holdings" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">我的持仓</a>
+      <a href="#watchlist-hub" data-tab="watchlist-hub" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">股票池</a>
     </div>
 
     <!-- AI 工作台 = 选股 → 配仓 → 验证 一条工作流 (2026-05-27 三独立 tab + 1 行 banner header) -->
     <div class="mb-4">
       <div class="text-base font-bold text-slate-800 mb-2 px-2">🧠 AI 工作台</div>
-      <a href="#discovery" data-tab="discovery" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">① 🔍 AI 选股</a>
-      <a href="#backtest" data-tab="backtest" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">② ⚖️ AI 配仓</a>
-      <a href="#portfolio" data-tab="portfolio" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">③ 🧪 AI 验证</a>
+      <a href="#discovery" data-tab="discovery" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">AI 推荐</a>
+      <a href="#backtest" data-tab="backtest" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">AI 配仓</a>
+      <a href="#portfolio" data-tab="portfolio" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">AI 跟踪</a>
     </div>
 
     <!-- 深度研究 = 买前解释和审查 (IPO & 次新 已并入 📊 股票池) -->
     <div class="mb-4">
       <div class="text-base font-bold text-slate-800 mb-2 px-2">🔬 深度研究</div>
-      <a href="#buy-research" data-tab="buy-research" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🛡 买前研究</a>
-      <a href="#chain" data-tab="chain" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">🌳 产业链地图</a>
-      <a href="#catalyst-validation" data-tab="catalyst-validation" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">📰 催化信号验证</a>
+      <a href="#buy-research" data-tab="buy-research" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">买前研究</a>
+      <a href="#chain" data-tab="chain" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">产业链地图</a>
+      <a href="#catalyst-validation" data-tab="catalyst-validation" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">催化信号验证</a>
     </div>
 
     <hr class="my-4 border-slate-200">
@@ -403,7 +403,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <!-- ⚙️ 管理：只保留系统状态；说明/升级文档不再占主入口 -->
     <div class="mb-4">
       <div class="text-base font-bold text-slate-800 mb-2 px-2">⚙️ 管理</div>
-      <a href="#runtime-status" data-tab="runtime-status" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-500 hover:text-violet-600 hover:bg-violet-50 rounded transition">🧪 系统状态</a>
+      <a href="#runtime-status" data-tab="runtime-status" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-500 hover:text-violet-600 hover:bg-violet-50 rounded transition">系统状态</a>
     </div>
 
     <hr class="my-4 border-slate-200">
@@ -882,7 +882,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                   · [全部]  → #db-explorer
                   · [IPO]   → #ipo-junior + 内部 sub='ipo'
                   · [小市值] → #ipo-junior + 内部 sub='junior' (解禁雷达通过此处的 ipo-junior 内部 sub 进入)
-     AI 推荐已抽出为「🧠 AI 工作台 → ① AI 选股」一级 tab。
+     AI 推荐已抽出为「🧠 AI 工作台 → ① AI 推荐」一级 tab。
      旧 hash (#discovery 已重映射到一级 tab / #ipo-junior / #db-explorer / #watchlist-edit) 由 getTabFromHash 跳转。
 -->
 <section id="watchlist-hub" class="max-w-7xl mx-auto px-6 pt-10 pb-2" style="display:none">
@@ -891,7 +891,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <span class="text-3xl">📊</span>
       <h2 class="text-2xl font-bold text-slate-900">股票池</h2>
     </div>
-    <p class="text-xs text-slate-500 mt-1">想看 AI 系统的横向推荐排名? → <a href="#discovery" class="text-violet-700 hover:underline font-medium">去「AI 工作台 → ① AI 选股」</a></p>
+    <p class="text-xs text-slate-500 mt-1">想看 AI 系统的横向推荐排名? → <a href="#discovery" class="text-violet-700 hover:underline font-medium">去「AI 工作台 → ① AI 推荐」</a></p>
   </div>
   <!-- 二级 tab 栏 (纯文字、无图标) — 2 个 (AI 推荐已抽出) -->
   <div class="border-b border-slate-200 flex gap-1 flex-wrap">
@@ -919,7 +919,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 </section>
 
-<!-- ============ ① 🔍 AI 选股 Tab (2026-05-27 独立子页, 无 banner — 侧栏已表达) ============ -->
+<!-- ============ ① 🔍 AI 推荐 Tab (2026-05-27 独立子页, 无 banner — 侧栏已表达) ============ -->
 <section id="discovery" class="max-w-7xl mx-auto px-6 pt-6 pb-8 bg-gradient-to-br from-sky-50 to-indigo-50 rounded-2xl my-3" style="display:none">
   <!-- 2026-05-26: 移除 discovery-meta + discovery-accuracy 两条系统信息行 (用户反馈无用); JS 仍可安全空操作 -->
 
@@ -988,7 +988,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div class="mt-4 bg-gradient-to-r from-violet-50 to-indigo-50 border border-violet-200 rounded-lg px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
       <div class="text-sm text-slate-700">
         <span class="font-semibold text-violet-900">⚖️ 想看 AI 把这批候选配成什么组合?</span>
-        <span class="text-slate-600 ml-1">「AI 组合方案」会从这里挑出 ~15 只 + 算出仓位比例。</span>
+        <span class="text-slate-600 ml-1">「AI 配仓」会从这里挑出 ~15 只 + 算出仓位比例。</span>
       </div>
       <a href="#" onclick="event.preventDefault(); switchTab('backtest');" class="bg-violet-600 hover:bg-violet-700 text-white px-3 py-1.5 rounded text-sm font-medium whitespace-nowrap">去看组合 →</a>
     </div>
@@ -1383,12 +1383,12 @@ function switchDiscoveryView(view) {
           <button onclick="saveRealHolding()" class="flex-1 bg-violet-600 hover:bg-violet-700 text-white py-2 rounded font-medium">保存</button>
         </div>
       </div>
-      <p class="text-[11px] text-slate-500 mt-3 leading-relaxed">真实持仓写入 DuckDB <span class="font-mono">real_holdings</span>。AI 方案模拟仓写入 <span class="font-mono">model_sim_holdings</span>,两者不会混用。</p>
+      <p class="text-[11px] text-slate-500 mt-3 leading-relaxed">真实持仓写入 DuckDB <span class="font-mono">real_holdings</span>。AI 跟踪仓写入 <span class="font-mono">model_sim_holdings</span>,两者不会混用。</p>
     </div>
   </div>
 </section>
 
-<!-- ============ ③ 🧪 AI 验证 Tab (原 AI 方案模拟) ============ -->
+<!-- ============ ③ 🧪 AI 跟踪 Tab (原 AI 跟踪) ============ -->
 <section id="portfolio" class="max-w-7xl mx-auto px-6 pt-6 pb-8 my-3" style="display:none">
   <!-- sub-tab 切换器 (2026-05-27): 把两件事彻底分开 · 刷新按钮挂右侧 -->
   <div class="mb-5 border-b border-slate-200 flex gap-1 items-center">
@@ -1406,7 +1406,7 @@ function switchDiscoveryView(view) {
   <!-- ============ sub-tab 1: 📊 锁定追踪 wrapper ============ -->
   <div id="portfolio-sub-tracking">
 
-  <!-- ============ 📊 锁定追踪 (2026-05-27 从 AI 组合方案 tab 挪过来) ============
+  <!-- ============ 📊 锁定追踪 (2026-05-27 从 AI 配仓 tab 挪过来) ============
        数据源: DuckDB snapshots 表的 plan_v6 (5-27 起的干净 V2 推荐池 snapshot)
        行为: daily_refresh 每天自动累加 forward 数据点 · 不需要用户操作
        目的: A 静态 vs C 动态对比 → 验证 AI 持续推荐的真实价值
@@ -1516,7 +1516,7 @@ function switchDiscoveryView(view) {
 
   <!-- 2026-05-21: "数据窗口/年化 95%/夏普 2.95/NVDA +330%" 黄底说明块已删除：
        1) 数字过时（V2 当前 Sharpe 2.55 而非 2.95）2) 内容是策略层 disclaimer，
-       已合并到「AI 助手 → AI 组合方案」tab 顶部 v6 模型卡的 disclaimer 行 -->
+       已合并到「AI 助手 → AI 配仓」tab 顶部 v6 模型卡的 disclaimer 行 -->
 
   <!-- 📅 5 天蒙特卡洛模拟（仅有 simulation 数据时显示） -->
   <div id="simulation-section" class="bg-gradient-to-br from-cyan-50 to-blue-50 rounded-xl border border-cyan-200 p-5 mb-4" style="display:none">
@@ -1553,7 +1553,7 @@ function switchDiscoveryView(view) {
   <!-- 总览数字 -->
   <div id="portfolio-summary" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 mb-4"></div>
 
-  <!-- 2026-05-21: v6-metrics-card 已挪到 AI 助手 → AI 组合方案 tab 顶部
+  <!-- 2026-05-21: v6-metrics-card 已挪到 AI 助手 → AI 配仓 tab 顶部
        (它是 plan_v6 策略的回测期望指标，跟"真实持仓"语义不同；放这里容易让新人
         误以为是自己持仓的预期回报) -->
 
@@ -1586,7 +1586,7 @@ function switchDiscoveryView(view) {
         </tr>
       </thead>
       <tbody id="holdings-table">
-        <tr><td colspan="12" class="text-center text-slate-500 py-8">暂无推荐模拟仓 · 点击「用 AI 组合方案刷新模拟仓」开始观察模型能力</td></tr>
+        <tr><td colspan="12" class="text-center text-slate-500 py-8">暂无推荐模拟仓 · 点击「用 AI 配仓刷新模拟仓」开始观察模型能力</td></tr>
       </tbody>
       <tfoot id="holdings-footer" class="bg-slate-50 font-semibold text-slate-800" style="display:none">
         <tr>
@@ -1620,7 +1620,7 @@ function switchDiscoveryView(view) {
   </div>  <!-- /#portfolio-sub-sim -->
 </section>
 
-<!-- ============ 🤖 AI 组合方案 Tab ============ -->
+<!-- ============ 🤖 AI 配仓 Tab ============ -->
 <section id="backtest" class="max-w-7xl mx-auto px-6 pt-6 pb-8 my-3" style="display:none">
 
   <!-- 候选池溯源条 (2026-05-27): 让用户看见组合是从哪个池子里挑出来的 -->
@@ -2530,7 +2530,7 @@ function switchDiscoveryView(view) {
       <div class="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-3 text-xs text-slate-700">
         <p class="font-semibold text-slate-800 mb-1">🔧 两条线公用的基础设施</p>
         SEC 13F 机构持仓抓取 · 多源 enrichment · 跨源审计 · 反向审查 · 风险指标（VaR/Sharpe/Calmar）·
-        仓位优化方法对比 · DuckDB 长期快照库（每天累加，将来做严肃回测）· AI 组合方案（v6 plan 锁定日为基线，往后看每日真实表现）
+        仓位优化方法对比 · DuckDB 长期快照库（每天累加，将来做严肃回测）· AI 配仓（v6 plan 锁定日为基线，往后看每日真实表现）
       </div>
 
       <!-- ⚠️ 已规划未做 -->
@@ -2956,7 +2956,7 @@ const TRACK_13F    = {TRACK_13F_JSON_DB};
 const OPTIMIZATION = {OPTIMIZATION_JSON_DB};
 const PLAN_A_V6    = {PLAN_A_V6_JSON_DB};
 const DISCOVERY    = {DISCOVERY_JSON};
-// AI 组合方案数据：A 静态（buy-and-hold from inception） / C 动态（每周一 rebalance）
+// AI 配仓数据：A 静态（buy-and-hold from inception） / C 动态（每周一 rebalance）
 const _BACKTEST    = {PLAN_BACKTEST_JSON_DB};
 const _DYNAMIC     = {PLAN_DYNAMIC_JSON_DB};
 
@@ -3048,7 +3048,7 @@ function _fmtAddedAt(iso) {
 
 // 持仓「持仓 / 方案」标记 — 区分 source：
 //   manual  → 蓝色"💼 持仓"   = 用户手填真实持仓
-//   ai_plan → 紫色"📋 方案"    = 从 AI 组合方案模拟写入（不是真买）
+//   ai_plan → 紫色"📋 方案"    = 从 AI 配仓模拟写入（不是真买）
 // 同一 code 多笔聚合显示总股数；两种 source 都有时分别展示
 function _heldBadge(code) {
   if (!_holdingsCache || _holdingsCache.length === 0) return "";
@@ -3065,7 +3065,7 @@ function _heldBadge(code) {
   if (aiPlan.length > 0) {
     const n = aiPlan.reduce((a, b) => a + (b.shares || 0), 0);
     const li = aiPlan.length > 1 ? `（${aiPlan.length} 笔）` : "";
-    badges.push(`<span class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold bg-violet-50 text-violet-600 ring-1 ring-violet-200 align-middle" title="AI 方案模拟持仓 ${n} 股${li} — 不是你真买的（来自 model_sim_holdings，可在模拟仓页清理）">📋 方案</span>`);
+    badges.push(`<span class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold bg-violet-50 text-violet-600 ring-1 ring-violet-200 align-middle" title="AI 跟踪持仓 ${n} 股${li} — 不是你真买的（来自 model_sim_holdings，可在模拟仓页清理）">📋 方案</span>`);
   }
   return badges.length ? " " + badges.join(" ") : "";
 }
@@ -4391,7 +4391,7 @@ const _STOCK_DETAIL_BACK_LABEL = {
   "ipo-junior":  "← 返回 IPO & 次新股",
   "real-holdings": "← 返回 我的持仓",
   "watchlist": "← 返回 自选股配置",
-  "portfolio": "← 返回 AI 组合方案",
+  "portfolio": "← 返回 AI 配仓",
   "recommendations": "← 返回 AI 推荐",
   "overview": "← 返回 今日决策台",
 };
@@ -5141,7 +5141,7 @@ try {
   if (_hubSubCurrent === "recommend") _hubSubCurrent = "self";
 } catch (e) {}
 
-// ============ 🧪 AI 方案模拟 sub-tab 切换 (2026-05-27) ============
+// ============ 🧪 AI 跟踪 sub-tab 切换 (2026-05-27) ============
 // tracking: 系统自动跑的 A/C 对比追踪 · sim: 用户手动按按钮的 model_sim_holdings
 let _ptfSubCurrent = "tracking";
 try { _ptfSubCurrent = localStorage.getItem("ptf_sub") || "tracking"; } catch (e) {}
@@ -7111,7 +7111,7 @@ function _plainPlanWeightCell(cls, x) {
     </td>`;
   }
   if (cls === "picks_only") {
-    return `<td class="px-3 py-2 text-right text-[11px] text-slate-500" title="目前 AI 组合方案(plan_a_v5)只覆盖美股池;港股 / A股 / 系统外个股有因子分但没有目标仓位">
+    return `<td class="px-3 py-2 text-right text-[11px] text-slate-500" title="目前 AI 配仓(plan_a_v5)只覆盖美股池;港股 / A股 / 系统外个股有因子分但没有目标仓位">
       <div>—</div><div class="text-[10px] text-slate-400">不在美股组合池</div></td>`;
   }
   if (cls === "tracking_only") {
@@ -8274,7 +8274,7 @@ async function renderPortfolio() {
   console.log(`[renderPortfolio] simulated holdings=${holdings.length}`, holdings.slice(0, 3));  // debug
 
   if (holdings.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="12" class="text-center text-slate-500 py-8">暂无推荐模拟仓 · 点击「用 AI 组合方案刷新模拟仓」开始观察模型能力</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="12" class="text-center text-slate-500 py-8">暂无推荐模拟仓 · 点击「用 AI 配仓刷新模拟仓」开始观察模型能力</td></tr>';
     document.getElementById("portfolio-summary").innerHTML = "";
     document.getElementById("alert-line").innerHTML = '<div class="text-sm text-slate-500">生成模拟仓后会显示模型账户警戒线</div>';
     return;
@@ -8481,7 +8481,7 @@ async function loadPlanAv6() {
     return;
   }
   if (!confirm(
-    "这会用当前 AI 组合方案刷新「AI 方案模拟」里的 model_sim_holdings 记录。\n\n" +
+    "这会用当前 AI 配仓刷新「AI 跟踪」里的 model_sim_holdings 记录。\n\n" +
     "✅ 它只用于观察模型能力\n" +
     "✅ 会保留你的真实持仓（real_holdings）\n" +
     "❌ 不会代表你已经真买，也不会写成真实持仓\n\n" +
@@ -8577,7 +8577,7 @@ function renderV6Metrics(metrics) {
   card.style.display = "";
 }
 
-// 2026-05-21: v6 指标卡挪到 AI 组合方案 tab 后，触发条件只看 PLAN_A_V6 有没有数据
+// 2026-05-21: v6 指标卡挪到 AI 配仓 tab 后，触发条件只看 PLAN_A_V6 有没有数据
 // （之前依赖 _holdingsCache.some(ai_plan)，但这是策略层指标，跟用户持没持仓无关）
 window.addEventListener("DOMContentLoaded", () => {
   if (PLAN_A_V6 && PLAN_A_V6.portfolio_metrics) {
@@ -8969,7 +8969,7 @@ function renderOptPane() {
   });
 }
 
-// ============ AI 组合方案 Tab ============
+// ============ AI 配仓 Tab ============
 // 2026-05-27: AI 推荐已抽出为一级 tab #discovery (在 🧠 AI 工作台 下)
 function goToAIRecommend(ev) {
   if (ev) ev.preventDefault();
@@ -12889,7 +12889,7 @@ def _defense_signal_explainer_html(*, compact: bool = False, stale_strip: str = 
     not_list = """
       <ul class="list-disc list-inside text-xs text-slate-600 space-y-1 mt-2">
         <li><strong>不是</strong>「AI 推荐」里今天买哪只</li>
-        <li><strong>不是</strong>「AI 组合方案」的调仓清单</li>
+        <li><strong>不是</strong>「AI 配仓」的调仓清单</li>
         <li><strong>不是</strong>「我的持仓」里你录入的 9992 / BRK-B 等个股结论</li>
       </ul>
     """
@@ -13416,7 +13416,7 @@ def today_decision_panel_html() -> str:
 
     cards_html = "".join([
         card("系统可用性", overall, overall_text, "#runtime-status", "查看系统状态"),
-        card("① AI 选股", "OK" if discovery_n else "WARN", f"{discovery_n} 只系统池候选；来源不包含手动自选股池。", "#discovery", "打开 AI 选股"),
+        card("① AI 推荐", "OK" if discovery_n else "WARN", f"{discovery_n} 只系统池候选；来源不包含手动自选股池。", "#discovery", "打开 AI 推荐"),
         card("② AI 配仓", plan_status, f"{plan_detail}；调仓清单：{trade_text}。", "#backtest", "查看 AI 配仓"),
         card("已拉取股票池", "OK" if pool_total else "WARN", market_line, "#db-explorer", "查看股票池"),
     ])
@@ -13597,11 +13597,11 @@ def today_decision_panel_html() -> str:
         </div>
         <div class="border-l-4 border-sky-400 pl-3">
           <div class="font-semibold text-slate-900">2. 再看选谁 <span class="text-[10px] text-violet-600 font-mono">①</span></div>
-          <div class="text-xs text-slate-500"><a href="#discovery" class="text-violet-700 hover:underline">AI 选股</a> 回答「哪些标的值得研究」。</div>
+          <div class="text-xs text-slate-500"><a href="#discovery" class="text-violet-700 hover:underline">AI 推荐</a> 回答「哪些标的值得研究」。</div>
         </div>
         <div class="border-l-4 border-emerald-400 pl-3">
           <div class="font-semibold text-slate-900">3. 最后看怎么买 <span class="text-[10px] text-violet-600 font-mono">②③</span></div>
-          <div class="text-xs text-slate-500"><a href="#backtest" class="text-violet-700 hover:underline">AI 配仓</a> 算目标仓位，<a href="#portfolio" class="text-violet-700 hover:underline">AI 验证</a> 看历史表现。</div>
+          <div class="text-xs text-slate-500"><a href="#backtest" class="text-violet-700 hover:underline">AI 配仓</a> 算目标仓位，<a href="#portfolio" class="text-violet-700 hover:underline">AI 跟踪</a> 看历史表现。</div>
         </div>
         <div class="border-l-4 border-orange-400 pl-3">
           <div class="font-semibold text-slate-900">4. 飞书橙卡 ≠ 个股指令</div>
@@ -15914,7 +15914,7 @@ def build():
             print(f"  ⚠️ catalyst_validation 加载失败: {e}")
     html = html.replace("{CATALYST_VALIDATION_JSON}", json.dumps(catalyst_validation_data, ensure_ascii=False, default=str))
 
-    # AI 组合方案 — Static (A 类: buy-and-hold from inception) — DuckDB 优先，fallback JSON
+    # AI 配仓 — Static (A 类: buy-and-hold from inception) — DuckDB 优先，fallback JSON
     plan_for_bt = plan_a_v6_runtime or plan_a_v6
     history_for_bt = history_data_db or history_data
     backtest_db = compute_plan_forward_track(plan_for_bt, history_for_bt)
@@ -15922,18 +15922,18 @@ def build():
         m = backtest_db["metrics"]
         inception = backtest_db.get("inception_date") or "?"
         baseline = backtest_db.get("baseline_date") or "?"
-        print(f"  AI 组合方案 A 静态: 锁定 {inception} → 基线 {baseline} · 跟踪 {m['n_tracked_days']} 日"
+        print(f"  AI 配仓 A 静态: 锁定 {inception} → 基线 {baseline} · 跟踪 {m['n_tracked_days']} 日"
               f" · 累计 {m['cumulative_return_pct']}% (vs SPY {m['bench_cumulative_return_pct']}%)")
     # 透传 candidate_universe 到前端 _BACKTEST,用于顶部溯源条 (2026-05-27)
     if backtest_db is not None and isinstance(plan_for_bt, dict):
         backtest_db["candidate_universe"] = plan_for_bt.get("candidate_universe")
     html = html.replace("{PLAN_BACKTEST_JSON_DB}", json.dumps(backtest_db, ensure_ascii=False))
 
-    # AI 组合方案 — Dynamic (C 类: weekly Monday rebalance, P1+P2)
+    # AI 配仓 — Dynamic (C 类: weekly Monday rebalance, P1+P2)
     dynamic_db = compute_dynamic_rebalance_track(history_for_bt)
     if dynamic_db and dynamic_db.get("metrics"):
         m = dynamic_db["metrics"]
-        print(f"  AI 组合方案 C 动态: {m['n_rebalances']} 次调仓 · 累计手续费 {dynamic_db.get('total_commission_pct', 0)}% · "
+        print(f"  AI 配仓 C 动态: {m['n_rebalances']} 次调仓 · 累计手续费 {dynamic_db.get('total_commission_pct', 0)}% · "
               f"跟踪 {m['n_tracked_days']} 日 · 累计 {m['cumulative_return_pct']}% (vs SPY {m['bench_cumulative_return_pct']}%)")
     html = html.replace("{PLAN_DYNAMIC_JSON_DB}", json.dumps(dynamic_db, ensure_ascii=False))
 
