@@ -38,6 +38,7 @@ AI_STRENGTH_BY_CHAIN: dict[str, str] = {
 }
 
 AI_STRENGTH_RANK = {"强": 3, "中": 2, "弱": 1, "无": 0, None: -1}
+AI_RADAR_VISIBLE_STRENGTHS = {"强", "中", "弱"}
 
 
 def derive_ai_strength(chain: str | None) -> str | None:
@@ -462,9 +463,24 @@ def build_ai_radar_payload(con) -> dict[str, Any]:
         pass  # 表可能不存在（极早期 DB）
 
     chains: list[dict[str, Any]] = []
+    filtered_non_ai_chains: list[dict[str, Any]] = []
     for chain, items in chain_buckets.items():
         if chain is None:
             continue  # 未分类的进覆盖率审计卡片，不进 chain 列表
+        ai_strength = derive_ai_strength(chain)
+        if ai_strength not in AI_RADAR_VISIBLE_STRENGTHS:
+            # 非 AI 链 — 不进主视图但保留到独立"系统池其它高分板块"区，避免完全丢弃
+            filtered_non_ai_chains.append({
+                "chain": chain,
+                "n_stocks": len(items),
+                "avg_score": round(sum(p["total_score"] for p in items) / len(items), 1),
+                "ai_strength": ai_strength,
+                "top_picks": [
+                    _format_pick(p, watchlist_set)
+                    for p in sorted(items, key=lambda x: -x["total_score"])[:5]
+                ],
+            })
+            continue
         avg_score = sum(p["total_score"] for p in items) / len(items)
         strong_count = sum(
             1 for p in items
@@ -476,7 +492,7 @@ def build_ai_radar_payload(con) -> dict[str, Any]:
             "n_stocks": len(items),
             "avg_score": round(avg_score, 1),
             "strong_count": strong_count,
-            "ai_strength": derive_ai_strength(chain),
+            "ai_strength": ai_strength,
             "delta_7d": round(delta, 2) if delta is not None else None,
             "mainline_status": classify_mainline(delta),
             "top_picks": [
@@ -506,8 +522,13 @@ def build_ai_radar_payload(con) -> dict[str, Any]:
         "data_generated_at": generated_at.isoformat() if hasattr(generated_at, "isoformat") else generated_at,
         "data_universe": "system_tech_universe",
         "n_picks_total": len(picks),
-        "n_picks_with_chain": sum(1 for p in picks if p["chain"]),
+        "n_picks_with_chain": sum(c["n_stocks"] for c in chains),
+        "n_picks_with_any_chain": sum(1 for p in picks if p["chain"]),
         "chains": chains,
+        "filtered_non_ai_chains": sorted(
+            filtered_non_ai_chains,
+            key=lambda c: (-c["n_stocks"], c["chain"]),
+        ),
         "coverage_audit": {
             "threshold_score": COVERAGE_AUDIT_SCORE_THRESHOLD,
             "n_uncovered": len(uncovered),
@@ -889,35 +910,40 @@ def _render_theme_evidence_panel(panel: dict[str, Any]) -> str:
                 f'关联 chain：{_esc("、".join(chains_mapped))} · 该 chain 在最新 picks 内 0 只命中'
                 f'</div>'
             )
-        else:
-            # 不管 direct 还是 partial 都展示具体票 — partial 加 needs_review 警示
-            # 之前 partial 隐藏具体票造成用户"找不到水冷链"的认知断层
+        elif has_direct:
+            # direct 映射：chain 内容跟主题语义重合，可展示具体票
             pick_chips = []
             for p in t["picks_assoc"]:
-                # partial 票额外加 ⚠️ 标签
-                ts_warn = '' if has_direct else (
-                    '<span class="text-amber-600 text-[10px] ml-1" title="chain 粗映射，主营是否属于此主题需人工核实">⚠️</span>'
-                )
                 pick_chips.append(
                     f'<span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-50 ring-1 ring-slate-200 text-[11px]">'
                     f'{_market_label(p["market"])} <span class="font-mono">{_esc(p["symbol"])}</span> '
                     f'<span class="text-slate-500">{_esc((p["name"] or "")[:10])}</span> '
                     f'<span class="font-semibold text-slate-700">{p["score"]:.0f}</span>'
-                    f'{ts_warn}'
                     f'</span>'
                 )
-
-            header_note = (
-                f'通过 chain「{_esc("、".join(chains_mapped))}」关联的 picks（{n_assoc} 只，前 {len(t["picks_assoc"])}）：'
-                if has_direct
-                else f'⚠️ <strong>粗映射</strong>：通过 chain「{_esc("、".join(chains_mapped))}」关联（{n_assoc} 只）· 该 chain 是粗分类，每只票主营是否真属于此主题需人工核实'
-            )
-            note_color = "text-slate-500" if has_direct else "text-amber-700"
-
             picks_assoc_html = (
                 f'<div class="mt-2 pt-2 border-t border-slate-100">'
-                f'<div class="text-[11px] {note_color} mb-1">{header_note}</div>'
+                f'<div class="text-[11px] text-slate-500 mb-1">'
+                f'通过 chain「{_esc("、".join(chains_mapped))}」(direct) 关联的 picks（{n_assoc} 只，前 {len(t["picks_assoc"])}）：'
+                f'</div>'
                 f'<div class="flex flex-wrap gap-1.5">{"".join(pick_chips)}</div>'
+                f'</div>'
+            )
+        else:
+            # partial 映射：chain 是粗分类（如"数据中心电力"包电力+液冷），不能直接展示具体票
+            # 否则会把 VST/GEV/NRG（电力供给）误标为"水冷"主题。
+            # 等公司级证据 confirmed/candidate 之后才在主题下显示具体公司。
+            picks_assoc_html = (
+                f'<div class="mt-2 pt-2 border-t border-slate-100">'
+                f'<div class="text-[11px] text-amber-700 mb-1">'
+                f'⚠️ <strong>粗映射</strong>：暂只能 partial 关联到 chain「{_esc("、".join(chains_mapped))}」 · '
+                f'该 chain 内有 {n_assoc} 只系统 picks，但 chain 是粗分类，'
+                f'每只票主营是否真属于此主题需要公司级证据（SEC filings 等）确认。'
+                f'</div>'
+                f'<div class="text-[10px] text-slate-500">'
+                f'本主题下不展示具体公司 — 待 ai_theme_company_evidence 表写入 confirmed 公司证据后才呈现。'
+                f'你可以到下方「{_esc("、".join(chains_mapped))}」链卡看 chain 全量。'
+                f'</div>'
                 f'</div>'
             )
 
@@ -1028,6 +1054,8 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
     """
     n_total = payload["n_picks_total"]
     n_chain = payload["n_picks_with_chain"]
+    n_any_chain = payload.get("n_picks_with_any_chain") or n_chain
+    n_filtered_non_ai = max(n_any_chain - n_chain, 0)
     coverage_pct = round(n_chain / n_total * 100, 1) if n_total else 0
     data_at = (payload.get("data_generated_at") or "")[:19].replace("T", " ")
 
@@ -1067,7 +1095,7 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
 
     trend_html = f"""
 <div class="bg-white ring-1 ring-slate-200 rounded-xl p-4 mb-4">
-  <div class="text-xs text-slate-500 mb-1">📊 数据驱动的链条趋势 · 系统打分近 7 天变化</div>
+  <div class="text-xs text-slate-500 mb-1">📊 数据驱动的 AI 相关链趋势 · 系统打分近 7 天变化</div>
   <div class="text-sm text-slate-700 mb-1">📈 发酵中：{rise_html}</div>
   <div class="text-sm text-slate-700">📉 冷却中：{fall_html}</div>
   <div class="text-[11px] text-slate-400 mt-2">指标含义：同一条产业链最新 picks 的平均系统分 - 7 天前 picks 的平均分。非买卖信号，仅供识别"市场资金/打分关注度在哪条链上"。</div>
@@ -1087,14 +1115,14 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
     <div class="text-[10px] text-slate-400 mt-0.5">三市场最新一批合计</div>
   </div>
   <div class="bg-white ring-1 ring-slate-200 rounded-lg p-3">
-    <div class="text-[11px] text-slate-500">已分类</div>
+    <div class="text-[11px] text-slate-500">AI 相关链</div>
     <div class="text-lg font-semibold text-slate-800">{n_chain} <span class="text-xs text-slate-500">({coverage_pct}%)</span></div>
-    <div class="text-[10px] text-slate-400 mt-0.5">含 chain_metadata 标签</div>
+    <div class="text-[10px] text-slate-400 mt-0.5">已过滤非 AI 链 {n_filtered_non_ai} 只</div>
   </div>
   <div class="bg-white ring-1 ring-slate-200 rounded-lg p-3">
-    <div class="text-[11px] text-slate-500">价值链层数</div>
+    <div class="text-[11px] text-slate-500">AI 链层数</div>
     <div class="text-lg font-semibold text-slate-800">{len(payload["chains"])}</div>
-    <div class="text-[10px] text-slate-400 mt-0.5">已命中 picks 的链</div>
+    <div class="text-[10px] text-slate-400 mt-0.5">已命中 picks 的 AI 链</div>
   </div>
 </div>
 """
@@ -1123,70 +1151,41 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
                       "text-rose-700" if (delta or 0) <= MAINLINE_FALL_DELTA else "text-slate-500"
         delta_txt = f'{delta:+.1f}' if delta is not None else 'N/A'
 
-        # 该 chain 对应哪些前瞻主题（用于在 chain 卡顶部打主题标签 + 嵌主题宏观证据）
+        # 该 chain 对应哪些前瞻主题
+        # 设计选择：chain 卡只挂"对应主题"小徽章，不嵌入主题宏观证据。
+        # 嵌入证据会造成视觉上"chain 卡 = 主题"的错觉（让 VST 看起来像水冷股）。
+        # 主题宏观证据统一在顶部 5 主题数据基建 panel 里看。
         mapped_themes = c.get("mapped_themes") or []
         theme_badges = []
-        theme_evidence_blocks = []
-        if mapped_themes and theme_panel:
-            theme_idx = {tp["theme_id"]: tp for tp in theme_panel.get("themes", [])}
-            for mt in mapped_themes:
-                rel = mt.get("relevance") or "direct"
-                rel_marker = "" if rel == "direct" else " <span class=\"text-[10px] text-amber-600\">(粗映射)</span>"
-                theme_badges.append(
-                    f'<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] '
-                    f'bg-violet-50 text-violet-800 ring-1 ring-violet-200">📑 {_esc(mt["display"])}</span>{rel_marker}'
-                )
-                # 把该主题的宏观证据嵌入（折叠）
-                tp = theme_idx.get(mt["theme_id"])
-                if tp:
-                    metric_lines = []
-                    for m in (tp.get("latest_metrics") or [])[:4]:
-                        val = m["metric_value"]
-                        val_str = f"{val:g}" if val is not None else "—"
-                        metric_lines.append(
-                            f'<div class="text-[11px] flex items-baseline justify-between gap-2 py-0.5">'
-                            f'<span class="text-slate-700">{_esc(m["metric_name"])}</span>'
-                            f'<span class="font-mono text-slate-800">{val_str} '
-                            f'<span class="text-slate-400 text-[10px]">{_esc(m.get("metric_unit") or "")}</span></span>'
-                            f'<a href="{_esc(m["source_url"] or "")}" target="_blank" '
-                            f'class="text-[10px] text-violet-600 hover:underline ml-2 whitespace-nowrap">'
-                            f'{_esc(m["source_id"])} · {_esc(m["metric_date"])}</a>'
-                            f'</div>'
-                        )
-                    src_items = []
-                    for s in (tp.get("sources_detail") or []):
-                        status_emoji = "✅" if s["status"] == "ok" else "⚠️"
-                        src_items.append(
-                            f'<li class="text-[11px]">{status_emoji} '
-                            f'<span class="text-violet-700 font-mono">[{s["source_tier"]}]</span> '
-                            f'<a href="{_esc(s["source_url"])}" target="_blank" '
-                            f'class="text-slate-700 hover:underline">{_esc(s["source_name"])}</a>'
-                            f'{" · " + _esc(s["status"]) if s["status"] != "ok" else ""}</li>'
-                        )
-                    metric_html = ("".join(metric_lines)
-                                   or '<div class="text-[11px] text-slate-400">该主题暂未录入宏观指标</div>')
-                    theme_evidence_blocks.append(f"""
-<details class="mt-2 bg-violet-50/50 rounded-lg ring-1 ring-violet-200 p-3">
-  <summary class="cursor-pointer text-[12px] text-violet-800 font-semibold list-none flex items-center justify-between">
-    <span>📑 {_esc(tp["display_name"])} · 主题宏观证据</span>
-    <span class="text-[10px] text-slate-500 group-open:hidden">点开看 ▾</span>
-  </summary>
-  <div class="mt-2 pt-2 border-t border-violet-200">
-    <div class="text-[10px] text-slate-500 mb-1">受益逻辑：{_esc(tp["why"])}</div>
-    <div class="mb-2">{metric_html}</div>
-    <div class="text-[10px] text-slate-500 mb-1">数据源（{tp["sources_ok"]}/{tp["sources_total"]} ok · A 类 {tp["sources_a"]} / B 类 {tp["sources_b"]}）：</div>
-    <ul class="space-y-0.5 pl-1">{"".join(src_items)}</ul>
-  </div>
-</details>
-""")
+        has_partial = False
+        for mt in mapped_themes:
+            rel = mt.get("relevance") or "direct"
+            if rel != "direct":
+                has_partial = True
+            rel_marker = "" if rel == "direct" else " <span class=\"text-[10px] text-amber-600\">(粗映射)</span>"
+            theme_badges.append(
+                f'<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] '
+                f'bg-violet-50 text-violet-800 ring-1 ring-violet-200">📑 {_esc(mt["display"])}</span>{rel_marker}'
+            )
 
-        themes_header_html = (
-            f'<div class="mt-1 flex items-center gap-1.5 flex-wrap">'
-            f'<span class="text-[10px] text-slate-500">对应前瞻主题：</span>'
-            f'{" ".join(theme_badges)}</div>'
-            if theme_badges else ""
-        )
-        theme_evidence_html = "".join(theme_evidence_blocks)
+        themes_header_html = ""
+        if theme_badges:
+            disclaimer = ""
+            if has_partial:
+                disclaimer = (
+                    '<div class="text-[10px] text-amber-700 mt-0.5">'
+                    '⚠️ 粗映射：chain 范围大于上述主题（如本 chain 包电力+液冷+电网），'
+                    'chain 内具体票主营是否属于该主题需自行核实。主题宏观证据请见顶部「5 前瞻主题数据基建」。'
+                    '</div>'
+                )
+            themes_header_html = (
+                f'<div class="mt-1">'
+                f'<div class="flex items-center gap-1.5 flex-wrap">'
+                f'<span class="text-[10px] text-slate-500">对应前瞻主题：</span>'
+                f'{" ".join(theme_badges)}</div>'
+                f'{disclaimer}</div>'
+            )
+        theme_evidence_html = ""  # 移除嵌入；主题证据统一在主题 panel
 
         chain_cards.append(f"""
 <div class="bg-white ring-1 ring-slate-200 rounded-xl p-4 mb-3">
@@ -1228,6 +1227,45 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
         '</div>'
     )
 
+    # ─── 系统池其它高分板块：AI 关联="无" 的链（创新药/新能源车/军工等）
+    # 不在主视图但仍 surface，避免用户以为 AI 雷达漏看市场，同时明确"这不属于 AI 主线"
+    other_chains = payload.get("filtered_non_ai_chains") or []
+    if other_chains:
+        other_rows = []
+        for c in other_chains:
+            pick_chips = []
+            for p in c.get("top_picks") or []:
+                pick_chips.append(
+                    f'<span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white ring-1 ring-slate-200 text-[11px]">'
+                    f'{_market_label(p["market"])} <span class="font-mono">{_esc(p["symbol"])}</span> '
+                    f'<span class="text-slate-500">{_esc((p["name"] or "")[:10])}</span> '
+                    f'<span class="font-semibold text-slate-700">{p["score"]:.0f}</span>'
+                    f'</span>'
+                )
+            other_rows.append(f"""
+<details class="py-2 border-b border-slate-100 last:border-0">
+  <summary class="cursor-pointer list-none flex items-center justify-between gap-2 text-[12px]">
+    <span class="font-semibold text-slate-700">{_esc(c["chain"])}</span>
+    <span class="text-[11px] text-slate-500">{c["n_stocks"]} 只 · 均分 {c["avg_score"]:.1f}</span>
+  </summary>
+  <div class="mt-2 flex flex-wrap gap-1.5">{"".join(pick_chips)}</div>
+</details>
+""")
+        other_chains_html = f"""
+<details class="bg-slate-50 ring-1 ring-slate-200 rounded-xl p-4 mb-3">
+  <summary class="cursor-pointer list-none flex items-center justify-between gap-2">
+    <div>
+      <div class="text-sm font-bold text-slate-700">📊 系统池其它高分板块（非 AI 主线）</div>
+      <div class="text-[11px] text-slate-500 mt-0.5">这些链系统打分也高，但 AI 关联强度为"无"，不在 AI 主题雷达主视图。点开看具体票。</div>
+    </div>
+    <span class="text-[11px] text-slate-500">{len(other_chains)} 条链</span>
+  </summary>
+  <div class="mt-3 pt-3 border-t border-slate-200">{"".join(other_rows)}</div>
+</details>
+"""
+    else:
+        other_chains_html = ""
+
     ca = payload["coverage_audit"]
     if ca["n_uncovered"]:
         audit_rows = []
@@ -1264,6 +1302,7 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
   <strong class="text-slate-700">本页定位：</strong>
   AI 主题雷达只解释「这些票为什么和 AI 有关、当前主线在哪一层」，不是买入清单。
   系统分高与 AI 关联强都只是分类指标，不构成买入信号。
+  创新药、新能源车、军工等 AI 关联强度为"无"的链条已从本页主视图过滤，仍保留在 AI 推荐和产业链地图中。
   实际下单仍由「AI 推荐 / AI 配仓 / 买前研究」共同决定，本页不写自选股、不写真实持仓。
 </div>
 """
@@ -1280,8 +1319,8 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
   {trend_html}
   {kpi_html}
   {chains_html}
+  {other_chains_html}
   {audit_html}
   {footer_html}
 </section>
 """
-
