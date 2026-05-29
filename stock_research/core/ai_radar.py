@@ -774,18 +774,56 @@ def _render_theme_evidence_panel_compact(panel: dict[str, Any], chain_to_themes_
         ok_badge = f'<span class="font-semibold {ok_color}">{t["sources_ok"]}/{t["sources_total"]}</span>'
 
         if is_mapped:
-            # 该主题已经映射到某条 chain，详细信息在那个 chain 卡里展示
-            # 这里只给一行 mini 摘要，引导用户去链卡
+            # 该主题已映射到 chain — 具体公司列表在 chain 卡看
+            # 这里 collapsible 展开能看到该主题的宏观指标 + 数据源详情（无具体 ticker，避免视觉混淆）
             n_metrics = t.get("metrics_count", 0)
             metric_hint = f"宏观指标 {n_metrics} 条" if n_metrics else "宏观指标暂未录入"
+
+            # 展开内容：metric_lines + 数据源清单
+            metric_lines = []
+            for m in (t.get("latest_metrics") or [])[:6]:
+                val = m["metric_value"]
+                val_str = f"{val:g}" if val is not None else "—"
+                metric_lines.append(
+                    f'<div class="text-[11px] flex items-baseline justify-between gap-2 py-0.5">'
+                    f'<span class="text-slate-700">{_esc(m["metric_name"])}</span>'
+                    f'<span class="font-mono text-slate-800">{val_str} '
+                    f'<span class="text-slate-400 text-[10px]">{_esc(m.get("metric_unit") or "")}</span></span>'
+                    f'<a href="{_esc(m["source_url"] or "")}" target="_blank" '
+                    f'class="text-[10px] text-violet-600 hover:underline ml-2 whitespace-nowrap">'
+                    f'{_esc(m["source_id"])} · {_esc(m["metric_date"])}</a>'
+                    f'</div>'
+                )
+            metric_html = "".join(metric_lines) or '<div class="text-[11px] text-slate-400">宏观指标暂未录入</div>'
+
+            src_items = []
+            for s in t["sources_detail"]:
+                status_emoji = "✅" if s["status"] == "ok" else "⚠️"
+                tier_color = "text-violet-700" if s["source_tier"] == "A" else "text-sky-700"
+                src_items.append(
+                    f'<li class="text-[11px]">{status_emoji} <span class="{tier_color} font-mono">[{s["source_tier"]}]</span> '
+                    f'<a href="{_esc(s["source_url"])}" target="_blank" class="text-slate-700 hover:text-violet-700 hover:underline">'
+                    f'{_esc(s["source_name"])}</a>'
+                    f'{" · " + _esc(s["status"]) if s["status"] != "ok" else ""}</li>'
+                )
+
             mini_rows.append(f"""
-<div class="flex items-center justify-between py-1.5 text-[12px] border-b border-slate-100 last:border-0">
-  <div class="flex items-center gap-2">
-    <span class="font-semibold text-slate-800">{_esc(t["display_name"])}</span>
-    <span class="text-[11px] text-slate-500">数据源 {ok_badge} · {metric_hint}</span>
+<details class="border-b border-slate-100 last:border-0">
+  <summary class="cursor-pointer list-none flex items-center justify-between py-1.5 text-[12px]">
+    <div class="flex items-center gap-2">
+      <span class="font-semibold text-slate-800">{_esc(t["display_name"])}</span>
+      <span class="text-[11px] text-slate-500">数据源 {ok_badge} · {metric_hint}</span>
+    </div>
+    <span class="text-[11px] text-violet-700">具体公司见下方链卡 ↓ · 点开看宏观指标 ▾</span>
+  </summary>
+  <div class="pl-3 py-2 mt-1 border-l-2 border-violet-200">
+    <div class="text-[10px] text-slate-500 mb-1">受益逻辑：{_esc(t["why"])}</div>
+    <div class="text-[10px] text-slate-500 mb-1">最新宏观指标：</div>
+    <div class="mb-2">{metric_html}</div>
+    <div class="text-[10px] text-slate-500 mb-1">数据源清单：</div>
+    <ul class="space-y-0.5 pl-1">{"".join(src_items)}</ul>
   </div>
-  <span class="text-[11px] text-violet-700">详见下方链卡 ↓</span>
-</div>
+</details>
 """)
         else:
             # chain 未覆盖的主题，独立成卡（如 AI 数据 / 当前可能也是稀土）

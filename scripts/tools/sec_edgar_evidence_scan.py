@@ -110,28 +110,56 @@ def search_filings(query: str, forms: str, max_hits: int = 20) -> list[dict]:
 def upsert_evidence_candidate(con, theme: str, ticker: str | None, cik: str,
                               company_name: str, source_url: str,
                               source_title: str, source_date: str | None,
-                              evidence_kind: str, evidence_text: str) -> None:
-    """灌一条 candidate 证据。同一 (theme, cik, source_url) 重跑会替换。"""
+                              evidence_kind: str, evidence_text: str,
+                              accession: str | None = None,
+                              expires_at=None) -> None:
+    """灌一条 candidate 证据。同一 (theme, cik, source_url) 重跑会替换。
+
+    accession 存进 metric_json（schema 没有独立列），便于后续审计追踪。
+    expires_at = source_date + 180 天（文档 §九 stale 规则）；过期标 stale。
+    """
     eid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{theme}|{cik}|{source_url}"))
+    metric_json = json.dumps({"accession": accession, "cik": cik}) if accession else None
     con.execute("""
         INSERT INTO ai_theme_company_evidence
           (evidence_id, theme, market, symbol, company_name,
            evidence_status, source_id, source_tier, source_url, source_title,
-           source_date, evidence_text, evidence_kind, confidence_score, reviewer_note)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           source_date, evidence_text, evidence_kind, metric_json,
+           confidence_score, expires_at, reviewer_note)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (evidence_id) DO UPDATE SET
           source_title = excluded.source_title,
           source_date = excluded.source_date,
           evidence_text = excluded.evidence_text,
           evidence_kind = excluded.evidence_kind,
-          confidence_score = excluded.confidence_score
+          metric_json = excluded.metric_json,
+          confidence_score = excluded.confidence_score,
+          expires_at = excluded.expires_at,
+          evidence_status = excluded.evidence_status
     """, [
         eid, theme, "US" if ticker else None, ticker, company_name,
         "candidate",  # PoC 阶段一律 candidate
         "sec_edgar_api", "A", source_url, source_title,
-        source_date, evidence_text, evidence_kind, 0.5,
-        "PoC 自动灌入；尚未做两源验证或主营业务核实。",
+        source_date, evidence_text, evidence_kind, metric_json,
+        0.5, expires_at,
+        "PoC 自动灌入；尚未做两源验证或主营业务核实。原文 snippet 待 SEC 全文下载工程补完。",
     ])
+
+
+def mark_stale_evidence(con) -> int:
+    """把 expires_at < CURRENT_DATE 且仍是 candidate/confirmed 的标 stale。
+
+    文档 §九：超过 180 天无新证据，降级为 stale。
+    """
+    r = con.execute("""
+        UPDATE ai_theme_company_evidence
+        SET evidence_status = 'stale'
+        WHERE evidence_status IN ('candidate', 'confirmed')
+          AND expires_at IS NOT NULL
+          AND expires_at < CURRENT_DATE
+    """)
+    # DuckDB UPDATE 不返回行数，用 SELECT 后查
+    return con.execute("SELECT COUNT(*) FROM ai_theme_company_evidence WHERE evidence_status = 'stale'").fetchone()[0]
 
 
 def main() -> int:
@@ -171,15 +199,44 @@ def main() -> int:
                     ticker = info.get("ticker")
                     name = info.get("name") or (h.get("display_names") or [""])[0]
 
-                    # 构造 filing URL
-                    accession = (h.get("adsh") or "").replace("-", "")
-                    if accession:
-                        filing_url = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={cik}&type={spec['forms']}"
+                    # 构造具体 filing URL（而非公司搜索页，让用户能直接打开 10-K）
+                    # accession 格式 "0001193125-26-001234"；archives 路径用去 dashes 版本
+                    accession_dashed = h.get("adsh") or ""
+                    accession_clean = accession_dashed.replace("-", "")
+                    cik_int = int(cik)
+                    if accession_clean and accession_dashed:
+                        # 直接进 filing index page，里面列了所有 exhibit
+                        filing_url = (
+                            f"https://www.sec.gov/Archives/edgar/data/{cik_int}/"
+                            f"{accession_clean}/{accession_dashed}-index.htm"
+                        )
                     else:
-                        filing_url = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={cik}"
+                        # accession 缺失时退到公司 EDGAR 主页
+                        filing_url = (
+                            f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={cik}"
+                            f"&type={spec['forms']}"
+                        )
 
                     source_date = h.get("file_date")
                     source_title = f"{spec['forms']} — {name}" if name else spec["forms"]
+
+                    # evidence_text 保留实际可复核线索：query keywords + accession
+                    # 而非空模板。原文 snippet 需独立下载 filing 解析，留作后续工程。
+                    evidence_text = (
+                        f"{spec['forms']} filed {source_date or '?'} 全文搜索匹配关键词: "
+                        f"{spec['query']}. accession={accession_dashed or 'unknown'}. "
+                        f"具体段落需打开 filing 阅读核实。"
+                    )
+
+                    # 180 天 stale 规则（文档 §九.evidence_status）
+                    expires_at = None
+                    if source_date:
+                        try:
+                            from datetime import date as _date, timedelta as _td
+                            sd = _date.fromisoformat(source_date) if isinstance(source_date, str) else source_date
+                            expires_at = sd + _td(days=180)
+                        except Exception:
+                            pass
 
                     upsert_evidence_candidate(
                         con, theme=theme,
@@ -188,7 +245,9 @@ def main() -> int:
                         source_title=source_title,
                         source_date=source_date,
                         evidence_kind=spec["evidence_kind"],
-                        evidence_text=spec["evidence_text_template"],
+                        evidence_text=evidence_text,
+                        accession=accession_dashed or None,
+                        expires_at=expires_at,
                     )
                     total_evi += 1
 
@@ -196,6 +255,10 @@ def main() -> int:
                 time.sleep(0.2)
 
         print(f"\n✅ 共 upsert {total_evi} 条 candidate 证据入 ai_theme_company_evidence")
+
+        # 文档 §九：跑 stale 规则把过期 evidence 降级
+        n_stale = mark_stale_evidence(con)
+        print(f"  stale 规则: 现存 stale 条目 {n_stale} 条（180 天前的 evidence 自动降级）")
 
         # 分布统计
         by_theme = dict(con.execute("""

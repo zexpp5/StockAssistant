@@ -74,13 +74,17 @@ METRICS: list[tuple] = [
      date(2026, 5, 1)),
 
     # ───── smr ─────
+    # 注：这两条数据来自 DOE ARDP 主页对 DE-FOA-0002271 的描述。
+    # DE-FOA-0002271 是 ARDP 项目的初始 funding announcement，金额 $160M，
+    # 对应资助 2 个示范项目（TerraPower Natrium + X-energy Xe-100）。
+    # 不要写成"累计拨款" — 后续 TerraPower/X-energy 还有数十亿增补，未计入此项。
     ("smr",
-     "DOE ARDP 示范项目数", 2, "个",
+     "DOE ARDP 初始示范项目数 (DE-FOA-0002271)", 2, "个",
      "doe_ardp",
      "https://www.energy.gov/ne/advanced-reactor-demonstration-projects",
      date(2026, 5, 29)),
     ("smr",
-     "DOE ARDP 累计拨款", 160, "USD M",
+     "DOE ARDP DE-FOA-0002271 初始拨款", 160, "USD M",
      "doe_ardp",
      "https://www.energy.gov/ne/advanced-reactor-demonstration-projects",
      date(2026, 5, 29)),
