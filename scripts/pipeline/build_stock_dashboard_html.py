@@ -388,6 +388,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <a href="#discovery" data-tab="discovery" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">AI 推荐</a>
       <a href="#backtest" data-tab="backtest" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">AI 配仓</a>
       <a href="#portfolio" data-tab="portfolio" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">AI 跟踪</a>
+      <a href="#ai-radar" data-tab="ai-radar" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">AI 主题雷达</a>
     </div>
 
     <!-- 深度研究 = 买前解释和审查 (IPO & 次新 已并入 📊 股票池) -->
@@ -1975,6 +1976,9 @@ function switchDiscoveryView(view) {
 
   <div id="chain-cards-container" class="space-y-6"></div>
 </section>
+
+<!-- ============ 📡 AI 主题雷达（行业理解层 · 非推荐池 · docs/V2/AI主题雷达_产品定位.md） ============ -->
+{AI_RADAR_SECTION}
 
 <!-- ============ 📅 IPO & 次新股（数据来自 data/latest/junior_stock_radar.json） ============ -->
 <section id="ipo-junior" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
@@ -5071,6 +5075,8 @@ const TAB_SECTIONS = {
   portfolio: ["portfolio"],
   discovery: ["discovery"],
   backtest: ["backtest"],
+  // ai-radar = 「📡 AI 主题雷达」· 行业理解层（非推荐池）· 见 docs/V2/AI主题雷达_产品定位.md
+  "ai-radar": ["ai-radar"],
   picks: ["picks-review"],
   "buy-research": ["valuation", "audit-panel"],
   audit: ["valuation", "audit-panel"],
@@ -6777,12 +6783,8 @@ async function _loadRealHoldingReview() {
     if (!r.ok) return _realHoldingReviewCache;
     const api = await r.json();
     if (!api || !api.items || !api.items.length) return _realHoldingReviewCache;
-    // 旧版 API 进程可能未带 industry_heat：有嵌入数据时优先嵌入，除非 API 已含完整字段
-    if (_reviewPayloadHasHeat(api) || !embedded) {
-      _realHoldingReviewCache = _mergeReviewHeatFromEmbedded(api);
-    } else {
-      _realHoldingReviewCache = _mergeReviewHeatFromEmbedded(_realHoldingReviewCache);
-    }
+    // API 是单一来源（generated_at / 现价 / pnl 都看它），industry_heat 缺失时由 embedded 逐 item 兜底
+    _realHoldingReviewCache = _mergeReviewHeatFromEmbedded(api);
     return _realHoldingReviewCache;
   } catch (e) {
     return _realHoldingReviewCache;
@@ -6966,12 +6968,34 @@ function _holdingCodeAliases(code) {
 }
 
 function _reviewByCode() {
+  // 2026-05-29 lot accounting: 兜底用 — 当 holding 没 id (理论不该有) 时按 code 兜底.
+  // 主路径请用 _reviewByHoldingId() 索引,避免同 code 多 lot 互相覆盖.
   if (!_realHoldingReviewCache || !_realHoldingReviewCache.items) return {};
   const m = {};
   for (const item of _realHoldingReviewCache.items) {
     for (const alias of _holdingCodeAliases(item.code || item.symbol)) m[alias] = item;
   }
   return m;
+}
+
+function _reviewByHoldingId() {
+  // 按 real_holdings.id 索引 review_item — 支持同 symbol 多 lot 各自独立追踪
+  if (!_realHoldingReviewCache || !_realHoldingReviewCache.items) return {};
+  const m = {};
+  for (const item of _realHoldingReviewCache.items) {
+    if (item.holding_id != null) m[String(item.holding_id)] = item;
+  }
+  return m;
+}
+
+function _lookupReviewItemForHolding(holding) {
+  // 2026-05-29: 优先按 holding.id 查 review (lot 独立);兜底按 code (旧 review 未带 holding_id)
+  if (holding && holding.id != null) {
+    const byId = _reviewByHoldingId();
+    const hit = byId[String(holding.id)];
+    if (hit) return hit;
+  }
+  return _lookupReviewItem(holding && (holding.code || holding.symbol));
 }
 
 // 把 ISO 时间戳格式化成 "YYYY-MM-DD HH:MM:SS"，缺值返回空串。
@@ -7954,7 +7978,8 @@ async function renderRealHoldings() {
   const enriched = holdings.map(h => {
     const code = h.code || h.symbol;
     const rec = _findRecord(code);
-    const reviewItem = _lookupReviewItem(code);
+    // 2026-05-29 lot accounting: 按 holding.id 查 review_item (而非 code) — 支持同 symbol 多 lot
+    const reviewItem = _lookupReviewItemForHolding(h);
     const reviewCost = _numOrNull(reviewItem && reviewItem.cost_rmb_locked);
     const reviewValue = _numOrNull(reviewItem && reviewItem.current_value_rmb);
     const reviewPnl = _numOrNull(reviewItem && reviewItem.pnl_rmb);
@@ -15936,6 +15961,52 @@ def build():
         print(f"  AI 配仓 C 动态: {m['n_rebalances']} 次调仓 · 累计手续费 {dynamic_db.get('total_commission_pct', 0)}% · "
               f"跟踪 {m['n_tracked_days']} 日 · 累计 {m['cumulative_return_pct']}% (vs SPY {m['bench_cumulative_return_pct']}%)")
     html = html.replace("{PLAN_DYNAMIC_JSON_DB}", json.dumps(dynamic_db, ensure_ascii=False))
+
+    # 📡 AI 主题雷达 — 行业理解层（非推荐池）· 见 docs/V2/AI主题雷达_产品定位.md
+    # 只读 chain_metadata + recommendation_picks + manual_watchlist（仅打 "已在自选" 标记，不写）。
+    ai_radar_html = ""
+    try:
+        from stock_research.core.ai_radar import (
+            build_ai_radar_payload,
+            build_theme_evidence_panel,
+            build_etf_consensus_panel,
+            render_ai_radar_section,
+        )
+        _radar_conn = duckdb.connect(os.path.join(_REPO, "stock_history_v2.duckdb"), read_only=True)
+        try:
+            radar_payload = build_ai_radar_payload(_radar_conn)
+            theme_panel = build_theme_evidence_panel(_radar_conn)
+            etf_panel = build_etf_consensus_panel(_radar_conn)
+        finally:
+            _radar_conn.close()
+        ai_radar_html = render_ai_radar_section(
+            radar_payload,
+            my_view_headline=MY_VIEW["headline"],
+            my_view_summary=MY_VIEW["summary"],
+            theme_panel=theme_panel,
+            etf_panel=etf_panel,
+        )
+        n_chains = len(radar_payload.get("chains") or [])
+        n_picks = radar_payload.get("n_picks_total") or 0
+        n_covered = radar_payload.get("n_picks_with_chain") or 0
+        n_uncov = (radar_payload.get("coverage_audit") or {}).get("n_uncovered") or 0
+        n_themes = len((theme_panel or {}).get("themes") or [])
+        n_src_ok = sum(t.get("sources_ok", 0) for t in (theme_panel or {}).get("themes") or [])
+        n_src_tot = sum(t.get("sources_total", 0) for t in (theme_panel or {}).get("themes") or [])
+        n_etfs = len((etf_panel or {}).get("etfs") or [])
+        n_etf_uni = (etf_panel or {}).get("summary", {}).get("n_holdings_in_universe", 0)
+        n_etf_tot = (etf_panel or {}).get("summary", {}).get("n_holdings_total", 0)
+        print(f"  AI 主题雷达: {n_chains} 条链 · picks {n_covered}/{n_picks} 已分类 · 覆盖率审计 {n_uncov} 只 · "
+              f"主题证据卡 {n_themes} 张 · 数据源 {n_src_ok}/{n_src_tot} ok · "
+              f"ETF 共识 {n_etfs} 个 · universe 命中 {n_etf_uni}/{n_etf_tot}")
+    except Exception as _e:
+        print(f"  ⚠️ AI 主题雷达渲染失败（不阻断 dashboard）：{_e}")
+        ai_radar_html = (
+            '<section id="ai-radar" class="max-w-7xl mx-auto px-6 py-10" style="display:none">'
+            '<div class="bg-amber-50 ring-1 ring-amber-200 rounded p-4 text-sm text-amber-800">'
+            'AI 主题雷达数据加载失败，请稍后重试或查看后台日志。</div></section>'
+        )
+    html = html.replace("{AI_RADAR_SECTION}", ai_radar_html)
 
     with open(OUTPUT, "w", encoding="utf-8") as f:
         f.write(html)

@@ -146,8 +146,11 @@ CREATE TABLE IF NOT EXISTS real_holding_review_runs (
     generated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 2026-05-29 lot accounting: PK 改为 (review_run_id, holding_id) 支持同 symbol 多 row 独立追踪
+-- holding_id 引用 real_holdings.id (broker 业界标准 per-lot tracking)
 CREATE TABLE IF NOT EXISTS real_holding_review_items (
     review_run_id      VARCHAR NOT NULL,
+    holding_id         INTEGER NOT NULL,
     account            VARCHAR,
     market             VARCHAR,
     symbol             VARCHAR NOT NULL,
@@ -174,15 +177,11 @@ CREATE TABLE IF NOT EXISTS real_holding_review_items (
     prev_trade_date    VARCHAR,
     day_change_rmb     DOUBLE,
     day_change_pct     DOUBLE,
+    size_advisory_json VARCHAR,
+    industry_heat_json VARCHAR,
     created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (review_run_id, symbol)
+    PRIMARY KEY (review_run_id, holding_id)
 );
-ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS prev_close DOUBLE;
-ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS prev_trade_date VARCHAR;
-ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS day_change_rmb DOUBLE;
-ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS day_change_pct DOUBLE;
-ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS size_advisory_json VARCHAR;
-ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS industry_heat_json VARCHAR;
 -- 注：manual_watchlist 的 industry / business 字段升级 ALTER 已从这里移除，
 -- 因为 manual_watchlist 表由 init_stock_db_v2.py 建（已含这两列）。
 -- 在不跑 init_stock_db_v2 的新 DB（test/临时）上，ALTER 不存在的表会 crash。
@@ -200,6 +199,126 @@ CREATE TABLE IF NOT EXISTS chain_metadata (
     source        VARCHAR DEFAULT 'rule_classify',
     classified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (market, symbol)
+);
+
+-- ============ AI 主题雷达 · 证据系统（docs/V2/AI主题雷达_产品定位.md §八）============
+-- 设计原则：
+--   1. 任何证据必须有 source_url，否则不能入库（seed 脚本会 assert）
+--   2. source_tier ∈ {A, B, C}，A=政府/监管/公司财报，B=ETF/行业协会，C=新闻
+--   3. evidence_status ∈ {candidate, confirmed, stale, needs_review, rejected}
+--   4. 首版只建表，不写 SEC/PDF 抓取；用 seed 脚本灌官方 URL 种子。
+CREATE TABLE IF NOT EXISTS ai_theme_evidence_sources (
+    source_id        VARCHAR PRIMARY KEY,
+    source_name      VARCHAR NOT NULL,
+    source_tier      VARCHAR NOT NULL,    -- A | B | C
+    source_type      VARCHAR NOT NULL,    -- government | regulator | company_filing | company_ir | industry | etf | news | open_dataset
+    source_url       VARCHAR NOT NULL,
+    update_cadence   VARCHAR,
+    license_note     VARCHAR,
+    last_checked_at  TIMESTAMP,
+    last_check_status VARCHAR,            -- ok | http_404 | http_5xx | timeout | network_err
+    last_check_http  INTEGER,
+    active           BOOLEAN DEFAULT TRUE
+);
+
+CREATE TABLE IF NOT EXISTS ai_theme_company_evidence (
+    evidence_id      VARCHAR PRIMARY KEY,
+    theme            VARCHAR NOT NULL,    -- liquid_cooling | rare_earths | uranium | smr | ai_data
+    market           VARCHAR,
+    symbol           VARCHAR,
+    company_name     VARCHAR,
+    evidence_status  VARCHAR NOT NULL,    -- candidate | confirmed | stale | needs_review | rejected
+    source_id        VARCHAR NOT NULL,
+    source_tier      VARCHAR NOT NULL,
+    source_url       VARCHAR NOT NULL,
+    source_title     VARCHAR,
+    source_date      DATE,
+    captured_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    evidence_text    VARCHAR,
+    evidence_kind    VARCHAR,             -- keyword_hit | filing_metric | contract | project_status | macro_metric | holdings_seed
+    metric_json      VARCHAR,
+    confidence_score DOUBLE,
+    expires_at       DATE,
+    reviewer_note    VARCHAR
+);
+
+CREATE TABLE IF NOT EXISTS ai_theme_company_tags (
+    theme              VARCHAR NOT NULL,
+    market             VARCHAR NOT NULL,
+    symbol             VARCHAR NOT NULL,
+    company_name       VARCHAR,
+    theme_role         VARCHAR,
+    ai_strength        VARCHAR,           -- 强 | 中 | 弱 | 无
+    evidence_status    VARCHAR,           -- confirmed | candidate | stale | needs_review
+    evidence_score     DOUBLE,
+    source_count_a     INTEGER,
+    source_count_b     INTEGER,
+    source_count_c     INTEGER,
+    latest_source_date DATE,
+    rationale          VARCHAR,
+    updated_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (theme, market, symbol)
+);
+
+CREATE TABLE IF NOT EXISTS ai_theme_topic_metrics (
+    theme             VARCHAR NOT NULL,
+    metric_date       DATE NOT NULL,
+    metric_name       VARCHAR NOT NULL,
+    metric_value      DOUBLE,
+    metric_unit       VARCHAR,
+    source_id         VARCHAR NOT NULL,
+    source_url        VARCHAR,
+    captured_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (theme, metric_date, metric_name, source_id)
+);
+
+-- 主题 ↔ 数据源 多对多映射（一个 sec_edgar_api 同时服务"水冷"和"AI 数据"）
+-- 用于 dashboard 按主题聚合"该主题有几个 A/B 类源，几个 ok / degraded"
+CREATE TABLE IF NOT EXISTS ai_theme_source_mapping (
+    theme       VARCHAR NOT NULL,    -- liquid_cooling | rare_earths | uranium | smr | ai_data
+    source_id   VARCHAR NOT NULL,    -- 引用 ai_theme_evidence_sources.source_id
+    note        VARCHAR,             -- 在该主题下这个源具体用途
+    PRIMARY KEY (theme, source_id)
+);
+
+-- 主题 ↔ chain 多对多映射（粗-细两套分类的桥）
+-- chain_metadata 是粗分类（"数据中心电力"包了电力+液冷），5 主题是细分类
+-- 通过这张表，主题卡能拉到该主题关联 chain 下的 picks 数
+CREATE TABLE IF NOT EXISTS ai_theme_chain_mapping (
+    theme       VARCHAR NOT NULL,
+    chain       VARCHAR NOT NULL,    -- 引用 chain_metadata.chain 的值
+    relevance   VARCHAR,             -- direct | partial | indirect
+    note        VARCHAR,
+    PRIMARY KEY (theme, chain)
+);
+
+-- ETF 驱动的主题发现 — 抄市场共识，避免 hardcode 主题清单
+-- 每个主题 ETF 持仓 Top N 就是"市场公认这个主题里值得关注的标的"
+-- 见 docs/V2/AI主题雷达_产品定位.md（ETF 数据源补充）
+CREATE TABLE IF NOT EXISTS ai_theme_etf_universe (
+    etf_ticker      VARCHAR PRIMARY KEY,
+    etf_name        VARCHAR NOT NULL,
+    issuer          VARCHAR NOT NULL,    -- Global X | VanEck | iShares | Range
+    theme_label     VARCHAR NOT NULL,    -- 机器人 + AI | 稀土 | 铀 | 半导体 | ...
+    theme_id        VARCHAR,             -- 关联到 ai_theme_evidence_sources 的 theme（若可对应），否则 NULL
+    holdings_url    VARCHAR NOT NULL,
+    note            VARCHAR,
+    active          BOOLEAN DEFAULT TRUE,
+    last_fetched_at TIMESTAMP
+);
+
+-- ETF 持仓快照 — 每次 fetch 覆盖该 ETF 的全量持仓
+-- rank 是 ETF 内排名（1=最大权重），weight 是百分比
+CREATE TABLE IF NOT EXISTS ai_theme_etf_holdings (
+    etf_ticker      VARCHAR NOT NULL,
+    rank            INTEGER NOT NULL,
+    raw_ticker      VARCHAR NOT NULL,    -- ETF 网站原始 ticker（如 "6954 JP", "ABBN SW", "300124 C2"）
+    company_name    VARCHAR,
+    weight          DOUBLE,              -- 百分比，0-100
+    market_inferred VARCHAR,             -- 从 raw_ticker 推断的市场（JP/SW/US/CN/HK）
+    universe_match  VARCHAR,             -- 若在我们 system_universe 命中，记 symbol；否则 NULL
+    captured_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (etf_ticker, rank)
 );
 """
 
@@ -1152,7 +1271,7 @@ REAL_HOLDING_REVIEW_RUN_COLS = [
 ]
 REAL_HOLDING_REVIEW_RUN_FULL_COLS = REAL_HOLDING_REVIEW_RUN_COLS + ["generated_at"]
 REAL_HOLDING_REVIEW_ITEM_COLS = [
-    "review_run_id", "account", "market", "symbol", "asset_class", "treatment_class",
+    "review_run_id", "holding_id", "account", "market", "symbol", "asset_class", "treatment_class",
     "score", "coverage_score", "rating", "action_label", "action_priority",
     "current_price", "current_currency", "current_value_rmb", "cost_rmb_locked",
     "pnl_rmb", "pnl_pct", "current_weight", "target_weight", "weight_gap_pt",
@@ -1478,8 +1597,14 @@ def save_real_holding_review(
         symbol = item.get("symbol") or item.get("code")
         if not symbol:
             continue
+        holding_id = item.get("holding_id")
+        if holding_id is None:
+            # 兜底:旧 caller 没传 holding_id → 跳过(不再支持按 symbol 单条写入,
+            # 避免 PK constraint 与 lot 独立追踪需求冲突)
+            continue
         vals = [
             review_run_id,
+            int(holding_id),
             item.get("account") or "default",
             item.get("market") or _infer_market_from_ticker(str(symbol)),
             symbol,
