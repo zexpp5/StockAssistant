@@ -341,9 +341,20 @@ def build_theme_evidence_panel(con) -> dict[str, Any]:
             "latest_metric_date": latest.isoformat() if hasattr(latest, "isoformat") else latest,
         }
 
-    # 拉主题关联 chain → picks
-    theme_chain_picks: dict[str, list[dict]] = {}
+    # 拉主题↔chain 映射 — 独立于 picks，避免"chain 未覆盖"误报
+    # 之前 bug：MP 在 chain_metadata（稀缺资源）但今天不在 picks，
+    # 导致 rare_earths 主题误报"chain 体系暂未覆盖"，让用户以为系统没建稀土链
     theme_chain_relevance: dict[str, dict[str, str]] = {}
+    try:
+        for theme, chain, rel in con.execute(
+            "SELECT theme, chain, relevance FROM ai_theme_chain_mapping"
+        ).fetchall():
+            theme_chain_relevance.setdefault(theme, {})[chain] = rel
+    except Exception:
+        pass
+
+    # 拉主题关联 chain → 当前 picks（用于在主题下显示具体票）
+    theme_chain_picks: dict[str, list[dict]] = {}
     for theme, chain, rel, market, symbol, name, score, role in con.execute(_SQL_THEME_CHAIN_PICKS).fetchall():
         theme_chain_picks.setdefault(theme, []).append({
             "chain": chain,
@@ -353,7 +364,6 @@ def build_theme_evidence_panel(con) -> dict[str, Any]:
             "score": float(score),
             "chain_role": role,
         })
-        theme_chain_relevance.setdefault(theme, {})[chain] = rel
 
     # 拉主题最近宏观指标
     theme_latest_metrics: dict[str, list[dict]] = {}
@@ -400,17 +410,41 @@ def build_theme_evidence_panel(con) -> dict[str, Any]:
             "latest_metrics": theme_latest_metrics.get(tid, []),
         })
 
-    # Phase 1 判断要看 evidence 原始表 — tags 是聚合结果（尚未写聚合 job）
+    # Phase 1 三档化（修复之前的过度乐观 ✅）：
+    #   未启动 = evidence 表为空
+    #   PoC    = 有 evidence 条目但全部 candidate，或 confirmed 主题覆盖率 < 80%
+    #   完成   = ≥ 80% 主题有 confirmed 公司证据
     n_evi_total = con.execute(
         "SELECT COUNT(*) FROM ai_theme_company_evidence"
     ).fetchone()[0]
+    n_confirmed = con.execute(
+        "SELECT COUNT(*) FROM ai_theme_company_evidence WHERE evidence_status = 'confirmed'"
+    ).fetchone()[0]
+    themes_with_confirmed = con.execute(
+        "SELECT COUNT(DISTINCT theme) FROM ai_theme_company_evidence WHERE evidence_status = 'confirmed'"
+    ).fetchone()[0]
+    n_themes_total = len(THEME_ORDER)
+    confirmed_coverage = themes_with_confirmed / n_themes_total if n_themes_total else 0.0
+
+    if n_evi_total == 0:
+        phase_1_level = "not_started"
+    elif confirmed_coverage >= 0.8:
+        phase_1_level = "done"
+    else:
+        phase_1_level = "poc"
 
     return {
         "themes": themes,
         "phase_status": {
             "phase_0_sources_seeded": all(t["sources_total"] > 0 for t in themes),
-            "phase_1_evidence_scanned": n_evi_total > 0,
+            "phase_1_level": phase_1_level,
+            "phase_1_n_evidence": n_evi_total,
+            "phase_1_n_confirmed": n_confirmed,
+            "phase_1_themes_with_confirmed": themes_with_confirmed,
+            "phase_1_themes_total": n_themes_total,
             "phase_2_dashboard_integrated": True,  # 这一刀就是 Phase 2 雏形
+            # 保留旧字段兼容（其它读 phase_status 的地方）
+            "phase_1_evidence_scanned": phase_1_level == "done",
         },
     }
 
@@ -805,7 +839,21 @@ def _render_theme_evidence_panel_compact(panel: dict[str, Any], chain_to_themes_
 
     phase = panel.get("phase_status") or {}
     p0 = "✅" if phase.get("phase_0_sources_seeded") else "⏳"
-    p1 = "✅" if phase.get("phase_1_evidence_scanned") else "⏳"
+    # Phase 1 三档：未启动 ⏳ / PoC 🟡 / 完成 ✅
+    p1_level = phase.get("phase_1_level") or ("done" if phase.get("phase_1_evidence_scanned") else "not_started")
+    p1_n_evi = phase.get("phase_1_n_evidence", 0)
+    p1_n_conf = phase.get("phase_1_n_confirmed", 0)
+    p1_themes_done = phase.get("phase_1_themes_with_confirmed", 0)
+    p1_themes_total = phase.get("phase_1_themes_total", 5)
+    if p1_level == "done":
+        p1 = "✅"
+        p1_detail = f"{p1_themes_done}/{p1_themes_total} 主题有 confirmed"
+    elif p1_level == "poc":
+        p1 = "🟡 PoC"
+        p1_detail = f"{p1_n_evi} 条证据 · {p1_n_conf} confirmed · {p1_themes_done}/{p1_themes_total} 主题已有 confirmed"
+    else:
+        p1 = "⏳"
+        p1_detail = "未启动"
     p2 = "✅" if phase.get("phase_2_dashboard_integrated") else "⏳"
 
     mini_html = ""
@@ -817,8 +865,9 @@ def _render_theme_evidence_panel_compact(panel: dict[str, Any], chain_to_themes_
       <div class="text-sm font-bold text-slate-900">📑 5 前瞻主题数据基建</div>
       <div class="text-[11px] text-slate-500">下面这些主题已经映射到 AI 价值链，详细公司列表在对应链卡里。文档 §七。</div>
     </div>
-    <div class="text-[11px] text-slate-500">
-      Phase 0 数据源 {p0} · Phase 1 公司证据 {p1} · Phase 2 看板集成 {p2}
+    <div class="text-[11px] text-slate-500 text-right">
+      <div>Phase 0 数据源 {p0} · Phase 1 公司证据 {p1} · Phase 2 看板集成 {p2}</div>
+      <div class="text-[10px] text-slate-400 mt-0.5">Phase 1 状态: {_esc(p1_detail)}</div>
     </div>
   </div>
   {"".join(mini_rows)}
@@ -1018,7 +1067,21 @@ def _render_theme_evidence_panel(panel: dict[str, Any]) -> str:
     # 顶部说明
     phase = panel.get("phase_status") or {}
     p0 = "✅" if phase.get("phase_0_sources_seeded") else "⏳"
-    p1 = "✅" if phase.get("phase_1_evidence_scanned") else "⏳"
+    # Phase 1 三档：未启动 ⏳ / PoC 🟡 / 完成 ✅
+    p1_level = phase.get("phase_1_level") or ("done" if phase.get("phase_1_evidence_scanned") else "not_started")
+    p1_n_evi = phase.get("phase_1_n_evidence", 0)
+    p1_n_conf = phase.get("phase_1_n_confirmed", 0)
+    p1_themes_done = phase.get("phase_1_themes_with_confirmed", 0)
+    p1_themes_total = phase.get("phase_1_themes_total", 5)
+    if p1_level == "done":
+        p1 = "✅"
+        p1_detail = f"{p1_themes_done}/{p1_themes_total} 主题有 confirmed"
+    elif p1_level == "poc":
+        p1 = "🟡 PoC"
+        p1_detail = f"{p1_n_evi} 条证据 · {p1_n_conf} confirmed · {p1_themes_done}/{p1_themes_total} 主题已有 confirmed"
+    else:
+        p1 = "⏳"
+        p1_detail = "未启动"
     p2 = "✅" if phase.get("phase_2_dashboard_integrated") else "⏳"
 
     return f"""
@@ -1028,8 +1091,9 @@ def _render_theme_evidence_panel(panel: dict[str, Any]) -> str:
       <div class="text-sm font-bold text-slate-900">📑 5 主题数据基建状态</div>
       <div class="text-[11px] text-slate-500">行业理解层的"证据底座"：每条主题先有公开数据源，再谈公司映射。文档 §七。</div>
     </div>
-    <div class="text-[11px] text-slate-500">
-      Phase 0 数据源 {p0} · Phase 1 公司证据 {p1} · Phase 2 看板集成 {p2}
+    <div class="text-[11px] text-slate-500 text-right">
+      <div>Phase 0 数据源 {p0} · Phase 1 公司证据 {p1} · Phase 2 看板集成 {p2}</div>
+      <div class="text-[10px] text-slate-400 mt-0.5">Phase 1 状态: {_esc(p1_detail)}</div>
     </div>
   </div>
   {"".join(cards)}
