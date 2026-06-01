@@ -283,7 +283,9 @@ def _run_checks() -> dict:
     2026-05-21 V1 cutover：legacy v6_us/hk/cn picks 检查全删（约 200 行 V1 SQL）。
     """
     now = datetime.now()
-    conn = get_db()
+    # 只读验收:本工具纯读库,用 force_read_only 真正以 DuckDB 只读模式打开,
+    # 避免与 nightly 写连接抢锁(2026-06-01 复现过并发锁失败)。这是独立 CLI 非 API 进程,可安全只读。
+    conn = get_db(force_read_only=True)
     try:
         return _run_v2_checks(conn, now)
     finally:
