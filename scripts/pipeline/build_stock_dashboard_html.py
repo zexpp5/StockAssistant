@@ -312,7 +312,8 @@ MY_VIEW = {
     "headline": "AI 主线已轮动到「下一波稀缺资源」拐点",
     "summary": (
         "算力（NVDA）→ 网络（COHR）→ 电力（GEV/VST）→ 内存（SK Hynix）→ 存储（SanDisk）"
-        "都已发生。下一波最可能的「百倍候选」在：水冷、稀土、铀、SMR、AI 数据。"
+        "都已发生。前瞻跟踪方向（高不确定性、需公司证据确认后才能进入研究池）："
+        "水冷、稀土、铀、SMR、AI 数据。"
     ),
     "thesis": [
         ("✅", "确定性最高", "AI 电力链（PWR/MTZ/ETN/VRT），但已涨过较多"),
@@ -817,11 +818,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <section id="scarce" class="max-w-7xl mx-auto px-6 py-10 bg-gradient-to-br from-violet-100 to-fuchsia-50 rounded-2xl my-6 glow-card">
   <div class="flex items-center gap-3 mb-2">
     <span class="text-3xl">💎</span>
-    <h2 class="text-2xl font-bold text-violet-900">下一波稀缺资源（重点关注区）</h2>
+    <h2 class="text-2xl font-bold text-violet-900">下一波稀缺资源（前瞻跟踪方向）</h2>
   </div>
   <p class="text-violet-800 mb-6 max-w-3xl">
-    根据 SK Hynix / SanDisk 的历史路径推断，下一个百倍候选最可能在<strong>「冷门→热门」的拐点</strong>。
-    以下 5 个方向都已有真实订单兑现，但市场关注度还不充分。
+    根据 SK Hynix / SanDisk 的历史路径推断，下一个增量需求最可能在<strong>「冷门→热门」的拐点</strong>。
+    以下 5 个方向都已有真实订单兑现的迹象，但市场关注度还不充分；不构成买入建议，需走公司证据确认后才进研究池。
   </p>
   <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">
     {SCARCE_THEME_CARDS}
