@@ -1704,6 +1704,10 @@ function switchDiscoveryView(view) {
         <div id="today-plan-lock-status" class="text-sm font-medium text-amber-700 mt-0.5">—</div>
       </div>
     </header>
+    <!-- 证据不足 gate (2026-06-01): 当前策略成熟样本不足时,顶部强制"仅研究观察"横幅,
+         防止下方 PASS / 回测 Sharpe / 回测年化 被误读成"可以照着买"。
+         数据源: recommendation_evidence.json 的 evidence_grade + review_coverage(后端已算好,前端只渲染) -->
+    <div id="today-plan-evidence-gate" class="hidden mx-5 mt-4"></div>
     <!-- 顶部 KPI -->
     <div id="today-plan-kpis" class="grid grid-cols-2 md:grid-cols-5 gap-3 px-5 pt-4 pb-2"></div>
     <!-- 表格 -->
@@ -3032,6 +3036,7 @@ const DB_EXPLORER_EMBEDDED = {DB_EXPLORER_JSON};
 // 真实持仓体检：build 时从 data/latest/real_holding_review.json 注入，避免 API 未重启时缺 industry_heat / size_advisory
 const REAL_HOLDING_REVIEW_EMBEDDED = {REAL_HOLDING_REVIEW_JSON};
 const CATALYST_VALIDATION = {CATALYST_VALIDATION_JSON};
+const RECOMMENDATION_EVIDENCE = {RECOMMENDATION_EVIDENCE_JSON};  // 推荐有效性证据(evidence_grade + 成熟样本数) — 喂「今天 AI 推荐的组合」证据 gate
 let _watchlistCache = [];
 let _watchlistEditCode = null;  // null = 新增模式；非空 = 编辑该 code
 // 2026-05-14: 自动评级状态
@@ -9092,6 +9097,57 @@ function goToAIRecommend(ev) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
+// ============ 证据不足 gate (2026-06-01) ============
+// 当前策略还没攒够实测样本时,在「今天 AI 推荐的组合」顶部强制"仅研究观察"横幅,
+// 防止下方 PASS / 回测 Sharpe / 回测年化 被新手误读成"可以照着买"。
+// 数据源: RECOMMENDATION_EVIDENCE(后端 recommendation_evidence.json 已算好的 grade + 成熟样本数),前端只渲染。
+// 注: 当前 evidence_grade 是全局口径;分市场 gate(US 够样本但 CN 还是 0)属于「质量闸门分市场」那条,后续单独做。
+function renderTodayPlanEvidenceGate() {
+  const el = document.getElementById('today-plan-evidence-gate');
+  if (!el) return;
+  const ev = (typeof RECOMMENDATION_EVIDENCE !== 'undefined' && RECOMMENDATION_EVIDENCE) || {};
+  const grade = String(ev.evidence_grade || '').toUpperCase();
+  if (!grade || grade === '—') { el.classList.add('hidden'); return; }
+  const rc = ev.review_coverage || {};
+  const mature = Number(rc.v2_total_mature != null ? rc.v2_total_mature : (rc.total_mature || 0)) || 0;
+  const strat = ev.strategy_version_filter || ev.requested_strategy_version || '当前策略';
+  const startDate = ev.metrics_start_date || '';
+  const byH = rc.v2_by_horizon || {};
+  const hParts = ['1d', '5d', '20d'].map(h => `${h} ${((byH[h] || {}).mature) || 0}`).join(' / ');
+  // 这些等级都表示"还不能当买入依据"
+  const NOT_TRADEABLE = { INSUFFICIENT_EVIDENCE: 1, LOW_COVERAGE: 1, BLOCKED: 1, NEEDS_IMPROVEMENT: 1 };
+
+  if (NOT_TRADEABLE[grade]) {
+    const isBlocked = grade === 'BLOCKED';
+    const bd = isBlocked ? 'border-rose-300' : 'border-amber-300';
+    const bg = isBlocked ? 'bg-rose-50'      : 'bg-amber-50';
+    const tx = isBlocked ? 'text-rose-900'   : 'text-amber-900';
+    const sub = isBlocked ? 'text-rose-700'  : 'text-amber-800';
+    el.className = `mx-5 mt-4 rounded-xl border-2 ${bd} ${bg} px-4 py-3`;
+    el.innerHTML = `
+      <div class="flex items-start gap-2">
+        <span class="text-lg leading-none">🔬</span>
+        <div>
+          <div class="text-sm font-bold ${tx}">仅研究观察 — 当前策略还没攒够实测样本,不能当买入依据</div>
+          <p class="text-[12px] ${sub} mt-1 leading-relaxed">
+            策略 <code class="px-1 bg-white/60 rounded">${_esc(strat)}</code> 自 ${_esc(startDate) || '近期'} 起算,
+            已成熟可回看的样本:<b>${mature}</b> 个(按持有期 ${hParts})。证据等级 <b>${_esc(grade)}</b>。
+            下方的「PASS / 回测 Sharpe / 回测年化」只说明<b>今天流水线跑通了、历史回看长这样</b>,
+            <b>不代表这套新公式未来有效</b>。请把这份组合当作<b>研究队列</b> —— 用来触发买前研究,不是照着下单。
+          </p>
+          <p class="text-[11px] ${sub} mt-1">充分性门槛:每个持有期累计 ≥20 个成熟样本才进入「弱观察」,≥60 个才谈得上「策略健康」。</p>
+        </div>
+      </div>`;
+    el.classList.remove('hidden');
+  } else if (grade === 'PROMISING') {
+    el.className = 'mx-5 mt-4 rounded-xl border-2 border-emerald-200 bg-emerald-50 px-4 py-3';
+    el.innerHTML = `<div class="text-sm font-medium text-emerald-900">🔬 弱观察 · 已有 ${mature} 个成熟样本且早期 alpha 为正 —— 仍非买入信号,继续累积到 ≥60 个再谈策略健康。</div>`;
+    el.classList.remove('hidden');
+  } else {
+    el.classList.add('hidden');
+  }
+}
+
 // ============ 📋 今天 AI 推荐的组合 (2026-05-27 新增) ============
 // 数据源: PLAN_A_V6 (来自 plan_a_v5.json) + PICKS (V2 picks 拿 name/total_score/theme)
 // 跟下方"已锁定方案回测"是两套数据流 —— 这里是最新 plan,下方是冻结的 inception snapshot
@@ -9104,6 +9160,7 @@ function renderTodayPlan() {
   const lockStatusEl = document.getElementById('today-plan-lock-status');
   const lockedMetaEl = document.getElementById('locked-plan-meta');
   if (!tbody || !emptyEl) return;
+  renderTodayPlanEvidenceGate();  // 证据不足 gate —— 顶部"仅研究观察"横幅(plan 空与否都先评估)
 
   const rows = plan.plan_v6 || plan.plan_v5 || plan.plan || [];
   if (!Array.isArray(rows) || rows.length === 0) {
@@ -16194,6 +16251,14 @@ def build():
         except Exception as e:
             print(f"  ⚠️ catalyst_validation 加载失败: {e}")
     html = html.replace("{CATALYST_VALIDATION_JSON}", json.dumps(catalyst_validation_data, ensure_ascii=False, default=str))
+
+    # 证据不足 gate (2026-06-01): 喂「今天 AI 推荐的组合」顶部"仅研究观察"横幅。
+    # 只读已算好的 evidence(grade + 成熟样本数),前端据此渲染,不在前端重算。
+    recommendation_evidence_embed = _runtime_load_json("data/latest/recommendation_evidence.json") or {}
+    _ev_grade = (recommendation_evidence_embed or {}).get("evidence_grade", "—")
+    _ev_mature = ((recommendation_evidence_embed or {}).get("review_coverage") or {}).get("v2_total_mature", 0)
+    print(f"  证据 gate 嵌入: grade={_ev_grade} · 成熟样本={_ev_mature}")
+    html = html.replace("{RECOMMENDATION_EVIDENCE_JSON}", json.dumps(recommendation_evidence_embed, ensure_ascii=False, default=str))
 
     # AI 配仓 — Static (A 类: buy-and-hold from inception) — DuckDB 优先，fallback JSON
     plan_for_bt = plan_a_v6_runtime or plan_a_v6
