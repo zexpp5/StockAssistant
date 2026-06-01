@@ -8103,6 +8103,22 @@ async function renderRealHoldings() {
   const dayCoverageLabel = hasDayChange
     ? (totalValueWithDayChange < totalValue * 0.95 ? ` · 覆盖 ${(totalValueWithDayChange / totalValue * 100).toFixed(0)}% 市值` : "")
     : "";
+  // 「今日盈亏」标签 footgun 修复: 盘前/周末后 reviewItem.prev_trade_date 通常是上一交易日,
+  // 此时口径是「上一交易日收盘 vs 前一日收盘」, 必须明示, 否则被误读为「6-01 今天的盈亏」
+  const _dayPnlDates = enriched
+    .map(x => x.reviewItem && x.reviewItem.prev_trade_date)
+    .filter(Boolean)
+    .sort();
+  const dayPnlAsOfDate = _dayPnlDates.length ? _dayPnlDates[_dayPnlDates.length - 1] : null;
+  const _nowLocal = new Date();
+  const _todayLocalISO = `${_nowLocal.getFullYear()}-${String(_nowLocal.getMonth()+1).padStart(2,'0')}-${String(_nowLocal.getDate()).padStart(2,'0')}`;
+  const dayPnlIsToday = dayPnlAsOfDate === _todayLocalISO;
+  const dayPnlLabel = (hasDayChange && dayPnlAsOfDate && !dayPnlIsToday)
+    ? `上一交易日盈亏 · 截至 ${dayPnlAsOfDate}`
+    : "今日盈亏";
+  const dayPnlTooltip = (hasDayChange && dayPnlAsOfDate && !dayPnlIsToday)
+    ? `${dayPnlAsOfDate} 收盘 vs 前一日收盘 · 本地今天 ${_todayLocalISO} 行情未到`
+    : `今日盈亏 = 最近一次有效收盘 vs 前一日收盘${hasDayChange ? "" : "(暂无 prev_close 数据)"}`;
   const coveredByAi = enrichedWithGap.filter(x => x.targetWeight != null);
   const stockWeightCovered = coveredByAi.reduce((sum, x) => sum + x.currentWeight, 0);
   const totalTargetCovered = coveredByAi.reduce((sum, x) => sum + x.targetWeight, 0);
@@ -8157,10 +8173,10 @@ async function renderRealHoldings() {
           <div class="text-sm font-semibold text-slate-700 leading-tight">${realCash.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
           <div class="text-[10px] text-slate-400 mt-0.5">估算现金 RMB</div>
         </div>
-        <!-- 重点 1: 今日盈亏 占 2 列宽 + 大字 -->
-        <div class="lg:col-span-2 rounded-lg ${hasDayChange ? (totalDayChange >= 0 ? "bg-emerald-50 border-emerald-200" : "bg-rose-50 border-rose-200") : "bg-slate-50 border-slate-100"} px-4 py-3 border" title="今日盈亏 = 最近一次有效收盘 vs 前一日收盘${hasDayChange ? "" : "(暂无 prev_close 数据)"}">
+        <!-- 重点 1: 当日/上一交易日盈亏 占 2 列宽 + 大字 -->
+        <div class="lg:col-span-2 rounded-lg ${hasDayChange ? (totalDayChange >= 0 ? "bg-emerald-50 border-emerald-200" : "bg-rose-50 border-rose-200") : "bg-slate-50 border-slate-100"} px-4 py-3 border" title="${dayPnlTooltip}">
           <div class="text-3xl font-bold ${hasDayChange ? dayPnlColor : "text-slate-400"} leading-tight">${hasDayChange ? (totalDayChange >= 0 ? "+" : "") + totalDayChange.toLocaleString(undefined, {maximumFractionDigits:0}) : "—"}</div>
-          <div class="text-xs font-medium ${hasDayChange ? (totalDayChange >= 0 ? "text-emerald-700" : "text-rose-700") : "text-slate-400"} mt-1">今日盈亏${hasDayChange ? ` · ${dayChangePct >= 0 ? "+" : ""}${dayChangePct.toFixed(2)}%${dayCoverageLabel}` : " · 数据未就绪"}</div>
+          <div class="text-xs font-medium ${hasDayChange ? (totalDayChange >= 0 ? "text-emerald-700" : "text-rose-700") : "text-slate-400"} mt-1">${dayPnlLabel}${hasDayChange ? ` · ${dayChangePct >= 0 ? "+" : ""}${dayChangePct.toFixed(2)}%${dayCoverageLabel}` : " · 数据未就绪"}</div>
         </div>
         <!-- 重点 2: 累计盈亏 占 2 列宽 + 大字 -->
         <div class="lg:col-span-2 rounded-lg ${totalPnl >= 0 ? "bg-emerald-50 border-emerald-200" : "bg-rose-50 border-rose-200"} px-4 py-3 border">
