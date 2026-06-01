@@ -15972,7 +15972,7 @@ def build():
             build_etf_consensus_panel,
             render_ai_radar_section,
         )
-        _radar_conn = duckdb.connect(os.path.join(_REPO, "stock_history_v2.duckdb"), read_only=True)
+        _radar_conn = duckdb.connect(_duckdb_path(), read_only=True)
         try:
             radar_payload = build_ai_radar_payload(_radar_conn)
             theme_panel = build_theme_evidence_panel(_radar_conn)

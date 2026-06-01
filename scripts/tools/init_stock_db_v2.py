@@ -414,6 +414,115 @@ CREATE TABLE IF NOT EXISTS factor_metadata (
 CREATE INDEX IF NOT EXISTS idx_factor_meta_lookup ON factor_metadata(market, symbol);
 
 
+-- ============ AI 主题雷达 · 证据系统 ============
+-- 8 张表：5 主题数据源 + ETF 共识 + 主题↔chain/source 映射
+-- 设计与文档：docs/V2/AI主题雷达_产品定位.md §八
+-- 反误导核心：任何 evidence 必须有 source_url；confirmed 必须 ≥2 来源 + ≥1 A 类 + 180 天内
+CREATE TABLE IF NOT EXISTS ai_theme_evidence_sources (
+    source_id        VARCHAR PRIMARY KEY,
+    source_name      VARCHAR NOT NULL,
+    source_tier      VARCHAR NOT NULL,
+    source_type      VARCHAR NOT NULL,
+    source_url       VARCHAR NOT NULL,
+    update_cadence   VARCHAR,
+    license_note     VARCHAR,
+    last_checked_at  TIMESTAMP,
+    last_check_status VARCHAR,
+    last_check_http  INTEGER,
+    active           BOOLEAN DEFAULT TRUE
+);
+
+CREATE TABLE IF NOT EXISTS ai_theme_company_evidence (
+    evidence_id      VARCHAR PRIMARY KEY,
+    theme            VARCHAR NOT NULL,
+    market           VARCHAR,
+    symbol           VARCHAR,
+    company_name     VARCHAR,
+    evidence_status  VARCHAR NOT NULL,
+    source_id        VARCHAR NOT NULL,
+    source_tier      VARCHAR NOT NULL,
+    source_url       VARCHAR NOT NULL,
+    source_title     VARCHAR,
+    source_date      DATE,
+    captured_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    evidence_text    VARCHAR,
+    evidence_kind    VARCHAR,
+    metric_json      VARCHAR,
+    confidence_score DOUBLE,
+    expires_at       DATE,
+    reviewer_note    VARCHAR
+);
+
+CREATE TABLE IF NOT EXISTS ai_theme_company_tags (
+    theme              VARCHAR NOT NULL,
+    market             VARCHAR NOT NULL,
+    symbol             VARCHAR NOT NULL,
+    company_name       VARCHAR,
+    theme_role         VARCHAR,
+    ai_strength        VARCHAR,
+    evidence_status    VARCHAR,
+    evidence_score     DOUBLE,
+    source_count_a     INTEGER,
+    source_count_b     INTEGER,
+    source_count_c     INTEGER,
+    latest_source_date DATE,
+    rationale          VARCHAR,
+    updated_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (theme, market, symbol)
+);
+
+CREATE TABLE IF NOT EXISTS ai_theme_topic_metrics (
+    theme             VARCHAR NOT NULL,
+    metric_date       DATE NOT NULL,
+    metric_name       VARCHAR NOT NULL,
+    metric_value      DOUBLE,
+    metric_unit       VARCHAR,
+    source_id         VARCHAR NOT NULL,
+    source_url        VARCHAR,
+    captured_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (theme, metric_date, metric_name, source_id)
+);
+
+CREATE TABLE IF NOT EXISTS ai_theme_source_mapping (
+    theme       VARCHAR NOT NULL,
+    source_id   VARCHAR NOT NULL,
+    note        VARCHAR,
+    PRIMARY KEY (theme, source_id)
+);
+
+CREATE TABLE IF NOT EXISTS ai_theme_chain_mapping (
+    theme       VARCHAR NOT NULL,
+    chain       VARCHAR NOT NULL,
+    relevance   VARCHAR,
+    note        VARCHAR,
+    PRIMARY KEY (theme, chain)
+);
+
+CREATE TABLE IF NOT EXISTS ai_theme_etf_universe (
+    etf_ticker      VARCHAR PRIMARY KEY,
+    etf_name        VARCHAR NOT NULL,
+    issuer          VARCHAR NOT NULL,
+    theme_label     VARCHAR NOT NULL,
+    theme_id        VARCHAR,
+    holdings_url    VARCHAR NOT NULL,
+    note            VARCHAR,
+    active          BOOLEAN DEFAULT TRUE,
+    last_fetched_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS ai_theme_etf_holdings (
+    etf_ticker      VARCHAR NOT NULL,
+    rank            INTEGER NOT NULL,
+    raw_ticker      VARCHAR NOT NULL,
+    company_name    VARCHAR,
+    weight          DOUBLE,
+    market_inferred VARCHAR,
+    universe_match  VARCHAR,
+    captured_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (etf_ticker, rank)
+);
+
+
 INSERT INTO schema_meta (key, value, updated_at)
 VALUES
   ('schema_version', 'v2', CURRENT_TIMESTAMP),
