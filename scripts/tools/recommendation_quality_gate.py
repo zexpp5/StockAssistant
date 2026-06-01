@@ -274,6 +274,11 @@ def _run_v2_checks(conn, now: datetime) -> dict:
         summary["pick_outcomes_count"] = outcomes
         summary["strategy_review_reports_count"] = reports
         summary["strategy_evidence_scope"] = cur_strategy or "all_history"
+        # 策略证据是独立维度,不能被流水线 status=PASS 掩盖 —— 单列一个状态,
+        # 让"流水线通"和"策略没被验证"语义分开(否则用户只看 PASS 会误读成可交易)。
+        summary["strategy_evidence_status"] = (
+            "INSUFFICIENT_EVIDENCE" if outcomes <= 0 else "ACCUMULATING"
+        )
         if outcomes <= 0 and reports <= 0:
             issues.append(_issue(
                 "INFO",
@@ -288,6 +293,9 @@ def _run_v2_checks(conn, now: datetime) -> dict:
     return {
         "generated_at": now.isoformat(),
         "status": "FAIL" if n_fail else ("WARN" if n_warn else "PASS"),
+        # 流水线状态(status)与策略证据状态(strategy_evidence_status)是两件事:
+        # status=PASS 只代表"今天链路/数据/入场价齐了可以出推荐";策略有没有被验证看下面这个。
+        "strategy_evidence_status": summary.get("strategy_evidence_status", "UNKNOWN"),
         "summary": {
             "fail": n_fail,
             "warn": n_warn,
@@ -322,6 +330,8 @@ def main() -> int:
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 
     print(f"Recommendation quality gate: {payload['status']}")
+    print(f"  strategy_evidence={payload.get('strategy_evidence_status', 'UNKNOWN')} "
+          f"(策略证据独立于流水线 status — PASS 不代表策略已验证)")
     summary = payload["summary"]
     print(f"  fail={summary['fail']} warn={summary['warn']} info={summary['info']}")
     if summary.get("schema_mode") == "v2":
