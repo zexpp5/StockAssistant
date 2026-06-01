@@ -1045,7 +1045,8 @@ def _age_days_from_iso(ts: str | None) -> int | None:
 def _render_ai_radar_focus(payload: dict[str, Any],
                            shortlist: dict[str, Any] | None,
                            freshness_panel: dict[str, Any] | None,
-                           theme_panel: dict[str, Any] | None) -> str:
+                           theme_panel: dict[str, Any] | None,
+                           production_panel: dict[str, Any] | None = None) -> str:
     """第一屏摘要：只回答用户今天打开后先看哪三件事。"""
     chains = payload.get("chains") or []
     rising = sorted(
@@ -1140,12 +1141,28 @@ def _render_ai_radar_focus(payload: dict[str, Any],
             f"推荐分滞后 {data_age} 天（影响今天能否参考）"
         ))
 
+    # 缺口 5: 分市场 F-Score 覆盖（2026-06-01 评审 #3）
+    # 从 production_acceptance_check.json 的 v2_f_score_coverage.by_market 抽
+    if production_panel:
+        f_cov = ((production_panel.get("summary") or {})
+                 .get("v2_f_score_coverage") or {}).get("by_market") or {}
+        for mkt, info in f_cov.items():
+            pct = info.get("coverage_pct", 0)
+            n_with = info.get("with_f_score", 0)
+            n_total = info.get("pick_count", 0)
+            if pct < 50 and n_total > 0:
+                gap_lines.append((
+                    "text-rose-700",
+                    f"{mkt} F-Score 覆盖 {n_with}/{n_total}（基本面因子未覆盖，推荐仅靠动量+估值）"
+                ))
+
     if not gap_lines:
         gap_lines.append(("text-emerald-700", "✓ 当前无关键数据缺口"))
 
     gap_impact = (
         '<div class="text-[10px] text-slate-400 mt-1">'
-        '缺 confirmed → research_score 公司证据维度=0；缺 chain → 高分票被研究漏过；缺新鲜度 → 今日推荐不可信'
+        '缺 confirmed → research_score 公司证据维度=0；缺 chain → 高分票被研究漏过；'
+        '缺新鲜度 → 今日推荐不可信；缺 F-Score → 该市场推荐缺基本面维度'
         '</div>'
     )
 
@@ -2004,7 +2021,8 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
     etf_panel_html = _render_etf_consensus_panel(etf_panel) if etf_panel else ""
     freshness_html = _render_freshness_panel(freshness_panel) if freshness_panel else ""
     shortlist_html = _render_research_shortlist(shortlist) if shortlist else ""
-    focus_html = _render_ai_radar_focus(payload, shortlist, freshness_panel, theme_panel)
+    focus_html = _render_ai_radar_focus(payload, shortlist, freshness_panel, theme_panel,
+                                         production_panel=production_panel)
     trust_gate_html = _render_ai_radar_trust_gate(
         payload, freshness_panel, theme_panel, production_panel, quality_panel
     )
