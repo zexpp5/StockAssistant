@@ -62,10 +62,11 @@ def _audit_theme_chain_no_evidence(con) -> list[dict]:
     """有 chain 映射但 evidence 表里该 theme 没公司证据."""
     # 列每个 theme，标注是否完全没 confirmed/candidate evidence
     rows = con.execute("""
-        SELECT t.theme, COUNT(*) FILTER (WHERE t.evidence_status IN ('confirmed', 'candidate')) AS n_active
-        FROM ai_theme_chain_mapping cm
+        SELECT cm.theme,
+               COUNT(*) FILTER (WHERE t.evidence_status IN ('confirmed', 'candidate')) AS n_active
+        FROM (SELECT DISTINCT theme FROM ai_theme_chain_mapping) cm
         LEFT JOIN ai_theme_company_tags t ON t.theme = cm.theme
-        GROUP BY t.theme
+        GROUP BY cm.theme
     """).fetchall()
     return [
         {"theme": theme, "n_active_evidence": int(n or 0)}
