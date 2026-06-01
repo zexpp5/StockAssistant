@@ -9,3 +9,13 @@
 """
 
 __version__ = "0.1.0"
+
+# 全局 HTTP 超时兜底：所有 jobs 经此入口 import，给裸 requests 调用（yfinance/akshare/
+# SEC EDGAR 等底层）注入默认 timeout，防止网络 hang 导致整轮 pipeline 卡死数十小时
+# （2026-06-01 事故）。仅在调用方未显式传 timeout 时生效，幂等。
+try:
+    from .core.http_timeout import install_default_timeout as _install_http_timeout
+    _install_http_timeout()
+except Exception:
+    # 兜底安装失败绝不能阻断系统 import
+    pass
