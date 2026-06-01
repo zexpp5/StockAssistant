@@ -304,17 +304,31 @@ def load_cik_ticker_map() -> dict[str, dict]:
     return cik_map
 
 
-def search_filings(query: str, forms: str, max_hits: int = 20) -> list[dict]:
-    """EDGAR full-text search。返回 hits[*]._source 字典列表。"""
+def search_filings(query: str, forms: str, max_hits: int = 20,
+                   days_back: int = 365) -> list[dict]:
+    """EDGAR full-text search。返回 hits[*]._source 字典列表。
+
+    days_back: 限定只看过去 N 天的 filing（默认 1 年），避免 SEC 默认相关性排序
+    把 10 年前的老 filing 当成最相关返回 → 触发 180 天 stale 把好公司全标 stale。
+    用 dateRange=custom 显式 startdt/enddt。
+    """
+    from datetime import date, timedelta
+    today = date.today()
+    startdt = today - timedelta(days=days_back)
     params = {
         "q": query,
         "forms": forms,
+        "dateRange": "custom",
+        "startdt": startdt.isoformat(),
+        "enddt": today.isoformat(),
     }
     data = _fetch_json(EDGAR_FULLTEXT, params=params)
     if not data:
         return []
     hits = (data.get("hits") or {}).get("hits") or []
-    return [h.get("_source") or {} for h in hits[:max_hits]]
+    # 显式按 file_date 降序排序（确保最新的 filing 在前）
+    sorted_hits = sorted(hits, key=lambda h: (h.get("_source") or {}).get("file_date", ""), reverse=True)
+    return [h.get("_source") or {} for h in sorted_hits[:max_hits]]
 
 
 def upsert_evidence_candidate(con, theme: str, ticker: str | None, cik: str,
