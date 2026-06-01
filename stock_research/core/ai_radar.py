@@ -921,83 +921,171 @@ def _watchlist_badge(in_wl: bool) -> str:
 
 
 def _render_research_shortlist(sl: dict[str, Any]) -> str:
-    """渲染"值得研究 N 只候选"。不是买入清单，是 buy-research funnel 入口。"""
+    """渲染紧凑版"研究优先级"。避免视觉上变成推荐/买入卡片。"""
     if not sl or not sl.get("items"):
         return ""
 
     rows = []
     for i, it in enumerate(sl["items"], 1):
         c = it["components"]
-        # 分数 bar 显示 5 个维度
-        sys_w = int(c["system_score"] / 30 * 100)
-        etf_w = int(c["etf_consensus"] / 25 * 100)
-        evi_w = int(c["evidence"] / 20 * 100)
-        str_w = int(c["ai_strength"] / 15 * 100)
-        trd_w = int(c["trend"] / 10 * 100)
-
-        # AI 关联色
-        strength_color = {
-            "强": "bg-violet-100 text-violet-800 ring-violet-300",
-            "中": "bg-sky-100 text-sky-800 ring-sky-300",
-            "弱": "bg-amber-100 text-amber-800 ring-amber-300",
-        }.get(it["ai_strength"], "bg-slate-100 text-slate-500 ring-slate-200")
-
-        why_chips_html = "".join(
-            f'<span class="inline-flex items-center px-1.5 py-0.5 rounded bg-slate-50 text-slate-700 ring-1 ring-slate-200 text-[11px]">{_esc(c)}</span>'
-            for c in it["why_chips"]
-        )
-
         trend_label = it["trend_label"]
         trend_color = "text-emerald-700" if trend_label == "发酵中" else "text-rose-700" if trend_label == "冷却中" else "text-slate-500"
-
+        evidence = it.get("evidence_status") or "待补公司证据"
+        evidence_color = "text-emerald-700" if evidence == "confirmed" else "text-slate-500"
+        chips = " · ".join(it.get("why_chips") or [])
         rows.append(f"""
-<div class="bg-white ring-1 ring-slate-200 rounded-xl p-4 mb-3">
-  <div class="flex items-center justify-between gap-2 mb-2">
-    <div class="flex items-center gap-2 flex-wrap">
-      <span class="text-[11px] text-slate-400 font-mono">#{i}</span>
-      <span class="text-base font-bold text-slate-900">{_market_label(it["market"])} <span class="font-mono">{_esc(it["symbol"])}</span></span>
-      <span class="text-sm text-slate-700">{_esc(it["name"] or "")}</span>
-      <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ring-1 {strength_color}">AI {it["ai_strength"]}</span>
-    </div>
-    <div class="text-right">
-      <div class="text-xl font-bold text-violet-700">{it["research_score"]:.0f}</div>
-      <div class="text-[10px] text-slate-400">research_score</div>
-    </div>
-  </div>
-
-  <div class="text-[11px] text-slate-500 mb-2">{_esc(it["chain"])} · {_esc(it["chain_role"] or "")} · <span class="{trend_color}">{_esc(trend_label)}</span></div>
-
-  <div class="flex flex-wrap gap-1.5 mb-3">{why_chips_html}</div>
-
-  <details class="text-[11px]">
-    <summary class="cursor-pointer text-slate-500 list-none">▾ 分数构成</summary>
-    <div class="mt-2 space-y-1">
-      <div class="flex items-center gap-2"><span class="w-20 text-slate-500">系统打分</span><div class="flex-1 bg-slate-100 rounded h-1.5 overflow-hidden"><div class="bg-violet-400 h-full" style="width:{sys_w}%"></div></div><span class="w-12 text-right font-mono text-slate-700">{c['system_score']}/30</span></div>
-      <div class="flex items-center gap-2"><span class="w-20 text-slate-500">ETF 共识</span><div class="flex-1 bg-slate-100 rounded h-1.5 overflow-hidden"><div class="bg-sky-400 h-full" style="width:{etf_w}%"></div></div><span class="w-12 text-right font-mono text-slate-700">{c['etf_consensus']}/25</span></div>
-      <div class="flex items-center gap-2"><span class="w-20 text-slate-500">公司证据</span><div class="flex-1 bg-slate-100 rounded h-1.5 overflow-hidden"><div class="bg-emerald-400 h-full" style="width:{evi_w}%"></div></div><span class="w-12 text-right font-mono text-slate-700">{c['evidence']}/20</span></div>
-      <div class="flex items-center gap-2"><span class="w-20 text-slate-500">AI 强度</span><div class="flex-1 bg-slate-100 rounded h-1.5 overflow-hidden"><div class="bg-amber-400 h-full" style="width:{str_w}%"></div></div><span class="w-12 text-right font-mono text-slate-700">{c['ai_strength']}/15</span></div>
-      <div class="flex items-center gap-2"><span class="w-20 text-slate-500">趋势</span><div class="flex-1 bg-slate-100 rounded h-1.5 overflow-hidden"><div class="bg-rose-400 h-full" style="width:{trd_w}%"></div></div><span class="w-12 text-right font-mono text-slate-700">{c['trend']}/10</span></div>
-    </div>
-  </details>
-</div>
+<tr class="border-t border-slate-100">
+  <td class="py-2 pr-2 align-top text-[12px] text-slate-400 font-mono">#{i}</td>
+  <td class="py-2 pr-2 align-top whitespace-nowrap">
+    <div class="text-[13px] font-bold text-slate-900">{_market_label(it["market"])} <span class="font-mono">{_esc(it["symbol"])}</span></div>
+    <div class="text-[11px] text-slate-500 truncate max-w-[140px]">{_esc(it["name"] or "")}</div>
+  </td>
+  <td class="py-2 pr-2 align-top">
+    <div class="text-[12px] text-slate-800">{_esc(it["chain"])} · {_esc(it["chain_role"] or "")}</div>
+    <div class="text-[11px] text-slate-500 truncate max-w-[360px] md:max-w-[520px]">{_esc(chips)}</div>
+  </td>
+  <td class="py-2 pr-2 align-top text-[12px] whitespace-nowrap">{_strength_badge(it["ai_strength"])}</td>
+  <td class="py-2 pr-2 align-top text-[12px] whitespace-nowrap"><span class="{trend_color}">{_esc(trend_label)}</span></td>
+  <td class="py-2 pr-2 align-top text-[12px] whitespace-nowrap"><span class="{evidence_color}">{_esc(evidence)}</span></td>
+  <td class="py-2 pl-2 align-top text-right whitespace-nowrap">
+    <div class="text-sm font-semibold text-slate-800">{it["research_score"]:.0f}</div>
+    <div class="text-[10px] text-slate-400">研究优先级</div>
+  </td>
+</tr>
 """)
 
     n_cand = sl.get("n_candidates", 0)
     return f"""
-<div class="bg-gradient-to-br from-violet-50 to-indigo-50 rounded-xl ring-1 ring-violet-200 p-4 mb-4">
+<div class="bg-white rounded-xl ring-1 ring-slate-200 p-4 mb-4">
   <div class="flex items-center justify-between flex-wrap gap-2 mb-3">
     <div>
-      <div class="text-base font-bold text-slate-900">🔬 值得研究的 {len(sl["items"])} 只</div>
-      <div class="text-[11px] text-slate-600 mt-0.5">把雷达 5 个信号源（系统打分 + ETF 共识 + 公司证据 + AI 关联 + chain 趋势）汇成研究优先级 — 这是「买前研究」tab 的 funnel 入口，<strong>不是买入清单</strong>。</div>
+      <div class="text-sm font-bold text-slate-900">研究优先级 Top {len(sl["items"])}</div>
+      <div class="text-[11px] text-slate-500 mt-0.5">用于决定先研究谁；高分表示多源信号集中，不等于买入。</div>
     </div>
     <span class="text-[11px] text-slate-500">候选池 {n_cand} 只 · 取 top {len(sl["items"])}</span>
   </div>
-  {"".join(rows)}
+  <div class="overflow-x-auto">
+    <table class="w-full min-w-[760px]">
+      <thead>
+        <tr class="text-[10px] text-slate-400 uppercase tracking-wide">
+          <th class="py-1 pr-2 text-left font-normal">序号</th>
+          <th class="py-1 pr-2 text-left font-normal">标的</th>
+          <th class="py-1 pr-2 text-left font-normal">为什么现在看</th>
+          <th class="py-1 pr-2 text-left font-normal">AI 关联</th>
+          <th class="py-1 pr-2 text-left font-normal">链趋势</th>
+          <th class="py-1 pr-2 text-left font-normal">公司证据</th>
+          <th class="py-1 pl-2 text-right font-normal">优先级</th>
+        </tr>
+      </thead>
+      <tbody>{"".join(rows)}</tbody>
+    </table>
+  </div>
   <div class="text-[10px] text-slate-500 mt-2 leading-relaxed">
-    research_score 满分 100 = 系统打分 30 + ETF 共识 25 + 公司证据 20 + AI 关联强度 15 + 趋势 10。
-    高 score 仅代表"多源信号汇聚"，不构成买入信号。下一步去
-    <a href="#buy-research" class="text-violet-700 hover:underline">「买前研究」tab</a>
-    看每只的深度审查（估值/财务/风险反证）。
+    研究优先级 = 系统打分 30 + ETF 共识 25 + 公司证据 20 + AI 关联强度 15 + 趋势 10。下一步仍需到
+    <a href="#buy-research" class="text-violet-700 hover:underline">买前研究</a> 做估值、财务和风险反证。
+  </div>
+</div>
+"""
+
+
+def _age_days_from_iso(ts: str | None) -> int | None:
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        now = datetime.now(dt.tzinfo) if dt.tzinfo else datetime.now()
+        return max((now.date() - dt.date()).days, 0)
+    except Exception:
+        return None
+
+
+def _render_ai_radar_focus(payload: dict[str, Any],
+                           shortlist: dict[str, Any] | None,
+                           freshness_panel: dict[str, Any] | None,
+                           theme_panel: dict[str, Any] | None) -> str:
+    """第一屏摘要：只回答用户今天打开后先看哪三件事。"""
+    chains = payload.get("chains") or []
+    rising = sorted(
+        [c for c in chains if (c.get("delta_7d") or 0) >= MAINLINE_RISE_DELTA],
+        key=lambda c: -(c.get("delta_7d") or 0),
+    )
+    cooling = sorted(
+        [c for c in chains if (c.get("delta_7d") or 0) <= MAINLINE_FALL_DELTA],
+        key=lambda c: c.get("delta_7d") or 0,
+    )
+    if rising:
+        mainline = "、".join(f'{_esc(c["chain"])} {c["delta_7d"]:+.1f}' for c in rising[:2])
+        mainline_sub = "当前系统打分关注度上移"
+        mainline_color = "text-emerald-700"
+    else:
+        mainline = "暂无明显发酵链"
+        mainline_sub = "先看冷却和覆盖率，不急着扩池"
+        mainline_color = "text-slate-700"
+
+    cooling_text = "、".join(f'{_esc(c["chain"])} {c["delta_7d"]:+.1f}' for c in cooling[:2]) or "无明显冷却"
+
+    top_items = (shortlist or {}).get("items") or []
+    top_chips = []
+    for it in top_items[:3]:
+        top_chips.append(
+            f'<span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-50 ring-1 ring-slate-200 text-[11px]">'
+            f'<span class="font-mono text-slate-800">{_esc(it["symbol"])}</span>'
+            f'<span class="text-slate-500">{_esc(it["chain"])}</span>'
+            f'<span class="font-semibold text-slate-700">{it["research_score"]:.0f}</span>'
+            f'</span>'
+        )
+    top_html = "".join(top_chips) or '<span class="text-slate-400 text-[12px]">暂无研究优先级</span>'
+
+    data_age = _age_days_from_iso(payload.get("data_generated_at"))
+    if data_age is None:
+        rec_status = "推荐分时间未知"
+        rec_color = "text-slate-500"
+    elif data_age == 0:
+        rec_status = "推荐分今天生成"
+        rec_color = "text-emerald-700"
+    elif data_age == 1:
+        rec_status = "推荐分 1 天前"
+        rec_color = "text-amber-700"
+    else:
+        rec_status = f"推荐分已滞后 {data_age} 天"
+        rec_color = "text-rose-700"
+
+    n_stale = (freshness_panel or {}).get("n_stale", 0)
+    phase = (theme_panel or {}).get("phase_status") or {}
+    phase_level = phase.get("phase_1_level")
+    n_confirmed = phase.get("phase_1_n_confirmed", 0)
+    n_theme_done = phase.get("phase_1_themes_with_confirmed", 0)
+    n_theme_total = phase.get("phase_1_themes_total", 5)
+    if n_stale:
+        evidence_status = f"证据系统 {n_stale} 项滞后"
+        evidence_color = "text-amber-700"
+    elif phase_level == "done":
+        evidence_status = f"公司证据完成：{n_theme_done}/{n_theme_total} 主题 confirmed"
+        evidence_color = "text-emerald-700"
+    elif phase_level == "poc":
+        evidence_status = f"公司证据 PoC：{n_confirmed} confirmed，{n_theme_done}/{n_theme_total} 主题覆盖"
+        evidence_color = "text-amber-700"
+    else:
+        evidence_status = "公司证据未启动"
+        evidence_color = "text-rose-700"
+
+    return f"""
+<div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+  <div class="bg-white ring-1 ring-slate-200 rounded-xl p-4">
+    <div class="text-[11px] text-slate-500 mb-1">1. 当前主线</div>
+    <div class="text-base font-bold {_esc(mainline_color)}">{mainline}</div>
+    <div class="text-[11px] text-slate-500 mt-1">{_esc(mainline_sub)}；冷却：{cooling_text}</div>
+  </div>
+  <div class="bg-white ring-1 ring-slate-200 rounded-xl p-4">
+    <div class="text-[11px] text-slate-500 mb-1">2. 先研究谁</div>
+    <div class="flex flex-wrap gap-1.5">{top_html}</div>
+    <div class="text-[11px] text-slate-500 mt-2">只是研究排序，不是买入清单。</div>
+  </div>
+  <div class="bg-white ring-1 ring-slate-200 rounded-xl p-4">
+    <div class="text-[11px] text-slate-500 mb-1">3. 数据可信度</div>
+    <div class="text-sm font-bold {rec_color}">{_esc(rec_status)}</div>
+    <div class="text-[11px] font-medium {evidence_color} mt-1">{_esc(evidence_status)}</div>
+    <div class="text-[10px] text-slate-400 mt-1">生产验收失败时，以今日决策台/运行状态为准。</div>
   </div>
 </div>
 """
@@ -1572,10 +1660,10 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
     summary = my_view_summary or ""
 
     head_html = f"""
-<div class="bg-gradient-to-br from-violet-50 to-indigo-50 rounded-xl ring-1 ring-violet-200 p-5 mb-4">
-  <div class="text-xs text-violet-700 mb-1">当前 AI 主线判断（作者观点）</div>
-  <div class="text-lg font-bold text-slate-900 mb-2">{_esc(headline)}</div>
-  <div class="text-sm text-slate-700 leading-relaxed">{_esc(summary)}</div>
+<div class="bg-slate-50 rounded-xl ring-1 ring-slate-200 p-4 mb-4">
+  <div class="text-[11px] text-slate-500 mb-1">作者主线假设</div>
+  <div class="text-base font-bold text-slate-900 mb-1">{_esc(headline)}</div>
+  <div class="text-[12px] text-slate-600 leading-relaxed">{_esc(summary)}</div>
 </div>
 """
 
@@ -1598,6 +1686,7 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
     etf_panel_html = _render_etf_consensus_panel(etf_panel) if etf_panel else ""
     freshness_html = _render_freshness_panel(freshness_panel) if freshness_panel else ""
     shortlist_html = _render_research_shortlist(shortlist) if shortlist else ""
+    focus_html = _render_ai_radar_focus(payload, shortlist, freshness_panel, theme_panel)
 
     rise_chains = [c for c in payload["chains"] if (c.get("delta_7d") or 0) >= MAINLINE_RISE_DELTA]
     fall_chains = [c for c in payload["chains"] if (c.get("delta_7d") or 0) <= MAINLINE_FALL_DELTA]
@@ -1818,22 +1907,57 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
 </div>
 """
 
+    evidence_details_html = f"""
+<details class="mb-4">
+  <summary class="cursor-pointer list-none flex items-center justify-between gap-2 py-2 border-y border-slate-200">
+    <span class="text-sm font-bold text-slate-900">数据健康与证据底座</span>
+    <span class="text-[11px] text-slate-500">展开看数据源、主题证据、覆盖率审计</span>
+  </summary>
+  <div class="mt-3">
+    {freshness_html}
+    {theme_panel_html}
+    {audit_html}
+  </div>
+</details>
+"""
+
+    etf_details_html = f"""
+<details class="mb-4">
+  <summary class="cursor-pointer list-none flex items-center justify-between gap-2 py-2 border-y border-slate-200">
+    <span class="text-sm font-bold text-slate-900">ETF 共识</span>
+    <span class="text-[11px] text-slate-500">展开看主题 ETF 持仓与系统 universe 命中</span>
+  </summary>
+  <div class="mt-3">{etf_panel_html}</div>
+</details>
+""" if etf_panel_html else ""
+
+    chain_details_html = f"""
+<details class="mb-4">
+  <summary class="cursor-pointer list-none flex items-center justify-between gap-2 py-2 border-y border-slate-200">
+    <span class="text-sm font-bold text-slate-900">AI 价值链明细</span>
+    <span class="text-[11px] text-slate-500">展开看每条链、近 7 天趋势、链内股票</span>
+  </summary>
+  <div class="mt-3">
+    {trend_html}
+    {kpi_html}
+    {chains_html}
+    {other_chains_html}
+  </div>
+</details>
+"""
+
     return f"""
 <section id="ai-radar" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
   <div class="mb-4">
     <h1 class="text-2xl font-bold text-slate-900 flex items-center gap-2">📡 AI 主题雷达</h1>
     <p class="text-sm text-slate-600 mt-1">AI 价值链全景 · 行业理解层 · 不构成买入建议</p>
   </div>
+  {focus_html}
   {head_html}
   {shortlist_html}
-  {freshness_html}
-  {etf_panel_html}
-  {theme_panel_html}
-  {trend_html}
-  {kpi_html}
-  {chains_html}
-  {other_chains_html}
-  {audit_html}
+  {evidence_details_html}
+  {etf_details_html}
+  {chain_details_html}
   {footer_html}
 </section>
 """
