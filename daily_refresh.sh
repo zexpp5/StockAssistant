@@ -482,6 +482,10 @@ fi
 needs_ipo_data && run_step "19b/25 次新股+解禁雷达（IPO & 次新股 tab 数据源）" "-m stock_research.jobs.junior_stock_watcher"
 is_research_step && run_step "20/25 产业政策事件扫描" "-m stock_research.jobs.policy_scan_daily"
 
+# 聚合三层关键事件 (L1 公司 + L2 政策 + L3 行业大会) → data/latest/key_events.json
+# 不重新抓数据,只读现成 JSON,极快(< 1s)。每天都跑,不挂 is_research_step 闸门。
+run_step "20a/25 关键事件聚合 (L1+L2+L3 → dashboard 概览页)" "-m stock_research.jobs.key_events_brief"
+
 # v9.0 A 股选股闭环（仅 morning + full 兜底；A 股 picks 主路径走 --a-share-only 16:30 单独跑）
 # - 早班 08:30 (morning) 跑会被 A_SHARE_READY=0 自动跳过
 # - 21:00 research 路径不进 A 股 picks（避免和 16:30 a-share line 重复）
