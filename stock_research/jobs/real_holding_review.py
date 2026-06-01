@@ -706,13 +706,32 @@ def _build_item(
     pnl_rmb = current_value_rmb - cost_rmb
     pnl_pct = (pnl_rmb / cost_rmb * 100.0) if cost_rmb else None
     # 今日盈亏: 最近收盘 vs 前一日收盘,统一口径而不按本地日历日。
+    # 2026-05-29 修复: 当日新建仓 (entry_date > prev_trade_date) 时改用 entry_price 作基准 —
+    # 否则会把"持有一整天的市场涨跌"算给今天才进场的仓位,造成虚假浮盈/浮亏。
+    # 2026-05-29 修复 v2: 当日建仓直接复用累计盈亏 (= 现市值 − 锁定成本),把汇兑变动也算进去,
+    # 与"累计盈亏"列同口径;否则港股/美股会出现今日 ≠ 累计,新手看不懂。
+    price_trade_date = (price or {}).get("trade_date")
     prev_close = _as_float((price or {}).get("prev_close"))
     prev_trade_date = (price or {}).get("prev_trade_date")
+    entry_date_raw = holding.get("entry_date")
+    entry_date_str = str(entry_date_raw)[:10] if entry_date_raw else None
+    prev_date_str = str(prev_trade_date)[:10] if prev_trade_date else None
+    use_entry_as_baseline = (
+        entry_date_str is not None and prev_date_str is not None
+        and entry_date_str > prev_date_str
+        and entry_price > 0
+    )
     day_change_rmb = None
     day_change_pct = None
-    if not missing_price and prev_close is not None and prev_close > 0:
+    day_change_basis = None
+    if use_entry_as_baseline and not missing_price:
+        day_change_rmb = pnl_rmb
+        day_change_pct = pnl_pct
+        day_change_basis = "entry_cost"
+    elif not missing_price and prev_close is not None and prev_close > 0:
         day_change_rmb = (current_price - prev_close) * shares * fx
         day_change_pct = (current_price / prev_close - 1.0) * 100.0
+        day_change_basis = "prev_close"
     current_weight = (current_value_rmb / total_capital) if total_capital > 0 else None
     target_weight = target_weights.get(symbol)
     if treatment_class == "risk_only":
@@ -857,6 +876,9 @@ def _build_item(
             reasons.append(f"所属板块 {etf} 60d {float(ret):+.1f}%（偏弱）")
 
     return {
+        # 2026-05-29 lot accounting: holding_id 关联 real_holdings.id, 让同 symbol
+        # 多次买入的 lot 各自独立显示 / 各自算 day_change
+        "holding_id": int(holding["id"]) if holding.get("id") is not None else None,
         "account": holding.get("account") or "default",
         "market": holding.get("market") or stock_db._infer_market_from_ticker(symbol),
         "symbol": symbol,
@@ -874,9 +896,11 @@ def _build_item(
         "cost_rmb_locked": round(cost_rmb, 4),
         "pnl_rmb": round(pnl_rmb, 4),
         "pnl_pct": round(pnl_pct, 4) if pnl_pct is not None else None,
+        "price_trade_date": price_trade_date,
         "prev_close": prev_close,
         "prev_trade_date": prev_trade_date,
-        "trade_date": (price or {}).get("trade_date"),
+        "trade_date": price_trade_date,
+        "day_change_basis": day_change_basis,
         "day_change_rmb": round(day_change_rmb, 4) if day_change_rmb is not None else None,
         "day_change_pct": round(day_change_pct, 4) if day_change_pct is not None else None,
         "current_weight": round(current_weight, 6) if current_weight is not None else None,
