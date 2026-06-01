@@ -470,9 +470,10 @@ run_step "0c/25 V2 系统池刷新（live universe → system_universe/pool_memb
     "scripts/tools/refresh_system_universe_v2.py"
 run_step "1/25 抓价格（手动 watchlist + 科技/AI universe）" "scripts/pipeline/fetch_stock_prices.py --source both"
 # M — V2 Piotroski P5-Lite（必须早于 build_v2_recommendations，让 picks 当日带上 f_score）
-# yfinance 99 只财报 ~ 4 分钟；A 股暂未实现（akshare 财报接口结构差异较大）
-run_step "1c/25 V2 F-Score 计算（P5-Lite · 美/港股 → factor_metadata）" \
-    "scripts/tools/compute_piotroski_v2.py --markets US,HK"
+# 2026-06-01：A 股已用 akshare stock_financial_abstract 接通（杜邦三表融合宽表）
+# 全 3 市场跑 ~10 分钟（yfinance 美/港 + akshare A 股 ~ 17% 入库率，其余 akshare 限流）
+run_step "1c/25 V2 F-Score 计算（P5-Lite · 美/港/A 股 → factor_metadata）" \
+    "scripts/tools/compute_piotroski_v2.py --markets US,HK,CN"
 # M — V2 推荐 run（必须在 step 10/23 之前跑，让两者拿到今日 picks 而不是昨日）
 run_step "1b/25 V2 推荐 run（system_universe → recommendation_picks/portfolio_plans）" \
     "scripts/tools/build_v2_recommendations.py"
