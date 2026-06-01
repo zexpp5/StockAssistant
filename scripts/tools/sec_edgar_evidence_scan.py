@@ -50,14 +50,81 @@ SNIPPET_FETCH_TIMEOUT = 30.0
 # 用 SEC 官方查询语法：双引号包关键词；多个用空格 AND
 SCAN_SPECS = {
     "uranium": [
+        # 精确组合: 同时提到 U3O8（铀矿主营产品代号）+ production guidance
+        # 比 "uranium"+"production guidance" 召回更精，过滤掉只是 risk factors 里提铀的票
         {
-            "query": '"uranium" "production guidance"',
+            "query": '"U3O8" "production guidance"',
             "forms": "10-K",
             "evidence_kind": "filing_metric",
-            "evidence_text_template": "10-K 提及 uranium production guidance",
+            "evidence_text_template": "10-K 提及 U3O8 production guidance（铀主营）",
+        },
+        {
+            "query": '"uranium mining"',
+            "forms": "10-K",
+            "evidence_kind": "filing_metric",
+            "evidence_text_template": "10-K 提及 uranium mining（铀矿主营）",
         },
     ],
-    # 后续主题先不扫，避免 PoC 失控
+    "smr": [
+        # SMR = small modular reactor。SEC 全文搜索接受短语
+        {
+            "query": '"small modular reactor"',
+            "forms": "10-K",
+            "evidence_kind": "filing_metric",
+            "evidence_text_template": "10-K 提及 small modular reactor (SMR)",
+        },
+        {
+            "query": '"advanced reactor" "NRC"',
+            "forms": "10-K",
+            "evidence_kind": "filing_metric",
+            "evidence_text_template": "10-K 提及 advanced reactor + NRC（监管申请）",
+        },
+    ],
+    "rare_earths": [
+        # NdPr = 钕镨，AI 磁材关键稀土；REO = rare earth oxide
+        {
+            "query": '"NdPr"',
+            "forms": "10-K",
+            "evidence_kind": "filing_metric",
+            "evidence_text_template": "10-K 提及 NdPr（钕镨磁材稀土）",
+        },
+        {
+            "query": '"rare earth" "oxide"',
+            "forms": "10-K",
+            "evidence_kind": "filing_metric",
+            "evidence_text_template": "10-K 提及 rare earth oxide（REO 主产品）",
+        },
+    ],
+    "liquid_cooling": [
+        # AI 服务器液冷主营关键词
+        {
+            "query": '"direct-to-chip" "liquid cooling"',
+            "forms": "10-K",
+            "evidence_kind": "filing_metric",
+            "evidence_text_template": "10-K 提及 direct-to-chip liquid cooling（AI 服务器液冷）",
+        },
+        {
+            "query": '"immersion cooling"',
+            "forms": "10-K",
+            "evidence_kind": "filing_metric",
+            "evidence_text_template": "10-K 提及 immersion cooling（浸没式液冷）",
+        },
+    ],
+    "ai_data": [
+        # AI 训练数据 / 内容授权主营关键词
+        {
+            "query": '"data licensing" "artificial intelligence"',
+            "forms": "10-K",
+            "evidence_kind": "filing_metric",
+            "evidence_text_template": "10-K 提及 data licensing for AI（AI 数据授权）",
+        },
+        {
+            "query": '"training data" "large language model"',
+            "forms": "10-K",
+            "evidence_kind": "filing_metric",
+            "evidence_text_template": "10-K 提及 training data for LLM",
+        },
+    ],
 }
 
 
