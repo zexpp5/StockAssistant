@@ -1696,7 +1696,7 @@ function switchDiscoveryView(view) {
   <section id="today-plan-card" class="bg-white border-2 border-violet-300 rounded-xl shadow-sm mb-6">
     <header class="px-5 py-4 border-b border-slate-200 flex items-center justify-between gap-3 flex-wrap">
       <div>
-        <h3 class="text-lg font-bold text-slate-900">📋 今天 AI 推荐的组合</h3>
+        <h3 class="text-lg font-bold text-slate-900" id="today-plan-title">📋 今天 AI 推荐的组合</h3>
         <p class="text-xs text-slate-500 mt-0.5" id="today-plan-subtitle">—</p>
       </div>
       <div class="text-right">
@@ -9175,6 +9175,14 @@ function renderTodayPlan() {
   // 副标题：生成时间 + 候选池信息
   const gen = (plan.generated_at || '').slice(0, 16).replace('T', ' ');
   const u = plan.candidate_universe || {};
+  // 标题按 market_scope 标清口径 —— 当前 plan 是 market_scope=US(15 只全美股),
+  // 不标"美股"会让人误以为是三市场统一组合。将来出 CN/HK/ALL 组合时同一处自动适配。
+  const titleEl = document.getElementById('today-plan-title');
+  if (titleEl) {
+    const scope = String((plan.constraints && plan.constraints.market_scope) || u.market_scope || '').toUpperCase();
+    const scopeLabel = { US: '美股', CN: 'A股', HK: '港股', ALL: '全市场' }[scope] || (scope ? scope : '');
+    titleEl.textContent = scopeLabel ? `📋 今天 AI 推荐的组合（${scopeLabel}）` : '📋 今天 AI 推荐的组合';
+  }
   if (subtitleEl) {
     subtitleEl.textContent = `生成时间 ${gen || '?'} · 从 ${u.count || '?'} 只 ${u.market_scope || ''} 候选挑出 ${rows.length} 只 · 默认只展开 ⭐ 重点观察 Top 5`;
   }
