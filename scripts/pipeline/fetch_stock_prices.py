@@ -530,19 +530,24 @@ def fetch_price_data(yf_ticker: str, *, hist: pd.DataFrame | None = None,
     if info_fields.get("error") and (hist is None or hist.empty):
         return None
 
-    price = info_fields.get("price")
+    info_price = info_fields.get("price")
     try:
-        price = float(price) if price is not None else None
+        info_price = float(info_price) if info_price is not None else None
     except Exception:
-        price = None
+        info_price = None
 
-    hist_metrics = _history_metrics(hist, price)
-    if price is None:
-        price = hist_metrics.get("history_price")
+    # 2026-06-01 修复（popmart 184.40 事故）：price / prev_close 绝不能用 info 的
+    # 12h TTL 缓存值 —— 这两个是快变量，被和慢变的估值字段（PE/市值）一起缓存后，
+    # 当天首次抓到的盘中价会被冻住：收盘后（以及之后 12h 内每次拉）仍吐几小时前的
+    # 盘中价，而不是官方结算收盘价。改为优先用每次都重新下载、不进缓存的历史 K 线
+    # Close 作权威价，info 缓存价仅在历史缺当天 bar 时兜底。
+    hist_price = _history_metrics(hist, None).get("history_price")
+    price = hist_price if hist_price is not None else info_price
     if price is None:
         return None
 
-    prev_close = info_fields.get("prev_close") or hist_metrics.get("history_prev_close")
+    hist_metrics = _history_metrics(hist, price)
+    prev_close = hist_metrics.get("history_prev_close") or info_fields.get("prev_close")
     currency = info_fields.get("currency") or "USD"
     market_cap = info_fields.get("market_cap")
     forward_pe = info_fields.get("forward_pe")
