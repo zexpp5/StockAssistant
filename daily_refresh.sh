@@ -511,6 +511,20 @@ run_step "23f/25 真实持仓每日体检（评分/建议/说明）" "-m stock_r
 # （这几步在 morning 必跑，research mode 不重做避免覆盖 morning 已落地的 dashboard）
 is_morning_step && run_step "24/25 DuckDB pipeline 同步" "scripts/migrate/migrate_pipeline_to_duckdb.py"
 is_morning_step && run_step "24b/25 V2 产业链分类入库" "scripts/tools/classify_chain_v2.py"
+
+# 24c: AI 主题雷达证据系统刷新（每日跑轻量；周一额外重抓 ETF + SEC 扫描）
+# 文档：docs/V2/AI主题雷达_产品定位.md §十一 / 评审 P3 #8 自动化频率
+#   日常：数据源 URL 健康检查 + stale 规则 + tags 聚合
+#   周一：额外刷 ETF 持仓 + SEC EDGAR 公司证据扫描
+if is_morning_step; then
+    if [ "$DOW" = "1" ]; then
+        run_step "24c/25 AI 主题雷达证据刷新（周一全量：ETF + SEC）" \
+            "-m stock_research.jobs.ai_theme_evidence_refresh --refresh-etf --scan-sec"
+    else
+        run_step "24c/25 AI 主题雷达证据刷新（每日轻量）" \
+            "-m stock_research.jobs.ai_theme_evidence_refresh"
+    fi
+fi
 # 注：F-Score 计算已挪到 step 1c（必须在 build_v2_recommendations 之前，让 picks 当日带 f_score）
 is_morning_step && run_step "25/25 重建 HTML" "scripts/pipeline/build_stock_dashboard_html.py"
 
