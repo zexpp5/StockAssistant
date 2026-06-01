@@ -40,6 +40,22 @@ AI_STRENGTH_BY_CHAIN: dict[str, str] = {
 AI_STRENGTH_RANK = {"强": 3, "中": 2, "弱": 1, "无": 0, None: -1}
 AI_RADAR_VISIBLE_STRENGTHS = {"强", "中", "弱"}
 
+# ─────────────── 低置信度市场（UI 标注，不改打分公式）───────────────
+# 2026-06-01 评审：A 股 F-Score 覆盖 0/20，基本面维度对 CN 推荐不可信
+# 这里给 CN 票加 ⚠️ UI 警示，不改 research_score 算法
+# （memory: feedback_no_secret_score_changes — 改公式必须先问）
+# 后续接通 A 股三表/F-Score 后，从 production_acceptance 动态读
+LOW_CONFIDENCE_MARKETS: dict[str, str] = {
+    "CN": "A 股 F-Score 0/20 · 基本面维度未覆盖，推荐仅靠动量+估值",
+}
+
+
+def pick_confidence_warning(market: str | None) -> str | None:
+    """返回 market 对应的低置信度警示文案（无警示返回 None）."""
+    if not market:
+        return None
+    return LOW_CONFIDENCE_MARKETS.get(market)
+
 
 def derive_ai_strength(chain: str | None) -> str | None:
     """按 chain 反推 AI 关联强度；未分类返回 None（前端显示『未分类』）。"""
@@ -976,11 +992,18 @@ def _render_research_shortlist(sl: dict[str, Any]) -> str:
         evidence = it.get("evidence_status") or "待补公司证据"
         evidence_color = "text-emerald-700" if evidence == "confirmed" else "text-slate-500"
         chips = " · ".join(it.get("why_chips") or [])
+        # 低置信度市场（如 A 股 F-Score 缺）加 ⚠️ badge
+        warn = pick_confidence_warning(it.get("market"))
+        warn_badge = (
+            f'<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] '
+            f'bg-rose-50 text-rose-700 ring-1 ring-rose-200 ml-1" title="{_esc(warn)}">⚠️ 低置信</span>'
+            if warn else ""
+        )
         rows.append(f"""
 <tr class="border-t border-slate-100">
   <td class="py-2 pr-2 align-top text-[12px] text-slate-400 font-mono">#{i}</td>
   <td class="py-2 pr-2 align-top whitespace-nowrap">
-    <div class="text-[13px] font-bold text-slate-900">{_market_label(it["market"])} <span class="font-mono">{_esc(it["symbol"])}</span></div>
+    <div class="text-[13px] font-bold text-slate-900">{_market_label(it["market"])} <span class="font-mono">{_esc(it["symbol"])}</span>{warn_badge}</div>
     <div class="text-[11px] text-slate-500 truncate max-w-[140px]">{_esc(it["name"] or "")}</div>
   </td>
   <td class="py-2 pr-2 align-top">
@@ -2077,9 +2100,16 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
             role = p.get("chain_role") or "—"
             tier = p.get("chain_tier") or ""
             tier_badge = (f'<span class="text-[10px] text-slate-500">· {_esc(tier)}</span>' if tier else "")
+            # 低置信度市场（如 A 股 F-Score 缺）
+            p_warn = pick_confidence_warning(p.get("market"))
+            warn_badge = (
+                f'<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] '
+                f'bg-rose-50 text-rose-700 ring-1 ring-rose-200 ml-1" title="{_esc(p_warn)}">⚠️ 低置信</span>'
+                if p_warn else ""
+            )
             rows.append(f"""
 <tr class="border-t border-slate-100">
-  <td class="py-1.5 pr-2 align-top text-[12px] whitespace-nowrap">{_market_label(p["market"])} <span class="font-mono">{_esc(p["symbol"])}</span></td>
+  <td class="py-1.5 pr-2 align-top text-[12px] whitespace-nowrap">{_market_label(p["market"])} <span class="font-mono">{_esc(p["symbol"])}</span>{warn_badge}</td>
   <td class="py-1.5 pr-2 align-top text-[12px]">{_esc(p["name"] or "")}</td>
   <td class="py-1.5 pr-2 align-top text-[12px] font-semibold text-slate-800 text-right whitespace-nowrap">{p["score"]:.1f}</td>
   <td class="py-1.5 pr-2 align-top text-[11px] text-slate-600">{_esc(role)} {tier_badge}<div class="text-[10px] text-slate-400 mt-0.5">{_esc(intro)}</div></td>
