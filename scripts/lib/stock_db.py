@@ -173,15 +173,21 @@ CREATE TABLE IF NOT EXISTS real_holding_review_items (
     reasons_json       VARCHAR,
     risk_flags_json    VARCHAR,
     data_flags_json    VARCHAR,
+    price_trade_date   VARCHAR,
     prev_close         DOUBLE,
     prev_trade_date    VARCHAR,
+    day_change_basis   VARCHAR,
     day_change_rmb     DOUBLE,
     day_change_pct     DOUBLE,
+    price_is_prior_session BOOLEAN,
     size_advisory_json VARCHAR,
     industry_heat_json VARCHAR,
     created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (review_run_id, holding_id)
 );
+ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS price_trade_date VARCHAR;
+ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS day_change_basis VARCHAR;
+ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS price_is_prior_session BOOLEAN;
 -- 注：manual_watchlist 的 industry / business 字段升级 ALTER 已从这里移除，
 -- 因为 manual_watchlist 表由 init_stock_db_v2.py 建（已含这两列）。
 -- 在不跑 init_stock_db_v2 的新 DB（test/临时）上，ALTER 不存在的表会 crash。
@@ -1276,7 +1282,8 @@ REAL_HOLDING_REVIEW_ITEM_COLS = [
     "current_price", "current_currency", "current_value_rmb", "cost_rmb_locked",
     "pnl_rmb", "pnl_pct", "current_weight", "target_weight", "weight_gap_pt",
     "reasons_json", "risk_flags_json", "data_flags_json",
-    "prev_close", "prev_trade_date", "day_change_rmb", "day_change_pct",
+    "price_trade_date", "prev_close", "prev_trade_date", "day_change_basis",
+    "day_change_rmb", "day_change_pct", "price_is_prior_session",
     "size_advisory_json",
     "industry_heat_json",
 ]
@@ -1627,10 +1634,13 @@ def save_real_holding_review(
             _dump_json_field(item.get("reasons")),
             _dump_json_field(item.get("risk_flags")),
             _dump_json_field(item.get("data_flags")),
+            item.get("price_trade_date") or item.get("trade_date"),
             item.get("prev_close"),
             item.get("prev_trade_date"),
+            item.get("day_change_basis"),
             item.get("day_change_rmb"),
             item.get("day_change_pct"),
+            bool(item.get("price_is_prior_session")),
             _dump_json_field(item.get("size_advisory")),
             _dump_json_field(item.get("industry_heat")),
         ]
@@ -1739,6 +1749,7 @@ def fetch_latest_real_holding_review(
         d["data_flags"] = _load_json_field(d.pop("data_flags_json", None), [])
         d["size_advisory"] = _load_json_field(d.pop("size_advisory_json", None), None)
         d["industry_heat"] = _load_json_field(d.pop("industry_heat_json", None), None)
+        d["trade_date"] = d.get("price_trade_date")
         items.append(d)
 
     if own:

@@ -10,6 +10,7 @@ import json
 import logging
 import math
 import sys
+import zoneinfo
 from datetime import date, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -388,6 +389,35 @@ def _parse_iso_date(value: Any) -> date | None:
         return None
 
 
+_MARKET_TZ = {
+    "HK": "Asia/Hong_Kong",
+    "港股": "Asia/Hong_Kong",
+    "CN": "Asia/Shanghai",
+    "A股": "Asia/Shanghai",
+    "US": "America/New_York",
+    "美股": "America/New_York",
+}
+
+
+def _market_local_date(symbol: str, market: Any = None) -> date:
+    """该 symbol 所属市场的"当前本地日期",用于判断行情是否还停留在上一交易日。
+
+    盘前/闭市时 price_daily 最新一条仍是上一交易日收盘(intraday 刷新拒绝写
+    phantom 行),其 trade_date < 本地今天 → 据此把价格标成"昨收"而非当日实时。
+    """
+    s = str(symbol or "").upper()
+    if s.endswith(".HK"):
+        tz_name = "Asia/Hong_Kong"
+    elif s.endswith((".SS", ".SZ", ".SH")):
+        tz_name = "Asia/Shanghai"
+    else:
+        tz_name = _MARKET_TZ.get(str(market or "").strip(), "America/New_York")
+    try:
+        return datetime.now(zoneinfo.ZoneInfo(tz_name)).date()
+    except Exception:
+        return datetime.now().date()
+
+
 def _hk_watchlist_score_fallbacks(symbols: list[str], *, max_age_days: float = 3.0) -> dict[str, dict]:
     """Fallback HK manual-watchlist scoring from hk_factor_cache.json.
 
@@ -710,9 +740,16 @@ def _build_item(
     # 否则会把"持有一整天的市场涨跌"算给今天才进场的仓位,造成虚假浮盈/浮亏。
     # 2026-05-29 修复 v2: 当日建仓直接复用累计盈亏 (= 现市值 − 锁定成本),把汇兑变动也算进去,
     # 与"累计盈亏"列同口径;否则港股/美股会出现今日 ≠ 累计,新手看不懂。
-    price_trade_date = (price or {}).get("trade_date")
     prev_close = _as_float((price or {}).get("prev_close"))
     prev_trade_date = (price or {}).get("prev_trade_date")
+    price_trade_date = (price or {}).get("trade_date")
+    # 盘前/闭市信号: 最新可用收盘的 trade_date 早于该市场本地今天 → 仍是上一交易日收盘,
+    # 不是当日实时价。比"current==prev_close"启发式稳(后者在 173.40≠161.5 时漏判)。
+    price_is_prior_session = False
+    if current_price is not None and price_trade_date is not None:
+        _td = _parse_iso_date(price_trade_date)
+        if _td is not None and _td < _market_local_date(symbol, holding.get("market")):
+            price_is_prior_session = True
     entry_date_raw = holding.get("entry_date")
     entry_date_str = str(entry_date_raw)[:10] if entry_date_raw else None
     prev_date_str = str(prev_trade_date)[:10] if prev_trade_date else None
@@ -796,18 +833,12 @@ def _build_item(
         reasons.append("暂无当日股票评分,结论降级为观察")
         data_flags.append("no_model_score")
     if price and current_price is not None:
-        # 当 close == prev_close 且日变动为 0，说明 yfinance 拉的是 prev_close（多发生在
-        # 港股/A 股开盘前的早报时点）。文案区分"前收"vs"最新"，避免误导。
-        is_stale_prev_close = (
-            prev_close is not None
-            and prev_close > 0
-            and abs(current_price - prev_close) < 1e-6
-            and (day_change_pct is None or abs(day_change_pct) < 1e-6)
-        )
-        if is_stale_prev_close and prev_trade_date:
-            reasons.append(f"前收价 {prev_trade_date} · {current_price:.2f} {current_currency}（盘前/未开盘，待盘中刷新）")
+        # 行情 trade_date 早于市场本地今天 → 仍是上一交易日收盘（盘前/闭市未刷新），
+        # 文案标"昨收"而非"最新"，并显示这条收盘的真实日期，避免误当成当日实时价。
+        if price_is_prior_session:
+            reasons.append(f"昨收价 {price_trade_date} · {current_price:.2f} {current_currency}（盘前/未开盘，待盘中刷新）")
         else:
-            reasons.append(f"最新行情 {price.get('trade_date')} · {current_price:.2f} {current_currency}")
+            reasons.append(f"最新行情 {price_trade_date} · {current_price:.2f} {current_currency}")
     else:
         reasons.append("暂无最新行情,市值暂用锁定成本估算")
         data_flags.append("missing_price")
@@ -900,6 +931,7 @@ def _build_item(
         "prev_close": prev_close,
         "prev_trade_date": prev_trade_date,
         "trade_date": price_trade_date,
+        "price_is_prior_session": price_is_prior_session,
         "day_change_basis": day_change_basis,
         "day_change_rmb": round(day_change_rmb, 4) if day_change_rmb is not None else None,
         "day_change_pct": round(day_change_pct, 4) if day_change_pct is not None else None,
