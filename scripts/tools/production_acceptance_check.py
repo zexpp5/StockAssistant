@@ -911,10 +911,25 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
                         if _has_f_score(factor_json)
                     ]
                     f_score_coverage = (len(f_score_rows) / len(factor_rows)) if factor_rows else 0.0
+                    # 分市场覆盖率 —— 防止某个市场(如 CN 0/20)被全局总数(如 40/60=67%)掩盖成"达标"。
+                    # factor_rows 每行已带 market,直接按市场分组。
+                    f_score_by_market: dict[str, dict] = {}
+                    for market, symbol, factor_json in factor_rows:
+                        mk = str(market)
+                        slot = f_score_by_market.setdefault(mk, {"with_f_score": 0, "pick_count": 0})
+                        slot["pick_count"] += 1
+                        if _has_f_score(factor_json):
+                            slot["with_f_score"] += 1
+                    for slot in f_score_by_market.values():
+                        slot["coverage_pct"] = (
+                            round(slot["with_f_score"] / slot["pick_count"] * 100, 2)
+                            if slot["pick_count"] else 0.0
+                        )
                     summary["v2_f_score_coverage"] = {
                         "with_f_score": len(f_score_rows),
                         "latest_pick_count": len(factor_rows),
                         "coverage_pct": round(f_score_coverage * 100, 2),
+                        "by_market": f_score_by_market,
                     }
                     if f_score_coverage < 0.50:
                         statement_types: dict[str, int] = {}
@@ -940,6 +955,22 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
                                 **summary["v2_f_score_coverage"],
                                 "financial_statement_types": statement_types,
                             },
+                        ))
+                    # 分市场闸门:即使全局覆盖达标,单个市场覆盖 <50% 也要 WARN —— 否则
+                    # CN 0/20 会被 US/HK 的高覆盖在全局总数里掩盖,基本面维度对 A 股根本没接上。
+                    low_f_markets = sorted(
+                        mk for mk, slot in f_score_by_market.items()
+                        if slot["pick_count"] > 0 and slot["with_f_score"] / slot["pick_count"] < 0.50
+                    )
+                    if low_f_markets:
+                        issues.append(_issue(
+                            "WARN",
+                            "v2_f_score_coverage_low_by_market",
+                            "部分市场 F-Score 覆盖过低，基本面维度对这些市场不能算已覆盖：" + "，".join(
+                                f"{mk} {f_score_by_market[mk]['with_f_score']}/{f_score_by_market[mk]['pick_count']}"
+                                for mk in low_f_markets
+                            ),
+                            {"low_markets": low_f_markets, "by_market": f_score_by_market},
                         ))
                 if latest_run_id:
                     bad_scope = conn.execute(
