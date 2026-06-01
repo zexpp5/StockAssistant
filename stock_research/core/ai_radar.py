@@ -235,6 +235,69 @@ ORDER BY theme, metric_date DESC
 """
 
 
+def build_freshness_panel(con) -> dict[str, Any]:
+    """构建数据新鲜度面板（评审 P3 #9）。
+
+    返回 5 个子系统的最近刷新时间 + 各自 stale 阈值判断:
+      sources_checked  数据源 URL HEAD check  (7 天内 fresh)
+      etf_fetched      ETF 持仓快照          (14 天内 fresh)
+      evidence_captured SEC/公司证据         (30 天内 fresh)
+      tags_aggregated  tags 聚合             (7 天内 fresh)
+      metrics_captured 宏观指标               (90 天内 fresh)
+    超过阈值标 stale，前端用 amber 提示。
+    """
+    from datetime import datetime, timedelta
+    now = datetime.now()
+    items = [
+        ("sources_checked", "数据源健康", 7,
+         "SELECT MAX(last_checked_at) FROM ai_theme_evidence_sources"),
+        ("etf_fetched", "ETF 持仓快照", 14,
+         "SELECT MAX(last_fetched_at) FROM ai_theme_etf_universe"),
+        ("evidence_captured", "公司证据", 30,
+         "SELECT MAX(captured_at) FROM ai_theme_company_evidence"),
+        ("tags_aggregated", "公司标签聚合", 7,
+         "SELECT MAX(updated_at) FROM ai_theme_company_tags"),
+        ("metrics_captured", "宏观指标", 90,
+         "SELECT MAX(captured_at) FROM ai_theme_topic_metrics"),
+    ]
+
+    out_items: list[dict[str, Any]] = []
+    for key, label, stale_days, sql in items:
+        try:
+            ts = con.execute(sql).fetchone()[0]
+        except Exception:
+            ts = None
+        if ts is None:
+            status = "missing"
+            age_days = None
+        else:
+            age = now - ts if hasattr(ts, "__sub__") else None
+            age_days = age.days if age else None
+            if age_days is None:
+                status = "missing"
+            elif age_days > stale_days:
+                status = "stale"
+            elif age_days > stale_days // 2:
+                status = "aging"
+            else:
+                status = "fresh"
+        out_items.append({
+            "key": key,
+            "label": label,
+            "last_at": ts.isoformat() if hasattr(ts, "isoformat") else ts,
+            "age_days": age_days,
+            "stale_days": stale_days,
+            "status": status,
+        })
+
+    n_stale = sum(1 for x in out_items if x["status"] in ("stale", "missing"))
+    return {
+        "items": out_items,
+        "n_stale": n_stale,
+        "checked_at": now.isoformat(timespec="seconds"),
+    }
+
+
 def build_etf_consensus_panel(con) -> dict[str, Any]:
     """构建 ETF 共识热门主题面板数据。
 
@@ -661,6 +724,63 @@ def _watchlist_badge(in_wl: bool) -> str:
         return ""
     return ('<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] '
             'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200">✓ 已在自选</span>')
+
+
+def _render_freshness_panel(panel: dict[str, Any]) -> str:
+    """渲染数据新鲜度小卡。stale 红，aging 琥珀，fresh 绿。"""
+    if not panel or not panel.get("items"):
+        return ""
+
+    chips = []
+    for it in panel["items"]:
+        status = it["status"]
+        color = {
+            "fresh":   "bg-emerald-50 text-emerald-700 ring-emerald-200",
+            "aging":   "bg-amber-50  text-amber-700  ring-amber-200",
+            "stale":   "bg-rose-50   text-rose-700   ring-rose-200",
+            "missing": "bg-slate-50  text-slate-500  ring-slate-200",
+        }.get(status, "bg-slate-50 text-slate-500 ring-slate-200")
+        icon = {"fresh": "✅", "aging": "🟡", "stale": "🟠", "missing": "❌"}.get(status, "·")
+
+        if it["age_days"] is None:
+            age_txt = "未跑"
+        elif it["age_days"] == 0:
+            age_txt = "今天"
+        elif it["age_days"] == 1:
+            age_txt = "1 天前"
+        else:
+            age_txt = f"{it['age_days']} 天前"
+
+        last_at = (it.get("last_at") or "")[:19].replace("T", " ")
+        title = f"上次刷新: {last_at} · stale 阈值 {it['stale_days']} 天"
+        chips.append(
+            f'<span class="inline-flex items-center px-2 py-0.5 rounded ring-1 text-[11px] {color}" title="{_esc(title)}">'
+            f'{icon} {_esc(it["label"])} · {_esc(age_txt)}</span>'
+        )
+
+    summary = ""
+    if panel["n_stale"]:
+        summary = (
+            f'<span class="text-[11px] text-rose-700">'
+            f'⚠️ {panel["n_stale"]} 个子系统 stale / missing — 建议跑 '
+            f'<code class="text-[10px] bg-rose-100 px-1 rounded">python -m stock_research.jobs.ai_theme_evidence_refresh</code>'
+            f'</span>'
+        )
+    else:
+        summary = '<span class="text-[11px] text-emerald-700">✓ 全部子系统新鲜</span>'
+
+    return f"""
+<div class="bg-white ring-1 ring-slate-200 rounded-xl p-4 mb-3">
+  <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+    <div>
+      <div class="text-sm font-bold text-slate-900">⏱ 数据新鲜度</div>
+      <div class="text-[11px] text-slate-500">证据系统 5 个子系统的最近刷新时间 — 鼠标悬停看具体时间戳。</div>
+    </div>
+    {summary}
+  </div>
+  <div class="flex flex-wrap gap-1.5">{"".join(chips)}</div>
+</div>
+"""
 
 
 def _render_etf_consensus_panel(panel: dict[str, Any]) -> str:
@@ -1154,7 +1274,8 @@ def _render_theme_evidence_panel(panel: dict[str, Any]) -> str:
 def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | None = None,
                             my_view_summary: str | None = None,
                             theme_panel: dict[str, Any] | None = None,
-                            etf_panel: dict[str, Any] | None = None) -> str:
+                            etf_panel: dict[str, Any] | None = None,
+                            freshness_panel: dict[str, Any] | None = None) -> str:
     """渲染 AI 主题雷达 section（独立 tab 内容）。
 
     硬规则（对应文档 §五）：
@@ -1197,6 +1318,7 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
         if theme_panel else ""
     )
     etf_panel_html = _render_etf_consensus_panel(etf_panel) if etf_panel else ""
+    freshness_html = _render_freshness_panel(freshness_panel) if freshness_panel else ""
 
     rise_chains = [c for c in payload["chains"] if (c.get("delta_7d") or 0) >= MAINLINE_RISE_DELTA]
     fall_chains = [c for c in payload["chains"] if (c.get("delta_7d") or 0) <= MAINLINE_FALL_DELTA]
@@ -1424,6 +1546,7 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
     <p class="text-sm text-slate-600 mt-1">AI 价值链全景 · 行业理解层 · 不构成买入建议</p>
   </div>
   {head_html}
+  {freshness_html}
   {etf_panel_html}
   {theme_panel_html}
   {trend_html}

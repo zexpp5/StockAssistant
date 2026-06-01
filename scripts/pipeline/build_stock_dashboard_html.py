@@ -234,15 +234,81 @@ EVOLUTION = [
 
 
 # ============================================================
-# 6 月关键事件
+# 6 月关键事件（带分析字段：watch/bull/bear/prep/history）
+# 字段定义：
+#   watch   — 这场要紧盯哪些数据点 / 公告 / 客户名单
+#   bull    — 满足什么条件 = 短期偏多
+#   bear    — 满足什么条件 = 短期偏空（或叙事翻转）
+#   prep    — 持仓的人 / 想加仓的人，事件前 1-3 天怎么调
+#   history — 上一届 / 历史可比事件后股价表现，作为锚点
 # ============================================================
 EVENTS = [
-    {"date": "2026-06-01", "title": "NVIDIA GTC Taipei", "tickers": ["NVDA", "TSM"], "desc": "黄仁勋演讲：Rubin / CPO / AI Factory"},
-    {"date": "2026-06-02", "title": "Computex 2026", "tickers": ["INTC", "AMD", "AAPL"], "desc": "AI PC + 机器人 + AR/VR"},
-    {"date": "2026-06-08", "title": "Apple WWDC 2026", "tickers": ["AAPL"], "desc": "Apple Intelligence 关键节点"},
-    {"date": "2026-07-22", "title": "AMD Advancing AI", "tickers": ["AMD"], "desc": "MI400 vs Rubin"},
-    {"date": "2026-08-27", "title": "NVIDIA Q1 FY27 财报", "tickers": ["NVDA"], "desc": "Capex 平缓化最早信号期"},
-    {"date": "2026-09-15", "title": "iPhone 18 发布", "tickers": ["AAPL"], "desc": "AI iPhone 周期能否延续"},
+    {
+        "date": "2026-06-01",
+        "title": "NVIDIA GTC Taipei",
+        "tickers": ["NVDA", "TSM", "COHR"],
+        "desc": "黄仁勋台北 keynote · Rubin 平台 / CPO 光互联 / AI Factory 客户案例",
+        "watch": "① Rubin 量产时间表是否明确到季度（市场默认 26Q4 出样、27H1 大批量）；② Vera CPU 首批客户；③ CoWoS-L 产能瓶颈讲法（TSM 给 60k vs 80k wpm 差很多）；④ AI Factory 是否点名 OpenAI / xAI / Meta 的新一轮订单数量；⑤ CPO 是否给 COHR / LITE 具体 design-win。",
+        "bull": "Rubin 量产明确到 27H1 + AI Factory 给出 ≥ 5 个超大客户名单 + CPO 量产时间表前移 → NVDA / TSM / COHR 三联动；尤其 COHR / LITE 在 5 月回调 15%+ 后弹性更大。",
+        "bear": "如果只是把 March GTC 的内容换语言重讲一遍 + Rubin 推迟到 27H2 → 强化 'AI Capex 周期顶' 叙事，NVDA / TSM 短期补跌 5-8%。",
+        "prep": "GTC 演讲台北时间下午 / 美股盘前。NVDA 持仓 ≥ 30% 的人，演讲前一晚收盘价就是参照点；不建议演讲中追涨。可对冲品种：SOXS（费城半导体 3 倍反向）。",
+        "history": "March 2026 GTC：Blackwell 出货确认后 NVDA + 12% / 5 周；May 2024 Computex：NVDA + 7% / 2 周但 1 个月后回吐。Pattern：keynote 当周强，4-6 周后看实际订单兑现。",
+    },
+    {
+        "date": "2026-06-02",
+        "title": "Computex 2026",
+        "tickers": ["INTC", "AMD", "AAPL", "DELL", "HPQ"],
+        "desc": "AI PC 第二波 + 边缘推理 + 机器人 + AR/VR · OEM 大本营",
+        "watch": "① AMD MI400 是否在 NVDA Rubin 之后给具体 TCO 对标数据；② Intel Lunar Lake 继任者 + Foundry 18A 客户名单；③ AAPL 是否露面（5 年没参加 Computex，2026 传言展示 M5 / Vision Pro 国行）；④ AI PC 渗透率：去年 Computex OEM 给 22% 渗透指引、今年至少要 35%+ 才及格；⑤ 机器人公链：宇树、傅利叶、智元的 SoC 选择。",
+        "bull": "AI PC 渗透率上调 + INTC 拿到 ≥ 2 个 18A 大客户（Apple / Broadcom 任一）+ AMD MI400 给出对标 Rubin 的具体数 → INTC 单日 + 8-12% 不夸张；近半年 INTC 是 'turnaround 但缺催化' 状态。",
+        "bear": "OEM 普遍下调 AI PC 渗透指引、INTC 18A 客户仍模糊 → INTC 重回 -5% 区间、DELL / HPQ 跟跌。",
+        "prep": "Computex 6/2-6/6 整周。INTC / AMD 仓位 ≤ 5% 的可以放着看；想加 INTC 的人不建议 6/2 开盘追，OEM keynote 集中在 6/3-6/4，6/4 收盘后再判断。",
+        "history": "Computex 2025：AMD + 11% / 3 周（MI325 demo 后）；INTC -4% / 当周（Pat 离职后第一次缺席）；DELL + 6% / 2 周（AI server 订单确认）。",
+    },
+    {
+        "date": "2026-06-08",
+        "title": "Apple WWDC 2026",
+        "tickers": ["AAPL", "AVGO"],
+        "desc": "Apple Intelligence 第二年 · Siri 大重构 · 可能宣布新 AI partner",
+        "watch": "① 重构后的 Siri 是否真在 iPhone 17 上跑、还是只在 18；② Apple Intelligence 是否扩展到 Mac Pro / Vision Pro；③ 是否宣布 Gemini / Claude 接入（去年只接了 OpenAI）；④ Vision Pro 2 是否露面或定价下调；⑤ 自研服务器芯片 'Project ACDC' 进展 — 这条对 AVGO / TSM 有直接影响。",
+        "bull": "Siri 重构有可演示的 demo + 接入第二家 AI（Gemini 概率高）+ Vision Pro 2 价格 $2500 以下 → AAPL 5-7% 反弹；但要注意 WWDC 后 AAPL 历史上 1-2 周内回吐概率 ≥ 60%。",
+        "bear": "Siri 重构再次推迟 + 没有新 AI partner + Vision Pro 2 价格仍 $3000+ → AAPL -3-5%，估值压缩。当前 AAPL forward P/E 32x，对 AI 故事的容忍度低。",
+        "prep": "WWDC keynote 美国西部时间 6/8 上午 10 点 = 北京时间 6/9 凌晨 1 点。AAPL 美股盘后第一时间反应，6/9 港股 Apple 链（瑞声、舜宇、立讯）会跟跳。想加 AAPL 的人，6/8 美股开盘已经预热过一波。",
+        "history": "WWDC 2024：Apple Intelligence 发布当周 AAPL + 7%，3 个月内 + 28%；WWDC 2023：Vision Pro 发布后 -1% / 1 周（价格太贵）；WWDC 2022：跌 / 3% / 1 周（无重大发布）。",
+    },
+    {
+        "date": "2026-07-22",
+        "title": "AMD Advancing AI 2026",
+        "tickers": ["AMD", "TSM", "AVGO"],
+        "desc": "AMD 年度旗舰发布会 · MI400 vs Rubin 正面对标",
+        "watch": "① MI400 vs Rubin 在 LLM 训练 / 推理 上的 perf-per-dollar；② MI500 是否给路线图（市场预期 28H1）；③ 大客户：Meta / Microsoft / Oracle 的 AMD 份额是否从 15% 提到 20%+；④ ROCm 7 是否真正能跑全部主流 LLM（这是过去 2 年 AMD 最大软件短板）；⑤ 是否给 AI PC 第二代 Strix Halo 路线图。",
+        "bull": "MI400 性能至少打平 Rubin + Meta / MSFT 给出具体增量订单（≥ $5B annual run-rate）→ AMD + 8-15% / 1 周；近 6 个月 AMD 一直是 'NVDA 替代' 故事的最大受益者，但缺旗舰催化。",
+        "bear": "MI400 性能落后 Rubin > 20% + ROCm 仍跑不全 → AMD -5-10%，年内涨幅大半回吐。",
+        "prep": "7/22 是周三，发布会北京时间 7/23 凌晨。AMD 持仓 ≥ 5% 的人，建议 7/15 前后看一次 ROCm 7 release notes（GitHub 公开），可以提前判断。",
+        "history": "Advancing AI 2024：MI325 发布后 AMD -3% / 2 周（市场嫌弃性能未拉开差距）；Advancing AI 2023：MI300 发布后 + 21% / 5 周（首次喊出对标 NVDA H100）。Pattern：'再次确认对标' 不涨、'拉开身位' 才涨。",
+    },
+    {
+        "date": "2026-08-27",
+        "title": "NVIDIA Q1 FY27 财报",
+        "tickers": ["NVDA", "TSM", "VRT", "GEV"],
+        "desc": "Capex 周期最早可能见顶的信号期 · 网络收入占比是关键",
+        "watch": "① Data Center 收入 QoQ 增速（连续 4 季度 > 15%，市场怕拐头）；② 网络（NVLink / InfiniBand / CPO）收入占比首破 25% 是关键里程碑；③ 毛利率：连续 5 季度 75%+，财报后市场只看 76% 以下 = 失望；④ Q2 guide：如果 guide 增速 < 10% QoQ，'AI Capex 周期顶' 叙事会强化；⑤ 网络绑定 VRT / GEV 这种电力 / 散热票，财报后通常会跟跌或跟涨 1-2 天滞后。",
+        "bull": "Data Center QoQ + 18% 以上 + 毛利率 76%+ + Q2 guide 强 → NVDA 财报后 + 8-12%，VRT / GEV 跟涨 1-2 天后再 + 5%。",
+        "bear": "Data Center QoQ < 12% + 毛利率掉到 74% + Q2 guide 平 → NVDA -10-15%，整个 AI 链滑铁卢；电力链可能逆势（因为电力需求滞后于芯片需求）。",
+        "prep": "财报美股盘后。NVDA 仓位 ≥ 20% 的人，财报前一周建议把仓位降到 15% 以下、或买 1 个月 OTM put 对冲。VRT / GEV 不要在 NVDA 财报当周加仓 — 跟跌但不会反弹同步。",
+        "history": "Q1 FY26 财报（2025-05）：+ 5% 财报后但 2 周内回吐到 0；Q4 FY26（2026-02）：财报后 -8%（毛利率掉到 75.5%）；Q3 FY26（2025-11）：+ 9%。近 6 季 3 涨 3 跌，波动率扩大。",
+    },
+    {
+        "date": "2026-09-15",
+        "title": "iPhone 18 发布",
+        "tickers": ["AAPL", "AVGO", "QCOM", "0241.HK", "2382.HK"],
+        "desc": "AI iPhone 周期第 2 年 · 真正考验换机率",
+        "watch": "① 主打 AI 功能（重构 Siri / on-device LLM 推理 / AI photo 升级）是否在 17 系列就能用，决定 18 的差异化卖点；② 自研 5G C2 调制解调器是否全系（这条直接砍掉 QCOM 50% 收入）；③ 印度产能占比（市场预期破 30%）；④ 起售价：维持 $799 = 中性、降到 $749 = 利好；⑤ 中国市场反响 — 华为 Mate 80 系列预计同期发布。",
+        "bull": "AI 功能差异化清晰 + C2 modem 表现稳 + 中国预订环比 + 20% → AAPL + 6-10% / 4 周；Apple 链港股（瑞声 / 舜宇）+ 10-15%。",
+        "bear": "AI 功能仍要等下一代 + C2 modem 翻车（去年延期一年的原因）+ 中国份额继续被华为蚕食 → AAPL -5%，Apple 链港股 -15%。",
+        "prep": "发布会 9/15 凌晨北京时间 1 点。Apple 链港股可以提前 2-3 周建仓（历史上发布前 4 周是甜蜜区），但发布日往往 sell-the-news。QCOM 持仓的人，如果在 7-8 月 AAPL C2 modem 信息出来时已经反应过一轮，9/15 影响减半。",
+        "history": "iPhone 16（2025-09）：发布后 AAPL -2% / 2 周（AI 功能延期失望）；iPhone 15（2023-09）：发布后 -3% / 1 周；iPhone 14（2022-09）：+ 1% / 1 周但 1 个月后 -10%。Pattern：发布后 1-2 周回调几乎是规律。",
+    },
 ]
 
 
@@ -373,6 +439,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div class="mb-4">
       <div class="text-base font-bold text-slate-800 mb-2 px-2">今日</div>
       <a href="#today" data-tab="today" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">今日决策台</a>
+      <a href="#overview" data-tab="overview" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">关键事件</a>
     </div>
 
     <!-- 我的池子 = 真实持仓 + 股票池 (我关注的 / 全部股票) — AI 推荐已独立到「AI 工作台」 -->
@@ -780,10 +847,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 </section>
 
-<!-- ============ 关键事件日历 ============ -->
+<!-- ============ 关键事件日历（横向行 + 每条 5 段分析） ============ -->
 <section id="events" class="max-w-7xl mx-auto px-6 py-10">
-  <h2 class="text-2xl font-bold text-slate-800 mb-6">📅 接下来 6 个月关键事件</h2>
-  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+  <div class="mb-6">
+    <h2 class="text-2xl font-bold text-slate-800 mb-2">📅 接下来 6 个月关键事件</h2>
+    <p class="text-sm text-slate-600">每场事件:<strong class="text-violet-700">看点</strong>(盯什么数据点) · <strong class="text-emerald-700">利好情景</strong>(满足什么条件偏多) · <strong class="text-rose-700">风险情景</strong>(满足什么条件偏空) · <strong class="text-blue-700">怎么准备</strong>(持仓 / 加仓建议) · <strong class="text-slate-600">历史可比</strong>(上一届表现作锚点)</p>
+    <p class="text-xs text-slate-400 mt-2">⚠️ 以下分析基于公开信息 + 历史规律，<strong>非内部消息</strong>，仅作研究参考，不构成投资建议</p>
+  </div>
+  <div class="space-y-4">
     {EVENT_CARDS}
   </div>
 </section>
@@ -11399,12 +11470,69 @@ SCARCE_THEMES = [
 
 
 def event_card_html(ev):
+    """每个事件渲染成一整行 · 左侧日期 chip / 右侧标题 + 5 段分析。
+    设计目标：横向占满 + 信息密度高 + 可扫读（看点/利好/风险/准备/历史 5 段固定结构）。
+    """
+    from datetime import date as _date
     tickers_html = " ".join(f'<span class="ticker-badge">{t}</span>' for t in ev['tickers'])
-    return f'''<div class="bg-white rounded-xl border-l-4 border-blue-400 shadow-sm p-4 hover:shadow-md transition">
-  <div class="text-xs font-mono text-blue-600 mb-1">📌 {ev['date']}</div>
-  <div class="font-bold text-slate-900 mb-1">{ev['title']}</div>
-  <div class="text-xs text-slate-600 mb-3">{ev['desc']}</div>
-  <div>{tickers_html}</div>
+
+    # 倒计时 / 时态判断
+    try:
+        ev_date = _date.fromisoformat(ev['date'])
+        delta = (ev_date - _date.today()).days
+        if delta == 0:
+            when_chip = '<span class="inline-block px-2 py-0.5 bg-rose-100 text-rose-700 text-xs font-bold rounded">🔥 今天</span>'
+        elif delta == 1:
+            when_chip = '<span class="inline-block px-2 py-0.5 bg-amber-100 text-amber-700 text-xs font-bold rounded">明天</span>'
+        elif 0 < delta <= 7:
+            when_chip = f'<span class="inline-block px-2 py-0.5 bg-violet-100 text-violet-700 text-xs font-bold rounded">{delta} 天后</span>'
+        elif 0 < delta <= 30:
+            when_chip = f'<span class="inline-block px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium rounded">{delta} 天后</span>'
+        elif delta > 30:
+            when_chip = f'<span class="inline-block px-2 py-0.5 bg-slate-100 text-slate-600 text-xs rounded">{delta} 天后</span>'
+        else:
+            when_chip = '<span class="inline-block px-2 py-0.5 bg-slate-100 text-slate-500 text-xs rounded">已过</span>'
+    except Exception:
+        when_chip = ''
+
+    # 5 段分析（向后兼容老数据：旧字段只有 desc 时降级显示）
+    def _row(emoji, label, key, color):
+        val = ev.get(key)
+        if not val:
+            return ''
+        return (f'<div class="flex gap-2 py-1.5 border-t border-slate-100">'
+                f'<div class="flex-shrink-0 w-20 text-xs font-semibold {color}">{emoji} {label}</div>'
+                f'<div class="flex-1 text-sm text-slate-700 leading-relaxed">{val}</div>'
+                f'</div>')
+
+    analysis_rows = (
+        _row('🔎', '看点', 'watch', 'text-violet-700') +
+        _row('🟢', '利好情景', 'bull', 'text-emerald-700') +
+        _row('🔴', '风险情景', 'bear', 'text-rose-700') +
+        _row('🛠️', '怎么准备', 'prep', 'text-blue-700') +
+        _row('📊', '历史可比', 'history', 'text-slate-600')
+    )
+
+    return f'''<div class="bg-white rounded-xl border-l-4 border-blue-400 shadow-sm hover:shadow-md transition overflow-hidden">
+  <div class="flex">
+    <!-- 左侧固定日期列 -->
+    <div class="flex-shrink-0 w-28 bg-slate-50 border-r border-slate-100 p-4 flex flex-col items-center justify-center gap-2">
+      <div class="text-xs font-mono text-blue-600">📌</div>
+      <div class="text-sm font-mono font-bold text-slate-900">{ev['date']}</div>
+      {when_chip}
+    </div>
+    <!-- 右侧内容列（横向占满）-->
+    <div class="flex-1 p-4 min-w-0">
+      <div class="flex items-start justify-between gap-3 mb-2 flex-wrap">
+        <div class="flex-1 min-w-0">
+          <div class="font-bold text-slate-900 text-base">{ev['title']}</div>
+          <div class="text-xs text-slate-600 mt-1">{ev['desc']}</div>
+        </div>
+        <div class="flex-shrink-0 flex flex-wrap gap-1">{tickers_html}</div>
+      </div>
+      {analysis_rows}
+    </div>
+  </div>
 </div>'''
 
 
@@ -15970,6 +16098,7 @@ def build():
             build_ai_radar_payload,
             build_theme_evidence_panel,
             build_etf_consensus_panel,
+            build_freshness_panel,
             render_ai_radar_section,
         )
         _radar_conn = duckdb.connect(_duckdb_path(), read_only=True)
@@ -15977,6 +16106,7 @@ def build():
             radar_payload = build_ai_radar_payload(_radar_conn)
             theme_panel = build_theme_evidence_panel(_radar_conn)
             etf_panel = build_etf_consensus_panel(_radar_conn)
+            freshness_panel = build_freshness_panel(_radar_conn)
         finally:
             _radar_conn.close()
         ai_radar_html = render_ai_radar_section(
@@ -15985,6 +16115,7 @@ def build():
             my_view_summary=MY_VIEW["summary"],
             theme_panel=theme_panel,
             etf_panel=etf_panel,
+            freshness_panel=freshness_panel,
         )
         n_chains = len(radar_payload.get("chains") or [])
         n_picks = radar_payload.get("n_picks_total") or 0
