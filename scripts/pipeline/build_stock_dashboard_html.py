@@ -8103,11 +8103,13 @@ async function renderRealHoldings() {
   const dayCoverageLabel = hasDayChange
     ? (totalValueWithDayChange < totalValue * 0.95 ? ` · 覆盖 ${(totalValueWithDayChange / totalValue * 100).toFixed(0)}% 市值` : "")
     : "";
-  // 「今日盈亏」标签 footgun 修复: 盘前/周末后 reviewItem.prev_trade_date 通常是上一交易日,
+  // 「今日盈亏」标签 footgun 修复: 盘前/周末后 reviewItem.trade_date (latest 那行) 通常是上一交易日,
   // 此时口径是「上一交易日收盘 vs 前一日收盘」, 必须明示, 否则被误读为「6-01 今天的盈亏」
+  // 注意用 trade_date (latest 那行=day_change 截至日), 不是 prev_trade_date (那是 prev_close 那行, 早 1 天)
   const _dayPnlDates = enriched
-    .map(x => x.reviewItem && x.reviewItem.prev_trade_date)
+    .map(x => x.reviewItem && (x.reviewItem.trade_date || x.reviewItem.prev_trade_date))
     .filter(Boolean)
+    .map(d => String(d).slice(0, 10))
     .sort();
   const dayPnlAsOfDate = _dayPnlDates.length ? _dayPnlDates[_dayPnlDates.length - 1] : null;
   const _nowLocal = new Date();
