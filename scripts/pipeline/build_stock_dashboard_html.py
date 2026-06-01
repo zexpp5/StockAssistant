@@ -1036,7 +1036,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       💡 <strong>怎么用</strong>: 这是科技/AI 股票池横向排名。未在「我关注的」里的标的可一键加关注；
       已关注的标的可回到详情页复核它为什么排在这里。
       <strong class="text-violet-700">α 列</strong>显示推荐后 5/20 交易日相对各市场基准的超额收益,
-      数据来自 <code class="text-xs bg-slate-100 px-1 rounded">recommendation_picks + pick_outcomes</code>（V2，每日刷新；生产统计从 2026-05-25 12:10 起 — 在此之前的推荐打分公式仍在调整，历史数据已清除避免误导）。
+      数据来自 <code class="text-xs bg-slate-100 px-1 rounded">recommendation_picks + pick_outcomes</code>（V2，每日刷新；准确度默认按当前 strategy_version 隔离统计，旧公式 run 只保留作审计）。
     </p>
     <!-- 反向 CTA: 把候选转成组合 (2026-05-27) -->
     <div class="mt-4 bg-gradient-to-r from-violet-50 to-indigo-50 border border-violet-200 rounded-lg px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
@@ -5139,11 +5139,10 @@ const TAB_SECTIONS = {
   // overview 已收敛为纯「关键事件」页 (2026-06-01):
   //   - 删 hero / thesis / evolution / scarce → 跟 AI 主题雷达 tab 重复
   //   - 删 stress-test / hundred-x → 不属于事件 surface
-  //   这些 section HTML 仍在文件里但不被任何 tab 引用 (废代码,下一轮清理)
   overview: ["events"],
   // 死代码 section: HTML 仍在文件里但不被任何用户可见 tab 引用。
   // 必须挂在 TAB_SECTIONS 某个 key 下,否则 switchTab 不收集进 allSections,
-  // 这些 section 就会默认显示 (display="" 是 visible)。
+  // 这些 section 就会一直默认显示 (display="" 是 visible)。
   // key 以 _ 开头,getTabFromHash() 不会路由到它,无 sidebar 入口,纯隐藏用。
   _dead_sections: ["hero", "stress-test", "thesis", "evolution", "scarce", "hundred-x"],
   "real-holdings": ["real-holdings"],
@@ -8101,31 +8100,86 @@ async function renderRealHoldings() {
   const totalPnlPct = totalCost > 0 ? totalPnl / totalCost * 100 : 0;
   const stockWeight = TOTAL_CAPITAL > 0 ? totalValue / TOTAL_CAPITAL * 100 : 0;
   const pnlColor = totalPnl >= 0 ? "text-emerald-600" : "text-rose-600";
-  // 今日盈亏: 仅汇总 prev_close 可用的持仓;%以"覆盖到的市值"为分母,避免被无数据的票稀释
+  // 最新收盘变动: 仅汇总 prev_close / 新仓成本基准可用的持仓。
+  // 混合账户里美股/港股/A股的最新收盘日可能不同,所以总额合并、日期按市场拆开展示。
   const hasDayChange = totalValueWithDayChange > 0;
   const dayChangePct = hasDayChange ? totalDayChange / totalValueWithDayChange * 100 : null;
   const dayPnlColor = totalDayChange >= 0 ? "text-emerald-600" : "text-rose-600";
   const dayCoverageLabel = hasDayChange
     ? (totalValueWithDayChange < totalValue * 0.95 ? ` · 覆盖 ${(totalValueWithDayChange / totalValue * 100).toFixed(0)}% 市值` : "")
     : "";
-  // 「今日盈亏」标签 footgun 修复: 盘前/周末后 reviewItem.trade_date (latest 那行) 通常是上一交易日,
-  // 此时口径是「上一交易日收盘 vs 前一日收盘」, 必须明示, 否则被误读为「6-01 今天的盈亏」
-  // 注意用 trade_date (latest 那行=day_change 截至日), 不是 prev_trade_date (那是 prev_close 那行, 早 1 天)
-  const _dayPnlDates = enriched
-    .map(x => x.reviewItem && (x.reviewItem.trade_date || x.reviewItem.prev_trade_date))
-    .filter(Boolean)
-    .map(d => String(d).slice(0, 10))
-    .sort();
-  const dayPnlAsOfDate = _dayPnlDates.length ? _dayPnlDates[_dayPnlDates.length - 1] : null;
-  const _nowLocal = new Date();
-  const _todayLocalISO = `${_nowLocal.getFullYear()}-${String(_nowLocal.getMonth()+1).padStart(2,'0')}-${String(_nowLocal.getDate()).padStart(2,'0')}`;
-  const dayPnlIsToday = dayPnlAsOfDate === _todayLocalISO;
-  const dayPnlLabel = (hasDayChange && dayPnlAsOfDate && !dayPnlIsToday)
-    ? `上一交易日盈亏 · 截至 ${dayPnlAsOfDate}`
-    : "今日盈亏";
-  const dayPnlTooltip = (hasDayChange && dayPnlAsOfDate && !dayPnlIsToday)
-    ? `${dayPnlAsOfDate} 收盘 vs 前一日收盘 · 本地今天 ${_todayLocalISO} 行情未到`
-    : `今日盈亏 = 最近一次有效收盘 vs 前一日收盘${hasDayChange ? "" : "(暂无 prev_close 数据)"}`;
+  const _dayMarketLabel = (m) => ({US: "美股", HK: "港股", CN: "A股"}[m] || (m || "其他"));
+  const _dateOnly = d => String(d || "").slice(0, 10);
+  const _inferMarketForHolding = (x) => {
+    const code = String(x.code || "").toUpperCase();
+    const raw = (x.reviewItem && x.reviewItem.market) || (x.h && x.h.market) || "";
+    const m = String(raw || "").toUpperCase();
+    if (m) return m;
+    if (code.endsWith(".HK")) return "HK";
+    if (code.endsWith(".SS") || code.endsWith(".SZ") || code.endsWith(".SH") || code.endsWith(".BJ")) return "CN";
+    return "US";
+  };
+  const dayBuckets = {};
+  enriched.forEach(x => {
+    if (x.dayChangeRmb == null) return;
+    const m = _inferMarketForHolding(x);
+    const b = dayBuckets[m] || (dayBuckets[m] = {
+      market: m, change: 0, value: 0, count: 0, latestDates: new Set(), prevDates: new Set(), entryCostCount: 0,
+    });
+    b.change += x.dayChangeRmb;
+    b.value += x.valueRmb;
+    b.count += 1;
+    const ri = x.reviewItem || {};
+    const latestDate = _dateOnly(ri.price_trade_date || ri.trade_date);
+    const prevDate = _dateOnly(ri.prev_trade_date);
+    if (latestDate) b.latestDates.add(latestDate);
+    if (prevDate) b.prevDates.add(prevDate);
+    if (ri.day_change_basis === "entry_cost") b.entryCostCount += 1;
+  });
+  const _marketSort = m => ({HK: 1, US: 2, CN: 3}[m] || 9);
+  const _dateSetText = (set) => {
+    const arr = Array.from(set || []).filter(Boolean).sort();
+    if (!arr.length) return "";
+    if (arr.length === 1) return arr[0];
+    return `${arr[0]}~${arr[arr.length - 1]}`;
+  };
+  const dayMarketRows = Object.values(dayBuckets).sort((a, b) => _marketSort(a.market) - _marketSort(b.market));
+  const dayMarketRowsHtml = dayMarketRows.map(b => {
+    const pct = b.value > 0 ? b.change / b.value * 100 : null;
+    const cls = b.change >= 0 ? "text-emerald-700" : "text-rose-700";
+    const latestText = _dateSetText(b.latestDates);
+    const prevText = _dateSetText(b.prevDates);
+    const dateText = latestText && prevText
+      ? `${latestText} 收盘 vs ${prevText}`
+      : (latestText ? `截至 ${latestText} 收盘` : "日期待补");
+    const basisText = b.entryCostCount ? ` · 含 ${b.entryCostCount} 笔新仓按买入成本` : "";
+    return `<div class="flex items-center justify-between gap-2 text-[11px] leading-snug">
+      <span class="text-slate-500">${_dayMarketLabel(b.market)} · ${dateText}${basisText}</span>
+      <span class="font-mono font-semibold ${cls} whitespace-nowrap">${b.change >= 0 ? "+" : ""}${b.change.toLocaleString(undefined, {maximumFractionDigits:0})}${pct == null ? "" : ` · ${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`}</span>
+    </div>`;
+  }).join("");
+  const dayPnlLabel = "最新收盘变动";
+  const dayPnlTooltip = "按各市场最近两次收盘分别计算；美股、港股、A股最新收盘日可能不同；当天新仓按买入成本计算。";
+  const quoteBuckets = {};
+  enriched.forEach(x => {
+    const m = _inferMarketForHolding(x);
+    const b = quoteBuckets[m] || (quoteBuckets[m] = {market: m, value: 0, count: 0, dates: new Set()});
+    b.value += x.valueRmb;
+    b.count += 1;
+    const ri = x.reviewItem || {};
+    const priceDate = _dateOnly(ri.price_trade_date || ri.trade_date);
+    if (priceDate) b.dates.add(priceDate);
+  });
+  const quoteRowsHtml = Object.values(quoteBuckets)
+    .sort((a, b) => _marketSort(a.market) - _marketSort(b.market))
+    .map(b => {
+      const dateText = _dateSetText(b.dates) || "日期待补";
+      return `<div class="flex items-center justify-between gap-2 text-[11px] leading-snug">
+        <span class="text-slate-500">${_dayMarketLabel(b.market)} · ${dateText} 最近行情 · ${b.count} 笔</span>
+        <span class="font-mono font-semibold text-slate-700 whitespace-nowrap">${b.value.toLocaleString(undefined, {maximumFractionDigits:0})}</span>
+      </div>`;
+    }).join("");
+  const totalPnlTooltip = "累计盈亏 = 按每只持仓最近一次成功行情估算的市值 - 买入锁定成本；港股、美股、A股可能对应不同的行情日期。";
   const coveredByAi = enrichedWithGap.filter(x => x.targetWeight != null);
   const stockWeightCovered = coveredByAi.reduce((sum, x) => sum + x.currentWeight, 0);
   const totalTargetCovered = coveredByAi.reduce((sum, x) => sum + x.targetWeight, 0);
@@ -8180,15 +8234,21 @@ async function renderRealHoldings() {
           <div class="text-sm font-semibold text-slate-700 leading-tight">${realCash.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
           <div class="text-[10px] text-slate-400 mt-0.5">估算现金 RMB</div>
         </div>
-        <!-- 重点 1: 当日/上一交易日盈亏 占 2 列宽 + 大字 -->
+        <!-- 重点 1: 最新收盘变动 占 2 列宽 + 大字；日期按市场拆开，避免跨市场误读 -->
         <div class="lg:col-span-2 rounded-lg ${hasDayChange ? (totalDayChange >= 0 ? "bg-emerald-50 border-emerald-200" : "bg-rose-50 border-rose-200") : "bg-slate-50 border-slate-100"} px-4 py-3 border" title="${dayPnlTooltip}">
           <div class="text-3xl font-bold ${hasDayChange ? dayPnlColor : "text-slate-400"} leading-tight">${hasDayChange ? (totalDayChange >= 0 ? "+" : "") + totalDayChange.toLocaleString(undefined, {maximumFractionDigits:0}) : "—"}</div>
           <div class="text-xs font-medium ${hasDayChange ? (totalDayChange >= 0 ? "text-emerald-700" : "text-rose-700") : "text-slate-400"} mt-1">${dayPnlLabel}${hasDayChange ? ` · ${dayChangePct >= 0 ? "+" : ""}${dayChangePct.toFixed(2)}%${dayCoverageLabel}` : " · 数据未就绪"}</div>
+          ${hasDayChange && dayMarketRowsHtml ? `<div class="mt-2 space-y-1 border-t border-white/60 pt-2">${dayMarketRowsHtml}</div>` : ""}
         </div>
-        <!-- 重点 2: 累计盈亏 占 2 列宽 + 大字 -->
-        <div class="lg:col-span-2 rounded-lg ${totalPnl >= 0 ? "bg-emerald-50 border-emerald-200" : "bg-rose-50 border-rose-200"} px-4 py-3 border">
+        <!-- 重点 2: 累计盈亏 占 2 列宽 + 大字；强调它按最近一次成功行情估算，不是统一自然日 -->
+        <div class="lg:col-span-2 rounded-lg ${totalPnl >= 0 ? "bg-emerald-50 border-emerald-200" : "bg-rose-50 border-rose-200"} px-4 py-3 border" title="${totalPnlTooltip}">
           <div class="text-3xl font-bold ${pnlColor} leading-tight">${totalPnl >= 0 ? "+" : ""}${totalPnl.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
-          <div class="text-xs font-medium ${totalPnl >= 0 ? "text-emerald-700" : "text-rose-700"} mt-1">累计盈亏 · ${totalPnlPct >= 0 ? "+" : ""}${totalPnlPct.toFixed(2)}%</div>
+          <div class="text-xs font-medium ${totalPnl >= 0 ? "text-emerald-700" : "text-rose-700"} mt-1">
+            累计盈亏 · ${totalPnlPct >= 0 ? "+" : ""}${totalPnlPct.toFixed(2)}%
+            <span class="ml-1 inline-flex items-center justify-center w-4 h-4 rounded-full border border-current text-[10px]" title="${totalPnlTooltip}">?</span>
+          </div>
+          <div class="mt-1 text-[11px] ${totalPnl >= 0 ? "text-emerald-700" : "text-rose-700"}">按最近一次成功行情估算</div>
+          ${quoteRowsHtml ? `<div class="mt-2 space-y-1 border-t border-white/60 pt-2">${quoteRowsHtml}</div>` : ""}
         </div>
       </div>
       <div class="mt-3">
@@ -8275,8 +8335,14 @@ async function renderRealHoldings() {
   const displayPrice = x.cur ? x.cur.raw_price : reviewPrice;
   const reviewRun = _realHoldingReviewCache && _realHoldingReviewCache.run;
   const reviewStamp = reviewRun ? _fmtGeneratedAt(reviewRun.generated_at) : "";
+  // 盘前/闭市时行情还停留在上一交易日收盘，标"昨收 <行情日>"而非"体检价 <今日时间戳>"，
+  // 避免把昨收价误当成当日实时价（price_is_prior_session 由后端 real_holding_review 算好）。
+  const priorSession = !!(reviewItem && reviewItem.price_is_prior_session);
+  const priceDate = (reviewItem && reviewItem.trade_date) ? String(reviewItem.trade_date).slice(0, 10) : "";
   const snapTag = (x.cur && x.cur.fromReview)
-    ? `<div class="text-[10px] text-violet-500" title="行情来自最近一次持仓体检快照">体检价 ${_esc(reviewStamp || (reviewRun && reviewRun.as_of_date) || "")}</div>`
+    ? (priorSession
+        ? `<div class="text-[10px] text-amber-600" title="盘前/闭市，行情还停留在上一交易日收盘，待盘中刷新">昨收 ${_esc(priceDate || reviewStamp)}</div>`
+        : `<div class="text-[10px] text-violet-500" title="行情来自最近一次持仓体检快照">体检价 ${_esc(reviewStamp || (reviewRun && reviewRun.as_of_date) || "")}</div>`)
     : "";
   const pnlCls = x.pnlRmb >= 0 ? "text-emerald-600" : "text-rose-600";
   const entryFx = _entryFxForHolding(x.h, x.code, x.cur);
@@ -10639,13 +10705,18 @@ function _factorValue(row, keys) {
 function _factorBreakdownHtml(row, compact = false) {
   const items = [
     ["动量", _factorValue(row, ["momentum_score", "momentum"])],
+    ["反转", _factorValue(row, ["reversal_score", "reversal"])],
     ["估值", _factorValue(row, ["valuation_score", "valuation"])],
     ["质量", _factorValue(row, ["quality_score", "quality", "data_quality"])],
     ["覆盖", _factorValue(row, ["coverage_score", "coverage"])],
   ].map(([label, v]) => {
     let value = v;
     if (label === "覆盖" && value !== null && value <= 1) value = value * 100;
-    const color = value === null ? "text-slate-300" : (value >= 70 ? "text-emerald-700" : value >= 50 ? "text-amber-700" : "text-rose-700");
+    const color = value === null
+      ? "text-slate-300"
+      : (label === "反转"
+        ? (value >= 85 ? "text-amber-700" : value >= 50 ? "text-slate-600" : "text-emerald-700")
+        : (value >= 70 ? "text-emerald-700" : value >= 50 ? "text-amber-700" : "text-rose-700"));
     return `<span class="inline-flex items-center gap-1 rounded bg-slate-50 border border-slate-200 px-1.5 py-0.5 ${compact ? "text-[10px]" : "text-[11px]"}">
       <span class="text-slate-500">${label}</span><span class="font-mono ${color}">${value === null ? "—" : value.toFixed(0)}</span>
     </span>`;
@@ -10936,6 +11007,7 @@ function _reasonSummaryHtml(row) {
         <strong>📊 算法准确度</strong> · 已记录 ${stats.totalRecs} 条 V2 推荐,但**还没有 alpha 数据**(可能 evaluate_v2_picks 还没跑,或推荐才生成不久还没到评估窗口)。</div>`;
     } else {
       const p = stats.panel;
+      const strategyText = DISCOVERY.history_strategy_version || DISCOVERY.strategy_version || "current";
       const cell = (label, v, hint) => {
         const fmt = (v == null) ? "—" : ((v >= 0 ? "+" : "") + v.toFixed(2) + "%");
         const cls = v == null ? "text-slate-400" : (v >= 0 ? "text-emerald-600" : "text-rose-600");
@@ -10960,7 +11032,7 @@ function _reasonSummaryHtml(row) {
         <div class="flex items-center gap-2 mb-3">
           <span class="text-xl">📊</span>
           <h3 class="text-lg font-bold text-slate-900">算法准确度</h3>
-          <span class="text-xs text-slate-500">基于过去 ${stats.totalRecs} 条 V2 推荐 · ${stats.evaluated} 条已评估</span>
+          <span class="text-xs text-slate-500">基于当前策略 ${_esc(strategyText)} · ${stats.totalRecs} 条 V2 推荐 · ${stats.evaluated} 条已评估</span>
         </div>
         <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
           ${cell("平均 1d α", p.alpha_1d, "1 个交易日 vs 各市场基准")}
@@ -12164,7 +12236,7 @@ def _runtime_load_pipeline_status(role: str = "production", mode: str | None = N
     return best[2] if best else {}
 
 
-def _build_appearance_index() -> dict:
+def _build_appearance_index(strategy_version: str | None = None) -> dict:
     """ticker (uppercase) → {first_seen_*, count, consecutive,
                               cur_rank, prev_rank, rank_up, cur_score, prev_score, score_up}
     + _meta{total_runs}。
@@ -12183,13 +12255,19 @@ def _build_appearance_index() -> dict:
     try:
         con = duckdb.connect(db_path, read_only=True)
         try:
-            total_runs = int(con.execute("SELECT COUNT(*) FROM recommendation_runs").fetchone()[0] or 0)
+            where = "WHERE r.universe_scope = 'system_tech_universe' AND r.status = 'generated'"
+            params: list = []
+            if strategy_version:
+                where += " AND r.strategy_version = ?"
+                params.append(strategy_version)
+            total_runs = int(con.execute(f"SELECT COUNT(*) FROM recommendation_runs r {where}", params).fetchone()[0] or 0)
             rows = con.execute(
-                """
+                f"""
                 WITH ordered AS (
                     SELECT r.run_id, r.run_date,
                            ROW_NUMBER() OVER (ORDER BY r.generated_at ASC) AS rn
                     FROM recommendation_runs r
+                    {where}
                 ),
                 picks AS (
                     SELECT p.symbol, o.rn, o.run_id, o.run_date, p.rank, p.total_score
@@ -12206,11 +12284,12 @@ def _build_appearance_index() -> dict:
                        (SELECT p7.total_score FROM picks p7 WHERE p7.symbol = picks.symbol ORDER BY p7.rn DESC LIMIT 1 OFFSET 1) AS prev_score
                 FROM picks
                 GROUP BY symbol
-                """
+                """,
+                params,
             ).fetchall()
         finally:
             con.close()
-        out: dict = {"_meta": {"total_runs": total_runs}}
+        out: dict = {"_meta": {"total_runs": total_runs, "strategy_version": strategy_version}}
         for symbol, run_ranks, first_run_id, first_date, cnt, cur_rank, cur_score, prev_rank, prev_score in rows:
             if not symbol:
                 continue
@@ -12246,7 +12325,7 @@ def _build_appearance_index() -> dict:
         return {"_meta": {"total_runs": 0}}
 
 
-def _build_dropouts() -> list[dict]:
+def _build_dropouts(strategy_version: str | None = None) -> list[dict]:
     """📉 上批次在 picks、本批次跌出 → 列出供 dashboard 顶部 banner 显示。
 
     跌出 = 上一次 run 出现在 recommendation_picks，最新 run 不在。
@@ -12262,15 +12341,21 @@ def _build_dropouts() -> list[dict]:
     try:
         con = duckdb.connect(db_path, read_only=True)
         try:
-            total_runs = int(con.execute("SELECT COUNT(*) FROM recommendation_runs").fetchone()[0] or 0)
+            where = "WHERE r.universe_scope = 'system_tech_universe' AND r.status = 'generated'"
+            params: list = []
+            if strategy_version:
+                where += " AND r.strategy_version = ?"
+                params.append(strategy_version)
+            total_runs = int(con.execute(f"SELECT COUNT(*) FROM recommendation_runs r {where}", params).fetchone()[0] or 0)
             if total_runs < 2:
                 return []
             rows = con.execute(
-                """
+                f"""
                 WITH ordered AS (
                     SELECT r.run_id, r.run_date,
                            ROW_NUMBER() OVER (ORDER BY r.generated_at DESC) AS rn
                     FROM recommendation_runs r
+                    {where}
                 ),
                 latest_syms AS (
                     SELECT p.symbol FROM recommendation_picks p
@@ -12285,7 +12370,8 @@ def _build_dropouts() -> list[dict]:
                 FROM prev
                 WHERE symbol NOT IN (SELECT symbol FROM latest_syms)
                 ORDER BY rank
-                """
+                """,
+                params,
             ).fetchall()
         finally:
             con.close()
@@ -12971,9 +13057,9 @@ def _runtime_v2_latest_batch_meta() -> dict:
             return {}
         latest = con.execute(
             """
-            SELECT run_id, run_date, generated_at
+            SELECT run_id, run_date, generated_at, strategy_version, model_version
             FROM recommendation_runs
-            WHERE universe_scope = 'system_tech_universe'
+            WHERE universe_scope = 'system_tech_universe' AND status = 'generated'
             ORDER BY generated_at DESC
             LIMIT 1
             """
@@ -12981,7 +13067,7 @@ def _runtime_v2_latest_batch_meta() -> dict:
         if not latest:
             con.close()
             return {}
-        run_id, run_date, generated_at = latest
+        run_id, run_date, generated_at, strategy_version, model_version = latest
         rows = con.execute(
             """
             SELECT market, signal, COUNT(*)
@@ -13011,6 +13097,8 @@ def _runtime_v2_latest_batch_meta() -> dict:
         "batch_run_id": str(run_id),
         "batch_run_date": str(run_date)[:10] if run_date is not None else None,
         "batch_generated_at": str(generated_at) if generated_at is not None else None,
+        "strategy_version": str(strategy_version) if strategy_version else None,
+        "model_version": str(model_version) if model_version else None,
         "full_batch_count": total,
         "market_breakdown": market_breakdown,
     }
@@ -13052,7 +13140,7 @@ def _coverage_pct(factors: dict):
     return value * 100.0 if value <= 1.0 else value
 
 
-def _runtime_v2_discovery_history(limit: int = 1200) -> list[dict]:
+def _runtime_v2_discovery_history(limit: int = 1200, strategy_version: str | None = None) -> list[dict]:
     """V2 history for AI 推荐: recommendation_picks + pick_outcomes.
 
     This replaces the deleted V1 discovery_history/discovery_tracking tables.
@@ -13093,10 +13181,15 @@ def _runtime_v2_discovery_history(limit: int = 1200) -> list[dict]:
                 WHERE FALSE
             )
         """
+        strategy_filter_sql = "AND rr.strategy_version = ?" if strategy_version else ""
+        params: list = [PRODUCTION_METRICS_START_DATE]
+        if strategy_version:
+            params.append(strategy_version)
+        params.append(limit)
         rows = con.execute(
-            outcome_cte + """
+            outcome_cte + f"""
             SELECT
-                rr.run_id, rr.run_date, rr.generated_at,
+                rr.run_id, rr.run_date, rr.generated_at, rr.strategy_version, rr.model_version,
                 rp.market, rp.symbol, rp.name, rp.rank, rp.rating, rp.signal,
                 rp.total_score, rp.factor_scores_json, rp.recommendation_reason,
                 rp.risk_flags_json, rp.entry_price, rp.entry_currency, rp.source_origin,
@@ -13108,10 +13201,11 @@ def _runtime_v2_discovery_history(limit: int = 1200) -> list[dict]:
               ON o.run_id = rp.run_id AND o.market = rp.market AND o.symbol = rp.symbol
             WHERE rr.universe_scope = 'system_tech_universe'
               AND rr.run_date >= ?
+              {strategy_filter_sql}
             ORDER BY rr.generated_at DESC, rp.rank NULLS LAST, rp.total_score DESC NULLS LAST, rp.market, rp.symbol
             LIMIT ?
             """,
-            [PRODUCTION_METRICS_START_DATE, limit],
+            params,
         ).fetchall()
         con.close()
     except Exception as e:
@@ -13121,7 +13215,7 @@ def _runtime_v2_discovery_history(limit: int = 1200) -> list[dict]:
     out: list[dict] = []
     for row in rows:
         (
-            run_id, run_date, generated_at,
+            run_id, run_date, generated_at, strategy_version_row, model_version_row,
             market, symbol, name, rank, rating, signal,
             total_score, factor_json, recommendation_reason, risk_flags_json,
             entry_price, entry_currency, source_origin,
@@ -13138,6 +13232,8 @@ def _runtime_v2_discovery_history(limit: int = 1200) -> list[dict]:
         generated_s = str(generated_at or run_date or run_id)
         out.append({
             "run_id": str(run_id),
+            "strategy_version": strategy_version_row,
+            "model_version": model_version_row,
             "generated_date": generated_s[:16],
             "run_date": str(run_date)[:10] if run_date is not None else None,
             "market": market,
@@ -13881,7 +13977,7 @@ def today_decision_panel_html() -> str:
     </div>
   </div>
 
-  <div class="grid grid-cols-1 md:grid-cols-4 gap-3 mb-6">
+  <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
     {cards_html}
   </div>
 
@@ -15919,7 +16015,8 @@ def build():
             if isinstance(c, dict)
         }
         catalyst_by_ticker = _build_catalyst_index()
-        appearance_idx = _build_appearance_index()
+        current_strategy_version = batch_meta_main.get("strategy_version")
+        appearance_idx = _build_appearance_index(current_strategy_version)
         appearance_total_runs = (appearance_idx.get("_meta") or {}).get("total_runs", 0)
         merged_candidates = []
         for c in v2_candidates_main:
@@ -15961,7 +16058,7 @@ def build():
                 item["quality_tag"] = qtag
             merged_candidates.append(item)
         v2_stats_main = _runtime_db_stats().get("v2") or {}
-        dropouts = _build_dropouts()
+        dropouts = _build_dropouts(current_strategy_version)
         # Dump 给 morning_brief 复用（避免 morning_brief 自己连 DuckDB 锁冲突）。
         # 2026-05-28 事故：refresh_system_universe_v2.py 持 DuckDB 写锁时，
         # appearance_idx 拿不到数据，dump 会把好的 picks_appearance.json 覆盖成空,
@@ -15991,6 +16088,7 @@ def build():
             "candidates": merged_candidates,
             "appearance_total_runs": appearance_total_runs,
             "dropouts": dropouts,
+            "history_strategy_version": current_strategy_version,
         }
     else:
         discovery = discovery_json
@@ -16161,7 +16259,8 @@ def build():
 
     # V2: V1 discovery_history/discovery_tracking 表已删；
     # AI 推荐历史从 recommendation_picks + pick_outcomes 注入前端。
-    disc_hist = _runtime_v2_discovery_history()
+    disc_hist_strategy = (discovery or {}).get("history_strategy_version") or (discovery or {}).get("strategy_version")
+    disc_hist = _runtime_v2_discovery_history(strategy_version=disc_hist_strategy)
     # enrich: 给每条历史推荐补 quality_tag — 用「当时往前 60d」的价格窗口（PIT 回溯）。
     # 用 r.run_date 作为 as_of，避免显示"现在看这只票是追涨"而误导成"当时是追涨"。
     sys.path.insert(0, _REPO)
@@ -16173,7 +16272,8 @@ def build():
                             mode="score_0_100", as_of_date=_h.get("run_date"))
         if _tag:
             _h["quality_tag"] = _tag.as_dict()
-    print(f"  AI 推荐历史已加载 [V2 pick_outcomes] ({len(disc_hist)} 条)")
+    strategy_suffix = f" · strategy={disc_hist_strategy}" if disc_hist_strategy else ""
+    print(f"  AI 推荐历史已加载 [V2 pick_outcomes] ({len(disc_hist)} 条{strategy_suffix})")
     html = html.replace("{DISCOVERY_HISTORY_JSON}", json.dumps(disc_hist, ensure_ascii=False, default=str))
 
     # 2026-05-26: V2 路径自选股 AI 评级 — 跟 PICKS_JSON 同源（_load_v2_watchlist_picks
@@ -16312,6 +16412,8 @@ def build():
             shortlist = build_research_shortlist(_radar_conn, top_n=5)
         finally:
             _radar_conn.close()
+        production_panel = _runtime_load_json("data/latest/production_acceptance_check.json")
+        quality_panel = _runtime_load_json("data/latest/recommendation_quality_gate.json")
         ai_radar_html = render_ai_radar_section(
             radar_payload,
             my_view_headline=MY_VIEW["headline"],
@@ -16320,6 +16422,8 @@ def build():
             etf_panel=etf_panel,
             freshness_panel=freshness_panel,
             shortlist=shortlist,
+            production_panel=production_panel,
+            quality_panel=quality_panel,
         )
         n_chains = len(radar_payload.get("chains") or [])
         n_picks = radar_payload.get("n_picks_total") or 0
@@ -16343,11 +16447,58 @@ def build():
         )
     html = html.replace("{AI_RADAR_SECTION}", ai_radar_html)
 
-    with open(OUTPUT, "w", encoding="utf-8") as f:
+    # 2026-06-01 评审 #2: 完整性 sanity check + 原子写入
+    # 各处 fetch 有 try/except 吞掉锁错误返回空数据，build() 不抛但生成的 HTML 残缺。
+    # 健康 HTML 通常 ≥ 4MB（含完整 records + picks JSON），降级 HTML 约 1-2MB。
+    # 用文件大小做最便宜的 sanity check：太小则 raise 让 _build_with_retry 重试 + 保留旧 HTML。
+    MIN_HEALTHY_HTML_BYTES = 3_000_000
+    n_records = len(records) if records else 0
+    if len(html) < MIN_HEALTHY_HTML_BYTES or n_records < 50:
+        raise RuntimeError(
+            f"dashboard 生成的 HTML 不完整（{len(html)} bytes / records={n_records}）— "
+            f"可能因 DuckDB 锁导致各路径降级。abort 保留旧 HTML 等待 retry。"
+        )
+
+    tmp_path = OUTPUT + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         f.write(html)
-    print(f"[3/3] 已生成：{OUTPUT}")
+    os.replace(tmp_path, OUTPUT)
+    print(f"[3/3] 已生成：{OUTPUT}（{len(html)} bytes, {n_records} records）")
     print(f"\n用浏览器打开：file://{OUTPUT}")
 
 
+def _build_with_retry(max_attempts: int = 3, retry_delay_s: float = 5.0) -> int:
+    """主入口：跑 build()，失败时重试 (DuckDB 锁缓解)。
+
+    2026-06-01 评审 #2: dashboard 构建经常因 DuckDB 写锁失败导致覆盖旧 HTML。
+    现在策略:
+      1. fetch_research_records_v2 等读路径已改 force_read_only=True
+      2. build() 失败时重试 3 次 × 5s 间隔
+      3. 全部失败时退出码 1，旧 HTML 保留 (build 内部已改原子写入)
+    """
+    import time
+    last_err = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            build()
+            return 0
+        except Exception as e:
+            last_err = e
+            msg = str(e)
+            is_lock = ("Conflicting lock" in msg or "different configuration" in msg
+                       or "Could not set lock" in msg)
+            # HTML 不完整也算可重试（吞锁错误后生成的降级版本）
+            is_incomplete = "HTML 不完整" in msg
+            if attempt < max_attempts and (is_lock or is_incomplete):
+                print(f"\n⚠️ dashboard build attempt {attempt}/{max_attempts} 失败 ({'HTML 不完整' if is_incomplete else 'DuckDB 锁'})，{retry_delay_s}s 后重试...")
+                print(f"   {msg[:200]}")
+                time.sleep(retry_delay_s)
+            else:
+                # 非锁错误立刻退出；锁错误用完重试次数退出
+                raise
+    print(f"❌ dashboard build 3 次重试后仍失败: {last_err}", file=sys.stderr)
+    return 1
+
+
 if __name__ == "__main__":
-    build()
+    sys.exit(_build_with_retry())

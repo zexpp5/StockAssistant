@@ -484,10 +484,13 @@ def fetch_research_records_v2(*, conn: duckdb.DuckDBPyConnection | None = None) 
     与 fetch_records_view 形状对齐（同字段名），但纯 V2 表，没有任何 V1 watchlist/prices 依赖。
     缺失的 V1 主观字段（business / ai_logic / conclusion / risks / peers / rhythm /
     chain / chain_tier / chain_role / layman_intro 等）填 None — 前端做空值处理或隐藏。
+
+    2026-06-01 评审 #2：own=True 时用 force_read_only=True 真只读，避免 dashboard
+    build 因 DuckDB 写锁失败覆盖旧 HTML。
     """
     own = conn is None
     if own:
-        conn = get_db(read_only=True)
+        conn = get_db(force_read_only=True)
     rows = conn.execute("""
         WITH latest_price AS (
             SELECT * FROM price_daily
