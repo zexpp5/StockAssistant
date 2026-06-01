@@ -57,6 +57,13 @@ COVERAGE_AUDIT_SCORE_THRESHOLD = 70.0
 # 用于 audit 去噪：只把"AI 相关"的高分票当成"缺口"
 # 排除非 AI 行业（检测/零售/化工/纺织/金融 等），避免污染 AI 雷达视野
 # coverage_audit.py 必须 import 此常量，禁止双引擎
+#
+# 2026-06-01 收窄：去掉 C35/C38/C39/C40 这些 A 股 GICS 大类
+#   原因：大类太宽，把"湖南裕能(C39 锂电)/阿特斯(C38 光伏)/健帆生物(C35 血液净化)"
+#         这种非 AI 主线票拉进 audit，制造假阳性
+#   保留：I63/I64/I65（电信/互联网/软件信息技术 — 这些粒度足够窄）
+#         M73（研发，主要是科技 R&D 公司）
+#   非 AI 高分 A 股票现在靠 chain_classifier name 规则识别（已加海康/浪潮/紫光 等具体名）
 AI_RELEVANT_THEME_KEYWORDS = (
     # 英文 theme/industry
     "ai", "semiconductor", "cloud", "saas", "software", "internet",
@@ -64,15 +71,11 @@ AI_RELEVANT_THEME_KEYWORDS = (
     "rare earth", "robot", "data", "quantum",
     # 中文
     "互联网", "半导体", "软件", "机器人", "云",
-    # A 股 GICS 行业代码（system_universe.theme 字段）
-    "C39",  # 计算机/通信电子
-    "C38",  # 电气机械
+    # A 股 GICS 行业代码 — 只留窄类，去 C35/C38/C39/C40 大类避免假阳性
     "I65",  # 软件信息技术
     "I64",  # 互联网相关
     "I63",  # 电信
     "M73",  # 研发
-    "C40",  # 仪器仪表
-    "C35",  # 专用设备（含半导体/光伏装备）
 )
 
 
