@@ -96,7 +96,10 @@ class SuggestSizeAdvisoryTest(unittest.TestCase):
         self.assertEqual(adv.get("direction"), "add")
         self.assertGreater(adv.get("suggested_shares") or 0, 0)
 
-    def test_trim_when_over_hard_cap(self):
+    def test_over_hard_cap_advises_hold_not_trim(self):
+        """超硬上限:产品口径走 advisory —— direction=hold + "仓位偏重提示",不出减仓数量。
+        2026-06-01: 真实持仓文案禁止 directive(不能"必须卖"),over_hard 路径从 trim 改 hold。
+        """
         rules = _default_rules()
         adv = _suggest_size_advisory(
             rules=rules,
@@ -113,7 +116,10 @@ class SuggestSizeAdvisoryTest(unittest.TestCase):
         )
         self.assertIsNotNone(adv)
         self.assertTrue(adv.get("over_hard_cap"))
-        self.assertEqual(adv.get("direction"), "trim")
+        self.assertEqual(adv.get("direction"), "hold")
+        # advisory 不出减仓股数/金额,只给"仓位偏重"提示
+        self.assertIsNone(adv.get("suggested_shares"))
+        self.assertIsNone(adv.get("suggested_action_rmb"))
 
     def test_a_share_add_rounds_to_lot_100(self):
         """A 股建议加仓必须按 100 股向下取整，且缺口不足 1 手时不出建议。"""
