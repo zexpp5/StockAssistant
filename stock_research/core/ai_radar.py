@@ -235,6 +235,200 @@ ORDER BY theme, metric_date DESC
 """
 
 
+def build_research_shortlist(con, top_n: int = 5) -> dict[str, Any]:
+    """把雷达多源信号汇成"值得研究 N 只"清单（不是买入清单）。
+
+    打分维度（5 个，max 100）:
+      系统打分     30 picks.total_score × 0.3（最近一批 picks 命中）
+      ETF 共识     25 出现在几个主题 ETF + 持仓权重总和
+      公司证据     20 confirmed=20 / candidate=10 / stale=3 / 无=0
+      AI 关联强度  15 强=15 / 中=10 / 弱=5
+      趋势         10 chain 7 天 delta：发酵=10 / 持稳=5 / 冷却=0
+
+    候选范围（防止引入未追踪票）:
+      - 必须在 system_universe + active
+      - chain_metadata 必须有 chain
+      - ai_strength 必须是 强/中/弱（非"无"）
+
+    每只票输出 "why_now" 多源理由 chip，可追溯到具体来源。
+
+    硬规则:
+      - 输出文案绝不含"买入/推荐买入"
+      - 标"值得研究"，定位为"买前研究" tab 的 funnel
+    """
+    # 1) 拉候选池：universe active + 有 chain + ai_strength 非"无"
+    pool_rows = con.execute("""
+        SELECT cm.market, cm.symbol, cm.chain, cm.chain_role, cm.layman_intro,
+               su.name AS universe_name
+        FROM chain_metadata cm
+        JOIN system_universe su ON su.market = cm.market AND su.symbol = cm.symbol AND su.active = TRUE
+        WHERE cm.chain IS NOT NULL
+    """).fetchall()
+
+    pool: dict[tuple, dict] = {}
+    for m, s, chain, role, intro, name in pool_rows:
+        strength = derive_ai_strength(chain)
+        if strength == "无" or strength is None:
+            continue
+        pool[(m, s)] = {
+            "market": m, "symbol": s, "chain": chain,
+            "chain_role": role, "layman_intro": intro, "universe_name": name,
+            "ai_strength": strength,
+        }
+
+    if not pool:
+        return {"items": [], "n_candidates": 0, "generated_at": datetime.now().isoformat(timespec="seconds")}
+
+    # 2) 系统打分（最近一批 picks）
+    pick_rows = con.execute("""
+        WITH latest_run AS (
+            SELECT rp.market, MAX(rr.generated_at) AS latest_at
+            FROM recommendation_runs rr
+            JOIN recommendation_picks rp ON rp.run_id = rr.run_id
+            WHERE rr.universe_scope = 'system_tech_universe'
+            GROUP BY rp.market
+        )
+        SELECT rp.market, rp.symbol, rp.total_score, rp.name
+        FROM recommendation_runs rr
+        JOIN recommendation_picks rp ON rp.run_id = rr.run_id
+        JOIN latest_run l ON l.market = rp.market AND l.latest_at = rr.generated_at
+    """).fetchall()
+    pick_score: dict[tuple, float] = {(m, s): float(score) for m, s, score, _ in pick_rows}
+    pick_name: dict[tuple, str] = {(m, s): n for m, s, _, n in pick_rows}
+
+    # 3) ETF 共识（universe_match 反查）
+    etf_rows = con.execute("""
+        SELECT h.universe_match AS symbol, h.weight, u.etf_ticker, u.theme_label
+        FROM ai_theme_etf_holdings h
+        JOIN ai_theme_etf_universe u ON u.etf_ticker = h.etf_ticker
+        WHERE h.universe_match IS NOT NULL
+    """).fetchall()
+    etf_info: dict[str, dict] = {}
+    for sym, w, etf, label in etf_rows:
+        if sym not in etf_info:
+            etf_info[sym] = {"etfs": [], "weight_sum": 0.0}
+        etf_info[sym]["etfs"].append({"etf": etf, "label": label, "weight": float(w or 0)})
+        etf_info[sym]["weight_sum"] += float(w or 0)
+
+    # 4) 公司证据（按 symbol → 最高状态）
+    evidence_rows = con.execute("""
+        SELECT symbol, evidence_status, theme
+        FROM ai_theme_company_tags
+    """).fetchall()
+    evi_status_rank = {"confirmed": 4, "candidate": 3, "needs_review": 2, "stale": 1, "rejected": 0}
+    evi_info: dict[str, dict] = {}
+    for sym, status, theme in evidence_rows:
+        cur = evi_info.get(sym, {"status": None, "themes": []})
+        if cur["status"] is None or evi_status_rank.get(status, 0) > evi_status_rank.get(cur["status"], 0):
+            cur["status"] = status
+        cur["themes"].append(theme)
+        evi_info[sym] = cur
+
+    # 5) chain 7 天 delta
+    delta_rows = con.execute("""
+        WITH series AS (
+            SELECT cm.chain, DATE(rr.generated_at) AS dt, AVG(rp.total_score) AS avg_score,
+                   ROW_NUMBER() OVER (PARTITION BY cm.chain ORDER BY DATE(rr.generated_at)) AS rn_asc,
+                   ROW_NUMBER() OVER (PARTITION BY cm.chain ORDER BY DATE(rr.generated_at) DESC) AS rn_desc
+            FROM recommendation_runs rr
+            JOIN recommendation_picks rp ON rp.run_id = rr.run_id
+            JOIN chain_metadata cm ON cm.market = rp.market AND cm.symbol = rp.symbol
+            WHERE rr.generated_at >= CURRENT_TIMESTAMP - INTERVAL '8 days'
+              AND cm.chain IS NOT NULL
+            GROUP BY cm.chain, DATE(rr.generated_at)
+        )
+        SELECT chain,
+               MAX(CASE WHEN rn_desc = 1 THEN avg_score END) -
+               MAX(CASE WHEN rn_asc = 1 THEN avg_score END) AS delta
+        FROM series GROUP BY chain
+    """).fetchall()
+    chain_delta = {chain: float(d) if d is not None else 0.0 for chain, d in delta_rows}
+
+    # 6) 打分 + why_now 拼接
+    AI_STRENGTH_POINTS = {"强": 15, "中": 10, "弱": 5}
+    EVI_POINTS = {"confirmed": 20, "candidate": 10, "needs_review": 5, "stale": 3}
+
+    scored: list[dict] = []
+    for (m, s), info in pool.items():
+        # 系统打分
+        sys_score = pick_score.get((m, s), 0.0)
+        sys_pts = min(sys_score * 0.3, 30) if sys_score > 0 else 0
+
+        # ETF 共识
+        e = etf_info.get(s) or {}
+        n_etfs = len(e.get("etfs") or [])
+        etf_weight = float(e.get("weight_sum") or 0)
+        etf_pts = min(n_etfs * 5 + etf_weight * 0.5, 25)
+
+        # 公司证据
+        evi = evi_info.get(s) or {}
+        evi_status = evi.get("status")
+        evi_pts = EVI_POINTS.get(evi_status, 0)
+
+        # AI 关联强度
+        strength_pts = AI_STRENGTH_POINTS.get(info["ai_strength"], 0)
+
+        # 趋势
+        delta = chain_delta.get(info["chain"], 0.0)
+        if delta >= MAINLINE_RISE_DELTA:
+            trend_pts = 10; trend_label = "发酵中"
+        elif delta <= MAINLINE_FALL_DELTA:
+            trend_pts = 0; trend_label = "冷却中"
+        else:
+            trend_pts = 5; trend_label = "持稳"
+
+        total = round(sys_pts + etf_pts + evi_pts + strength_pts + trend_pts, 1)
+
+        # why_now 多源理由
+        why_chips = []
+        if sys_score > 0:
+            why_chips.append(f"系统打分 {sys_score:.1f}")
+        if n_etfs > 0:
+            etf_codes = ",".join(x["etf"] for x in e["etfs"][:3])
+            why_chips.append(f"ETF 共识 {n_etfs} 个 ({etf_codes})")
+        if evi_status:
+            why_chips.append(f"证据 {evi_status}")
+        why_chips.append(f"AI 关联 {info['ai_strength']}")
+        why_chips.append(f"chain「{info['chain']}」{trend_label}")
+
+        scored.append({
+            "market": m, "symbol": s,
+            "name": pick_name.get((m, s)) or info["universe_name"] or info["chain_role"],
+            "chain": info["chain"],
+            "chain_role": info["chain_role"],
+            "layman_intro": info["layman_intro"],
+            "ai_strength": info["ai_strength"],
+            "research_score": total,
+            "components": {
+                "system_score": round(sys_pts, 1),
+                "etf_consensus": round(etf_pts, 1),
+                "evidence": round(evi_pts, 1),
+                "ai_strength": round(strength_pts, 1),
+                "trend": round(trend_pts, 1),
+            },
+            "evidence_status": evi_status,
+            "etf_count": n_etfs,
+            "etf_weight_sum": round(etf_weight, 2),
+            "chain_delta_7d": round(delta, 2),
+            "trend_label": trend_label,
+            "raw_system_score": round(sys_score, 1),
+            "why_chips": why_chips,
+        })
+
+    scored.sort(key=lambda x: -x["research_score"])
+
+    return {
+        "items": scored[:top_n],
+        "n_candidates": len(scored),
+        "top_n": top_n,
+        "scoring_doc": (
+            "research_score 满分 100 = 系统打分 30 + ETF 共识 25 + "
+            "公司证据 20 + AI 关联强度 15 + 趋势 10"
+        ),
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+
+
 def build_freshness_panel(con) -> dict[str, Any]:
     """构建数据新鲜度面板（评审 P3 #9）。
 
@@ -724,6 +918,89 @@ def _watchlist_badge(in_wl: bool) -> str:
         return ""
     return ('<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] '
             'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200">✓ 已在自选</span>')
+
+
+def _render_research_shortlist(sl: dict[str, Any]) -> str:
+    """渲染"值得研究 N 只候选"。不是买入清单，是 buy-research funnel 入口。"""
+    if not sl or not sl.get("items"):
+        return ""
+
+    rows = []
+    for i, it in enumerate(sl["items"], 1):
+        c = it["components"]
+        # 分数 bar 显示 5 个维度
+        sys_w = int(c["system_score"] / 30 * 100)
+        etf_w = int(c["etf_consensus"] / 25 * 100)
+        evi_w = int(c["evidence"] / 20 * 100)
+        str_w = int(c["ai_strength"] / 15 * 100)
+        trd_w = int(c["trend"] / 10 * 100)
+
+        # AI 关联色
+        strength_color = {
+            "强": "bg-violet-100 text-violet-800 ring-violet-300",
+            "中": "bg-sky-100 text-sky-800 ring-sky-300",
+            "弱": "bg-amber-100 text-amber-800 ring-amber-300",
+        }.get(it["ai_strength"], "bg-slate-100 text-slate-500 ring-slate-200")
+
+        why_chips_html = "".join(
+            f'<span class="inline-flex items-center px-1.5 py-0.5 rounded bg-slate-50 text-slate-700 ring-1 ring-slate-200 text-[11px]">{_esc(c)}</span>'
+            for c in it["why_chips"]
+        )
+
+        trend_label = it["trend_label"]
+        trend_color = "text-emerald-700" if trend_label == "发酵中" else "text-rose-700" if trend_label == "冷却中" else "text-slate-500"
+
+        rows.append(f"""
+<div class="bg-white ring-1 ring-slate-200 rounded-xl p-4 mb-3">
+  <div class="flex items-center justify-between gap-2 mb-2">
+    <div class="flex items-center gap-2 flex-wrap">
+      <span class="text-[11px] text-slate-400 font-mono">#{i}</span>
+      <span class="text-base font-bold text-slate-900">{_market_label(it["market"])} <span class="font-mono">{_esc(it["symbol"])}</span></span>
+      <span class="text-sm text-slate-700">{_esc(it["name"] or "")}</span>
+      <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ring-1 {strength_color}">AI {it["ai_strength"]}</span>
+    </div>
+    <div class="text-right">
+      <div class="text-xl font-bold text-violet-700">{it["research_score"]:.0f}</div>
+      <div class="text-[10px] text-slate-400">research_score</div>
+    </div>
+  </div>
+
+  <div class="text-[11px] text-slate-500 mb-2">{_esc(it["chain"])} · {_esc(it["chain_role"] or "")} · <span class="{trend_color}">{_esc(trend_label)}</span></div>
+
+  <div class="flex flex-wrap gap-1.5 mb-3">{why_chips_html}</div>
+
+  <details class="text-[11px]">
+    <summary class="cursor-pointer text-slate-500 list-none">▾ 分数构成</summary>
+    <div class="mt-2 space-y-1">
+      <div class="flex items-center gap-2"><span class="w-20 text-slate-500">系统打分</span><div class="flex-1 bg-slate-100 rounded h-1.5 overflow-hidden"><div class="bg-violet-400 h-full" style="width:{sys_w}%"></div></div><span class="w-12 text-right font-mono text-slate-700">{c['system_score']}/30</span></div>
+      <div class="flex items-center gap-2"><span class="w-20 text-slate-500">ETF 共识</span><div class="flex-1 bg-slate-100 rounded h-1.5 overflow-hidden"><div class="bg-sky-400 h-full" style="width:{etf_w}%"></div></div><span class="w-12 text-right font-mono text-slate-700">{c['etf_consensus']}/25</span></div>
+      <div class="flex items-center gap-2"><span class="w-20 text-slate-500">公司证据</span><div class="flex-1 bg-slate-100 rounded h-1.5 overflow-hidden"><div class="bg-emerald-400 h-full" style="width:{evi_w}%"></div></div><span class="w-12 text-right font-mono text-slate-700">{c['evidence']}/20</span></div>
+      <div class="flex items-center gap-2"><span class="w-20 text-slate-500">AI 强度</span><div class="flex-1 bg-slate-100 rounded h-1.5 overflow-hidden"><div class="bg-amber-400 h-full" style="width:{str_w}%"></div></div><span class="w-12 text-right font-mono text-slate-700">{c['ai_strength']}/15</span></div>
+      <div class="flex items-center gap-2"><span class="w-20 text-slate-500">趋势</span><div class="flex-1 bg-slate-100 rounded h-1.5 overflow-hidden"><div class="bg-rose-400 h-full" style="width:{trd_w}%"></div></div><span class="w-12 text-right font-mono text-slate-700">{c['trend']}/10</span></div>
+    </div>
+  </details>
+</div>
+""")
+
+    n_cand = sl.get("n_candidates", 0)
+    return f"""
+<div class="bg-gradient-to-br from-violet-50 to-indigo-50 rounded-xl ring-1 ring-violet-200 p-4 mb-4">
+  <div class="flex items-center justify-between flex-wrap gap-2 mb-3">
+    <div>
+      <div class="text-base font-bold text-slate-900">🔬 值得研究的 {len(sl["items"])} 只</div>
+      <div class="text-[11px] text-slate-600 mt-0.5">把雷达 5 个信号源（系统打分 + ETF 共识 + 公司证据 + AI 关联 + chain 趋势）汇成研究优先级 — 这是「买前研究」tab 的 funnel 入口，<strong>不是买入清单</strong>。</div>
+    </div>
+    <span class="text-[11px] text-slate-500">候选池 {n_cand} 只 · 取 top {len(sl["items"])}</span>
+  </div>
+  {"".join(rows)}
+  <div class="text-[10px] text-slate-500 mt-2 leading-relaxed">
+    research_score 满分 100 = 系统打分 30 + ETF 共识 25 + 公司证据 20 + AI 关联强度 15 + 趋势 10。
+    高 score 仅代表"多源信号汇聚"，不构成买入信号。下一步去
+    <a href="#buy-research" class="text-violet-700 hover:underline">「买前研究」tab</a>
+    看每只的深度审查（估值/财务/风险反证）。
+  </div>
+</div>
+"""
 
 
 def _render_freshness_panel(panel: dict[str, Any]) -> str:
@@ -1275,7 +1552,8 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
                             my_view_summary: str | None = None,
                             theme_panel: dict[str, Any] | None = None,
                             etf_panel: dict[str, Any] | None = None,
-                            freshness_panel: dict[str, Any] | None = None) -> str:
+                            freshness_panel: dict[str, Any] | None = None,
+                            shortlist: dict[str, Any] | None = None) -> str:
     """渲染 AI 主题雷达 section（独立 tab 内容）。
 
     硬规则（对应文档 §五）：
@@ -1319,6 +1597,7 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
     )
     etf_panel_html = _render_etf_consensus_panel(etf_panel) if etf_panel else ""
     freshness_html = _render_freshness_panel(freshness_panel) if freshness_panel else ""
+    shortlist_html = _render_research_shortlist(shortlist) if shortlist else ""
 
     rise_chains = [c for c in payload["chains"] if (c.get("delta_7d") or 0) >= MAINLINE_RISE_DELTA]
     fall_chains = [c for c in payload["chains"] if (c.get("delta_7d") or 0) <= MAINLINE_FALL_DELTA]
@@ -1546,6 +1825,7 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
     <p class="text-sm text-slate-600 mt-1">AI 价值链全景 · 行业理解层 · 不构成买入建议</p>
   </div>
   {head_html}
+  {shortlist_html}
   {freshness_html}
   {etf_panel_html}
   {theme_panel_html}

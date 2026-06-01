@@ -16115,6 +16115,7 @@ def build():
             build_theme_evidence_panel,
             build_etf_consensus_panel,
             build_freshness_panel,
+            build_research_shortlist,
             render_ai_radar_section,
         )
         _radar_conn = duckdb.connect(_duckdb_path(), read_only=True)
@@ -16123,6 +16124,7 @@ def build():
             theme_panel = build_theme_evidence_panel(_radar_conn)
             etf_panel = build_etf_consensus_panel(_radar_conn)
             freshness_panel = build_freshness_panel(_radar_conn)
+            shortlist = build_research_shortlist(_radar_conn, top_n=5)
         finally:
             _radar_conn.close()
         ai_radar_html = render_ai_radar_section(
@@ -16132,6 +16134,7 @@ def build():
             theme_panel=theme_panel,
             etf_panel=etf_panel,
             freshness_panel=freshness_panel,
+            shortlist=shortlist,
         )
         n_chains = len(radar_payload.get("chains") or [])
         n_picks = radar_payload.get("n_picks_total") or 0
