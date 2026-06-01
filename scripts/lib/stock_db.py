@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime, date
 from typing import Iterable, Mapping, Any
 
@@ -359,6 +360,32 @@ USER_CONFIG_DEFAULTS = {
 }
 
 
+def _connect_with_lock_retry(path: str, read_only: bool, *, retry: bool,
+                             attempts: int = 8, backoff_s: float = 0.75) -> duckdb.DuckDBPyConnection:
+    """打开 DuckDB 连接;retry=True 时对"被写锁挡住"做 backoff 重试。
+
+    DuckDB 单写者文件锁:写连接持独占锁期间,只读连接也打不开(Conflicting lock)。
+    retry 仅用于 force_read_only 的独立只读 CLI/cron 进程 —— 等正在写库的步骤释放锁。
+    非锁错误立刻抛;API/写路径 retry=False,绝不阻塞。
+    """
+    if not retry:
+        return duckdb.connect(path, read_only=read_only)
+    last_exc: Exception | None = None
+    for i in range(attempts):
+        try:
+            return duckdb.connect(path, read_only=read_only)
+        except Exception as exc:  # duckdb.IOException 等;按消息判定是否锁冲突
+            if "lock" not in str(exc).lower():
+                raise  # 非锁错误不重试
+            last_exc = exc
+            if i < attempts - 1:
+                time.sleep(backoff_s)
+    raise RuntimeError(
+        f"DuckDB 被写锁挡住,{attempts} 次只读重试(每次 {backoff_s}s)仍失败 —— "
+        f"很可能有写库步骤正在跑,请错开并发或稍后重试。原始错误: {last_exc}"
+    )
+
+
 def get_db(path: str = DB_PATH, *, read_only: bool = False,
            force_read_only: bool = False,
            ensure_schema: bool | None = None) -> duckdb.DuckDBPyConnection:
@@ -377,12 +404,17 @@ def get_db(path: str = DB_PATH, *, read_only: bool = False,
     2026-06-01 force_read_only:
       独立 cron job（审计、报表、只读分析脚本）跑独立进程，不与 API 共享 connection pool，
       可以传 force_read_only=True 真正以 DuckDB 只读模式打开。
-      好处：被另一个进程持写锁时，read-only 连接仍能成功打开（DuckDB 写锁不阻塞只读连接）。
-      使用场景：ai_theme_coverage_audit / aggregate_theme_tags 等纯只读 job。
+      使用场景：ai_theme_coverage_audit / aggregate_theme_tags / 各类 *_check / *_gate 等纯只读 job。
       ⚠️ 不要在 API/FastAPI/server 进程里传 force_read_only=True，会跟 write conn 撞 mode。
+
+      ⚠️ 锁的真相(2026-06-01 复现修正)：DuckDB 是单写者文件锁 —— 某进程持写连接(独占锁)时,
+         别的进程**连只读都打不开**(报 "Could not set lock ... Conflicting lock is held")。
+         所以 force_read_only **并不能**绕开正在写库的进程。为此在 force_read_only 路径上加了
+         锁感知 retry/backoff：撞上写锁就等几秒重试,让 nightly 写库步骤先释放锁。
+         (API/写路径不 retry —— 绝不在请求线程里阻塞。)
     """
     actual_read_only = bool(force_read_only)
-    conn = duckdb.connect(path, read_only=actual_read_only)
+    conn = _connect_with_lock_retry(path, actual_read_only, retry=force_read_only)
     if ensure_schema is None:
         ensure_schema = not (read_only or force_read_only)
     if ensure_schema:
