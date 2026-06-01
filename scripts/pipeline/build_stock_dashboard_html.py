@@ -1729,6 +1729,15 @@ function switchDiscoveryView(view) {
           <tbody id="today-plan-table-body" class="divide-y divide-slate-100"></tbody>
         </table>
       </div>
+      <div id="today-plan-toggle-wrap" class="hidden mt-2 text-center">
+        <button id="today-plan-toggle" onclick="toggleTodayPlanFull()"
+                class="text-xs px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 transition">
+          展开完整组合（其余 <span id="today-plan-extra-cnt">—</span> 只）▾
+        </button>
+        <p class="text-[11px] text-slate-400 mt-1.5 leading-relaxed">
+          ⭐ = AI 下注最重的 5 只,先重点盯这几只学;组合仍按 15 只分散配置,展开可看全部。
+        </p>
+      </div>
       <p id="today-plan-empty" class="hidden text-sm text-slate-500 py-6 text-center">
         plan_a_v5.json 缺失或为空 — 请先跑 <code class="text-xs bg-slate-100 px-1 rounded">python3 -m stock_research.jobs.optimize_portfolio</code>
       </p>
@@ -9109,7 +9118,7 @@ function renderTodayPlan() {
   const gen = (plan.generated_at || '').slice(0, 16).replace('T', ' ');
   const u = plan.candidate_universe || {};
   if (subtitleEl) {
-    subtitleEl.textContent = `生成时间 ${gen || '?'} · 从 ${u.count || '?'} 只 ${u.market_scope || ''} 候选挑出 ${rows.length} 只`;
+    subtitleEl.textContent = `生成时间 ${gen || '?'} · 从 ${u.count || '?'} 只 ${u.market_scope || ''} 候选挑出 ${rows.length} 只 · 默认只展开 ⭐ 重点观察 Top 5`;
   }
 
   // 锁定状态：跟下方回测的 inception 比较
@@ -9174,11 +9183,17 @@ function renderTodayPlan() {
     });
   } catch (e) { /* DISCOVERY 缺失不影响主体渲染 */ }
 
-  // 按 capped_weight 降序
+  // 按 capped_weight 降序;权重并列时(常见:多只同时顶到单只上限)用 V2 总分破平,
+  // 让「重点观察 Top5」的内部先后也有依据,而非任意顺序。
+  const _scoreOf = r => {
+    const c = discoveryLookup[String(r.ticker || '').toUpperCase()] || {};
+    return (c.composite_z != null) ? Number(c.composite_z) : -1;
+  };
   const sortedRows = rows.slice().sort((a, b) => {
     const wa = a.capped_weight || a.target_weight || a.weight || 0;
     const wb = b.capped_weight || b.target_weight || b.weight || 0;
-    return wb - wa;
+    if (wb !== wa) return wb - wa;
+    return _scoreOf(b) - _scoreOf(a);
   });
 
   const fmtPct = v => (v == null) ? '—' : (Number(v) * 100).toFixed(2) + '%';
@@ -9217,6 +9232,10 @@ function renderTodayPlan() {
     return c.recommendation_reason || '';
   };
 
+  // 2026-06-01: 「重点观察 Top5」层 —— 组合仍 15 只保持分散,但默认只展开下注最重的 5 只,
+  // 让新手把注意力收敛到看得过来的范围;剩余仓位折叠,「展开完整组合」随时可看全。
+  // 纯展示层:Top5 = 已按 capped_weight 降序后的前 5 行,不改打分/不改策略/不破坏锁定回测。
+  const TOP_N_WATCH = 5;
   tbody.innerHTML = sortedRows.map((r, i) => {
     const ticker = (r.ticker || '').toUpperCase();
     const cand = discoveryLookup[ticker] || {};
@@ -9226,9 +9245,16 @@ function renderTodayPlan() {
     const fScore = cand.f_score;          // V2 归一化 0-100
     const theme = (typeof chainThemeFor === 'function' ? chainThemeFor(ticker) : '')
       || cand.sector || '';
+    const isTop = i < TOP_N_WATCH;
+    const rowCls = isTop
+      ? 'today-plan-row today-plan-top align-top bg-amber-50/40 hover:bg-amber-50/70'
+      : 'today-plan-row today-plan-extra align-top hover:bg-slate-50 hidden';
+    const rankCell = isTop
+      ? `<span class="text-amber-500" title="重点观察 — AI 下注最重的 ${TOP_N_WATCH} 只">⭐</span> ${i + 1}`
+      : `${i + 1}`;
     return `
-      <tr class="hover:bg-slate-50 align-top">
-        <td class="px-3 py-2 text-slate-500">${i + 1}</td>
+      <tr class="${rowCls}">
+        <td class="px-3 py-2 text-slate-500 whitespace-nowrap">${rankCell}</td>
         <td class="px-3 py-2 font-mono font-semibold text-violet-700">${ticker}</td>
         <td class="px-3 py-2 text-slate-800">${name}</td>
         <td class="px-3 py-2 text-right font-mono font-bold text-violet-900">${fmtPct(w)}</td>
@@ -9244,6 +9270,41 @@ function renderTodayPlan() {
       </tr>
     `;
   }).join('');
+
+  // 折叠状态:>Top5 时显示「展开完整组合」按钮;默认折叠到 Top5
+  const extraCount = Math.max(0, sortedRows.length - TOP_N_WATCH);
+  const toggleWrap = document.getElementById('today-plan-toggle-wrap');
+  const extraCntEl = document.getElementById('today-plan-extra-cnt');
+  if (toggleWrap) {
+    if (extraCount > 0) {
+      toggleWrap.classList.remove('hidden');
+      _todayPlanExtraCount = extraCount;
+      if (extraCntEl) extraCntEl.textContent = String(extraCount);
+      _todayPlanExpanded = false;
+      _applyTodayPlanToggle();
+    } else {
+      toggleWrap.classList.add('hidden');
+    }
+  }
+}
+
+// 「重点观察 Top5」折叠开关 —— 纯前端视图,不动数据
+let _todayPlanExpanded = false;
+let _todayPlanExtraCount = 0;
+function _applyTodayPlanToggle() {
+  const btn = document.getElementById('today-plan-toggle');
+  document.querySelectorAll('#today-plan-table-body .today-plan-extra').forEach(tr => {
+    tr.classList.toggle('hidden', !_todayPlanExpanded);
+  });
+  if (btn) {
+    btn.innerHTML = _todayPlanExpanded
+      ? '收起 — 只看重点 5 只 ▴'
+      : `展开完整组合（其余 ${_todayPlanExtraCount} 只）▾`;
+  }
+}
+function toggleTodayPlanFull() {
+  _todayPlanExpanded = !_todayPlanExpanded;
+  _applyTodayPlanToggle();
 }
 
 function renderBacktestUniverseBanner(data) {
