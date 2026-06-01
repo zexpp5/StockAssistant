@@ -143,6 +143,123 @@ def compute_p5_lite_yfinance(symbol: str) -> dict | None:
     }
 
 
+def _safe_pct(v) -> float | None:
+    """akshare A 股财报指标值可能是 '12.34' / '12.34%' / '--' / NaN，统一转 float."""
+    if v is None:
+        return None
+    s = str(v).strip()
+    if not s or s in ("--", "nan", "None"):
+        return None
+    s = s.rstrip("%").replace(",", "")
+    try:
+        return float(s)
+    except Exception:
+        return None
+
+
+def compute_p5_lite_akshare(symbol_with_suffix: str) -> dict | None:
+    """A 股 P5-Lite — 用 akshare.stock_financial_abstract（杜邦三表融合宽表）.
+
+    symbol_with_suffix 形如 '600089.SS' / '300919.SZ' — 截掉 suffix 给 akshare.
+    指标全在一张表里，免去 join 三表。
+    """
+    try:
+        import akshare as ak  # type: ignore
+    except ImportError:
+        logger.warning("akshare 未安装，A 股 P5-Lite 跳过")
+        return None
+
+    code = symbol_with_suffix.split(".")[0]
+    try:
+        df = ak.stock_financial_abstract(symbol=code)
+    except Exception as e:
+        logger.debug("akshare stock_financial_abstract %s 失败: %s", code, e)
+        return None
+    if df is None or df.empty:
+        return None
+
+    # 报告期列（按时间倒序：最新在前）
+    report_cols = [c for c in df.columns if c not in ("选项", "指标")]
+    if len(report_cols) < 5:
+        return None  # 数据不够算 YoY
+
+    # 找 y0 (最新) 和 y4 (4 季度前 = 1 年前同期)
+    # report_cols 形如 ['20260331', '20251231', '20250930', '20250630', '20250331', ...]
+    # 取前 5 个，y0 = [0], y4 = [4]（同季度前 1 年）
+    y0_col, y4_col = report_cols[0], report_cols[4]
+
+    def _get_metric(name_substr: str, col: str) -> float | None:
+        """按指标名子串匹配，取该报告期值。"""
+        for _, r in df.iterrows():
+            metric = str(r.get("指标", ""))
+            if name_substr in metric:
+                return _safe_pct(r.get(col))
+        return None
+
+    ni_y0 = _get_metric("归母净利润", y0_col)
+    ni_y4 = _get_metric("归母净利润", y4_col)
+    cfo_y0 = _get_metric("经营现金流量净额", y0_col)
+    roa_y0 = _get_metric("总资产报酬率(ROA)", y0_col)
+    roa_y4 = _get_metric("总资产报酬率(ROA)", y4_col)
+    lev_y0 = _get_metric("资产负债率", y0_col)
+    lev_y4 = _get_metric("资产负债率", y4_col)
+
+    details: dict[str, dict | None] = {}
+    score = 0
+
+    # 1. 净利润 > 0
+    if ni_y0 is not None:
+        ok = ni_y0 > 0
+        details["profitable"] = {"value": ni_y0, "pass": ok}
+        score += int(ok)
+    else:
+        details["profitable"] = None
+
+    # 2. CFO > 0
+    if cfo_y0 is not None:
+        ok = cfo_y0 > 0
+        details["cfo_positive"] = {"value": cfo_y0, "pass": ok}
+        score += int(ok)
+    else:
+        details["cfo_positive"] = None
+
+    # 3. ROA 同比改善
+    if roa_y0 is not None and roa_y4 is not None:
+        ok = roa_y0 > roa_y4
+        details["roa_improving"] = {"roa_y0": roa_y0, "roa_y4": roa_y4, "pass": ok}
+        score += int(ok)
+    else:
+        details["roa_improving"] = None
+
+    # 4. CFO > NI（现金流质量）— 单位都是元，可直接比
+    if cfo_y0 is not None and ni_y0 is not None:
+        ok = cfo_y0 > ni_y0
+        details["cfo_quality"] = {"cfo": cfo_y0, "ni": ni_y0, "pass": ok}
+        score += int(ok)
+    else:
+        details["cfo_quality"] = None
+
+    # 5. 杠杆同比下降（资产负债率下降是好事）
+    if lev_y0 is not None and lev_y4 is not None:
+        ok = lev_y0 < lev_y4
+        details["leverage_down"] = {"lev_y0": lev_y0, "lev_y4": lev_y4, "pass": ok}
+        score += int(ok)
+    else:
+        details["leverage_down"] = None
+
+    covered = sum(1 for v in details.values() if v is not None)
+    if covered == 0:
+        return None
+    return {
+        "f_score_raw_5": score,
+        "f_score_norm_9": round(score / 5.0 * 9.0, 2),
+        "covered_items": covered,
+        "details": details,
+        "source": "akshare_p5_lite_a_share",
+        "report_periods": {"y0": y0_col, "y4": y4_col},
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--markets", default="US,HK", help="逗号分隔市场代码")
@@ -189,14 +306,15 @@ def main() -> int:
         ).fetchall()
     if args.limit:
         targets = targets[:args.limit]
-    logger.info("待计算 %d 只（A 股暂用 yfinance 不支持，会自动跳过）", len(targets))
+    logger.info("待计算 %d 只", len(targets))
 
-    ok = err = skip_a = 0
+    ok = err = 0
+    by_market = {}
     for market, symbol in targets:
         if market == "CN":
-            skip_a += 1
-            continue
-        result = compute_p5_lite_yfinance(symbol)
+            result = compute_p5_lite_akshare(symbol)
+        else:
+            result = compute_p5_lite_yfinance(symbol)
         if result is None:
             err += 1
             continue
@@ -210,8 +328,9 @@ def main() -> int:
                 computed_at=excluded.computed_at
         """, [market, symbol, result["f_score_norm_9"], json.dumps(result, ensure_ascii=False), result["source"]])
         ok += 1
+        by_market[market] = by_market.get(market, 0) + 1
 
-    logger.info("入库完成：成功 %d · 失败 %d · A股跳过 %d（暂不支持）", ok, err, skip_a)
+    logger.info("入库完成：成功 %d · 失败 %d · 按市场 %s", ok, err, by_market)
     total = conn.execute("SELECT COUNT(*) FROM factor_metadata WHERE f_score IS NOT NULL").fetchone()[0]
     logger.info("factor_metadata.f_score 总条目：%d", total)
     conn.close()
