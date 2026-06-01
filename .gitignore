@@ -22,7 +22,12 @@ venv/
 env/
 
 # 数据快照（运行时生成）
-data/
+# 注: 用 data/* 而不是 data/, 是为了让下面的 !data/curated/ negation 能生效
+# (git 不允许 re-include 父目录已被 exclude 的子文件, 必须父目录用 glob 排除)
+data/*
+# 例外：data/curated/ 是手维护的源数据（不是 generated），必须入库
+!data/curated/
+!data/curated/**
 prices_*.json
 review_*.json
 13f_snapshots/
