@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 
@@ -44,17 +45,88 @@ AI_RADAR_VISIBLE_STRENGTHS = {"强", "中", "弱"}
 # 2026-06-01 评审：A 股 F-Score 覆盖 0/20，基本面维度对 CN 推荐不可信
 # 这里给 CN 票加 ⚠️ UI 警示，不改 research_score 算法
 # （memory: feedback_no_secret_score_changes — 改公式必须先问）
-# 后续接通 A 股三表/F-Score 后，从 production_acceptance 动态读
-LOW_CONFIDENCE_MARKETS: dict[str, str] = {
-    "CN": "A 股 F-Score 0/20 · 基本面维度未覆盖，推荐仅靠动量+估值",
-}
+#
+# 阈值：market F-Score 覆盖率 < 50% 触发 ⚠️
+# 数据源：data/latest/production_acceptance_check.json
+#   summary.v2_f_score_coverage.by_market.{CN/HK/US}.coverage_pct
+# 接通 A 股 P5-Lite 后 CN 覆盖率会上升，badge 自动消失。
+LOW_CONFIDENCE_PCT_THRESHOLD = 50.0
+
+
+def _load_low_confidence_markets_from_acceptance() -> dict[str, str]:
+    """从 production_acceptance.json 动态读分市场 F-Score 覆盖率，
+    覆盖率 < 50% 的 market 进入低置信集合。
+
+    失败时退回保守 hardcode（仅 CN，避免 acceptance 文件缺失时静默放过）。
+    """
+    import json as _json
+    import os as _os
+    path = _os.path.join(_REPO_ROOT, "data", "latest", "production_acceptance_check.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = _json.load(f)
+        by_market = ((data.get("summary") or {}).get("v2_f_score_coverage") or {}).get("by_market") or {}
+        out: dict[str, str] = {}
+        for mkt, info in by_market.items():
+            pct = info.get("coverage_pct", 0)
+            n_with = info.get("with_f_score", 0)
+            n_total = info.get("pick_count", 0)
+            if pct < LOW_CONFIDENCE_PCT_THRESHOLD and n_total > 0:
+                out[mkt] = (
+                    f"{mkt} F-Score {n_with}/{n_total} ({pct:.0f}%) · "
+                    f"基本面维度未覆盖，推荐仅靠动量+估值"
+                )
+        return out
+    except Exception:
+        # acceptance 文件缺失/损坏：保守退回 CN（不能静默放过基本面缺口）
+        return {"CN": "A 股 F-Score 覆盖未知 · 基本面维度可能未覆盖（acceptance 不可读）"}
+
+
+# 模块级缓存（dashboard 一次 build 周期内复用）
+_REPO_ROOT = str(Path(__file__).resolve().parents[2])
+_LOW_CONFIDENCE_CACHE: dict[str, str] | None = None
+
+
+def get_low_confidence_markets() -> dict[str, str]:
+    global _LOW_CONFIDENCE_CACHE
+    if _LOW_CONFIDENCE_CACHE is None:
+        _LOW_CONFIDENCE_CACHE = _load_low_confidence_markets_from_acceptance()
+    return _LOW_CONFIDENCE_CACHE
 
 
 def pick_confidence_warning(market: str | None) -> str | None:
     """返回 market 对应的低置信度警示文案（无警示返回 None）."""
     if not market:
         return None
-    return LOW_CONFIDENCE_MARKETS.get(market)
+    return get_low_confidence_markets().get(market)
+
+
+# 兼容旧 API：直接以 dict 形式暴露（懒求值）
+class _LowConfMap(dict):
+    """让 LOW_CONFIDENCE_MARKETS 用法仍可工作（dict-like），内部走 dynamic 读取."""
+    def __getitem__(self, key):
+        return get_low_confidence_markets()[key]
+
+    def get(self, key, default=None):
+        return get_low_confidence_markets().get(key, default)
+
+    def __contains__(self, key):
+        return key in get_low_confidence_markets()
+
+    def __iter__(self):
+        return iter(get_low_confidence_markets())
+
+    def items(self):
+        return get_low_confidence_markets().items()
+
+    def keys(self):
+        return get_low_confidence_markets().keys()
+
+    def values(self):
+        return get_low_confidence_markets().values()
+
+
+LOW_CONFIDENCE_MARKETS = _LowConfMap()
 
 
 def derive_ai_strength(chain: str | None) -> str | None:
