@@ -34,6 +34,7 @@ from stock_db import get_db  # noqa: E402  # type: ignore
 
 
 SUMMARY_PATH = REPO / "data" / "latest" / "ai_theme_evidence_summary.json"
+PYTHON = sys.executable or "/opt/homebrew/bin/python3"
 
 
 def _query_one(sql: str, params: list = None):
@@ -57,7 +58,7 @@ def _step_seed_sources() -> dict:
     """Step 1: 跑 seed_ai_theme_sources（含 URL HEAD check + 写 last_check_status）"""
     try:
         r = subprocess.run(
-            ["/opt/homebrew/bin/python3", str(REPO / "scripts" / "tools" / "seed_ai_theme_sources.py")],
+            [PYTHON, str(REPO / "scripts" / "tools" / "seed_ai_theme_sources.py")],
             capture_output=True, text=True, timeout=120
         )
         rows = _query_all("SELECT last_check_status, COUNT(*) FROM ai_theme_evidence_sources GROUP BY last_check_status")
@@ -84,7 +85,7 @@ def _step_refresh_etf(refresh: bool) -> dict:
     try:
         if refresh:
             r = subprocess.run(
-                ["/opt/homebrew/bin/python3", str(REPO / "scripts" / "tools" / "ingest_etf_holdings_snapshot.py")],
+                [PYTHON, str(REPO / "scripts" / "tools" / "ingest_etf_holdings_snapshot.py")],
                 capture_output=True, text=True, timeout=120
             )
             action = "re-ingested from snapshot"
@@ -112,7 +113,7 @@ def _step_sec_scan(scan: bool) -> dict:
     try:
         if scan:
             r = subprocess.run(
-                ["/opt/homebrew/bin/python3", str(REPO / "scripts" / "tools" / "sec_edgar_evidence_scan.py")],
+                [PYTHON, str(REPO / "scripts" / "tools" / "sec_edgar_evidence_scan.py")],
                 capture_output=True, text=True, timeout=180
             )
             action = "ran scan + stale rule"
