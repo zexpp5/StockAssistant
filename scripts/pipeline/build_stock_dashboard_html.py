@@ -234,82 +234,63 @@ EVOLUTION = [
 
 
 # ============================================================
-# 6 月关键事件（带分析字段：watch/bull/bear/prep/history）
-# 字段定义：
-#   watch   — 这场要紧盯哪些数据点 / 公告 / 客户名单
-#   bull    — 满足什么条件 = 短期偏多
-#   bear    — 满足什么条件 = 短期偏空（或叙事翻转）
-#   prep    — 持仓的人 / 想加仓的人，事件前 1-3 天怎么调
-#   history — 上一届 / 历史可比事件后股价表现，作为锚点
+# 关键事件 - 从 JSON 读，不再硬编码 (2026-06-01 拆出 industry_events.json)
+#   主源:     data/latest/key_events.json       (key_events_brief.py 聚合 L1+L2+L3)
+#   fallback: data/curated/industry_events.json (L3 行业大会日历, 手维护)
+# 字段定义见 industry_events.json 的 field_spec
+# 概览页只渲染 L3 (用户最关心的"未来 6 个月行业大会");
+# L1/L2 由 morning_brief.section_calendar 渲染.
 # ============================================================
-EVENTS = [
-    {
-        "date": "2026-06-01",
-        "title": "NVIDIA GTC Taipei",
-        "tickers": ["NVDA", "TSM", "COHR"],
-        "desc": "黄仁勋台北 keynote · Rubin 平台 / CPO 光互联 / AI Factory 客户案例",
-        "watch": "① Rubin 量产时间表是否明确到季度（市场默认 26Q4 出样、27H1 大批量）；② Vera CPU 首批客户；③ CoWoS-L 产能瓶颈讲法（TSM 给 60k vs 80k wpm 差很多）；④ AI Factory 是否点名 OpenAI / xAI / Meta 的新一轮订单数量；⑤ CPO 是否给 COHR / LITE 具体 design-win。",
-        "bull": "Rubin 量产明确到 27H1 + AI Factory 给出 ≥ 5 个超大客户名单 + CPO 量产时间表前移 → NVDA / TSM / COHR 三联动；尤其 COHR / LITE 在 5 月回调 15%+ 后弹性更大。",
-        "bear": "如果只是把 March GTC 的内容换语言重讲一遍 + Rubin 推迟到 27H2 → 强化 'AI Capex 周期顶' 叙事，NVDA / TSM 短期补跌 5-8%。",
-        "prep": "GTC 演讲台北时间下午 / 美股盘前。NVDA 持仓 ≥ 30% 的人，演讲前一晚收盘价就是参照点；不建议演讲中追涨。可对冲品种：SOXS（费城半导体 3 倍反向）。",
-        "history": "March 2026 GTC：Blackwell 出货确认后 NVDA + 12% / 5 周；May 2024 Computex：NVDA + 7% / 2 周但 1 个月后回吐。Pattern：keynote 当周强，4-6 周后看实际订单兑现。",
-    },
-    {
-        "date": "2026-06-02",
-        "title": "Computex 2026",
-        "tickers": ["INTC", "AMD", "AAPL", "DELL", "HPQ"],
-        "desc": "AI PC 第二波 + 边缘推理 + 机器人 + AR/VR · OEM 大本营",
-        "watch": "① AMD MI400 是否在 NVDA Rubin 之后给具体 TCO 对标数据；② Intel Lunar Lake 继任者 + Foundry 18A 客户名单；③ AAPL 是否露面（5 年没参加 Computex，2026 传言展示 M5 / Vision Pro 国行）；④ AI PC 渗透率：去年 Computex OEM 给 22% 渗透指引、今年至少要 35%+ 才及格；⑤ 机器人公链：宇树、傅利叶、智元的 SoC 选择。",
-        "bull": "AI PC 渗透率上调 + INTC 拿到 ≥ 2 个 18A 大客户（Apple / Broadcom 任一）+ AMD MI400 给出对标 Rubin 的具体数 → INTC 单日 + 8-12% 不夸张；近半年 INTC 是 'turnaround 但缺催化' 状态。",
-        "bear": "OEM 普遍下调 AI PC 渗透指引、INTC 18A 客户仍模糊 → INTC 重回 -5% 区间、DELL / HPQ 跟跌。",
-        "prep": "Computex 6/2-6/6 整周。INTC / AMD 仓位 ≤ 5% 的可以放着看；想加 INTC 的人不建议 6/2 开盘追，OEM keynote 集中在 6/3-6/4，6/4 收盘后再判断。",
-        "history": "Computex 2025：AMD + 11% / 3 周（MI325 demo 后）；INTC -4% / 当周（Pat 离职后第一次缺席）；DELL + 6% / 2 周（AI server 订单确认）。",
-    },
-    {
-        "date": "2026-06-08",
-        "title": "Apple WWDC 2026",
-        "tickers": ["AAPL", "AVGO"],
-        "desc": "Apple Intelligence 第二年 · Siri 大重构 · 可能宣布新 AI partner",
-        "watch": "① 重构后的 Siri 是否真在 iPhone 17 上跑、还是只在 18；② Apple Intelligence 是否扩展到 Mac Pro / Vision Pro；③ 是否宣布 Gemini / Claude 接入（去年只接了 OpenAI）；④ Vision Pro 2 是否露面或定价下调；⑤ 自研服务器芯片 'Project ACDC' 进展 — 这条对 AVGO / TSM 有直接影响。",
-        "bull": "Siri 重构有可演示的 demo + 接入第二家 AI（Gemini 概率高）+ Vision Pro 2 价格 $2500 以下 → AAPL 5-7% 反弹；但要注意 WWDC 后 AAPL 历史上 1-2 周内回吐概率 ≥ 60%。",
-        "bear": "Siri 重构再次推迟 + 没有新 AI partner + Vision Pro 2 价格仍 $3000+ → AAPL -3-5%，估值压缩。当前 AAPL forward P/E 32x，对 AI 故事的容忍度低。",
-        "prep": "WWDC keynote 美国西部时间 6/8 上午 10 点 = 北京时间 6/9 凌晨 1 点。AAPL 美股盘后第一时间反应，6/9 港股 Apple 链（瑞声、舜宇、立讯）会跟跳。想加 AAPL 的人，6/8 美股开盘已经预热过一波。",
-        "history": "WWDC 2024：Apple Intelligence 发布当周 AAPL + 7%，3 个月内 + 28%；WWDC 2023：Vision Pro 发布后 -1% / 1 周（价格太贵）；WWDC 2022：跌 / 3% / 1 周（无重大发布）。",
-    },
-    {
-        "date": "2026-07-22",
-        "title": "AMD Advancing AI 2026",
-        "tickers": ["AMD", "TSM", "AVGO"],
-        "desc": "AMD 年度旗舰发布会 · MI400 vs Rubin 正面对标",
-        "watch": "① MI400 vs Rubin 在 LLM 训练 / 推理 上的 perf-per-dollar；② MI500 是否给路线图（市场预期 28H1）；③ 大客户：Meta / Microsoft / Oracle 的 AMD 份额是否从 15% 提到 20%+；④ ROCm 7 是否真正能跑全部主流 LLM（这是过去 2 年 AMD 最大软件短板）；⑤ 是否给 AI PC 第二代 Strix Halo 路线图。",
-        "bull": "MI400 性能至少打平 Rubin + Meta / MSFT 给出具体增量订单（≥ $5B annual run-rate）→ AMD + 8-15% / 1 周；近 6 个月 AMD 一直是 'NVDA 替代' 故事的最大受益者，但缺旗舰催化。",
-        "bear": "MI400 性能落后 Rubin > 20% + ROCm 仍跑不全 → AMD -5-10%，年内涨幅大半回吐。",
-        "prep": "7/22 是周三，发布会北京时间 7/23 凌晨。AMD 持仓 ≥ 5% 的人，建议 7/15 前后看一次 ROCm 7 release notes（GitHub 公开），可以提前判断。",
-        "history": "Advancing AI 2024：MI325 发布后 AMD -3% / 2 周（市场嫌弃性能未拉开差距）；Advancing AI 2023：MI300 发布后 + 21% / 5 周（首次喊出对标 NVDA H100）。Pattern：'再次确认对标' 不涨、'拉开身位' 才涨。",
-    },
-    {
-        "date": "2026-08-27",
-        "title": "NVIDIA Q1 FY27 财报",
-        "tickers": ["NVDA", "TSM", "VRT", "GEV"],
-        "desc": "Capex 周期最早可能见顶的信号期 · 网络收入占比是关键",
-        "watch": "① Data Center 收入 QoQ 增速（连续 4 季度 > 15%，市场怕拐头）；② 网络（NVLink / InfiniBand / CPO）收入占比首破 25% 是关键里程碑；③ 毛利率：连续 5 季度 75%+，财报后市场只看 76% 以下 = 失望；④ Q2 guide：如果 guide 增速 < 10% QoQ，'AI Capex 周期顶' 叙事会强化；⑤ 网络绑定 VRT / GEV 这种电力 / 散热票，财报后通常会跟跌或跟涨 1-2 天滞后。",
-        "bull": "Data Center QoQ + 18% 以上 + 毛利率 76%+ + Q2 guide 强 → NVDA 财报后 + 8-12%，VRT / GEV 跟涨 1-2 天后再 + 5%。",
-        "bear": "Data Center QoQ < 12% + 毛利率掉到 74% + Q2 guide 平 → NVDA -10-15%，整个 AI 链滑铁卢；电力链可能逆势（因为电力需求滞后于芯片需求）。",
-        "prep": "财报美股盘后。NVDA 仓位 ≥ 20% 的人，财报前一周建议把仓位降到 15% 以下、或买 1 个月 OTM put 对冲。VRT / GEV 不要在 NVDA 财报当周加仓 — 跟跌但不会反弹同步。",
-        "history": "Q1 FY26 财报（2025-05）：+ 5% 财报后但 2 周内回吐到 0；Q4 FY26（2026-02）：财报后 -8%（毛利率掉到 75.5%）；Q3 FY26（2025-11）：+ 9%。近 6 季 3 涨 3 跌，波动率扩大。",
-    },
-    {
-        "date": "2026-09-15",
-        "title": "iPhone 18 发布",
-        "tickers": ["AAPL", "AVGO", "QCOM", "0241.HK", "2382.HK"],
-        "desc": "AI iPhone 周期第 2 年 · 真正考验换机率",
-        "watch": "① 主打 AI 功能（重构 Siri / on-device LLM 推理 / AI photo 升级）是否在 17 系列就能用，决定 18 的差异化卖点；② 自研 5G C2 调制解调器是否全系（这条直接砍掉 QCOM 50% 收入）；③ 印度产能占比（市场预期破 30%）；④ 起售价：维持 $799 = 中性、降到 $749 = 利好；⑤ 中国市场反响 — 华为 Mate 80 系列预计同期发布。",
-        "bull": "AI 功能差异化清晰 + C2 modem 表现稳 + 中国预订环比 + 20% → AAPL + 6-10% / 4 周；Apple 链港股（瑞声 / 舜宇）+ 10-15%。",
-        "bear": "AI 功能仍要等下一代 + C2 modem 翻车（去年延期一年的原因）+ 中国份额继续被华为蚕食 → AAPL -5%，Apple 链港股 -15%。",
-        "prep": "发布会 9/15 凌晨北京时间 1 点。Apple 链港股可以提前 2-3 周建仓（历史上发布前 4 周是甜蜜区），但发布日往往 sell-the-news。QCOM 持仓的人，如果在 7-8 月 AAPL C2 modem 信息出来时已经反应过一轮，9/15 影响减半。",
-        "history": "iPhone 16（2025-09）：发布后 AAPL -2% / 2 周（AI 功能延期失望）；iPhone 15（2023-09）：发布后 -3% / 1 周；iPhone 14（2022-09）：+ 1% / 1 周但 1 个月后 -10%。Pattern：发布后 1-2 周回调几乎是规律。",
-    },
-]
+def _load_key_events_for_dashboard():
+    """加载 L3 行业大会事件 (dashboard 概览页用)。
+
+    优先读 data/latest/key_events.json,缺失则 fallback 到 industry_events.json。
+    返回 list[dict],每项包含 event_card_html 期望的字段。
+    """
+    import pathlib
+    repo = pathlib.Path(__file__).resolve().parents[2]
+
+    latest = repo / "data" / "latest" / "key_events.json"
+    if latest.exists():
+        try:
+            payload = json.loads(latest.read_text(encoding="utf-8"))
+            l3 = [e for e in payload.get("events", []) if e.get("layer") == "L3"]
+            return [{
+                "date": e.get("date", ""),
+                "title": e.get("title", ""),
+                "tickers": e.get("tickers", []),
+                "desc": e.get("desc", ""),
+                "watch": e.get("watch", ""),
+                "bull": e.get("bull", ""),
+                "bear": e.get("bear", ""),
+                "prep": e.get("prep", ""),
+                "history": e.get("history", ""),
+                "source_url": e.get("source_url", ""),
+            } for e in l3]
+        except Exception as exc:
+            print(f"  [warn] 解析 key_events.json 失败: {exc} — fallback 到 curated 源")
+
+    curated = repo / "data" / "curated" / "industry_events.json"
+    if curated.exists():
+        try:
+            payload = json.loads(curated.read_text(encoding="utf-8"))
+            return [{
+                "date": e.get("start_date", ""),
+                "title": e.get("title", ""),
+                "tickers": e.get("tickers", []),
+                "desc": e.get("desc", ""),
+                "watch": e.get("watch", ""),
+                "bull": e.get("bull", ""),
+                "bear": e.get("bear", ""),
+                "prep": e.get("prep", ""),
+                "history": e.get("history", ""),
+                "source_url": e.get("source_url", ""),
+            } for e in payload.get("events", [])]
+        except Exception as exc:
+            print(f"  [warn] 解析 industry_events.json 失败: {exc}")
+
+    print("  [warn] 关键事件数据源全部缺失 — 跑 stock_research.jobs.key_events_brief 重新生成")
+    return []
 
 
 # ============================================================
@@ -15897,7 +15878,9 @@ def build():
         scarce_with_ticker_html.append(s_copy)
     html = html.replace("{SCARCE_THEME_CARDS}", "\n".join(scarce_theme_card_html(t) for t in scarce_with_ticker_html))
 
-    html = html.replace("{EVENT_CARDS}", "\n".join(event_card_html(e) for e in EVENTS))
+    _key_events = _load_key_events_for_dashboard()
+    print(f"  关键事件 (L3 行业大会): {len(_key_events)} 条 · 主源 data/latest/key_events.json")
+    html = html.replace("{EVENT_CARDS}", "\n".join(event_card_html(e) for e in _key_events))
 
     theme_sections = "\n".join(theme_section_html(t, records) for t in THEMES)
     html = html.replace("{THEME_SECTIONS}", theme_sections)
