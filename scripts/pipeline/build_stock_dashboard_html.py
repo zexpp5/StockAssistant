@@ -5126,6 +5126,11 @@ const TAB_SECTIONS = {
   //   - 删 stress-test / hundred-x → 不属于事件 surface
   //   这些 section HTML 仍在文件里但不被任何 tab 引用 (废代码,下一轮清理)
   overview: ["events"],
+  // 死代码 section: HTML 仍在文件里但不被任何用户可见 tab 引用。
+  // 必须挂在 TAB_SECTIONS 某个 key 下,否则 switchTab 不收集进 allSections,
+  // 这些 section 就会默认显示 (display="" 是 visible)。
+  // key 以 _ 开头,getTabFromHash() 不会路由到它,无 sidebar 入口,纯隐藏用。
+  _dead_sections: ["hero", "stress-test", "thesis", "evolution", "scarce", "hundred-x"],
   "real-holdings": ["real-holdings"],
   // 🧠 AI 工作台 (2026-05-27 三独立子 tab, header 各自 1 行 banner)
   portfolio: ["portfolio"],
