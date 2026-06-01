@@ -1083,26 +1083,28 @@ _sys.exit(rc)
         失败 fail-soft 返回 error 字段,不抛 HTTP 5xx。
         """
         import subprocess as _sub
+        import shlex as _shlex
         import time as _time
-        cmd = [
-            sys.executable,
-            str(_REPO_ROOT / "scripts" / "pipeline" / "fetch_stock_prices.py"),
-            "--source", "watchlist",
-        ]
+        # 拉价 → 接着重跑持仓体检,否则 price_daily 更新了但 daily-review/latest 仍吐旧体检,
+        # dashboard 刷新看不到新现价(2026-06-01 事故:按钮只写 price_daily 不重算体检)。
+        py = _shlex.quote(sys.executable)
+        fetch_script = _shlex.quote(str(_REPO_ROOT / "scripts" / "pipeline" / "fetch_stock_prices.py"))
+        review_script = _shlex.quote(str(_REPO_ROOT / "stock_research" / "jobs" / "real_holding_review.py"))
+        chained = f"{py} {fetch_script} --source watchlist && {py} {review_script}"
         log_dir = _REPO_ROOT / "data" / "latest"
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / "fetch_prices_on_demand.log"
         try:
             with open(log_path, "ab") as log_f:
-                log_f.write(f"\n=== on-demand fetch-prices {_time.strftime('%Y-%m-%d %H:%M:%S')} ===\n".encode())
+                log_f.write(f"\n=== on-demand fetch-prices + review {_time.strftime('%Y-%m-%d %H:%M:%S')} ===\n".encode())
                 proc = _sub.Popen(
-                    cmd, cwd=str(_REPO_ROOT), stdout=log_f, stderr=_sub.STDOUT,
+                    ["bash", "-c", chained], cwd=str(_REPO_ROOT), stdout=log_f, stderr=_sub.STDOUT,
                     start_new_session=True,
                 )
             return {
                 "status": "started", "pid": proc.pid,
                 "log": str(log_path),
-                "hint": "约 1-2 分钟后 price_daily 会有数据,再刷 dashboard 现价就出来",
+                "hint": "约 1-2 分钟后拉价 + 体检重算完成,刷新 dashboard 现价/盈亏就更新(走 daily-review/latest 实时端点,无需重建 HTML)",
             }
         except Exception as e:
             return {"status": "error", "error": str(e)}
