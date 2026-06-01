@@ -136,7 +136,16 @@ WATCHDOG_PID=$!
 trap 'rm -f "$PID_LOCK"; if [ -n "$WATCHDOG_PID" ]; then pkill -P "$WATCHDOG_PID" 2>/dev/null; kill "$WATCHDOG_PID" 2>/dev/null; fi' EXIT
 
 PIPELINE_STATUS_DIR="$DIR/data/latest"
-PIPELINE_STATUS_FILE="$PIPELINE_STATUS_DIR/pipeline_status.json"
+PIPELINE_STATUS_MODE_FILE="$PIPELINE_STATUS_DIR/pipeline_status_${MODE}.json"
+PIPELINE_STATUS_PRODUCTION_FILE="$PIPELINE_STATUS_DIR/pipeline_status_production.json"
+PIPELINE_STATUS_COMPAT_FILE="$PIPELINE_STATUS_DIR/pipeline_status.json"
+PIPELINE_STATUS_FILE="$PIPELINE_STATUS_MODE_FILE"
+PIPELINE_STATUS_ROLE="research"
+PIPELINE_STATUS_ALIAS_FILES=""
+if [ "$MODE" != "research" ]; then
+    PIPELINE_STATUS_ROLE="production"
+    PIPELINE_STATUS_ALIAS_FILES="$PIPELINE_STATUS_PRODUCTION_FILE:$PIPELINE_STATUS_COMPAT_FILE"
+fi
 PIPELINE_STATUS_STEPS="$PIPELINE_STATUS_DIR/.pipeline_status_${PIPELINE_RUN_ID}.jsonl"
 mkdir -p "$PIPELINE_STATUS_DIR"
 : > "$PIPELINE_STATUS_STEPS"
@@ -218,9 +227,11 @@ write_pipeline_status() {
     local status="$1"
     local completed_at="$2"
     PIPELINE_STATUS_FILE="$PIPELINE_STATUS_FILE" \
+    PIPELINE_STATUS_ALIAS_FILES="$PIPELINE_STATUS_ALIAS_FILES" \
     PIPELINE_STATUS_STEPS="$PIPELINE_STATUS_STEPS" \
     PIPELINE_RUN_ID="$PIPELINE_RUN_ID" \
     PIPELINE_MODE="$MODE" \
+    PIPELINE_STATUS_ROLE="$PIPELINE_STATUS_ROLE" \
     PIPELINE_STATUS="$status" \
     PIPELINE_STARTED_AT="$PIPELINE_STARTED_AT" \
     PIPELINE_COMPLETED_AT="$completed_at" \
@@ -249,6 +260,7 @@ slowest = sorted(steps, key=lambda s: s.get("duration_seconds") or 0, reverse=Tr
 payload = {
     "run_id": os.environ.get("PIPELINE_RUN_ID"),
     "mode": os.environ.get("PIPELINE_MODE"),
+    "status_role": os.environ.get("PIPELINE_STATUS_ROLE"),
     "status": os.environ.get("PIPELINE_STATUS"),
     "started_at": os.environ.get("PIPELINE_STARTED_AT"),
     "updated_at": datetime.now().isoformat(timespec="seconds"),
@@ -267,13 +279,23 @@ payload = {
     "steps": steps,
 }
 
-out = os.environ["PIPELINE_STATUS_FILE"]
-os.makedirs(os.path.dirname(out), exist_ok=True)
-fd, tmp = tempfile.mkstemp(prefix=".pipeline_status_", suffix=".json", dir=os.path.dirname(out))
-with os.fdopen(fd, "w", encoding="utf-8") as f:
-    json.dump(payload, f, ensure_ascii=False, indent=2)
-    f.write("\n")
-os.replace(tmp, out)
+primary = os.environ["PIPELINE_STATUS_FILE"]
+aliases = [x for x in os.environ.get("PIPELINE_STATUS_ALIAS_FILES", "").split(":") if x]
+out_files = []
+for candidate in [primary, *aliases]:
+    if candidate and candidate not in out_files:
+        out_files.append(candidate)
+
+payload["primary_status_file"] = os.path.relpath(primary, os.getcwd())
+payload["alias_status_files"] = [os.path.relpath(x, os.getcwd()) for x in aliases]
+
+for out in out_files:
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".pipeline_status_", suffix=".json", dir=os.path.dirname(out))
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    os.replace(tmp, out)
 PY
 }
 

@@ -87,8 +87,16 @@ def _payload_ts(payload: dict | None) -> datetime | None:
 
 
 def _pipeline_status_payload() -> dict:
-    payload = _load_json(REPO / "data" / "latest" / "pipeline_status.json")
-    return payload if isinstance(payload, dict) else {}
+    for name in ("pipeline_status_production.json", "pipeline_status.json"):
+        payload = _load_json(REPO / "data" / "latest" / name)
+        if not isinstance(payload, dict):
+            continue
+        mode = str(payload.get("mode") or "").lower()
+        role = str(payload.get("status_role") or "").lower()
+        if mode == "research" or role == "research":
+            continue
+        return payload
+    return {}
 
 
 def _fmt_plain_ts(dt: datetime | None) -> str:

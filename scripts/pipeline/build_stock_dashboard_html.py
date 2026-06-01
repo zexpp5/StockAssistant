@@ -11994,6 +11994,49 @@ def _runtime_load_json(rel: str) -> dict:
         return {"_error": str(e)}
 
 
+def _runtime_parse_dt(value) -> datetime | None:
+    if not value:
+        return None
+    text = str(value).replace("Z", "").split("+")[0]
+    try:
+        return datetime.fromisoformat(text)
+    except Exception:
+        return None
+
+
+def _runtime_load_pipeline_status(role: str = "production", mode: str | None = None) -> dict:
+    if mode:
+        candidates = [f"data/latest/pipeline_status_{mode}.json"]
+    elif role == "research":
+        candidates = ["data/latest/pipeline_status_research.json"]
+    else:
+        candidates = [
+            "data/latest/pipeline_status_production.json",
+            "data/latest/pipeline_status.json",
+            "data/latest/pipeline_status_morning.json",
+            "data/latest/pipeline_status_full.json",
+            "data/latest/pipeline_status_a_share_only.json",
+            "data/latest/pipeline_status_skip_a_share.json",
+        ]
+    best: tuple[datetime, int, dict] | None = None
+    for idx, rel in enumerate(candidates):
+        payload = _runtime_load_json(rel)
+        if not payload or payload.get("_error"):
+            continue
+        payload_role = str(payload.get("status_role") or "").lower()
+        payload_mode = str(payload.get("mode") or "").lower()
+        if role == "production" and (payload_role == "research" or payload_mode == "research"):
+            continue
+        if role == "research" and payload_mode != "research" and payload_role != "research":
+            continue
+        dt = _runtime_parse_dt(payload.get("updated_at") or payload.get("completed_at") or payload.get("started_at"))
+        stamp = dt or datetime.min
+        candidate = (stamp, -idx, payload)
+        if best is None or candidate[:2] > best[:2]:
+            best = candidate
+    return best[2] if best else {}
+
+
 def _build_appearance_index() -> dict:
     """ticker (uppercase) → {first_seen_*, count, consecutive,
                               cur_rank, prev_rank, rank_up, cur_score, prev_score, score_up}
@@ -13783,7 +13826,9 @@ def runtime_status_panel_html() -> str:
     evidence = _runtime_load_json("data/latest/recommendation_evidence.json")
     source_health = _runtime_load_json("data/latest/source_health.json")
     discovery = {} if clean_v2 else _runtime_load_json("data/discovery_candidates.json")
-    pipeline = _runtime_load_json("data/latest/pipeline_status.json")
+    pipeline = _runtime_load_pipeline_status("production")
+    research_pipeline = _runtime_load_pipeline_status("research")
+    a_share_pipeline = _runtime_load_pipeline_status("production", mode="a_share_only")
     db = _runtime_db_stats()
     log_failures = _runtime_latest_log_failures()
 
@@ -13951,12 +13996,15 @@ def runtime_status_panel_html() -> str:
     )
     discovery_status = "OK" if discovery_n and evidence_grade not in {"BLOCKED", "FAIL"} else ("WARN" if discovery_n else "WARN")
     pipeline_run = pipeline.get("started_at") or "尚未记录"
+    research_status = str(research_pipeline.get("status") or "UNKNOWN")
+    research_run = research_pipeline.get("started_at") or "尚未记录"
     cards = [
         ("总状态", overall, "质量闸门和生产验收综合结果"),
         ("质量闸门", quality_status, f"fail={quality_summary.get('fail', '—')} warn={quality_summary.get('warn', '—')}"),
         ("生产验收", acceptance_status, f"fail={acceptance_summary.get('fail', '—')} warn={acceptance_summary.get('warn', '—')}"),
         ("AI 推荐", discovery_status, f"{discovery_n} 只候选 · evidence={evidence_grade}"),
-        ("跑批状态", pipeline_status, f"{str(pipeline_run)[:19]} · mode={pipeline.get('mode') or '—'}"),
+        ("生产跑批", pipeline_status, f"{str(pipeline_run)[:19]} · mode={pipeline.get('mode') or '—'}"),
+        ("研究线", research_status if research_pipeline else "INFO", f"{str(research_run)[:19]} · mode={research_pipeline.get('mode') or '—'}"),
     ]
     cards_html = "".join(
         f"""
@@ -14033,7 +14081,6 @@ def runtime_status_panel_html() -> str:
         planned = str(item.get("planned_time") or "—")
         scope = str(item.get("scope") or "—")
         command = str(item.get("command") or "—")
-        mode = str(pipeline.get("mode") or "")
         now_local = datetime.now()
 
         def before_clock(text: str) -> bool:
@@ -14045,12 +14092,17 @@ def runtime_status_panel_html() -> str:
 
         last_status = "INFO"
         last_run = "尚未记录"
-        if name == "早盘主线" and mode in {"full", "morning"}:
-            last_status = pipeline_status
-            last_run = str(pipeline.get("started_at") or "尚未记录")[:19]
-        elif name == "A/H 收盘线" and mode == "a_share_only":
-            last_status = pipeline_status
-            last_run = str(pipeline.get("started_at") or "尚未记录")[:19]
+        if name == "早盘主线":
+            mode = str(pipeline.get("mode") or "")
+            if mode in {"full", "morning", "skip_a_share"}:
+                last_status = pipeline_status
+                last_run = str(pipeline.get("started_at") or "尚未记录")[:19]
+            else:
+                last_status = "INFO"
+                last_run = "等待早盘生产线"
+        elif name == "A/H 收盘线" and a_share_pipeline:
+            last_status = str(a_share_pipeline.get("status") or "UNKNOWN")
+            last_run = str(a_share_pipeline.get("started_at") or "尚未记录")[:19]
         elif name == "A/H 收盘线":
             if before_clock("16:30"):
                 last_status = "DATA_NOT_EXPECTED"
@@ -14059,14 +14111,18 @@ def runtime_status_panel_html() -> str:
                 last_status = "WARN"
                 last_run = "今日未运行"
         elif name == "增强研究线":
-            if before_clock("21:00"):
+            if research_pipeline:
+                last_status = str(research_pipeline.get("status") or "UNKNOWN")
+                last_run = str(research_pipeline.get("started_at") or "尚未记录")[:19]
+            elif before_clock("21:00"):
                 last_status = "DATA_NOT_EXPECTED"
                 last_run = "未到 21:00"
             else:
                 last_status = "WAIT"
-                last_run = "待拆分 research_refresh"
+                last_run = "今日未运行"
         elif name == "周频策略验证":
-            weekly = next((s for s in pipeline.get("steps", []) if "walk-forward" in str(s.get("label", ""))), None)
+            weekly_source = research_pipeline if research_pipeline else pipeline
+            weekly = next((s for s in weekly_source.get("steps", []) if "walk-forward" in str(s.get("label", ""))), None)
             if weekly:
                 last_status = str(weekly.get("status") or "UNKNOWN")
                 last_run = str(weekly.get("ended_at") or weekly.get("started_at") or "尚未记录")[:19]
@@ -14100,7 +14156,7 @@ def runtime_status_panel_html() -> str:
         <h3 class="font-bold text-indigo-950">数据时钟</h3>
         <p class="text-xs text-indigo-800">这里显示计划什么时候拉、最近实际什么时候跑、跑到了哪里。系统不会再“默默拉数据”。</p>
       </div>
-      <div class="text-xs text-indigo-800">状态文件：<span class="font-mono">data/latest/pipeline_status.json</span></div>
+      <div class="text-xs text-indigo-800">状态文件：<span class="font-mono">pipeline_status_production.json</span> / <span class="font-mono">pipeline_status_research.json</span></div>
     </div>
     <div class="overflow-x-auto">
       <table class="w-full text-left text-sm">
@@ -14333,7 +14389,7 @@ def runtime_status_panel_html() -> str:
       </div>
       <div class="text-xs text-slate-500">推荐是否可交易以“质量闸门 + 生产验收”为准</div>
     </div>
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">{cards_html}</div>
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-3">{cards_html}</div>
   </div>
   {_defense_signal_explainer_html(compact=False)}
   {issue_html}

@@ -49,6 +49,17 @@ CORE_LATEST_JSON = (
     "data/discovery_candidates.json",
 )
 
+PRODUCTION_PIPELINE_STATUS_JSON = (
+    "data/latest/pipeline_status_production.json",
+    # Backward-compatible production alias. Research runs must not write this
+    # file anymore, but keep it here while old workspaces roll forward.
+    "data/latest/pipeline_status.json",
+    "data/latest/pipeline_status_morning.json",
+    "data/latest/pipeline_status_full.json",
+    "data/latest/pipeline_status_a_share_only.json",
+    "data/latest/pipeline_status_skip_a_share.json",
+)
+
 HK_LATEST_JSON = (
     "data/latest/hk_picks.json",
     "data/latest/trade_delta_hk.json",
@@ -128,6 +139,85 @@ def _payload_dt(payload: dict[str, Any] | None, path: Path) -> datetime | None:
     if path.exists():
         return datetime.fromtimestamp(path.stat().st_mtime)
     return None
+
+
+def _load_production_pipeline_status() -> tuple[dict[str, Any] | None, Path | None, str | None]:
+    """Return the newest production-line status, explicitly ignoring research."""
+    candidates: list[tuple[datetime, int, dict[str, Any], Path, str]] = []
+    for index, rel in enumerate(PRODUCTION_PIPELINE_STATUS_JSON):
+        payload, path = _json_load(rel)
+        if not payload or "_error" in payload:
+            continue
+        mode = str(payload.get("mode") or "").lower()
+        role = str(payload.get("status_role") or "").lower()
+        if mode == "research" or role == "research":
+            continue
+        dt = _payload_dt(payload, path) or datetime.min
+        # Prefer fresher files; for identical timestamps prefer explicit production file.
+        candidates.append((dt, -index, payload, path, rel))
+    if not candidates:
+        return None, None, None
+    _dt, _rank, payload, path, rel = max(candidates, key=lambda x: (x[0], x[1]))
+    return payload, path, rel
+
+
+def _check_pipeline_status(
+    *,
+    issues: list[dict[str, Any]],
+    summary: dict[str, Any],
+    now: datetime,
+) -> dict[str, Any] | None:
+    pipeline_status, _path, source_rel = _load_production_pipeline_status()
+    if not pipeline_status:
+        issues.append(_issue(
+            "FAIL",
+            "production_pipeline_status_missing",
+            "未找到 production/morning/a_share_only 流水线状态；research 状态不能作为今日生产验收依据",
+        ))
+        summary["pipeline_status_source"] = None
+        return None
+
+    summary["pipeline_status_source"] = source_rel
+    pstatus = str(pipeline_status.get("status") or "UNKNOWN").upper()
+    summary["pipeline_status"] = {
+        "run_id": pipeline_status.get("run_id"),
+        "mode": pipeline_status.get("mode"),
+        "status_role": pipeline_status.get("status_role"),
+        "source": source_rel,
+        "status": pstatus,
+        "started_at": pipeline_status.get("started_at"),
+        "updated_at": pipeline_status.get("updated_at"),
+        "completed_at": pipeline_status.get("completed_at"),
+        "failed_steps": len(pipeline_status.get("failed_steps") or []),
+    }
+    if pipeline_status.get("failed_steps"):
+        issues.append(_issue(
+            "FAIL",
+            "pipeline_failed_steps_present",
+            f"{source_rel} 存在失败步骤，不能只看最终 JSON 产物",
+            (pipeline_status.get("failed_steps") or [])[:10],
+        ))
+    updated = _parse_dt(pipeline_status.get("updated_at"))
+    if pstatus in {"FAIL", "FAILED", "ERROR"}:
+        age = (now - updated) if updated else None
+        issues.append(_issue(
+            "FAIL",
+            "pipeline_not_completed",
+            f"{source_rel} 当前为 {pstatus}，报告可能混用半成品/跨轮次产物",
+            {"updated_at": pipeline_status.get("updated_at"), "age_minutes": int(age.total_seconds() / 60) if age else None},
+        ))
+    elif pstatus == "RUNNING":
+        # daily_refresh 内部 step 跑 acceptance 时 pipeline 必然 RUNNING；只在 updated_at 长时间未推进时报 WARN（疑似卡死）。
+        age = (now - updated) if updated else None
+        stale_minutes = 30
+        if age is not None and age.total_seconds() > stale_minutes * 60:
+            issues.append(_issue(
+                "WARN",
+                "pipeline_running_stale",
+                f"{source_rel} 已 {int(age.total_seconds()/60)} 分钟未推进（>{stale_minutes} 分钟），可能卡死",
+                {"updated_at": pipeline_status.get("updated_at"), "age_minutes": int(age.total_seconds() / 60)},
+            ))
+    return pipeline_status
 
 
 def _a_share_ready(now: datetime) -> bool:
@@ -454,45 +544,7 @@ def _surface_artifact_checks(
 
     plan_a, plan_path = _json_load("data/latest/plan_a_v5.json")
     plan_v6, _ = _json_load("data/latest/plan_v6.json")
-    pipeline_status, _ = _json_load("data/latest/pipeline_status.json")
-    if pipeline_status and "_error" not in pipeline_status:
-        pstatus = str(pipeline_status.get("status") or "UNKNOWN").upper()
-        summary["pipeline_status"] = {
-            "run_id": pipeline_status.get("run_id"),
-            "mode": pipeline_status.get("mode"),
-            "status": pstatus,
-            "started_at": pipeline_status.get("started_at"),
-            "updated_at": pipeline_status.get("updated_at"),
-            "completed_at": pipeline_status.get("completed_at"),
-            "failed_steps": len(pipeline_status.get("failed_steps") or []),
-        }
-        if pipeline_status.get("failed_steps"):
-            issues.append(_issue(
-                "FAIL",
-                "pipeline_failed_steps_present",
-                "pipeline_status.json 存在失败步骤，不能只看最终 JSON 产物",
-                (pipeline_status.get("failed_steps") or [])[:10],
-            ))
-        updated = _parse_dt(pipeline_status.get("updated_at"))
-        if pstatus in {"FAIL", "FAILED", "ERROR"}:
-            age = (now - updated) if updated else None
-            issues.append(_issue(
-                "FAIL",
-                "pipeline_not_completed",
-                f"pipeline_status 当前为 {pstatus}，报告可能混用半成品/跨轮次产物",
-                {"updated_at": pipeline_status.get("updated_at"), "age_minutes": int(age.total_seconds() / 60) if age else None},
-            ))
-        elif pstatus == "RUNNING":
-            # daily_refresh 内部 step 跑 acceptance 时 pipeline 必然 RUNNING；只在 updated_at 长时间未推进时报 WARN（疑似卡死）。
-            age = (now - updated) if updated else None
-            stale_minutes = 30
-            if age is not None and age.total_seconds() > stale_minutes * 60:
-                issues.append(_issue(
-                    "WARN",
-                    "pipeline_running_stale",
-                    f"pipeline_status 已 {int(age.total_seconds()/60)} 分钟未推进（>{stale_minutes} 分钟），可能卡死",
-                    {"updated_at": pipeline_status.get("updated_at"), "age_minutes": int(age.total_seconds() / 60)},
-                ))
+    pipeline_status = _check_pipeline_status(issues=issues, summary=summary, now=now)
 
     brief = REPO / "morning_brief.md"
     if plan_a and "_error" not in plan_a:
@@ -1186,45 +1238,7 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
 
     plan_a, plan_path = _json_load("data/latest/plan_a_v5.json")
     plan_v6, _ = _json_load("data/latest/plan_v6.json")
-    pipeline_status, _ = _json_load("data/latest/pipeline_status.json")
-    if pipeline_status and "_error" not in pipeline_status:
-        pstatus = str(pipeline_status.get("status") or "UNKNOWN").upper()
-        summary["pipeline_status"] = {
-            "run_id": pipeline_status.get("run_id"),
-            "mode": pipeline_status.get("mode"),
-            "status": pstatus,
-            "started_at": pipeline_status.get("started_at"),
-            "updated_at": pipeline_status.get("updated_at"),
-            "completed_at": pipeline_status.get("completed_at"),
-            "failed_steps": len(pipeline_status.get("failed_steps") or []),
-        }
-        if pipeline_status.get("failed_steps"):
-            issues.append(_issue(
-                "FAIL",
-                "pipeline_failed_steps_present",
-                "pipeline_status.json 存在失败步骤，不能只看最终 JSON 产物",
-                (pipeline_status.get("failed_steps") or [])[:10],
-            ))
-        updated = _parse_dt(pipeline_status.get("updated_at"))
-        if pstatus in {"FAIL", "FAILED", "ERROR"}:
-            age = (now - updated) if updated else None
-            issues.append(_issue(
-                "FAIL",
-                "pipeline_not_completed",
-                f"pipeline_status 当前为 {pstatus}，报告可能混用半成品/跨轮次产物",
-                {"updated_at": pipeline_status.get("updated_at"), "age_minutes": int(age.total_seconds() / 60) if age else None},
-            ))
-        elif pstatus == "RUNNING":
-            # daily_refresh 内部 step 跑 acceptance 时 pipeline 必然 RUNNING；只在 updated_at 长时间未推进时报 WARN（疑似卡死）。
-            age = (now - updated) if updated else None
-            stale_minutes = 30
-            if age is not None and age.total_seconds() > stale_minutes * 60:
-                issues.append(_issue(
-                    "WARN",
-                    "pipeline_running_stale",
-                    f"pipeline_status 已 {int(age.total_seconds()/60)} 分钟未推进（>{stale_minutes} 分钟），可能卡死",
-                    {"updated_at": pipeline_status.get("updated_at"), "age_minutes": int(age.total_seconds() / 60)},
-                ))
+    pipeline_status = _check_pipeline_status(issues=issues, summary=summary, now=now)
     if plan_a and "_error" not in plan_a:
         method = str(plan_a.get("method") or "")
         engine = str((plan_a.get("risk_aware") or {}).get("engine") or "")
