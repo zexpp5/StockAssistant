@@ -180,6 +180,36 @@ def main():
     if failed:
         print(f"  失败：{', '.join(failed)}")
 
+    # 2026-05-29 修复 backtest 锁定追踪卡 0 天 bug：直接把 snapshot 写进 DuckDB，
+    # 不再等 morning migrate_pipeline_to_duckdb.py（research mode 写完 file 后 DuckDB
+    # 还停在旧日，dashboard backtest 拿到旧 history → tracked_dates 不含锁定日 → n_tracked=0）
+    try:
+        import duckdb
+        from stock_research import config
+        from stock_research.adapters.store import _ensure_snapshots_schema
+        db_path = str(config.DUCKDB_PATH)
+        con = duckdb.connect(db_path)
+        try:
+            _ensure_snapshots_schema(con)
+            taken_at = datetime.fromtimestamp(out_path.stat().st_mtime)
+            existing = con.execute(
+                "SELECT 1 FROM snapshots WHERE category='pipeline' AND name='history_data' AND taken_at=?",
+                [taken_at],
+            ).fetchone()
+            if existing:
+                print(f"  ⏭️  DuckDB snapshot 已存在 (taken_at={taken_at.isoformat(timespec='seconds')}), 跳过")
+            else:
+                payload_json = json.dumps(out, ensure_ascii=False, default=str)
+                con.execute(
+                    "INSERT INTO snapshots(category, name, taken_at, payload) VALUES (?, ?, ?, ?)",
+                    ["pipeline", "history_data", taken_at, payload_json],
+                )
+                print(f"  ✅ DuckDB snapshot 同步 (taken_at={taken_at.isoformat(timespec='seconds')})")
+        finally:
+            con.close()
+    except Exception as e:
+        print(f"  ⚠️  DuckDB snapshot 同步失败: {e} (file 已写, 等 morning migrate 兜底)")
+
 
 if __name__ == "__main__":
     main()
