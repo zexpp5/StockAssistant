@@ -108,7 +108,32 @@ if [ -f "$PID_LOCK" ]; then
     fi
 fi
 echo $$ > "$PID_LOCK"
-trap 'rm -f "$PID_LOCK"' EXIT
+
+# D''' 运行超时看门狗（2026-06-01 事故根因：5-29 21:00 的 research run 某步挂死，
+#   整轮拖到 6-01 08:36 才结束（~83h），全程占着 PID_LOCK → 5-30/5-31/6-01 的 launchd
+#   触发全看到 kill -0 旧 PID 存活而主动退出，三天没出新批 picks。历史上 5-23→5-25 也犯过同样
+#   的 ~35h 拖死。正常一轮 research ≤ ~3.2h，这里默认 6h 上限，超时强杀自身+子进程，释放锁让下轮能起。
+#   可用 DAILY_REFRESH_MAX_SECONDS 覆盖（如手动长跑调试时设大）。
+MAX_RUNTIME_SECONDS="${DAILY_REFRESH_MAX_SECONDS:-21600}"  # 6h
+MAIN_PID=$$
+(
+    sleep "$MAX_RUNTIME_SECONDS"
+    if kill -0 "$MAIN_PID" 2>/dev/null; then
+        echo ""
+        echo "⏱️  daily_refresh 运行超过 ${MAX_RUNTIME_SECONDS}s（$((MAX_RUNTIME_SECONDS/3600))h）——看门狗强制终止 PID $MAIN_PID 及子进程，释放锁。"
+        notify "⏱️ daily_refresh 超时自杀" "运行超 $((MAX_RUNTIME_SECONDS/3600))h，看门狗已 kill（防止 5-29 那样卡死几天霸占槽位）"
+        pkill -TERM -P "$MAIN_PID" 2>/dev/null
+        kill -TERM "$MAIN_PID" 2>/dev/null
+        sleep 10
+        pkill -KILL -P "$MAIN_PID" 2>/dev/null
+        kill -KILL "$MAIN_PID" 2>/dev/null
+    fi
+) &
+WATCHDOG_PID=$!
+
+# EXIT 时清 PID 锁 + 收掉看门狗（正常结束时看门狗 subshell 还在 sleep，必须连它的 sleep 子进程
+#   一起杀，否则残留一个 sleep 进程直到超时——先 pkill -P 杀子 sleep，再 kill subshell 本身）
+trap 'rm -f "$PID_LOCK"; if [ -n "$WATCHDOG_PID" ]; then pkill -P "$WATCHDOG_PID" 2>/dev/null; kill "$WATCHDOG_PID" 2>/dev/null; fi' EXIT
 
 PIPELINE_STATUS_DIR="$DIR/data/latest"
 PIPELINE_STATUS_FILE="$PIPELINE_STATUS_DIR/pipeline_status.json"
