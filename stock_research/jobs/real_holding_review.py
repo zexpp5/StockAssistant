@@ -876,6 +876,7 @@ def _build_item(
         "pnl_pct": round(pnl_pct, 4) if pnl_pct is not None else None,
         "prev_close": prev_close,
         "prev_trade_date": prev_trade_date,
+        "trade_date": (price or {}).get("trade_date"),
         "day_change_rmb": round(day_change_rmb, 4) if day_change_rmb is not None else None,
         "day_change_pct": round(day_change_pct, 4) if day_change_pct is not None else None,
         "current_weight": round(current_weight, 6) if current_weight is not None else None,
