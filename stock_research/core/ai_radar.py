@@ -468,9 +468,13 @@ def build_ai_radar_payload(con) -> dict[str, Any]:
 
     picks = [dict(zip(cols, r)) for r in rows]
 
-    # 自选股集合（只读，仅用于打标）
+    # 自选股集合 — 用 symbol 匹配（不靠 market）
+    # 原因：manual_watchlist.market 字段存的是中文（"美股" / "A股·沪交所"），
+    #      recommendation_picks.market 是英文短码（"US" / "CN" / "HK"），
+    #      用 (market, symbol) 直接比会让"美股的 DELL"匹配不上"US 的 DELL"。
+    # symbol 在跨市场冲突极小（ticker 体系一般独立），按 symbol 比足够鲁棒。
     watchlist_rows = con.execute(_SQL_WATCHLIST).fetchall()
-    watchlist_set = {(m, s) for m, s in watchlist_rows}
+    watchlist_symbols = {s for _m, s in watchlist_rows if s}
 
     # chain 趋势 → 主线判断
     trend_rows = con.execute(_SQL_CHAIN_TREND).fetchall()
@@ -510,7 +514,7 @@ def build_ai_radar_payload(con) -> dict[str, Any]:
                 "avg_score": round(sum(p["total_score"] for p in items) / len(items), 1),
                 "ai_strength": ai_strength,
                 "top_picks": [
-                    _format_pick(p, watchlist_set)
+                    _format_pick(p, watchlist_symbols)
                     for p in sorted(items, key=lambda x: -x["total_score"])[:5]
                 ],
             })
@@ -530,7 +534,7 @@ def build_ai_radar_payload(con) -> dict[str, Any]:
             "delta_7d": round(delta, 2) if delta is not None else None,
             "mainline_status": classify_mainline(delta),
             "top_picks": [
-                _format_pick(p, watchlist_set)
+                _format_pick(p, watchlist_symbols)
                 for p in sorted(items, key=lambda x: -x["total_score"])[:5]
             ],
             "mapped_themes": chain_to_themes.get(chain, []),
@@ -581,8 +585,12 @@ def build_ai_radar_payload(con) -> dict[str, Any]:
     }
 
 
-def _format_pick(p: dict, watchlist_set: set) -> dict[str, Any]:
-    """单只票的展示字段（注意：不包含任何推荐/买入文案）。"""
+def _format_pick(p: dict, watchlist_symbols: set) -> dict[str, Any]:
+    """单只票的展示字段（注意：不包含任何推荐/买入文案）。
+
+    in_watchlist 按 symbol 匹配 — manual_watchlist 与 picks 的 market 字段表示不一致
+    （"美股" vs "US"），symbol 几乎唯一更鲁棒。
+    """
     return {
         "market": p["market"],
         "symbol": p["symbol"],
@@ -593,7 +601,7 @@ def _format_pick(p: dict, watchlist_set: set) -> dict[str, Any]:
         "layman_intro": p["layman_intro"],
         "chain_source": p["chain_source"],
         "ai_strength": derive_ai_strength(p["chain"]),
-        "in_watchlist": (p["market"], p["symbol"]) in watchlist_set,
+        "in_watchlist": p["symbol"] in watchlist_symbols,
     }
 
 
