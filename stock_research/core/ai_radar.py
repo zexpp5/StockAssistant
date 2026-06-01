@@ -1107,8 +1107,50 @@ def _render_ai_radar_focus(payload: dict[str, Any],
         evidence_status = "公司证据未启动"
         evidence_color = "text-rose-700"
 
+    # 第 4 卡：数据缺口 — 用户优先级 #4 "哪些数据还缺，缺了会影响什么"
+    gap_lines: list[tuple[str, str]] = []  # (color_class, text)
+    # 缺口 1: 公司证据 confirmed 主题数
+    if n_theme_done < n_theme_total:
+        gap_lines.append((
+            "text-rose-700",
+            f"{n_theme_total - n_theme_done}/{n_theme_total} 主题无 confirmed 公司证据"
+        ))
+    # 缺口 2: chain 覆盖率审计
+    n_uncovered = int((payload.get("coverage_audit") or {}).get("n_uncovered") or 0)
+    if n_uncovered:
+        gap_lines.append((
+            "text-amber-700",
+            f"{n_uncovered} 只 AI 高分票缺 chain（运维补规则）"
+        ))
+    # 缺口 3: 数据源 stale/degraded
+    if n_stale:
+        gap_lines.append((
+            "text-amber-700",
+            f"{n_stale} 个子系统 stale / degraded"
+        ))
+    # 缺口 4: 推荐分时间滞后
+    if data_age is not None and data_age > 1:
+        gap_lines.append((
+            "text-rose-700",
+            f"推荐分滞后 {data_age} 天（影响今天能否参考）"
+        ))
+
+    if not gap_lines:
+        gap_lines.append(("text-emerald-700", "✓ 当前无关键数据缺口"))
+
+    gap_impact = (
+        '<div class="text-[10px] text-slate-400 mt-1">'
+        '缺 confirmed → research_score 公司证据维度=0；缺 chain → 高分票被研究漏过；缺新鲜度 → 今日推荐不可信'
+        '</div>'
+    )
+
+    gap_html = "".join(
+        f'<div class="text-[12px] font-medium {color} {("mb-0.5" if i < len(gap_lines)-1 else "")}">{_esc(text)}</div>'
+        for i, (color, text) in enumerate(gap_lines)
+    )
+
     return f"""
-<div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
   <div class="bg-white ring-1 ring-slate-200 rounded-xl p-4">
     <div class="text-[11px] text-slate-500 mb-1">1. 当前主线</div>
     <div class="text-base font-bold {_esc(mainline_color)}">{mainline}</div>
@@ -1124,6 +1166,11 @@ def _render_ai_radar_focus(payload: dict[str, Any],
     <div class="text-sm font-bold {rec_color}">{_esc(rec_status)}</div>
     <div class="text-[11px] font-medium {evidence_color} mt-1">{_esc(evidence_status)}</div>
     <div class="text-[10px] text-slate-400 mt-1">生产验收失败时，以今日决策台/运行状态为准。</div>
+  </div>
+  <div class="bg-white ring-1 ring-slate-200 rounded-xl p-4">
+    <div class="text-[11px] text-slate-500 mb-1">4. 数据缺口</div>
+    {gap_html}
+    {gap_impact}
   </div>
 </div>
 """
