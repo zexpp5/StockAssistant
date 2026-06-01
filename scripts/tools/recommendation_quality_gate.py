@@ -249,15 +249,38 @@ def _run_v2_checks(conn, now: datetime) -> dict:
         issues.append(_issue("FAIL", "v2_no_portfolio_plans", "v2 还没有生成 AI 组合方案"))
 
     if {"pick_outcomes", "strategy_review_reports"}.intersection(tables):
-        outcomes = count("pick_outcomes")
-        reports = count("strategy_review_reports")
+        # 按当前(最新)策略口径数,不数全历史 —— 否则旧公式攒下的上千行 outcomes 会让
+        # 当前新策略 0 成熟样本时看起来"已有验证证据",status 假性 PASS。
+        # 与 evidence gate / strategy_validation 的 latest-strategy 口径保持一致。
+        cur_strategy = latest.get("strategy_version")
+        if cur_strategy and "recommendation_runs" in tables:
+            outcomes = int(conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM pick_outcomes o
+                JOIN recommendation_runs r ON r.run_id = o.run_id
+                WHERE r.strategy_version = ?
+                """,
+                [cur_strategy],
+            ).fetchone()[0])
+            reports = int(conn.execute(
+                "SELECT COUNT(*) FROM strategy_review_reports WHERE strategy_version = ?",
+                [cur_strategy],
+            ).fetchone()[0]) if "strategy_review_reports" in tables else 0
+        else:
+            # 拿不到当前策略版本时退回全历史(至少不漏 INFO)
+            outcomes = count("pick_outcomes")
+            reports = count("strategy_review_reports")
         summary["pick_outcomes_count"] = outcomes
         summary["strategy_review_reports_count"] = reports
+        summary["strategy_evidence_scope"] = cur_strategy or "all_history"
         if outcomes <= 0 and reports <= 0:
             issues.append(_issue(
                 "INFO",
                 "v2_strategy_evidence_not_mature",
-                "策略验证样本仍在积累；这不阻断今日推荐生成，但不能证明长期有效",
+                f"当前策略 {cur_strategy or 'all'} 的验证样本仍在积累"
+                f"(成熟 outcomes={outcomes} / reports={reports})；"
+                "这不阻断今日推荐生成，但不能证明长期有效",
             ))
 
     n_fail = sum(1 for x in issues if x["level"] == "FAIL")
