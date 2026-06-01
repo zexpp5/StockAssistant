@@ -69,8 +69,10 @@ AI_RELEVANT_THEME_KEYWORDS = (
     "ai", "semiconductor", "cloud", "saas", "software", "internet",
     "cooling", "power", "grid", "electrical", "nuclear", "uranium",
     "rare earth", "robot", "data", "quantum",
+    "idc", "data center",  # 2026-06-01 评审补：IDC + 数据中心承载层
     # 中文
     "互联网", "半导体", "软件", "机器人", "云",
+    "数据中心",  # 2026-06-01 评审补
     # A 股 GICS 行业代码 — 只留窄类，去 C35/C38/C39/C40 大类避免假阳性
     "I65",  # 软件信息技术
     "I64",  # 互联网相关

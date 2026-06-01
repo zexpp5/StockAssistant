@@ -148,6 +148,18 @@ _RULES: list[tuple[int, str, list[str], ChainTag]] = [
                   "中航光电", "航发动力", "中航高科"],
         ChainTag("军工/国防", "下游", "军工主机厂/装备", "国防订单驱动")),
 
+    # ===== 数据中心承载层 (IDC / data center REIT) — 2026-06-01 评审补 =====
+    # 之前 chain_classifier 漏了 IDC：9698.HK 万国数据 + EQIX / DLR 长期高分但 chain 为空
+    # 复用 "数据中心电力" chain，role 区分"电力供给" vs "IDC 物业"，跟价值链统一
+    (89, "name", ["Equinix", "Digital Realty", "万国数据", "GDS Holdings",
+                  "GDS", "21Vianet", "世纪互联", "润泽科技", "光环新网"],
+        ChainTag("数据中心电力", "中游", "IDC 物业 / 数据中心 REIT",
+                 "AI 算力需求 → 数据中心物业 + IDC 服务商")),
+    # theme 兜底 (universe.theme 字段含 IDC / data center)
+    (88, "theme", ["IDC", "data center", "数据中心"],
+        ChainTag("数据中心电力", "中游", "IDC / 数据中心",
+                 "AI 数据中心物业 + 承载层")),
+
     # ===== 2026-06-01 audit 补缺规则 =====
     # 美股 SaaS 龙头（INTU / VEEV / ADSK 长期 picks 高分但缺 chain）
     (87, "name", ["Intuit", "Veeva", "Autodesk", "ServiceNow", "Workday",
