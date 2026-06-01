@@ -14209,6 +14209,8 @@ def runtime_status_panel_html() -> str:
     runtime_v2_candidates = _runtime_v2_recommendations()
     discovery_n = len(runtime_v2_candidates or (discovery.get("candidates") or []))
     evidence_grade = evidence.get("evidence_grade") or "—"
+    # 策略证据状态独立于流水线 PASS —— 显式露出,防止「质量闸门 PASS」被读成"策略已验证"
+    strategy_evidence = str(quality.get("strategy_evidence_status") or "—")
     quality_level = quality_status.upper()
     acceptance_level = acceptance_status.upper()
     pipeline_level = pipeline_status.upper()
@@ -14223,7 +14225,7 @@ def runtime_status_panel_html() -> str:
     research_run = research_pipeline.get("started_at") or "尚未记录"
     cards = [
         ("总状态", overall, "质量闸门和生产验收综合结果"),
-        ("质量闸门", quality_status, f"fail={quality_summary.get('fail', '—')} warn={quality_summary.get('warn', '—')}"),
+        ("质量闸门", quality_status, f"fail={quality_summary.get('fail', '—')} warn={quality_summary.get('warn', '—')} · 策略证据={strategy_evidence}"),
         ("生产验收", acceptance_status, f"fail={acceptance_summary.get('fail', '—')} warn={acceptance_summary.get('warn', '—')}"),
         ("AI 推荐", discovery_status, f"{discovery_n} 只候选 · evidence={evidence_grade}"),
         ("生产跑批", pipeline_status, f"{str(pipeline_run)[:19]} · mode={pipeline.get('mode') or '—'}"),
