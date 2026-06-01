@@ -166,6 +166,32 @@ def _step_topic_metrics() -> dict:
         return {"step": "topic_metrics_audit", "status": "error", "error": str(e)}
 
 
+def _step_coverage_audit() -> dict:
+    """Step 6: 跑覆盖率审计 → data/latest/ai_theme_coverage_audit.json"""
+    try:
+        from stock_research.jobs.ai_theme_coverage_audit import run_audit, OUTPUT_PATH
+        con = get_db()
+        try:
+            audit = run_audit(con)
+        finally:
+            con.close()
+        OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        OUTPUT_PATH.write_text(json.dumps(audit, ensure_ascii=False, indent=2, default=str))
+        return {
+            "step": "coverage_audit",
+            "status": "ok",
+            "n_total_issues": audit["n_total_issues"],
+            "out": str(OUTPUT_PATH),
+            "counts": {
+                k: audit[k]["count"] for k in
+                ("high_score_no_chain", "theme_no_evidence",
+                 "confirmed_stale_risk", "ticker_conflicts")
+            },
+        }
+    except Exception as e:
+        return {"step": "coverage_audit", "status": "error", "error": str(e), "trace": traceback.format_exc()}
+
+
 def _step_aggregate_tags() -> dict:
     """Step 5: 跑 aggregate_theme_tags 把 evidence 聚合成 tags"""
     try:
@@ -215,20 +241,23 @@ def main() -> int:
     started_at = datetime.now()
     results = []
 
-    print("\n[Step 1/5] 数据源健康检查")
+    print("\n[Step 1/6] 数据源健康检查")
     r = _step_seed_sources(); results.append(r); print(f"  → {r['status']} · ok={r.get('n_ok')}/{r.get('n_total')}")
 
-    print("\n[Step 2/5] ETF 持仓刷新")
+    print("\n[Step 2/6] ETF 持仓刷新")
     r = _step_refresh_etf(args.refresh_etf); results.append(r); print(f"  → {r['status']} · {r.get('action')}")
 
-    print("\n[Step 3/5] SEC 公司证据扫描 + stale 规则")
+    print("\n[Step 3/6] SEC 公司证据扫描 + stale 规则")
     r = _step_sec_scan(args.scan_sec); results.append(r); print(f"  → {r['status']} · {r.get('action')}")
 
-    print("\n[Step 4/5] 宏观指标新鲜度审计")
+    print("\n[Step 4/6] 宏观指标新鲜度审计")
     r = _step_topic_metrics(); results.append(r); print(f"  → {r['status']}")
 
-    print("\n[Step 5/5] 公司标签聚合")
+    print("\n[Step 5/6] 公司标签聚合")
     r = _step_aggregate_tags(); results.append(r); print(f"  → {r['status']} · tags={r.get('n_tags')} · {r.get('by_status')}")
+
+    print("\n[Step 6/6] 覆盖率审计")
+    r = _step_coverage_audit(); results.append(r); print(f"  → {r['status']} · issues={r.get('n_total_issues')} · counts={r.get('counts')}")
 
     wl_after = _watchlist_count()
 
