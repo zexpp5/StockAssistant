@@ -41,6 +41,11 @@ EDGAR_HEADERS = {
 EDGAR_FULLTEXT = "https://efts.sec.gov/LATEST/search-index"
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 
+# 原文 snippet 抽取参数
+SNIPPET_WINDOW_CHARS = 220          # 关键词命中前后各取多少字符
+MAX_FILING_BYTES = 8 * 1024 * 1024  # 单个 filing 最大下载 8MB（防爆显存）
+SNIPPET_FETCH_TIMEOUT = 30.0
+
 # 主题 → 关键词组 + form 限制
 # 用 SEC 官方查询语法：双引号包关键词；多个用空格 AND
 SCAN_SPECS = {
@@ -54,6 +59,96 @@ SCAN_SPECS = {
     ],
     # 后续主题先不扫，避免 PoC 失控
 }
+
+
+def _fetch_filing_index(filing_index_url: str) -> str | None:
+    """拉 filing index page 文本（HTML）。"""
+    req = urllib.request.Request(filing_index_url, headers=EDGAR_HEADERS)
+    try:
+        with urllib.request.urlopen(req, timeout=SNIPPET_FETCH_TIMEOUT) as resp:
+            if resp.status != 200:
+                return None
+            return resp.read(MAX_FILING_BYTES).decode("utf-8", errors="replace")
+    except Exception:
+        return None
+
+
+def _find_primary_document_url(index_html: str, base_url: str) -> str | None:
+    """从 filing index page HTML 找 primary document（10-K 主文档）链接。
+
+    SEC index page 顶部有 SEC 站内导航（Rules/Regulations 等 .htm），
+    不能用 "第一个 .htm" 当 primary。只接受 Archives/edgar/data 路径下的 doc，
+    且排除 -index.htm 自身、xbrl/_cal/_def/_lab/_pre 等 XBRL 附属文档。
+    """
+    if not index_html:
+        return None
+    import re as _re
+
+    # 候选：href 必须含 Archives/edgar/data
+    candidates: list[str] = []
+    for m in _re.finditer(r'href="([^"]+\.htm[lx]?)"', index_html, _re.IGNORECASE):
+        href = m.group(1)
+        # 解开 inline XBRL viewer wrapper /ix?doc=/Archives/...
+        if href.startswith("/ix?doc="):
+            href = href[len("/ix?doc="):]
+        # 必须落在 Archives/edgar/data 路径内（排除 SEC 站内导航）
+        if "/Archives/edgar/data/" not in href:
+            continue
+        # 排除 index page 自己 / exhibit / XBRL 附属
+        if _re.search(r"-index\.html?$", href, _re.IGNORECASE):
+            continue
+        if _re.search(r"-ex\d", href, _re.IGNORECASE):
+            continue
+        if _re.search(r"_(cal|def|lab|pre|R\d+)\.htm", href, _re.IGNORECASE):
+            continue
+        candidates.append(href)
+
+    if not candidates:
+        return None
+
+    href = candidates[0]
+    if href.startswith("http"):
+        return href
+    if href.startswith("/"):
+        return f"https://www.sec.gov{href}"
+    # 相对路径拼 base_dir
+    import os as _os
+    base_dir = _os.path.dirname(base_url)
+    return f"{base_dir}/{href}"
+
+
+def _extract_snippet(text: str, query_keywords: list[str], window: int = SNIPPET_WINDOW_CHARS) -> str | None:
+    """在 filing 文本里找关键词命中，返回前后 window 字符的 snippet。
+
+    优先按 query_keywords 顺序查找（第一个关键词最相关），找不到再退后续。
+    去 HTML 标签 + 压缩 whitespace + unescape entities。
+    """
+    if not text:
+        return None
+    import re as _re
+    import html as _html
+
+    plain = _re.sub(r"<script[\s\S]*?</script>", " ", text, flags=_re.IGNORECASE)
+    plain = _re.sub(r"<style[\s\S]*?</style>", " ", plain, flags=_re.IGNORECASE)
+    plain = _re.sub(r"<[^>]+>", " ", plain)
+    plain = _html.unescape(plain)   # &amp; / &nbsp; / &#8221; 等
+    plain = _re.sub(r"\s+", " ", plain).strip()
+
+    plain_lower = plain.lower()
+    for kw in query_keywords:
+        kw_l = kw.strip('"').lower()
+        if not kw_l:
+            continue
+        idx = plain_lower.find(kw_l)
+        if idx < 0:
+            continue
+        start = max(0, idx - window // 2)
+        end = min(len(plain), idx + len(kw_l) + window // 2)
+        snippet = plain[start:end]
+        prefix = "…" if start > 0 else ""
+        suffix = "…" if end < len(plain) else ""
+        return f"{prefix}{snippet}{suffix}"
+    return None
 
 
 def _fetch_json(url: str, params: dict | None = None, timeout: float = 15.0) -> dict | None:
@@ -220,13 +315,34 @@ def main() -> int:
                     source_date = h.get("file_date")
                     source_title = f"{spec['forms']} — {name}" if name else spec["forms"]
 
-                    # evidence_text 保留实际可复核线索：query keywords + accession
-                    # 而非空模板。原文 snippet 需独立下载 filing 解析，留作后续工程。
-                    evidence_text = (
-                        f"{spec['forms']} filed {source_date or '?'} 全文搜索匹配关键词: "
-                        f"{spec['query']}. accession={accession_dashed or 'unknown'}. "
-                        f"具体段落需打开 filing 阅读核实。"
-                    )
+                    # 抽 filing 原文 snippet（评审 P0 #3 要求 — 必须可复核）
+                    # 流程：filing index page → 找 primary doc → 下载 → regex 抽关键词命中前后窗口
+                    snippet = None
+                    if accession_clean and accession_dashed:
+                        index_html = _fetch_filing_index(filing_url)
+                        primary_url = _find_primary_document_url(index_html, filing_url) if index_html else None
+                        if primary_url:
+                            primary_html = _fetch_filing_index(primary_url)
+                            if primary_html:
+                                # 关键词从 spec.query 提取（去引号 + 空格 split）
+                                kws = [k.strip('" ') for k in spec["query"].replace('"', ' ').split()]
+                                kws = [k for k in kws if k]
+                                snippet = _extract_snippet(primary_html, kws)
+                                time.sleep(0.15)  # SEC 限速
+                        time.sleep(0.15)
+
+                    if snippet:
+                        evidence_text = (
+                            f"[原文片段 from {spec['forms']} filed {source_date or '?'}] "
+                            f"{snippet} [accession={accession_dashed}]"
+                        )
+                    else:
+                        # 抽取失败仍保留 metadata，但明确标 "无 snippet"
+                        evidence_text = (
+                            f"{spec['forms']} filed {source_date or '?'} 全文搜索匹配关键词: "
+                            f"{spec['query']}. accession={accession_dashed or 'unknown'}. "
+                            f"⚠️ 未能下载 filing 原文 snippet — 需打开 filing URL 人工核实。"
+                        )
 
                     # 180 天 stale 规则（文档 §九.evidence_status）
                     expires_at = None
