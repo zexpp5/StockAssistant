@@ -360,6 +360,7 @@ USER_CONFIG_DEFAULTS = {
 
 
 def get_db(path: str = DB_PATH, *, read_only: bool = False,
+           force_read_only: bool = False,
            ensure_schema: bool | None = None) -> duckdb.DuckDBPyConnection:
     """打开 DuckDB 连接并保证用户态共享表存在。
 
@@ -370,12 +371,20 @@ def get_db(path: str = DB_PATH, *, read_only: bool = False,
       DuckDB 不允许同一进程内 read_only=True 与 read_only=False 两种 conn 同时存在
       (报 "Can't open a connection ... different configuration")。API 进程是多线程,
       不同 endpoint thread 拿不同 mode 会撞上,产生 HTTP 500。
-      → 即使调用方传 read_only=True,这里强制用 False 打开 connection;
-        read_only 参数仅保留作为是否跳过 SCHEMA_SQL 的提示。
+      → 默认调用方传 read_only=True 仍强制用 False 打开 connection（兼容 API）；
+        read_only 参数保留作为是否跳过 SCHEMA_SQL 的提示。
+
+    2026-06-01 force_read_only:
+      独立 cron job（审计、报表、只读分析脚本）跑独立进程，不与 API 共享 connection pool，
+      可以传 force_read_only=True 真正以 DuckDB 只读模式打开。
+      好处：被另一个进程持写锁时，read-only 连接仍能成功打开（DuckDB 写锁不阻塞只读连接）。
+      使用场景：ai_theme_coverage_audit / aggregate_theme_tags 等纯只读 job。
+      ⚠️ 不要在 API/FastAPI/server 进程里传 force_read_only=True，会跟 write conn 撞 mode。
     """
-    conn = duckdb.connect(path, read_only=False)
+    actual_read_only = bool(force_read_only)
+    conn = duckdb.connect(path, read_only=actual_read_only)
     if ensure_schema is None:
-        ensure_schema = not read_only
+        ensure_schema = not (read_only or force_read_only)
     if ensure_schema:
         conn.execute(SCHEMA_SQL)
         _ensure_manual_watchlist_columns(conn)
@@ -1045,7 +1054,7 @@ def fetch_latest_recommendation_picks(
 
     返回字段：market, symbol, code(=symbol), name, rank, rating, signal,
     total_score, factor_scores(dict from factor_scores_json), entry_price,
-    universe_scope, run_id, run_date。
+    universe_scope, run_id, run_date, strategy_version, model_version。
     无最新 run 时返回 []。
     """
     own = conn is None
@@ -1053,7 +1062,7 @@ def fetch_latest_recommendation_picks(
         conn = get_db(read_only=True)
     row = conn.execute(
         """
-        SELECT run_id, run_date FROM recommendation_runs
+        SELECT run_id, run_date, strategy_version, model_version FROM recommendation_runs
         WHERE universe_scope = ? AND status = 'generated'
         ORDER BY generated_at DESC LIMIT 1
         """,
@@ -1063,7 +1072,7 @@ def fetch_latest_recommendation_picks(
         if own:
             conn.close()
         return []
-    run_id, run_date = row
+    run_id, run_date, strategy_version, model_version = row
     rows = conn.execute(
         """
         SELECT market, symbol, name, rank, rating, signal, total_score,
@@ -1096,6 +1105,8 @@ def fetch_latest_recommendation_picks(
             "universe_scope": scope,
             "run_id": run_id,
             "run_date": run_date,
+            "strategy_version": strategy_version,
+            "model_version": model_version,
         })
     if own:
         conn.close()

@@ -183,7 +183,25 @@ def main():
     print("AI 主题雷达 · 覆盖率审计")
     print("=" * 70)
 
-    con = get_db()
+    # 纯读 job — force_read_only 让自己不持写锁
+    # ⚠️ DuckDB 实测：跨进程的写锁会阻塞只读 conn（不像 sqlite/postgres）
+    # 所以即使本进程 read-only，遇到别人的写锁仍然 IOException
+    # → 加重试 3 次 × 5s，避开生产 pipeline 短时写窗口
+    import time
+    last_err = None
+    for attempt in range(3):
+        try:
+            con = get_db(force_read_only=True)
+            break
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                print(f"  ⚠️ DB 被占用，{attempt+1}/3 重试中（5s）...")
+                time.sleep(5)
+    else:
+        print(f"❌ 3 次重试后仍打不开 DB: {last_err}")
+        return 1
+
     try:
         audit = run_audit(con)
     finally:
