@@ -39,6 +39,25 @@ SEEDS: list[dict] = [
         "update_cadence": "realtime",
         "license_note": "公共域；SEC 要求 User-Agent 标识",
     },
+    # 2026-06-01 confirmed 工程：拆 10-K / 8-K 两路径，让 aggregate_tags 算 2 独立 source
+    {
+        "source_id": "sec_edgar_10k",
+        "source_name": "SEC EDGAR 10-K Filings",
+        "source_tier": "A",
+        "source_type": "regulator",
+        "source_url": "https://www.sec.gov/edgar/sec-api-documentation",
+        "update_cadence": "annual",
+        "license_note": "10-K = 年度审计后申报；公司主营披露",
+    },
+    {
+        "source_id": "sec_edgar_8k",
+        "source_name": "SEC EDGAR 8-K Filings",
+        "source_tier": "A",
+        "source_type": "regulator",
+        "source_url": "https://www.sec.gov/edgar/sec-api-documentation",
+        "update_cadence": "event_triggered",
+        "license_note": "8-K = 重大事件 8 工作日内申报；项目里程碑/合同/产能",
+    },
     {
         "source_id": "doe_lbnl_data_center_2024",
         "source_name": "LBNL 2024 U.S. Data Center Energy Usage Report",

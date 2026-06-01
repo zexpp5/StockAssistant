@@ -127,6 +127,54 @@ SCAN_SPECS = {
     ],
 }
 
+# 2026-06-01 评审 confirmed 工程：加 8-K 事件公告扫描作为第 2 独立 source_id
+# 跟 10-K 时间维度不同（10-K=年度审计后；8-K=8 工作日内事件触发）
+# aggregate_tags 算独立 source 时 sec_edgar_10k + sec_edgar_8k 算 2 个 → 满足 confirmed
+#
+# 关键词更聚焦"事件类": 项目里程碑/合同/产能投放等公告才会在 8-K 提
+SCAN_SPECS_8K = {
+    "uranium": [
+        {"query": '"uranium" "off-take"', "forms": "8-K",
+         "evidence_kind": "contract",
+         "evidence_text_template": "8-K 提及 uranium off-take 长合同"},
+        {"query": '"U3O8"', "forms": "8-K",
+         "evidence_kind": "project_status",
+         "evidence_text_template": "8-K 提及 U3O8 产能/合同事件"},
+    ],
+    "smr": [
+        {"query": '"small modular reactor"', "forms": "8-K",
+         "evidence_kind": "project_status",
+         "evidence_text_template": "8-K 提及 SMR 项目里程碑"},
+        {"query": '"NRC" "construction permit"', "forms": "8-K",
+         "evidence_kind": "project_status",
+         "evidence_text_template": "8-K 提及 NRC 施工许可"},
+    ],
+    "rare_earths": [
+        {"query": '"rare earth" "off-take"', "forms": "8-K",
+         "evidence_kind": "contract",
+         "evidence_text_template": "8-K 提及 rare earth off-take 合同"},
+        {"query": '"NdPr"', "forms": "8-K",
+         "evidence_kind": "project_status",
+         "evidence_text_template": "8-K 提及 NdPr 产能/合同事件"},
+    ],
+    "liquid_cooling": [
+        {"query": '"immersion cooling"', "forms": "8-K",
+         "evidence_kind": "project_status",
+         "evidence_text_template": "8-K 提及 immersion cooling 订单/产品"},
+        {"query": '"data center" "liquid cooling"', "forms": "8-K",
+         "evidence_kind": "project_status",
+         "evidence_text_template": "8-K 提及 data center liquid cooling"},
+    ],
+    "ai_data": [
+        {"query": '"data licensing" "OpenAI"', "forms": "8-K",
+         "evidence_kind": "contract",
+         "evidence_text_template": "8-K 提及 OpenAI 数据授权合同"},
+        {"query": '"content licensing" "artificial intelligence"', "forms": "8-K",
+         "evidence_kind": "contract",
+         "evidence_text_template": "8-K 提及 AI 内容授权合同"},
+    ],
+}
+
 
 def _fetch_filing_index(filing_index_url: str) -> str | None:
     """拉 filing index page 文本（HTML）。"""
@@ -274,14 +322,21 @@ def upsert_evidence_candidate(con, theme: str, ticker: str | None, cik: str,
                               source_title: str, source_date: str | None,
                               evidence_kind: str, evidence_text: str,
                               accession: str | None = None,
-                              expires_at=None) -> None:
+                              expires_at=None,
+                              source_id: str = "sec_edgar_api") -> None:
     """灌一条 candidate 证据。同一 (theme, cik, source_url) 重跑会替换。
+
+    source_id 参数化（2026-06-01 ↑）：
+      不同 SEC form 用不同 source_id 让 aggregate_tags 算多独立来源:
+        sec_edgar_api (历史，等价 10-K)
+        sec_edgar_10k (新)
+        sec_edgar_8k (新)
 
     accession 存进 metric_json（schema 没有独立列），便于后续审计追踪。
     expires_at = source_date + 180 天（文档 §九 stale 规则）；过期标 stale。
     """
     eid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{theme}|{cik}|{source_url}"))
-    metric_json = json.dumps({"accession": accession, "cik": cik}) if accession else None
+    metric_json = json.dumps({"accession": accession, "cik": cik, "form_source": source_id}) if accession else None
     con.execute("""
         INSERT INTO ai_theme_company_evidence
           (evidence_id, theme, market, symbol, company_name,
@@ -290,6 +345,7 @@ def upsert_evidence_candidate(con, theme: str, ticker: str | None, cik: str,
            confidence_score, expires_at, reviewer_note)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (evidence_id) DO UPDATE SET
+          source_id = excluded.source_id,
           source_title = excluded.source_title,
           source_date = excluded.source_date,
           evidence_text = excluded.evidence_text,
@@ -301,7 +357,7 @@ def upsert_evidence_candidate(con, theme: str, ticker: str | None, cik: str,
     """, [
         eid, theme, "US" if ticker else None, ticker, company_name,
         "candidate",  # PoC 阶段一律 candidate
-        "sec_edgar_api", "A", source_url, source_title,
+        source_id, "A", source_url, source_title,
         source_date, evidence_text, evidence_kind, metric_json,
         0.5, expires_at,
         "PoC 自动灌入；尚未做两源验证或主营业务核实。原文 snippet 待 SEC 全文下载工程补完。",
@@ -337,105 +393,104 @@ def main() -> int:
     con = get_db()
     try:
         total_evi = 0
-        for theme, specs in SCAN_SPECS.items():
-            print(f"\n=== 主题 {theme} ===")
-            for spec in specs:
-                print(f"  查询: q={spec['query']!r} forms={spec['forms']}")
-                hits = search_filings(spec["query"], spec["forms"], max_hits=20)
-                print(f"  命中 {len(hits)} 条 filing")
+        # 跑两轮：10-K (source_id=sec_edgar_10k) + 8-K (source_id=sec_edgar_8k)
+        # 同公司在两轮里被命中 → aggregate_tags 算 2 独立来源 → satisfies §九 confirmed
+        scan_rounds = [
+            ("10-K 主营披露扫描", SCAN_SPECS, "sec_edgar_10k"),
+            ("8-K 事件公告扫描", SCAN_SPECS_8K, "sec_edgar_8k"),
+        ]
+        for round_label, round_specs, round_source_id in scan_rounds:
+            print(f"\n\n{'=' * 70}\n>>> {round_label} (source_id={round_source_id})\n{'=' * 70}")
+            for theme, specs in round_specs.items():
+                print(f"\n=== 主题 {theme} ===")
+                for spec in specs:
+                    print(f"  查询: q={spec['query']!r} forms={spec['forms']}")
+                    hits = search_filings(spec["query"], spec["forms"], max_hits=20)
+                    print(f"  命中 {len(hits)} 条 filing")
 
-                # 每条 filing 映射到一家公司（去重按 CIK）
-                seen_ciks: set[str] = set()
-                for h in hits:
-                    cik_raw = h.get("ciks") or h.get("cik")
-                    if isinstance(cik_raw, list):
-                        cik_raw = cik_raw[0] if cik_raw else None
-                    if not cik_raw:
-                        continue
-                    cik = str(cik_raw).zfill(10)
-                    if cik in seen_ciks:
-                        continue
-                    seen_ciks.add(cik)
+                    # 每条 filing 映射到一家公司（去重按 CIK）
+                    seen_ciks: set[str] = set()
+                    for h in hits:
+                        cik_raw = h.get("ciks") or h.get("cik")
+                        if isinstance(cik_raw, list):
+                            cik_raw = cik_raw[0] if cik_raw else None
+                        if not cik_raw:
+                            continue
+                        cik = str(cik_raw).zfill(10)
+                        if cik in seen_ciks:
+                            continue
+                        seen_ciks.add(cik)
 
-                    info = cik_map.get(cik, {})
-                    ticker = info.get("ticker")
-                    name = info.get("name") or (h.get("display_names") or [""])[0]
+                        info = cik_map.get(cik, {})
+                        ticker = info.get("ticker")
+                        name = info.get("name") or (h.get("display_names") or [""])[0]
 
-                    # 构造具体 filing URL（而非公司搜索页，让用户能直接打开 10-K）
-                    # accession 格式 "0001193125-26-001234"；archives 路径用去 dashes 版本
-                    accession_dashed = h.get("adsh") or ""
-                    accession_clean = accession_dashed.replace("-", "")
-                    cik_int = int(cik)
-                    if accession_clean and accession_dashed:
-                        # 直接进 filing index page，里面列了所有 exhibit
-                        filing_url = (
-                            f"https://www.sec.gov/Archives/edgar/data/{cik_int}/"
-                            f"{accession_clean}/{accession_dashed}-index.htm"
+                        accession_dashed = h.get("adsh") or ""
+                        accession_clean = accession_dashed.replace("-", "")
+                        cik_int = int(cik)
+                        if accession_clean and accession_dashed:
+                            filing_url = (
+                                f"https://www.sec.gov/Archives/edgar/data/{cik_int}/"
+                                f"{accession_clean}/{accession_dashed}-index.htm"
+                            )
+                        else:
+                            filing_url = (
+                                f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={cik}"
+                                f"&type={spec['forms']}"
+                            )
+
+                        source_date = h.get("file_date")
+                        source_title = f"{spec['forms']} — {name}" if name else spec["forms"]
+
+                        snippet = None
+                        if accession_clean and accession_dashed:
+                            index_html = _fetch_filing_index(filing_url)
+                            primary_url = _find_primary_document_url(index_html, filing_url) if index_html else None
+                            if primary_url:
+                                primary_html = _fetch_filing_index(primary_url)
+                                if primary_html:
+                                    kws = [k.strip('" ') for k in spec["query"].replace('"', ' ').split()]
+                                    kws = [k for k in kws if k]
+                                    snippet = _extract_snippet(primary_html, kws)
+                                    time.sleep(0.15)
+                            time.sleep(0.15)
+
+                        if snippet:
+                            evidence_text = (
+                                f"[原文片段 from {spec['forms']} filed {source_date or '?'}] "
+                                f"{snippet} [accession={accession_dashed}]"
+                            )
+                        else:
+                            evidence_text = (
+                                f"{spec['forms']} filed {source_date or '?'} 全文搜索匹配关键词: "
+                                f"{spec['query']}. accession={accession_dashed or 'unknown'}. "
+                                f"⚠️ 未能下载 filing 原文 snippet — 需打开 filing URL 人工核实。"
+                            )
+
+                        expires_at = None
+                        if source_date:
+                            try:
+                                from datetime import date as _date, timedelta as _td
+                                sd = _date.fromisoformat(source_date) if isinstance(source_date, str) else source_date
+                                expires_at = sd + _td(days=180)
+                            except Exception:
+                                pass
+
+                        upsert_evidence_candidate(
+                            con, theme=theme,
+                            ticker=ticker, cik=cik, company_name=name,
+                            source_url=filing_url,
+                            source_title=source_title,
+                            source_date=source_date,
+                            evidence_kind=spec["evidence_kind"],
+                            evidence_text=evidence_text,
+                            accession=accession_dashed or None,
+                            expires_at=expires_at,
+                            source_id=round_source_id,
                         )
-                    else:
-                        # accession 缺失时退到公司 EDGAR 主页
-                        filing_url = (
-                            f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={cik}"
-                            f"&type={spec['forms']}"
-                        )
+                        total_evi += 1
 
-                    source_date = h.get("file_date")
-                    source_title = f"{spec['forms']} — {name}" if name else spec["forms"]
-
-                    # 抽 filing 原文 snippet（评审 P0 #3 要求 — 必须可复核）
-                    # 流程：filing index page → 找 primary doc → 下载 → regex 抽关键词命中前后窗口
-                    snippet = None
-                    if accession_clean and accession_dashed:
-                        index_html = _fetch_filing_index(filing_url)
-                        primary_url = _find_primary_document_url(index_html, filing_url) if index_html else None
-                        if primary_url:
-                            primary_html = _fetch_filing_index(primary_url)
-                            if primary_html:
-                                # 关键词从 spec.query 提取（去引号 + 空格 split）
-                                kws = [k.strip('" ') for k in spec["query"].replace('"', ' ').split()]
-                                kws = [k for k in kws if k]
-                                snippet = _extract_snippet(primary_html, kws)
-                                time.sleep(0.15)  # SEC 限速
-                        time.sleep(0.15)
-
-                    if snippet:
-                        evidence_text = (
-                            f"[原文片段 from {spec['forms']} filed {source_date or '?'}] "
-                            f"{snippet} [accession={accession_dashed}]"
-                        )
-                    else:
-                        # 抽取失败仍保留 metadata，但明确标 "无 snippet"
-                        evidence_text = (
-                            f"{spec['forms']} filed {source_date or '?'} 全文搜索匹配关键词: "
-                            f"{spec['query']}. accession={accession_dashed or 'unknown'}. "
-                            f"⚠️ 未能下载 filing 原文 snippet — 需打开 filing URL 人工核实。"
-                        )
-
-                    # 180 天 stale 规则（文档 §九.evidence_status）
-                    expires_at = None
-                    if source_date:
-                        try:
-                            from datetime import date as _date, timedelta as _td
-                            sd = _date.fromisoformat(source_date) if isinstance(source_date, str) else source_date
-                            expires_at = sd + _td(days=180)
-                        except Exception:
-                            pass
-
-                    upsert_evidence_candidate(
-                        con, theme=theme,
-                        ticker=ticker, cik=cik, company_name=name,
-                        source_url=filing_url,
-                        source_title=source_title,
-                        source_date=source_date,
-                        evidence_kind=spec["evidence_kind"],
-                        evidence_text=evidence_text,
-                        accession=accession_dashed or None,
-                        expires_at=expires_at,
-                    )
-                    total_evi += 1
-
-                # SEC 建议 10 req/s 之内
-                time.sleep(0.2)
+                    time.sleep(0.2)
 
         print(f"\n✅ 共 upsert {total_evi} 条 candidate 证据入 ai_theme_company_evidence")
 
