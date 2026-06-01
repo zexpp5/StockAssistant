@@ -24,6 +24,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts" / "lib"))
 
 from stock_db import get_db  # noqa: E402  # type: ignore
+from stock_research.core.ai_radar import AI_RELEVANT_THEME_KEYWORDS  # noqa: E402
 
 
 OUTPUT_PATH = REPO / "data" / "latest" / "ai_theme_coverage_audit.json"
@@ -34,8 +35,27 @@ CONFIRMED_STALE_DAYS = 180        # confirmed evidence 超过此天数视为 sta
 
 
 def _audit_high_score_no_chain(con) -> list[dict]:
-    """高分 picks 但 chain_metadata 缺失."""
-    rows = con.execute("""
+    """高分 picks 但 chain_metadata 缺失 — 仅审计"AI 雷达相关"的票。
+
+    白名单（system_universe.theme/industry 含任一关键词才进 audit）:
+      美/港股 theme: AI / semiconductor / cloud / SaaS / software / internet /
+                    cooling / power / nuclear / uranium / rare earth / robot /
+                    data / quantum / 互联网 / 半导体 / 软件
+      A 股 GICS 代码:
+        C39 计算机/通信电子 · C38 电气机械 · I65 软件信息技术
+        I64 互联网相关 · I63 电信 · M73 研发 · C40 仪器仪表
+        C35 专用设备（含半导体/光伏装备）
+
+    排除非 AI 行业（检测/零售/化工/纺织 等），避免污染 AI 雷达视野。
+    保留这些非 AI 高分票供运维参考但不在主 audit 里 — 由别的工具关心。
+    """
+    # 用 ai_radar.py 的 AI_RELEVANT_THEME_KEYWORDS（单一来源，避免双引擎漂移）
+    where_clauses = " OR ".join([
+        f"LOWER(COALESCE(su.theme, '')) LIKE '%{kw.lower()}%' OR LOWER(COALESCE(su.industry, '')) LIKE '%{kw.lower()}%'"
+        for kw in AI_RELEVANT_THEME_KEYWORDS
+    ])
+
+    rows = con.execute(f"""
         WITH latest_run AS (
             SELECT rp.market, MAX(rr.generated_at) AS latest_at
             FROM recommendation_runs rr
@@ -43,18 +63,23 @@ def _audit_high_score_no_chain(con) -> list[dict]:
             WHERE rr.universe_scope = 'system_tech_universe'
             GROUP BY rp.market
         )
-        SELECT rp.market, rp.symbol, rp.name, rp.total_score
+        SELECT rp.market, rp.symbol, rp.name, rp.total_score,
+               su.theme, su.industry
         FROM recommendation_runs rr
         JOIN recommendation_picks rp ON rp.run_id = rr.run_id
         JOIN latest_run l ON l.market = rp.market AND l.latest_at = rr.generated_at
         LEFT JOIN chain_metadata cm ON cm.market = rp.market AND cm.symbol = rp.symbol
+        LEFT JOIN system_universe su ON su.market = rp.market AND su.symbol = rp.symbol
         WHERE rp.total_score >= ?
           AND (cm.chain IS NULL OR cm.chain = '')
+          AND ({where_clauses})
         ORDER BY rp.total_score DESC
     """, [HIGH_SCORE_THRESHOLD]).fetchall()
     return [
-        {"market": m, "symbol": s, "name": n, "score": round(float(sc), 1)}
-        for m, s, n, sc in rows
+        {"market": m, "symbol": s, "name": n,
+         "score": round(float(sc), 1),
+         "theme": th, "industry": ind}
+        for m, s, n, sc, th, ind in rows
     ]
 
 

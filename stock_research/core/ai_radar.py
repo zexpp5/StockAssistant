@@ -53,6 +53,35 @@ def derive_ai_strength(chain: str | None) -> str | None:
 COVERAGE_AUDIT_SCORE_THRESHOLD = 70.0
 
 
+# ─────────────── AI 雷达视野白名单（单一来源）───────────────
+# 用于 audit 去噪：只把"AI 相关"的高分票当成"缺口"
+# 排除非 AI 行业（检测/零售/化工/纺织/金融 等），避免污染 AI 雷达视野
+# coverage_audit.py 必须 import 此常量，禁止双引擎
+AI_RELEVANT_THEME_KEYWORDS = (
+    # 英文 theme/industry
+    "ai", "semiconductor", "cloud", "saas", "software", "internet",
+    "cooling", "power", "grid", "electrical", "nuclear", "uranium",
+    "rare earth", "robot", "data", "quantum",
+    # 中文
+    "互联网", "半导体", "软件", "机器人", "云",
+    # A 股 GICS 行业代码（system_universe.theme 字段）
+    "C39",  # 计算机/通信电子
+    "C38",  # 电气机械
+    "I65",  # 软件信息技术
+    "I64",  # 互联网相关
+    "I63",  # 电信
+    "M73",  # 研发
+    "C40",  # 仪器仪表
+    "C35",  # 专用设备（含半导体/光伏装备）
+)
+
+
+def is_ai_relevant_universe(theme: str | None, industry: str | None) -> bool:
+    """判断 system_universe 票是否属于 AI 雷达视野（基于 theme/industry 关键词）。"""
+    hay = (theme or "").lower() + " " + (industry or "").lower()
+    return any(kw.lower() in hay for kw in AI_RELEVANT_THEME_KEYWORDS)
+
+
 # ─────────────── 主线轮动判断 ───────────────
 # 按 chain 算 (今日均分 - 7 天前均分)，标记主线 / 稳定 / 冷却
 MAINLINE_RISE_DELTA = 2.0
@@ -83,11 +112,13 @@ WITH latest_run AS (
 SELECT
     rp.market, rp.symbol, rp.name, rp.rank, rp.total_score, rp.rating,
     cm.chain, cm.chain_tier, cm.chain_role, cm.layman_intro, cm.source AS chain_source,
+    su.theme, su.industry,
     rr.run_id, rr.generated_at
 FROM recommendation_runs rr
 JOIN recommendation_picks rp ON rp.run_id = rr.run_id
 JOIN latest_run l ON l.market = rp.market AND l.latest_at = rr.generated_at
 LEFT JOIN chain_metadata cm ON cm.market = rp.market AND cm.symbol = rp.symbol
+LEFT JOIN system_universe su ON su.market = rp.market AND su.symbol = rp.symbol
 ORDER BY rp.market, rp.rank
 """
 
@@ -721,6 +752,7 @@ def build_ai_radar_payload(con) -> dict[str, Any]:
     rows = con.execute(_SQL_LATEST_PICKS).fetchall()
     cols = ["market", "symbol", "name", "rank", "total_score", "rating",
             "chain", "chain_tier", "chain_role", "layman_intro", "chain_source",
+            "theme", "industry",
             "run_id", "generated_at"]
 
     picks = [dict(zip(cols, r)) for r in rows]
@@ -803,8 +835,14 @@ def build_ai_radar_payload(con) -> dict[str, Any]:
         -c["avg_score"],
     ))
 
-    # 覆盖率审计：高分但 chain 为空
-    uncovered = [p for p in picks if not p["chain"] and p["total_score"] >= COVERAGE_AUDIT_SCORE_THRESHOLD]
+    # 覆盖率审计：高分但 chain 为空 — 仅审计"AI 雷达视野内"的票
+    # 避免华测检测/万辰集团/贝泰妮这种非 AI 高分票污染 AI 雷达
+    uncovered = [
+        p for p in picks
+        if not p["chain"]
+        and p["total_score"] >= COVERAGE_AUDIT_SCORE_THRESHOLD
+        and is_ai_relevant_universe(p.get("theme"), p.get("industry"))
+    ]
     uncovered.sort(key=lambda p: -p["total_score"])
 
     # run 元信息
@@ -1091,6 +1129,231 @@ def _render_ai_radar_focus(payload: dict[str, Any],
 """
 
 
+def _status_text(panel: dict[str, Any] | None) -> str | None:
+    if not panel:
+        return None
+    status = panel.get("status")
+    return str(status).upper() if status else None
+
+
+def _render_ai_radar_trust_gate(payload: dict[str, Any],
+                                freshness_panel: dict[str, Any] | None,
+                                theme_panel: dict[str, Any] | None,
+                                production_panel: dict[str, Any] | None,
+                                quality_panel: dict[str, Any] | None) -> str:
+    """顶部结论灯：把生产状态、推荐新鲜度、证据成熟度压成一句可读结论。"""
+    data_age = _age_days_from_iso(payload.get("data_generated_at"))
+    prod_status = _status_text(production_panel)
+    quality_status = _status_text(quality_panel)
+    n_picks = int(payload.get("n_picks_total") or 0)
+    n_uncovered = int((payload.get("coverage_audit") or {}).get("n_uncovered") or 0)
+    n_stale = int((freshness_panel or {}).get("n_stale") or 0)
+    phase = (theme_panel or {}).get("phase_status") or {}
+    phase_level = phase.get("phase_1_level")
+    n_confirmed = int(phase.get("phase_1_n_confirmed") or 0)
+    themes_done = int(phase.get("phase_1_themes_with_confirmed") or 0)
+    themes_total = int(phase.get("phase_1_themes_total") or 5)
+
+    fail_reasons: list[str] = []
+    observe_reasons: list[str] = []
+
+    if n_picks <= 0:
+        fail_reasons.append("最新系统 picks 为空")
+    if quality_status == "FAIL":
+        fail_reasons.append("推荐质量闸门 FAIL")
+    if prod_status == "FAIL":
+        observe_reasons.append("生产验收 FAIL")
+    if data_age is None:
+        observe_reasons.append("推荐分时间未知")
+    elif data_age > 1:
+        observe_reasons.append(f"推荐分滞后 {data_age} 天")
+    if n_stale:
+        observe_reasons.append(f"证据子系统 {n_stale} 项滞后")
+    if phase_level != "done":
+        observe_reasons.append(f"公司证据未完成：{n_confirmed} confirmed，{themes_done}/{themes_total} 主题覆盖")
+    if n_uncovered:
+        observe_reasons.append(f"{n_uncovered} 只高分票缺 chain 标签")
+
+    if fail_reasons:
+        label = "不可参考"
+        headline = "本页今天不应作为判断依据"
+        tone = "bg-rose-50 ring-rose-200 text-rose-900"
+        badge = "bg-rose-600 text-white"
+        reasons = fail_reasons + observe_reasons
+        action = "先修推荐生成和质量闸门，再看 AI 主题雷达。"
+    elif observe_reasons:
+        label = "仅观察"
+        headline = "本页只用于理解 AI 主线，不用于今日交易或调仓"
+        tone = "bg-amber-50 ring-amber-200 text-amber-950"
+        badge = "bg-amber-500 text-white"
+        reasons = observe_reasons
+        action = "先看主线变化和研究优先级；下单仍以 AI 推荐、AI 配仓、买前研究和生产验收为准。"
+    else:
+        label = "可参考"
+        headline = "本页可作为今日 AI 主题研究入口"
+        tone = "bg-emerald-50 ring-emerald-200 text-emerald-950"
+        badge = "bg-emerald-600 text-white"
+        reasons = ["生产验收 PASS", "推荐分新鲜", "公司证据覆盖达标"]
+        action = "仍需在买前研究里核对估值、财报和风险反证。"
+
+    issue_rows = "".join(
+        f'<span class="inline-flex items-center px-2 py-0.5 rounded bg-white/70 ring-1 ring-black/5 text-[11px]">{_esc(r)}</span>'
+        for r in reasons[:5]
+    )
+
+    prod_txt = prod_status or "未知"
+    quality_txt = quality_status or "未知"
+    data_txt = "未知" if data_age is None else ("今天" if data_age == 0 else f"{data_age} 天前")
+
+    return f"""
+<div class="rounded-xl ring-1 {tone} p-4 mb-4">
+  <div class="flex items-start justify-between gap-3 flex-wrap">
+    <div class="flex-1 min-w-[260px]">
+      <div class="flex items-center gap-2 flex-wrap mb-1">
+        <span class="inline-flex items-center px-2 py-0.5 rounded text-[12px] font-bold {badge}">{_esc(label)}</span>
+        <span class="text-base font-bold">{_esc(headline)}</span>
+      </div>
+      <div class="text-[12px] leading-relaxed">{_esc(action)}</div>
+      <div class="flex flex-wrap gap-1.5 mt-2">{issue_rows}</div>
+    </div>
+    <div class="grid grid-cols-3 gap-2 text-center text-[11px] min-w-[260px]">
+      <div class="bg-white/70 rounded-lg ring-1 ring-black/5 px-2 py-1.5">
+        <div class="text-slate-500">生产验收</div>
+        <div class="font-bold">{_esc(prod_txt)}</div>
+      </div>
+      <div class="bg-white/70 rounded-lg ring-1 ring-black/5 px-2 py-1.5">
+        <div class="text-slate-500">质量闸门</div>
+        <div class="font-bold">{_esc(quality_txt)}</div>
+      </div>
+      <div class="bg-white/70 rounded-lg ring-1 ring-black/5 px-2 py-1.5">
+        <div class="text-slate-500">推荐分</div>
+        <div class="font-bold">{_esc(data_txt)}</div>
+      </div>
+    </div>
+  </div>
+</div>
+"""
+
+
+def _render_ai_radar_reader_guide(payload: dict[str, Any],
+                                  freshness_panel: dict[str, Any] | None,
+                                  theme_panel: dict[str, Any] | None,
+                                  production_panel: dict[str, Any] | None,
+                                  quality_panel: dict[str, Any] | None) -> str:
+    """把技术状态翻译成用户能直接执行的读法和补数动作。"""
+    data_age = _age_days_from_iso(payload.get("data_generated_at"))
+    prod_status = _status_text(production_panel)
+    quality_status = _status_text(quality_panel)
+    n_uncovered = int((payload.get("coverage_audit") or {}).get("n_uncovered") or 0)
+    n_stale = int((freshness_panel or {}).get("n_stale") or 0)
+    phase = (theme_panel or {}).get("phase_status") or {}
+    phase_level = phase.get("phase_1_level")
+    n_confirmed = int(phase.get("phase_1_n_confirmed") or 0)
+    themes_done = int(phase.get("phase_1_themes_with_confirmed") or 0)
+    themes_total = int(phase.get("phase_1_themes_total") or 5)
+
+    read_rows = [
+        ("先看结论灯", "黄灯表示只能观察主线，不能拿来交易；红灯表示先别用。"),
+        ("再看当前主线", "它告诉你资金和系统打分最近偏向哪条 AI 价值链。"),
+        ("最后看研究优先级", "它只是研究顺序，不是买入清单；下单前还要去买前研究。"),
+    ]
+    read_html = "".join(
+        f"""
+<div class="py-2 border-b border-slate-100 last:border-0">
+  <div class="text-[12px] font-semibold text-slate-900">{_esc(title)}</div>
+  <div class="text-[11px] text-slate-600 mt-0.5 leading-relaxed">{_esc(body)}</div>
+</div>
+"""
+        for title, body in read_rows
+    )
+
+    fix_rows: list[tuple[str, str, str]] = []
+    if prod_status == "FAIL":
+        fix_rows.append((
+            "生产验收失败",
+            "今天的推荐链路还没完全跑顺，本页只能当行业观察。",
+            "先修运行状态里的失败步骤，再跑 production_acceptance_check.py。"
+        ))
+    if quality_status == "FAIL":
+        fix_rows.append((
+            "推荐质量闸门失败",
+            "系统推荐本身不合格，研究优先级也会失真。",
+            "先重跑推荐质量闸门，确认 recommendation_quality_gate.json 变 PASS。"
+        ))
+    if data_age is None or data_age > 1:
+        age_text = "时间未知" if data_age is None else f"已滞后 {data_age} 天"
+        fix_rows.append((
+            f"推荐分{age_text}",
+            "主线升温/冷却可能不是今天的状态。",
+            "重跑行情抓取、V2 推荐生成、推荐质量闸门，再重建 dashboard。"
+        ))
+    if n_stale:
+        fix_rows.append((
+            "证据子系统滞后",
+            "ETF、公司证据或宏观指标可能不是最新。",
+            "重跑 AI 主题雷达证据刷新，必要时带 --refresh-etf 和 --scan-sec。"
+        ))
+    if phase_level != "done":
+        fix_rows.append((
+            "公司证据不足",
+            f"现在只有 {n_confirmed} 个 confirmed，{themes_done}/{themes_total} 个主题有 confirmed 公司证据。",
+            "给水冷、稀土、铀、SMR、AI 数据补公司级证据，写入 ai_theme_company_evidence 后聚合 tags。"
+        ))
+    if n_uncovered:
+        fix_rows.append((
+            "高分票缺价值链标签",
+            f"{n_uncovered} 只高分票还不知道属于哪条 AI 价值链。",
+            "补 chain_metadata 规则或人工 override，然后重跑 classify_chain_v2.py。"
+        ))
+
+    if not fix_rows:
+        fix_rows.append((
+            "暂无关键缺口",
+            "数据链路和证据成熟度都达标。",
+            "继续按日常刷新；新增公司时再补 chain 和公司证据。"
+        ))
+
+    fix_html = "".join(
+        f"""
+<tr class="border-t border-slate-100">
+  <td class="py-2 pr-3 align-top text-[12px] font-semibold text-slate-900 whitespace-nowrap">{_esc(title)}</td>
+  <td class="py-2 pr-3 align-top text-[12px] text-slate-600 leading-relaxed">{_esc(impact)}</td>
+  <td class="py-2 align-top text-[12px] text-slate-700 leading-relaxed">{_esc(action)}</td>
+</tr>
+"""
+        for title, impact, action in fix_rows
+    )
+
+    return f"""
+<div class="bg-white ring-1 ring-slate-200 rounded-xl p-4 mb-4">
+  <div class="flex items-start justify-between gap-3 flex-wrap mb-3">
+    <div>
+      <div class="text-sm font-bold text-slate-900">这页到底怎么看</div>
+      <div class="text-[11px] text-slate-500 mt-0.5">先判断能不能参考，再看主线，最后才看股票。</div>
+    </div>
+    <div class="text-[11px] text-slate-400">缺数据会在下方直接写出补法</div>
+  </div>
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+    <div class="lg:col-span-1 bg-slate-50 rounded-lg px-3 py-2">
+      {read_html}
+    </div>
+    <div class="lg:col-span-2 overflow-x-auto">
+      <table class="w-full min-w-[760px]">
+        <thead>
+          <tr class="text-[10px] text-slate-400 uppercase tracking-wide">
+            <th class="py-1 pr-3 text-left font-normal">缺口</th>
+            <th class="py-1 pr-3 text-left font-normal">影响</th>
+            <th class="py-1 text-left font-normal">怎么补</th>
+          </tr>
+        </thead>
+        <tbody>{fix_html}</tbody>
+      </table>
+    </div>
+  </div>
+</div>
+"""
+
+
 def _render_freshness_panel(panel: dict[str, Any]) -> str:
     """渲染数据新鲜度小卡。stale 红，aging 琥珀，fresh 绿。"""
     if not panel or not panel.get("items"):
@@ -1352,9 +1615,10 @@ def _render_theme_evidence_panel_compact(panel: dict[str, Any], chain_to_themes_
     <div class="flex-1 min-w-0">
       <div class="flex items-center gap-2 flex-wrap">
         <span class="text-base font-bold text-slate-900">{_esc(t["display_name"])}</span>
-        <span class="text-[11px] text-amber-700">⚠️ chain 体系暂未覆盖此主题</span>
+        <span class="text-[11px] text-amber-700">⚠️ 暂无公司清单</span>
       </div>
       <div class="text-[12px] text-slate-600 mt-0.5">{_esc(t["why"])}</div>
+      <div class="text-[11px] text-amber-700 mt-1">意思是：主题资料已经有了，但系统还没把它接成可展示的股票列表。现在只能看数据源和宏观指标；要显示公司，需要补公司证据和价值链标签。</div>
       <div class="text-[11px] text-slate-500 mt-1">数据源 {ok_badge} · A 类 {t["sources_a"]} / B 类 {t["sources_b"]}</div>
     </div>
     <span class="text-slate-400 text-[12px] select-none">▾</span>
@@ -1409,8 +1673,8 @@ def _render_theme_evidence_panel_compact(panel: dict[str, Any], chain_to_themes_
     if standalone_cards:
         standalone_html = f"""
 <div class="mb-3">
-  <div class="text-sm font-bold text-slate-900 mb-2">🔭 前瞻主题 · chain 未覆盖</div>
-  <div class="text-[11px] text-slate-500 mb-2">这些主题尚未在 AI 价值链 chain 体系中独立成类，下面只展示宏观数据源和指标，待 universe 扩张或 chain 类目新增后才会出现公司列表。</div>
+  <div class="text-sm font-bold text-slate-900 mb-2">🔭 前瞻主题 · 暂无公司清单</div>
+  <div class="text-[11px] text-slate-500 mb-2">这些主题已有数据源和宏观指标，但还没有接成可展示的股票列表。补完公司证据和价值链标签后，才会在 AI 价值链明细里出现公司。</div>
   {"".join(standalone_cards)}
 </div>
 """
@@ -1481,7 +1745,7 @@ def _render_theme_evidence_panel(panel: dict[str, Any]) -> str:
         if not chains_mapped:
             picks_assoc_html = (
                 '<div class="text-[11px] text-amber-700 mt-2">'
-                '⚠️ chain 体系未覆盖此主题 — 等待 universe 扩张或新 chain 类目'
+                '⚠️ 暂无公司清单 — 需要补公司证据或新增价值链类目'
                 '</div>'
             )
         elif n_assoc == 0:
@@ -1568,7 +1832,7 @@ def _render_theme_evidence_panel(panel: dict[str, Any]) -> str:
         else:
             picks_summary = (
                 '<span class="text-[11px] text-amber-700">'
-                '⚠️ chain 体系暂未覆盖此主题'
+                '⚠️ 暂无公司清单'
                 '</span>'
             )
 
@@ -1641,7 +1905,9 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
                             theme_panel: dict[str, Any] | None = None,
                             etf_panel: dict[str, Any] | None = None,
                             freshness_panel: dict[str, Any] | None = None,
-                            shortlist: dict[str, Any] | None = None) -> str:
+                            shortlist: dict[str, Any] | None = None,
+                            production_panel: dict[str, Any] | None = None,
+                            quality_panel: dict[str, Any] | None = None) -> str:
     """渲染 AI 主题雷达 section（独立 tab 内容）。
 
     硬规则（对应文档 §五）：
@@ -1687,6 +1953,12 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
     freshness_html = _render_freshness_panel(freshness_panel) if freshness_panel else ""
     shortlist_html = _render_research_shortlist(shortlist) if shortlist else ""
     focus_html = _render_ai_radar_focus(payload, shortlist, freshness_panel, theme_panel)
+    trust_gate_html = _render_ai_radar_trust_gate(
+        payload, freshness_panel, theme_panel, production_panel, quality_panel
+    )
+    reader_guide_html = _render_ai_radar_reader_guide(
+        payload, freshness_panel, theme_panel, production_panel, quality_panel
+    )
 
     rise_chains = [c for c in payload["chains"] if (c.get("delta_7d") or 0) >= MAINLINE_RISE_DELTA]
     fall_chains = [c for c in payload["chains"] if (c.get("delta_7d") or 0) <= MAINLINE_FALL_DELTA]
@@ -1908,10 +2180,16 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
 """
 
     evidence_details_html = f"""
-<details class="mb-4">
-  <summary class="cursor-pointer list-none flex items-center justify-between gap-2 py-2 border-y border-slate-200">
-    <span class="text-sm font-bold text-slate-900">数据健康与证据底座</span>
-    <span class="text-[11px] text-slate-500">展开看数据源、主题证据、覆盖率审计</span>
+<details class="group mb-3">
+  <summary class="cursor-pointer select-none list-none flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-white ring-1 ring-slate-200 hover:bg-slate-50 transition">
+    <div class="flex items-center gap-3 min-w-0">
+      <span class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-500 text-base leading-none transition-transform group-open:rotate-90">›</span>
+      <div class="min-w-0">
+        <div class="text-sm font-bold text-slate-900">数据健康与证据底座</div>
+        <div class="text-[11px] text-slate-500 mt-0.5">数据源、主题证据、覆盖率审计</div>
+      </div>
+    </div>
+    <span class="text-[11px] text-slate-400 whitespace-nowrap">点击展开</span>
   </summary>
   <div class="mt-3">
     {freshness_html}
@@ -1922,20 +2200,32 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
 """
 
     etf_details_html = f"""
-<details class="mb-4">
-  <summary class="cursor-pointer list-none flex items-center justify-between gap-2 py-2 border-y border-slate-200">
-    <span class="text-sm font-bold text-slate-900">ETF 共识</span>
-    <span class="text-[11px] text-slate-500">展开看主题 ETF 持仓与系统 universe 命中</span>
+<details class="group mb-3">
+  <summary class="cursor-pointer select-none list-none flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-white ring-1 ring-slate-200 hover:bg-slate-50 transition">
+    <div class="flex items-center gap-3 min-w-0">
+      <span class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-500 text-base leading-none transition-transform group-open:rotate-90">›</span>
+      <div class="min-w-0">
+        <div class="text-sm font-bold text-slate-900">ETF 共识</div>
+        <div class="text-[11px] text-slate-500 mt-0.5">主题 ETF 持仓与系统 universe 命中</div>
+      </div>
+    </div>
+    <span class="text-[11px] text-slate-400 whitespace-nowrap">点击展开</span>
   </summary>
   <div class="mt-3">{etf_panel_html}</div>
 </details>
 """ if etf_panel_html else ""
 
     chain_details_html = f"""
-<details class="mb-4">
-  <summary class="cursor-pointer list-none flex items-center justify-between gap-2 py-2 border-y border-slate-200">
-    <span class="text-sm font-bold text-slate-900">AI 价值链明细</span>
-    <span class="text-[11px] text-slate-500">展开看每条链、近 7 天趋势、链内股票</span>
+<details class="group mb-4">
+  <summary class="cursor-pointer select-none list-none flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-white ring-1 ring-slate-200 hover:bg-slate-50 transition">
+    <div class="flex items-center gap-3 min-w-0">
+      <span class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-500 text-base leading-none transition-transform group-open:rotate-90">›</span>
+      <div class="min-w-0">
+        <div class="text-sm font-bold text-slate-900">AI 价值链明细</div>
+        <div class="text-[11px] text-slate-500 mt-0.5">每条链、近 7 天趋势、链内股票</div>
+      </div>
+    </div>
+    <span class="text-[11px] text-slate-400 whitespace-nowrap">点击展开</span>
   </summary>
   <div class="mt-3">
     {trend_html}
@@ -1952,6 +2242,8 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
     <h1 class="text-2xl font-bold text-slate-900 flex items-center gap-2">📡 AI 主题雷达</h1>
     <p class="text-sm text-slate-600 mt-1">AI 价值链全景 · 行业理解层 · 不构成买入建议</p>
   </div>
+  {trust_gate_html}
+  {reader_guide_html}
   {focus_html}
   {head_html}
   {shortlist_html}
