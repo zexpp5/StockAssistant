@@ -15,7 +15,8 @@ from __future__ import annotations
 import logging
 import sys
 import time
-from datetime import datetime
+import zoneinfo
+from datetime import datetime, date
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -58,6 +59,48 @@ def _infer_market(symbol: str) -> str:
     return "US"
 
 
+def _market_trade_date(symbol: str) -> "date | None":
+    """返回 symbol 当前应贴的 trade_date；若该市场当前不在交易时段则 None（不写 phantom 行）。
+
+    Bug fix 2026-06-01: 原代码用 `now.date()`（北京日历日）当所有市场的 trade_date，
+    导致盘外整点跑时 fast_info.lastPrice（上一交易日收盘）被误贴成今天。
+    例：6-01 周一 09:01 跑美股 MCD，fast_info 返回的是 5-30 周五收盘价，但被写成
+    `trade_date=2026-06-01` 的 phantom 行，real_holding_review 又据此算「今日盈亏」。
+    """
+    market = _infer_market(symbol)
+    if market == "US":
+        # 美股常规时段 ET 09:30-16:00（不含盘前/盘后；fast_info 盘前盘后会更新但日级落地不安全）
+        tz = zoneinfo.ZoneInfo("America/New_York")
+        now = datetime.now(tz)
+        if now.weekday() >= 5:
+            return None
+        minutes = now.hour * 60 + now.minute
+        if not (570 <= minutes < 960):
+            return None
+        return now.date()
+    if market == "HK":
+        tz = zoneinfo.ZoneInfo("Asia/Hong_Kong")
+        now = datetime.now(tz)
+        if now.weekday() >= 5:
+            return None
+        minutes = now.hour * 60 + now.minute
+        # 港股 9:30-12:00 + 13:00-16:00
+        if not ((570 <= minutes < 720) or (780 <= minutes < 960)):
+            return None
+        return now.date()
+    if market == "CN":
+        tz = zoneinfo.ZoneInfo("Asia/Shanghai")
+        now = datetime.now(tz)
+        if now.weekday() >= 5:
+            return None
+        minutes = now.hour * 60 + now.minute
+        # A 股 9:30-11:30 + 13:00-15:00
+        if not ((570 <= minutes < 690) or (780 <= minutes < 900)):
+            return None
+        return now.date()
+    return None
+
+
 def _to_yf_ticker(symbol: str) -> str:
     """real_holdings 里的 symbol 已经是 yfinance 格式（9992.HK / MCD / BRK-B），直接返回。"""
     return symbol.strip().upper()
@@ -91,15 +134,23 @@ def _upsert_price_daily(rows: list[dict]) -> int:
     con = duckdb.connect(DB_PATH)
     try:
         now = datetime.now()
-        trade_date = now.date()
         payload = []
+        skipped_off_hours: list[str] = []
         for r in rows:
             market = _infer_market(r["symbol"])
+            trade_date = _market_trade_date(r["symbol"])
+            if trade_date is None:
+                skipped_off_hours.append(r["symbol"])
+                continue
             payload.append((
                 market, r["symbol"], trade_date, "1d",
                 r["price"], r.get("prev_close"), r.get("currency"),
                 "yfinance_intraday", now, now,
             ))
+        if skipped_off_hours:
+            logger.info("市场未开盘跳过 (不写 phantom 行): %s", ", ".join(skipped_off_hours))
+        if not payload:
+            return 0
         con.executemany(
             "DELETE FROM price_daily WHERE market=? AND symbol=? AND trade_date=? AND interval=?",
             [(p[0], p[1], p[2], p[3]) for p in payload],
