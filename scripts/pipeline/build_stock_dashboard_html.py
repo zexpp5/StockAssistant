@@ -5121,7 +5121,11 @@ function _yahooLink(code, market) {
 const TAB_SECTIONS = {
   today: ["today-decision"],
   about: ["about"],
-  overview: ["hero", "stress-test", "thesis", "evolution", "scarce", "events", "hundred-x"],
+  // overview 已收敛为纯「关键事件」页 (2026-06-01):
+  //   - 删 hero / thesis / evolution / scarce → 跟 AI 主题雷达 tab 重复
+  //   - 删 stress-test / hundred-x → 不属于事件 surface
+  //   这些 section HTML 仍在文件里但不被任何 tab 引用 (废代码,下一轮清理)
+  overview: ["events"],
   "real-holdings": ["real-holdings"],
   // 🧠 AI 工作台 (2026-05-27 三独立子 tab, header 各自 1 行 banner)
   portfolio: ["portfolio"],
