@@ -17,7 +17,7 @@ import math
 import sys
 import time
 import zoneinfo
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -28,10 +28,13 @@ import duckdb  # type: ignore
 import yfinance as yf  # type: ignore
 
 import stock_db  # type: ignore
+from stock_research.core import akshare_client  # type: ignore
 
 DB_PATH = str(REPO / "stock_history_v2.duckdb")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("intraday_refresh")
+
+MAX_INTRADAY_JUMP_PCT = 15.0
 
 # yfinance 在闭市时 history(period=1y) 会抛 "possibly delisted"，但 fast_info 仍可用。
 # 我们只用 fast_info，所以 history 的 ERROR 输出是噪音，全部静默。
@@ -78,6 +81,31 @@ def _regular_session_minutes(symbol: str) -> list[tuple[int, int]]:
 def _in_regular_session(symbol: str, now: datetime) -> bool:
     minutes = now.hour * 60 + now.minute
     return any(start <= minutes < end for start, end in _regular_session_minutes(symbol))
+
+
+def _quote_trade_date(symbol: str) -> "date | None":
+    """Best-effort trade_date for native quote endpoints without explicit dates.
+
+    Before today's open, native HK/A quote feeds usually still expose the latest
+    completed session. Tag it as the previous weekday instead of manufacturing
+    a new "today" row.
+    """
+    now = _market_now(symbol)
+    if now.weekday() >= 5:
+        return _previous_weekday(now.date())
+    sessions = _regular_session_minutes(symbol)
+    first_open = min(start for start, _ in sessions)
+    minutes = now.hour * 60 + now.minute
+    if minutes < first_open:
+        return _previous_weekday(now.date())
+    return now.date()
+
+
+def _previous_weekday(d: date) -> date:
+    prev = d - timedelta(days=1)
+    while prev.weekday() >= 5:
+        prev -= timedelta(days=1)
+    return prev
 
 
 def _coerce_trade_date(value) -> date | None:
@@ -143,6 +171,55 @@ def _positive_float(value) -> float | None:
     return None
 
 
+def _finite_float(value) -> float | None:
+    try:
+        f = float(value)
+    except Exception:
+        return None
+    return f if math.isfinite(f) else None
+
+
+def _change_pct(price: float | None, prev_close: float | None) -> float | None:
+    if price is None or prev_close is None or prev_close <= 0:
+        return None
+    return (price / prev_close - 1.0) * 100.0
+
+
+def _abnormal_intraday_move(symbol: str, price: float | None, prev_close: float | None) -> bool:
+    pct = _change_pct(price, prev_close)
+    return pct is not None and abs(pct) > MAX_INTRADAY_JUMP_PCT
+
+
+def _hk_native_quote(symbol: str) -> dict | None:
+    """Prefer akshare/Eastmoney for HK real-holding marks.
+
+    yfinance HK daily bars have repeatedly disagreed with local quote feeds on
+    the real-holdings page. For HK lots, use the native HK quote first and derive
+    prev_close from its change percentage so day P&L follows the same source.
+    """
+    trade_date = _quote_trade_date(symbol)
+    if trade_date is None:
+        return None
+    q = akshare_client.fetch_hk_stock_quote(symbol)
+    if not q:
+        return None
+    price = _positive_float(q.get("price"))
+    if price is None:
+        return None
+    prev_close = None
+    change_pct = _finite_float(q.get("change_pct"))
+    if change_pct is not None and abs(1.0 + change_pct / 100.0) > 0.000001:
+        prev_close = price / (1.0 + change_pct / 100.0)
+    return {
+        "symbol": symbol.upper(),
+        "price": price,
+        "prev_close": prev_close,
+        "currency": "HKD",
+        "trade_date": trade_date,
+        "source": q.get("source") or "akshare/stock_hk_spot_em",
+    }
+
+
 def _latest_daily_bar(symbol: str) -> dict | None:
     yf_symbol = _to_yf_ticker(symbol)
     try:
@@ -200,6 +277,11 @@ def _latest_daily_bar(symbol: str) -> dict | None:
 def _fetch_one(symbol: str) -> dict | None:
     """yfinance fast_info 拉单只实时价。返回 None 表示拉失败。"""
     try:
+        if _infer_market(symbol) == "HK":
+            native = _hk_native_quote(symbol)
+            if native:
+                return native
+
         yf_symbol = _to_yf_ticker(symbol)
         daily = _latest_daily_bar(symbol) or {}
         price = None
@@ -220,12 +302,21 @@ def _fetch_one(symbol: str) -> dict | None:
         if price is None:
             logger.warning("%s: fast_info/daily bar 都没有可用价格，跳过", symbol)
             return None
+        source = "yfinance_intraday"
+        if _abnormal_intraday_move(symbol, price, prev):
+            pct = _change_pct(price, prev)
+            logger.warning(
+                "%s: yfinance intraday 较前收大幅跳变 %.2f%% (price=%s prev=%s)，保留行情并标记 large_move",
+                symbol, pct or 0.0, price, prev,
+            )
+            source = "yfinance_intraday_large_move"
         return {
             "symbol": symbol.upper(),
             "price": price,
             "prev_close": prev,
             "currency": currency,
             "trade_date": daily.get("trade_date"),
+            "source": source,
         }
     except Exception as exc:
         logger.warning("%s: 拉价失败 %s", symbol, exc)
@@ -249,7 +340,7 @@ def _upsert_price_daily(rows: list[dict]) -> int:
             payload.append((
                 market, r["symbol"], trade_date, "1d",
                 r["price"], r.get("prev_close"), r.get("currency"),
-                "yfinance_intraday", now, now,
+                r.get("source") or "yfinance_intraday", now, now,
             ))
         if skipped_off_hours:
             logger.info("未确认当日行情，跳过 (不写 phantom 行): %s", ", ".join(skipped_off_hours))
@@ -273,6 +364,37 @@ def _upsert_price_daily(rows: list[dict]) -> int:
         con.close()
 
 
+def _delete_intraday_price_rows(rows: list[dict]) -> int:
+    payload = []
+    for r in rows:
+        symbol = (r.get("symbol") or "").strip().upper()
+        trade_date = _coerce_trade_date(r.get("delete_trade_date"))
+        if not symbol or trade_date is None:
+            continue
+        payload.append((_infer_market(symbol), symbol, trade_date))
+    if not payload:
+        return 0
+    con = duckdb.connect(DB_PATH)
+    try:
+        n = 0
+        for market, symbol, trade_date in payload:
+            con.execute(
+                """
+                DELETE FROM price_daily
+                WHERE market = ?
+                  AND symbol = ?
+                  AND trade_date = ?
+                  AND interval = '1d'
+                  AND source LIKE 'yfinance_intraday%'
+                """,
+                [market, symbol, trade_date],
+            )
+            n += 1
+        return n
+    finally:
+        con.close()
+
+
 def _run_with_lock_retry(max_attempts: int = 3, wait_sec: int = 60) -> int:
     """整段主流程在 DB 写锁冲突时自动 retry。
 
@@ -289,7 +411,12 @@ def _run_with_lock_retry(max_attempts: int = 3, wait_sec: int = 60) -> int:
                 return 0
 
             logger.info("拉取 %d 只真实持仓的盘中价: %s", len(symbols), ", ".join(symbols))
-            fetched = [r for r in (_fetch_one(s) for s in symbols) if r is not None]
+            fetched_all = [r for r in (_fetch_one(s) for s in symbols) if r is not None]
+            deletes = [r for r in fetched_all if r.get("skip_write") and r.get("delete_trade_date")]
+            fetched = [r for r in fetched_all if not r.get("skip_write")]
+            deleted = _delete_intraday_price_rows(deletes)
+            if deleted:
+                logger.warning("删除异常 intraday 行 %d 条", deleted)
             logger.info("成功拉到 %d / %d 只", len(fetched), len(symbols))
 
             written = _upsert_price_daily(fetched)

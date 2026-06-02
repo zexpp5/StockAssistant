@@ -744,6 +744,12 @@ def _build_item(
     prev_close = _as_float((price or {}).get("prev_close"))
     prev_trade_date = (price or {}).get("prev_trade_date")
     price_trade_date = (price or {}).get("trade_date")
+    price_source = str((price or {}).get("source") or "")
+    hk_yfinance_unconfirmed = (
+        symbol.upper().endswith(".HK")
+        and price_source.lower().startswith("yfinance")
+    )
+    large_move_unconfirmed = "large_move" in price_source.lower()
     # 盘前/闭市信号: 最新可用收盘的 trade_date 早于该市场本地今天 → 仍是上一交易日收盘,
     # 不是当日实时价。比"current==prev_close"启发式稳(后者在 173.40≠161.5 时漏判)。
     price_is_prior_session = False
@@ -764,6 +770,8 @@ def _build_item(
     day_change_basis = None
     if price_is_prior_session:
         day_change_basis = "prior_session"
+    elif hk_yfinance_unconfirmed:
+        day_change_basis = "unconfirmed_hk_yfinance"
     elif use_entry_as_baseline and not missing_price:
         day_change_rmb = pnl_rmb
         day_change_pct = pnl_pct
@@ -843,6 +851,12 @@ def _build_item(
             data_flags.append("prior_session_price")
         else:
             reasons.append(f"最新行情 {price_trade_date} · {current_price:.2f} {current_currency}")
+        if hk_yfinance_unconfirmed:
+            reasons.append("港股行情仅来自 yfinance，未通过本地二源确认；当日盈亏暂不展示")
+            data_flags.append("hk_yfinance_unconfirmed")
+        if large_move_unconfirmed:
+            reasons.append("行情较前收大幅跳动，已保留为盘中价；请结合行情源复核")
+            data_flags.append("large_move_unconfirmed")
     else:
         reasons.append("暂无最新行情,市值暂用锁定成本估算")
         data_flags.append("missing_price")
@@ -982,6 +996,11 @@ def build_real_holding_review(*, persist: bool = True) -> dict[str, Any]:
         verdict_by_code = {v.get("code"): v for v in verdict.get("holdings", [])}
 
         sector_rotation = _load_sector_rotation()
+        active_discipline_plans = {
+            int(p["holding_id"]): p
+            for p in stock_db.fetch_real_holding_discipline_plans(status="active", conn=conn)
+            if p.get("holding_id") is not None
+        }
         items = []
         for h in holdings:
             sym = str(h.get("symbol") or h.get("code"))
@@ -994,18 +1013,25 @@ def build_real_holding_review(*, persist: bool = True) -> dict[str, Any]:
                 rotation=sector_rotation,
                 asset_class=v.get("asset_class") or h.get("asset_class"),
             )
-            items.append(
-                _build_item(
-                    h,
-                    rules=rules,
-                    price=prices.get(sym),
-                    pick=picks.get(sym),
-                    verdict=verdict_by_code.get(sym),
-                    total_capital=total_capital,
-                    target_weights=target_weights,
-                    industry_heat=heat,
-                )
+            item = _build_item(
+                h,
+                rules=rules,
+                price=prices.get(sym),
+                pick=picks.get(sym),
+                verdict=verdict_by_code.get(sym),
+                total_capital=total_capital,
+                target_weights=target_weights,
+                industry_heat=heat,
             )
+            plan = active_discipline_plans.get(int(h["id"])) if h.get("id") is not None else None
+            if plan:
+                item["discipline"] = stock_db.evaluate_real_holding_discipline_plan(
+                    plan,
+                    current_price=item.get("current_price"),
+                    price_trade_date=item.get("price_trade_date"),
+                    price_is_stale=bool(item.get("price_is_prior_session")),
+                )
+            items.append(item)
 
         today = date.today().isoformat()
         now = datetime.now()

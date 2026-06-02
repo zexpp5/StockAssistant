@@ -79,6 +79,26 @@ class RealHoldingReviewTest(unittest.TestCase):
         self.assertIsNotNone(item["day_change_rmb"])
         self.assertGreater(item["day_change_rmb"], 0)
 
+    def test_us_large_move_source_keeps_day_change_with_flag(self):
+        """美股大幅跳动不能被压回昨收,但必须在体检里标注来源风险。"""
+        with patch("stock_research.jobs.real_holding_review._market_local_date", return_value=date(2026, 6, 2)):
+            item = _build_item(
+                {"symbol": "MRVL", "market": "US", "entry_price": 272.54, "shares": 34,
+                 "currency": "USD", "entry_fx_rate": 6.7611},
+                price={"close": 280.78, "prev_close": 219.493, "currency": "USD",
+                       "trade_date": "2026-06-02", "prev_trade_date": "2026-06-01",
+                       "source": "yfinance_intraday_large_move"},
+                pick={"total_score": 45, "rating": "观察"},
+                verdict={"coverage_class": "picks_only", "treatment_class": "stock_score", "asset_class": "equity"},
+                total_capital=500000,
+                target_weights={},
+            )
+        self.assertFalse(item["price_is_prior_session"])
+        self.assertEqual(item["day_change_basis"], "prev_close")
+        self.assertIsNotNone(item["day_change_rmb"])
+        self.assertGreater(item["day_change_rmb"], 0)
+        self.assertIn("large_move_unconfirmed", item["data_flags"])
+
     def test_day_change_suppressed_for_prior_session_price(self):
         """盘前/未刷新时,上一交易日涨跌不能冒充成今日盈亏。"""
         item = _build_item(
@@ -96,6 +116,26 @@ class RealHoldingReviewTest(unittest.TestCase):
         self.assertIsNone(item["day_change_rmb"])
         self.assertIsNone(item["day_change_pct"])
         self.assertIn("prior_session_price", item["data_flags"])
+
+    def test_hk_yfinance_day_change_requires_native_confirmation(self):
+        """港股只有 yfinance 单源时,不展示当日盈亏,避免和本地行情冲突误导。"""
+        with patch("stock_research.jobs.real_holding_review._market_local_date", return_value=date(2026, 6, 2)):
+            item = _build_item(
+                {"symbol": "9992.HK", "market": "HK", "entry_price": 176.5, "shares": 2000,
+                 "currency": "HKD", "entry_fx_rate": 0.8627},
+                price={"close": 179.2, "prev_close": 179.6, "currency": "HKD",
+                       "trade_date": "2026-06-02", "prev_trade_date": "2026-06-01",
+                       "source": "yfinance"},
+                pick={"total_score": 60, "rating": "⭐ 关注"},
+                verdict={"coverage_class": "picks_only", "treatment_class": "stock_score", "asset_class": "equity"},
+                total_capital=500000,
+                target_weights={},
+            )
+        self.assertFalse(item["price_is_prior_session"])
+        self.assertEqual(item["day_change_basis"], "unconfirmed_hk_yfinance")
+        self.assertIsNone(item["day_change_rmb"])
+        self.assertIsNone(item["day_change_pct"])
+        self.assertIn("hk_yfinance_unconfirmed", item["data_flags"])
 
     def test_day_change_missing_when_prev_close_absent(self):
         """没有 prev_close 时,day_change 字段保持 None,不应崩。"""

@@ -66,12 +66,57 @@ class IntradayRefreshHoldingsDateTest(unittest.TestCase):
                 raise RuntimeError("fast_info broken")
 
         daily = {"price": 179.2, "prev_close": 179.6, "trade_date": date(2026, 6, 2)}
-        with patch.object(refresh, "_latest_daily_bar", return_value=daily), \
+        with patch.object(refresh, "_hk_native_quote", return_value=None), \
+             patch.object(refresh, "_latest_daily_bar", return_value=daily), \
              patch.object(refresh.yf, "Ticker", return_value=BrokenTicker()):
             row = refresh._fetch_one("9992.HK")
         self.assertEqual(row["symbol"], "9992.HK")
         self.assertEqual(row["currency"], "HKD")
         self.assertAlmostEqual(row["price"], 179.2)
+        self.assertEqual(row["trade_date"], date(2026, 6, 2))
+
+    def test_hk_fetch_prefers_native_quote(self):
+        quote = {
+            "price": 184.4,
+            "change_pct": 2.0,
+            "source": "akshare/stock_hk_spot_em",
+        }
+        with patch.object(refresh, "_market_now", return_value=self._at("9992.HK", 2026, 6, 2, 16, 10)), \
+             patch.object(refresh.akshare_client, "fetch_hk_stock_quote", return_value=quote):
+            row = refresh._fetch_one("9992.HK")
+        self.assertEqual(row["symbol"], "9992.HK")
+        self.assertEqual(row["trade_date"], date(2026, 6, 2))
+        self.assertEqual(row["source"], "akshare/stock_hk_spot_em")
+        self.assertAlmostEqual(row["price"], 184.4)
+        self.assertAlmostEqual(row["prev_close"], 184.4 / 1.02)
+
+    def test_hk_native_quote_premarket_tags_previous_session(self):
+        quote = {
+            "price": 184.4,
+            "change_pct": 2.0,
+            "source": "akshare/stock_hk_spot_em",
+        }
+        with patch.object(refresh, "_market_now", return_value=self._at("9992.HK", 2026, 6, 3, 0, 5)), \
+             patch.object(refresh.akshare_client, "fetch_hk_stock_quote", return_value=quote):
+            row = refresh._fetch_one("9992.HK")
+        self.assertEqual(row["trade_date"], date(2026, 6, 2))
+
+    def test_us_large_yfinance_jump_is_written_with_caution_source(self):
+        class WeirdTicker:
+            fast_info = {
+                "lastPrice": 274.49,
+                "previousClose": 219.493,
+                "currency": "USD",
+            }
+
+        daily = {"price": 274.49, "prev_close": 219.493, "trade_date": date(2026, 6, 2)}
+        with patch.object(refresh, "_market_now", return_value=self._at("MRVL", 2026, 6, 2, 11, 5)), \
+             patch.object(refresh, "_latest_daily_bar", return_value=daily), \
+             patch.object(refresh.yf, "Ticker", return_value=WeirdTicker()):
+            row = refresh._fetch_one("MRVL")
+        self.assertFalse(row.get("skip_write", False))
+        self.assertEqual(row["source"], "yfinance_intraday_large_move")
+        self.assertAlmostEqual(row["price"], 274.49)
         self.assertEqual(row["trade_date"], date(2026, 6, 2))
 
 
