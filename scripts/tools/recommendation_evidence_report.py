@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import argparse
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,7 @@ from stock_db import get_db  # noqa: E402
 
 # 2026-05-21 V1 cutover: V1 production sources 已废
 PRODUCTION_METRICS_START_DATE = os.environ.get("STOCK_ASSISTANT_METRICS_START_DATE", "2026-05-25")
+DEFAULT_STRATEGY_VERSION = os.environ.get("STOCK_ASSISTANT_STRATEGY_VERSION", "latest")
 
 
 def _load_json(rel: str) -> dict | None:
@@ -45,18 +47,71 @@ def _coverage(n: int, d: int) -> float | None:
     return n / d
 
 
-def _v2_market_metrics(conn) -> list[dict[str, Any]]:
+def _tables(conn) -> set[str]:
+    try:
+        return {str(r[0]) for r in conn.execute("SHOW TABLES").fetchall()}
+    except Exception:
+        return set()
+
+
+def _table_columns(conn, table: str) -> set[str]:
+    try:
+        return {str(r[1]) for r in conn.execute(f"PRAGMA table_info('{table}')").fetchall()}
+    except Exception:
+        return set()
+
+
+def _latest_strategy_version(conn) -> str | None:
+    if "recommendation_runs" not in _tables(conn):
+        return None
+    if "strategy_version" not in _table_columns(conn, "recommendation_runs"):
+        return None
+    row = conn.execute(
+        """
+        SELECT strategy_version
+        FROM recommendation_runs
+        WHERE universe_scope = 'system_tech_universe'
+          AND status = 'generated'
+          AND strategy_version IS NOT NULL
+          AND strategy_version <> ''
+        ORDER BY generated_at DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    return str(row[0]) if row and row[0] else None
+
+
+def _resolve_strategy_version(conn, requested: str | None) -> str | None:
+    value = str(requested or "latest").strip()
+    if value.lower() in {"", "latest", "current"}:
+        return _latest_strategy_version(conn)
+    if value.lower() in {"all", "*"}:
+        return None
+    return value
+
+
+def _strategy_filter(conn, strategy_version: str | None, alias: str = "rr") -> tuple[str, list[Any]]:
+    if not strategy_version:
+        return "", []
+    if "strategy_version" not in _table_columns(conn, "recommendation_runs"):
+        return "", []
+    prefix = f"{alias}." if alias else ""
+    return f" AND {prefix}strategy_version = ?", [strategy_version]
+
+
+def _v2_market_metrics(conn, strategy_version: str | None = None) -> list[dict[str, Any]]:
     """V2 路径：pick_outcomes 按 (market, horizon) 聚合 alpha 评估指标。
 
     返回与 _source_metrics 一致的字段形状，让 _grade / markdown 渲染兼容。
     market_source 用 'v2_us/v2_hk/v2_cn'，signal 全部当 'buy'（V2 picks 只产 buy/avoid，
     其中只有 alpha_pct 不空的进入 outcomes，全是 buy）。
     """
-    tables = {str(r[0]) for r in conn.execute("SHOW TABLES").fetchall()}
+    tables = _tables(conn)
     if not {"pick_outcomes", "recommendation_runs"}.issubset(tables):
         return []
+    strategy_clause, strategy_params = _strategy_filter(conn, strategy_version)
     rows = conn.execute(
-        """
+        f"""
         SELECT po.market, po.horizon,
                COUNT(*) AS n,
                ROUND(AVG(po.return_pct), 2) AS avg_pct,
@@ -68,10 +123,11 @@ def _v2_market_metrics(conn) -> list[dict[str, Any]]:
         WHERE po.alpha_pct IS NOT NULL
           AND rr.universe_scope = 'system_tech_universe'
           AND rr.run_date >= ?
+          {strategy_clause}
         GROUP BY po.market, po.horizon
         ORDER BY po.market, po.horizon
         """,
-        [PRODUCTION_METRICS_START_DATE],
+        [PRODUCTION_METRICS_START_DATE, *strategy_params],
     ).fetchall()
     out = []
     for market, horizon, n, avg_pct, avg_bench, avg_alpha, hit_rate in rows:
@@ -87,21 +143,24 @@ def _v2_market_metrics(conn) -> list[dict[str, Any]]:
     return out
 
 
-def _v2_latest_pick_metrics(conn) -> dict[str, Any]:
+def _v2_latest_pick_metrics(conn, strategy_version: str | None = None) -> dict[str, Any]:
     """V2 路径：最新 system_tech_universe run 的 picks 按 market 拆。"""
-    tables = {str(r[0]) for r in conn.execute("SHOW TABLES").fetchall()}
+    tables = _tables(conn)
     if "recommendation_picks" not in tables or "recommendation_runs" not in tables:
         return {}
+    strategy_clause, strategy_params = _strategy_filter(conn, strategy_version, alias="")
     latest = conn.execute(
-        """
-        SELECT run_id, run_date FROM recommendation_runs
+        f"""
+        SELECT run_id, run_date, strategy_version, model_version FROM recommendation_runs
         WHERE universe_scope = 'system_tech_universe' AND status = 'generated'
+          {strategy_clause}
         ORDER BY generated_at DESC LIMIT 1
-        """
+        """,
+        strategy_params,
     ).fetchone()
     if not latest:
         return {}
-    run_id, run_date = latest
+    run_id, run_date, latest_strategy, latest_model = latest
     rows = conn.execute(
         """
         SELECT market,
@@ -124,11 +183,13 @@ def _v2_latest_pick_metrics(conn) -> dict[str, Any]:
             "with_entry_price": int(with_entry or 0),
             "buy_n": int(buy_n or 0),
             "avoid_n": int(avoid_n or 0),
+            "strategy_version": latest_strategy,
+            "model_version": latest_model,
         }
     return out
 
 
-def _review_coverage(conn) -> dict[str, Any]:
+def _review_coverage(conn, strategy_version: str | None = None) -> dict[str, Any]:
     """V2 only：pick_outcomes 按 horizon 计算成熟样本 / 已评估样本。
 
     2026-05-21 V1 cutover：删除 V1 picks/reviews 查询路径。
@@ -136,10 +197,11 @@ def _review_coverage(conn) -> dict[str, Any]:
     by_horizon: dict[str, dict] = {}
     v2_total_reviewed = 0
     v2_total_mature = 0
-    tables = {str(r[0]) for r in conn.execute("SHOW TABLES").fetchall()}
-    if {"pick_outcomes", "recommendation_picks", "recommendation_runs"}.issubset(tables):
+    tables = _tables(conn)
+    if {"pick_outcomes", "recommendation_picks", "recommendation_runs", "price_daily"}.issubset(tables):
+        strategy_clause, strategy_params = _strategy_filter(conn, strategy_version)
         v2_mature_rows = conn.execute(
-            """
+            f"""
             SELECT horizon, COUNT(*) FROM (
                 SELECT rp.run_id, rp.market, rp.symbol, h.horizon
                 FROM recommendation_picks rp
@@ -149,23 +211,59 @@ def _review_coverage(conn) -> dict[str, Any]:
                   AND rr.status = 'generated'
                   AND rp.signal = 'buy'
                   AND rr.run_date >= ?
+                  {strategy_clause}
                   AND (rr.run_date + INTERVAL (h.days) DAY) <= CURRENT_DATE
+                  AND EXISTS (
+                    SELECT 1
+                    FROM price_daily ps
+                    WHERE ps.market = rp.market
+                      AND ps.symbol = rp.symbol
+                      AND ps.close IS NOT NULL
+                      AND ps.trade_date >= (rr.run_date + INTERVAL (h.days) DAY)
+                  )
+                  AND EXISTS (
+                    SELECT 1
+                    FROM price_daily be
+                    WHERE be.market = rp.market
+                      AND be.symbol = CASE rp.market
+                        WHEN 'US' THEN 'SPY'
+                        WHEN 'HK' THEN '^HSI'
+                        WHEN 'CN' THEN '000300.SS'
+                        ELSE NULL
+                      END
+                      AND be.close IS NOT NULL
+                      AND be.trade_date >= rr.run_date
+                  )
+                  AND EXISTS (
+                    SELECT 1
+                    FROM price_daily bx
+                    WHERE bx.market = rp.market
+                      AND bx.symbol = CASE rp.market
+                        WHEN 'US' THEN 'SPY'
+                        WHEN 'HK' THEN '^HSI'
+                        WHEN 'CN' THEN '000300.SS'
+                        ELSE NULL
+                      END
+                      AND bx.close IS NOT NULL
+                      AND bx.trade_date >= (rr.run_date + INTERVAL (h.days) DAY)
+                  )
             )
             GROUP BY horizon
             """,
-            [PRODUCTION_METRICS_START_DATE],
+            [PRODUCTION_METRICS_START_DATE, *strategy_params],
         ).fetchall()
         v2_reviewed_rows = conn.execute(
-            """
+            f"""
             SELECT po.horizon, COUNT(*)
             FROM pick_outcomes po
             JOIN recommendation_runs rr ON rr.run_id = po.run_id
             WHERE po.alpha_pct IS NOT NULL
               AND rr.universe_scope = 'system_tech_universe'
               AND rr.run_date >= ?
+              {strategy_clause}
             GROUP BY po.horizon
             """,
-            [PRODUCTION_METRICS_START_DATE],
+            [PRODUCTION_METRICS_START_DATE, *strategy_params],
         ).fetchall()
         mature_by_h = {h: int(n) for h, n in v2_mature_rows}
         reviewed_by_h = {h: int(n) for h, n in v2_reviewed_rows}
@@ -185,15 +283,16 @@ def _review_coverage(conn) -> dict[str, Any]:
     }
 
 
-def _discovery_metrics(conn) -> dict[str, Any]:
+def _discovery_metrics(conn, strategy_version: str | None = None) -> dict[str, Any]:
     """V2 path：pick_outcomes 按 horizon 聚合（取代 V1 discovery_tracking）。"""
     out: dict[str, Any] = {}
-    tables = {str(r[0]) for r in conn.execute("SHOW TABLES").fetchall()}
+    tables = _tables(conn)
     if not {"pick_outcomes", "recommendation_runs"}.issubset(tables):
         return {f"{w}d": {"n": 0, "avg_alpha_pct": None, "hit_rate": None} for w in (1, 5, 20)}
+    strategy_clause, strategy_params = _strategy_filter(conn, strategy_version)
     for horizon in ("1d", "5d", "20d"):
         row = conn.execute(
-            """
+            f"""
             SELECT COUNT(po.alpha_pct) AS n,
                    ROUND(AVG(po.alpha_pct), 2) AS avg_alpha,
                    ROUND(SUM(CASE WHEN po.alpha_pct > 0 THEN 1 ELSE 0 END) * 100.0
@@ -203,8 +302,9 @@ def _discovery_metrics(conn) -> dict[str, Any]:
             WHERE po.horizon = ?
               AND rr.universe_scope = 'system_tech_universe'
               AND rr.run_date >= ?
+              {strategy_clause}
             """,
-            [horizon, PRODUCTION_METRICS_START_DATE],
+            [horizon, PRODUCTION_METRICS_START_DATE, *strategy_params],
         ).fetchone()
         out[horizon] = {
             "n": int(row[0] or 0),
@@ -221,7 +321,10 @@ def _grade(payload: dict[str, Any]) -> str:
     coverage = (payload.get("review_coverage") or {}).get("coverage") or 0
     total_reviewed = (payload.get("review_coverage") or {}).get("total_reviewed") or 0
     source_rows = payload.get("review_metrics_by_source") or []
-    alpha_rows = [r for r in source_rows if r.get("signal") == "buy" and r.get("avg_alpha_pct") is not None]
+    alpha_rows = [
+        r for r in source_rows
+        if str(r.get("signal") or "").startswith("buy") and r.get("avg_alpha_pct") is not None
+    ]
     avg_alpha = None
     if alpha_rows:
         total_n = sum(r["n"] for r in alpha_rows)
@@ -241,6 +344,7 @@ def _to_markdown(payload: dict[str, Any]) -> str:
         "",
         f"Generated: {payload['generated_at']}",
         f"Metrics start date: **{payload.get('metrics_start_date', '—')}**",
+        f"Strategy version: **{payload.get('strategy_version_filter', 'all')}**",
         f"Evidence grade: **{payload['evidence_grade']}**",
         f"Quality gate: **{(payload.get('quality_gate') or {}).get('status', 'UNKNOWN')}**",
         "",
@@ -260,10 +364,10 @@ def _to_markdown(payload: dict[str, Any]) -> str:
         f"Total reviewed/mature: **{cov.get('total_reviewed', 0)} / {cov.get('total_mature', 0)}** "
         f"({(cov.get('coverage') or 0) * 100:.1f}%)",
         "",
-        "| Source | Mature | Reviewed | Coverage |",
+        "| Horizon | Mature | Reviewed | Coverage |",
         "|---|---:|---:|---:|",
     ])
-    for src, row in (cov.get("by_source") or {}).items():
+    for src, row in (cov.get("v2_by_horizon") or cov.get("by_source") or {}).items():
         coverage = row.get("coverage")
         lines.append(f"| {src} | {row.get('mature', 0)} | {row.get('reviewed', 0)} | {'—' if coverage is None else f'{coverage * 100:.1f}%'} |")
 
@@ -295,18 +399,25 @@ def _to_markdown(payload: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def build_report() -> dict[str, Any]:
-    conn = get_db()
+def build_report(strategy_version: str | None = DEFAULT_STRATEGY_VERSION) -> dict[str, Any]:
+    conn = get_db(force_read_only=True)
+    resolved_strategy_version = _resolve_strategy_version(conn, strategy_version)
     # V2-only 数据：pick_outcomes 按 market×horizon 聚合 + 最新 run 按 market 拆 picks
     payload = {
         "generated_at": datetime.now().isoformat(),
         "metrics_start_date": PRODUCTION_METRICS_START_DATE,
-        "sample_policy": f"Only V2 recommendation runs on/after {PRODUCTION_METRICS_START_DATE} count toward user-facing evidence; earlier rows are retained for audit only.",
+        "strategy_version_filter": resolved_strategy_version or "all",
+        "requested_strategy_version": strategy_version or "latest",
+        "sample_policy": (
+            f"Only V2 recommendation runs on/after {PRODUCTION_METRICS_START_DATE} "
+            f"and matching strategy_version={resolved_strategy_version or 'all'} count toward user-facing evidence; "
+            "earlier/cross-version rows are retained for audit only."
+        ),
         "quality_gate": _load_json("data/latest/recommendation_quality_gate.json") or {},
-        "latest_picks": _v2_latest_pick_metrics(conn),
-        "review_coverage": _review_coverage(conn),
-        "review_metrics_by_source": _v2_market_metrics(conn),
-        "discovery_metrics": _discovery_metrics(conn),
+        "latest_picks": _v2_latest_pick_metrics(conn, resolved_strategy_version),
+        "review_coverage": _review_coverage(conn, resolved_strategy_version),
+        "review_metrics_by_source": _v2_market_metrics(conn, resolved_strategy_version),
+        "discovery_metrics": _discovery_metrics(conn, resolved_strategy_version),
     }
     conn.close()
     payload["evidence_grade"] = _grade(payload)
@@ -314,7 +425,14 @@ def build_report() -> dict[str, Any]:
 
 
 def main() -> int:
-    payload = build_report()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--strategy-version",
+        default=DEFAULT_STRATEGY_VERSION,
+        help="Strategy version to evaluate; use 'latest' (default) or 'all'.",
+    )
+    args = parser.parse_args()
+    payload = build_report(strategy_version=args.strategy_version)
     out_json = REPO / "data" / "latest" / "recommendation_evidence.json"
     out_md = REPO / "data" / "reports" / "recommendation_evidence.md"
     out_json.parent.mkdir(parents=True, exist_ok=True)

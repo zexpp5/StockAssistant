@@ -132,6 +132,7 @@ def main() -> int:
 
         bench_cache = _benchmark_close_cache()
         wrote = 0
+        backfilled = 0
         skipped_immature = 0
         for run_id, run_date in runs:
             picks = conn.execute(
@@ -150,19 +151,28 @@ def main() -> int:
                     if target_date > today:
                         skipped_immature += 1
                         continue
-                    # 跳过已写过的
+                    # 已写过且 alpha 已补齐才跳过；早先可能因为 benchmark 缺失只写了 return_pct，
+                    # 后续 benchmark 到库后需要幂等回填 benchmark_pct / alpha_pct。
                     existing = conn.execute(
-                        "SELECT 1 FROM pick_outcomes WHERE run_id=? AND market=? AND symbol=? AND horizon=?",
+                        """
+                        SELECT outcome_date, return_pct, alpha_pct
+                        FROM pick_outcomes
+                        WHERE run_id=? AND market=? AND symbol=? AND horizon=?
+                        """,
                         [run_id, market, symbol, horizon_name],
                     ).fetchone()
-                    if existing:
+                    if existing and existing[2] is not None:
                         continue
-                    # 标的当期 close
-                    stock_row = _next_trade_day_close(conn, market, symbol, target_date)
-                    if not stock_row:
-                        continue
-                    outcome_date, stock_close = stock_row
-                    return_pct = (stock_close / float(entry_price) - 1) * 100
+                    if existing and existing[0] is not None and existing[1] is not None:
+                        outcome_date = existing[0]
+                        return_pct = float(existing[1])
+                    else:
+                        # 标的当期 close
+                        stock_row = _next_trade_day_close(conn, market, symbol, target_date)
+                        if not stock_row:
+                            continue
+                        outcome_date, stock_close = stock_row
+                        return_pct = (stock_close / float(entry_price) - 1) * 100
                     # 基准
                     benchmark_pct = None
                     if benchmark:
@@ -176,23 +186,56 @@ def main() -> int:
                             benchmark_pct = (bench_exit / bench_entry - 1) * 100
                     alpha_pct = (return_pct - benchmark_pct) if benchmark_pct is not None else None
                     is_success = bool(alpha_pct is not None and alpha_pct > 0)
-                    conn.execute(
-                        """
-                        INSERT INTO pick_outcomes (
-                            run_id, market, symbol, horizon, outcome_date,
-                            return_pct, benchmark_symbol, benchmark_pct, alpha_pct,
-                            is_success, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                        """,
-                        [run_id, market, symbol, horizon_name, outcome_date,
-                         round(return_pct, 4), benchmark,
-                         round(benchmark_pct, 4) if benchmark_pct is not None else None,
-                         round(alpha_pct, 4) if alpha_pct is not None else None,
-                         is_success],
-                    )
-                    wrote += 1
+                    if existing:
+                        if alpha_pct is None:
+                            continue
+                        conn.execute(
+                            """
+                            UPDATE pick_outcomes
+                            SET benchmark_symbol=?,
+                                benchmark_pct=?,
+                                alpha_pct=?,
+                                is_success=?,
+                                updated_at=CURRENT_TIMESTAMP
+                            WHERE run_id=? AND market=? AND symbol=? AND horizon=?
+                            """,
+                            [
+                                benchmark,
+                                round(benchmark_pct, 4) if benchmark_pct is not None else None,
+                                round(alpha_pct, 4),
+                                is_success,
+                                run_id, market, symbol, horizon_name,
+                            ],
+                        )
+                        backfilled += 1
+                    else:
+                        conn.execute(
+                            """
+                            INSERT INTO pick_outcomes (
+                                run_id, market, symbol, horizon, outcome_date,
+                                return_pct, benchmark_symbol, benchmark_pct, alpha_pct,
+                                is_success, updated_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                            """,
+                            [run_id, market, symbol, horizon_name, outcome_date,
+                             round(return_pct, 4), benchmark,
+                             round(benchmark_pct, 4) if benchmark_pct is not None else None,
+                             round(alpha_pct, 4) if alpha_pct is not None else None,
+                             is_success],
+                        )
+                        wrote += 1
 
         # 汇总成熟样本 / 总样本，供 morning_brief surface
+        latest_strategy = conn.execute(
+            """
+            SELECT strategy_version
+            FROM recommendation_runs
+            WHERE universe_scope = 'system_tech_universe' AND status = 'generated'
+            ORDER BY generated_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        latest_strategy_version = str(latest_strategy[0]) if latest_strategy and latest_strategy[0] else None
         summary = conn.execute(
             """
             SELECT po.horizon, COUNT(*) AS n_total,
@@ -202,13 +245,14 @@ def main() -> int:
             JOIN recommendation_runs rr ON rr.run_id = po.run_id
             WHERE rr.universe_scope = 'system_tech_universe'
               AND rr.run_date >= ?
+              AND (? IS NULL OR rr.strategy_version = ?)
             GROUP BY po.horizon ORDER BY po.horizon
             """,
-            [PRODUCTION_METRICS_START_DATE],
+            [PRODUCTION_METRICS_START_DATE, latest_strategy_version, latest_strategy_version],
         ).fetchall()
         print(
-            f"evaluate_v2_picks: wrote={wrote} skipped_immature={skipped_immature} "
-            f"metrics_start={PRODUCTION_METRICS_START_DATE}"
+            f"evaluate_v2_picks: wrote={wrote} backfilled={backfilled} skipped_immature={skipped_immature} "
+            f"metrics_start={PRODUCTION_METRICS_START_DATE} strategy={latest_strategy_version or 'all'}"
         )
         for horizon, n_total, n_win, avg_alpha in summary:
             win_rate = (n_win / n_total * 100) if n_total else 0

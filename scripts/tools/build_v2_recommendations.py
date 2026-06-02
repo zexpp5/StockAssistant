@@ -35,6 +35,9 @@ def _clip(value: float, lo: float = 0.0, hi: float = 100.0) -> float:
 
 
 _NEGATIVE_VALUATION_SCORE = 27.5  # loss / earnings decline: not "cheap"
+_PRICE_ACTION_REVIEW_SCORE_CAP = 59.99
+STRATEGY_VERSION = "tech_ai_v2_price_action_gate"
+MODEL_VERSION = "v2_rule_factor_2026_06_price_action_gate"
 
 
 def _score_lower_better(value: Any, good: float, bad: float, missing: float = 30.0) -> float:
@@ -42,7 +45,8 @@ def _score_lower_better(value: Any, good: float, bad: float, missing: float = 30
         x = float(value)
     except Exception:
         return missing
-    if x < 0:
+    if x <= 0:
+        # PE / PEG 的 0 通常是缺失、哨兵值或口径不可用，不能当成"极便宜"。
         return _NEGATIVE_VALUATION_SCORE
     if x <= good:
         return 95.0
@@ -135,7 +139,7 @@ def _score_momentum(row: dict[str, Any]) -> float:
     return momentum
 
 
-def _factor_scores(row: dict[str, Any]) -> dict[str, float]:
+def _factor_scores(row: dict[str, Any]) -> dict[str, Any]:
     peg_score = _score_lower_better(row.get("peg_ratio"), good=1.0, bad=4.0)
     fpe_score = _score_lower_better(row.get("forward_pe"), good=20.0, bad=80.0)
     tpe_score = _score_lower_better(row.get("trailing_pe"), good=25.0, bad=100.0)
@@ -180,6 +184,145 @@ def _factor_scores(row: dict[str, Any]) -> dict[str, float]:
     return scores
 
 
+def _as_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _daily_pct(row: dict[str, Any]) -> float | None:
+    close = _as_float(row.get("close"))
+    prev_close = _as_float(row.get("prev_close"))
+    if close is None or prev_close is None or prev_close <= 0:
+        return None
+    return (close / prev_close - 1.0) * 100.0
+
+
+def _fmt_pct(label: str, value: float | None) -> str | None:
+    if value is None:
+        return None
+    return f"{label} {value:+.1f}%"
+
+
+def _structural_repair_confirmed(
+    *,
+    one_week: float | None,
+    one_month: float | None,
+    day: float | None,
+) -> bool:
+    """Conservative repair check for names already in a structural downtrend.
+
+    A sharp one-week bounce alone is not enough. The one-month window must have
+    turned clearly positive, and the latest day cannot be another hard selloff.
+    """
+    if one_month is None or one_week is None:
+        return False
+    if one_month < 5.0 or one_week < 0.0:
+        return False
+    if day is not None and day <= -3.0:
+        return False
+    return True
+
+
+def _price_action_review_reasons(row: dict[str, Any]) -> list[str]:
+    """Return price-action reasons that require buy-before review.
+
+    Reversal is useful as a research signal, but a name that is down sharply on
+    short and medium windows should not graduate directly into a buy signal. A
+    single sharp down day inside an otherwise strong trend is warning material,
+    not enough by itself to turn a candidate into a "fallen knife" review gate.
+    """
+    one_week = _as_float(row.get("one_week_pct"))
+    one_month = _as_float(row.get("one_month_pct"))
+    ytd = _as_float(row.get("ytd_pct"))
+    one_year = _as_float(row.get("one_year_pct"))
+    day = _daily_pct(row)
+
+    deep_month_drop = one_month is not None and one_month <= -15.0
+    severe_month_drop = one_month is not None and one_month <= -20.0
+    structural_downtrend = (
+        (ytd is not None and ytd <= -25.0)
+        or (one_year is not None and one_year <= -25.0)
+    )
+    medium_weakness = structural_downtrend or (one_month is not None and one_month <= -8.0)
+
+    reasons: list[str] = []
+    if day is not None and day <= -8.0 and medium_weakness:
+        reasons.append(f"单日 {day:+.1f}%")
+    if one_week is not None and one_week <= -12.0 and (
+        structural_downtrend or (one_month is not None and one_month <= -5.0)
+    ):
+        reasons.append(f"近1周 {one_week:+.1f}%")
+    if severe_month_drop or (deep_month_drop and structural_downtrend):
+        details = [
+            _fmt_pct("近1月", one_month),
+            _fmt_pct("YTD", ytd),
+            _fmt_pct("1Y", one_year),
+        ]
+        reasons.append(" / ".join(x for x in details if x))
+    if structural_downtrend and not _structural_repair_confirmed(
+        one_week=one_week, one_month=one_month, day=day,
+    ):
+        details = [
+            _fmt_pct("YTD", ytd),
+            _fmt_pct("1Y", one_year),
+            _fmt_pct("近1月", one_month),
+            _fmt_pct("近1周", one_week),
+        ]
+        reasons.append("结构性下跌未确认修复：" + " / ".join(x for x in details if x))
+
+    return reasons
+
+
+def _price_action_warning_flags(row: dict[str, Any]) -> list[dict[str, Any]]:
+    if _price_action_review_reasons(row):
+        return []
+
+    reasons: list[str] = []
+    day = _daily_pct(row)
+    one_week = _as_float(row.get("one_week_pct"))
+    if day is not None and day <= -8.0:
+        reasons.append(f"单日 {day:+.1f}%")
+    if one_week is not None and one_week <= -12.0:
+        reasons.append(f"近1周 {one_week:+.1f}%")
+    if not reasons:
+        return []
+    return [{
+        "code": "ACUTE_PRICE_PULLBACK",
+        "severity": "medium",
+        "message": (
+            "短线价格异动："
+            + "；".join(reasons)
+            + "。未达到跌深反转降级条件，但需确认是否为事件性下跌。"
+        ),
+    }]
+
+
+def _apply_price_action_review_gate(row: dict[str, Any], scores: dict[str, Any]) -> list[dict[str, Any]]:
+    reasons = _price_action_review_reasons(row)
+    if not reasons:
+        return []
+
+    raw_total = float(scores["total"])
+    scores["raw_total"] = round(raw_total, 2)
+    scores["review_gate"] = "price_action"
+    scores["total"] = round(min(raw_total, _PRICE_ACTION_REVIEW_SCORE_CAP), 2)
+    structural = any("结构性下跌" in r for r in reasons)
+
+    return [{
+        "code": "STRUCTURAL_DOWNTREND_REVIEW_GATE" if structural else "PRICE_ACTION_REVIEW_GATE",
+        "severity": "high",
+        "message": (
+            "价格行为红旗："
+            + "；".join(reasons)
+            + ("。属于结构性下跌后的反弹候选，已从 buy 降为 watch；需先确认修复。"
+               if structural else
+               "。属于跌深反转候选，已从 buy 降为 watch；需先进入买前审查。")
+        ),
+    }]
+
+
 def _rating(total: float) -> str:
     if total >= 75:
         return "strong_buy"
@@ -206,6 +349,25 @@ def _same_day(a: Any, b: Any) -> bool:
 
 def _quality_flags(row: dict[str, Any]) -> list[dict[str, Any]]:
     flags: list[dict[str, Any]] = []
+    invalid_valuation_fields = []
+    for key, label in (
+        ("peg_ratio", "PEG"),
+        ("forward_pe", "Forward PE"),
+        ("trailing_pe", "Trailing PE"),
+    ):
+        value = _as_float(row.get(key))
+        if value is not None and value <= 0:
+            invalid_valuation_fields.append(f"{label}={value:g}")
+    if invalid_valuation_fields:
+        flags.append({
+            "code": "INVALID_VALUATION_RATIO",
+            "severity": "medium",
+            "message": (
+                "估值字段异常："
+                + " / ".join(invalid_valuation_fields)
+                + "；已按亏损/缺失口径扣分，不视为便宜。"
+            ),
+        })
     try:
         y1 = float(row.get("one_year_pct"))
     except (TypeError, ValueError):
@@ -372,17 +534,20 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
     candidates = _load_candidates(conn)
     now = datetime.now()
     run_id = f"rec_{now.strftime('%Y%m%d_%H%M%S')}_system_tech"
-    strategy_version = "tech_ai_v1"
-    model_version = "v2_rule_factor_2026_05_overheat"
+    strategy_version = STRATEGY_VERSION
+    model_version = MODEL_VERSION
     scored: list[dict[str, Any]] = []
     for row in candidates:
         scores = _factor_scores(row)
+        price_action_flags = _apply_price_action_review_gate(row, scores)
+        if not price_action_flags:
+            price_action_flags = _price_action_warning_flags(row)
         total = scores["total"]
         scored.append({
             **row,
             "total_score": total,
             "factor_scores": scores,
-            "risk_flags": _quality_flags(row),
+            "risk_flags": price_action_flags + _quality_flags(row),
             "rating": _rating(total),
             "signal": _signal(total),
         })
@@ -422,8 +587,17 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
         """,
         [
             strategy_version,
-            "Clean v2 rule-factor baseline for system tech universe.",
-            json.dumps({"top_per_market": top_per_market, "portfolio_size": portfolio_size}, ensure_ascii=False),
+            (
+                "V2 system tech universe rule-factor strategy with price-action review gate, "
+                "invalid valuation-ratio guard, and buy-only portfolio eligibility."
+            ),
+            json.dumps({
+                "top_per_market": top_per_market,
+                "portfolio_size": portfolio_size,
+                "score_cap_price_action_review": _PRICE_ACTION_REVIEW_SCORE_CAP,
+                "invalid_valuation_ratio_score": _NEGATIVE_VALUATION_SCORE,
+                "structural_repair_requires": "one_month>=+5%, one_week>=0%, latest_day>-3%",
+            }, ensure_ascii=False),
             now,
             now,
         ],
@@ -442,7 +616,11 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
             model_version,
             now,
             now,
-            f"candidate_count={len(candidates)}; selected_count={len(selected)}; pool_membership={pool_membership_count}; price_daily={price_daily_count}",
+            (
+                f"candidate_count={len(candidates)}; selected_count={len(selected)}; "
+                f"pool_membership={pool_membership_count}; price_daily={price_daily_count}; "
+                "scoring_change=price_action_review_gate+structural_downtrend_gate+invalid_zero_valuation_guard"
+            ),
         ],
     )
     for rank, row in enumerate(selected, start=1):

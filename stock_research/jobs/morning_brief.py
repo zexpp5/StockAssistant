@@ -2043,6 +2043,12 @@ def section_weekly_hitrate(today: date | None = None) -> str:
               AND po.alpha_pct IS NOT NULL
               AND rr.universe_scope = 'system_tech_universe'
               AND rr.run_date >= ?
+              AND rr.strategy_version = (
+                SELECT strategy_version
+                FROM recommendation_runs
+                WHERE universe_scope = 'system_tech_universe' AND status = 'generated'
+                ORDER BY generated_at DESC LIMIT 1
+              )
             GROUP BY po.horizon ORDER BY po.horizon
             """,
             [today - timedelta(days=30), PRODUCTION_METRICS_START_DATE],
@@ -2701,6 +2707,12 @@ def _hitrate_card_lines(today: date) -> list[str]:
               AND po.alpha_pct IS NOT NULL
               AND rr.universe_scope = 'system_tech_universe'
               AND rr.run_date >= ?
+              AND rr.strategy_version = (
+                SELECT strategy_version
+                FROM recommendation_runs
+                WHERE universe_scope = 'system_tech_universe' AND status = 'generated'
+                ORDER BY generated_at DESC LIMIT 1
+              )
             GROUP BY po.horizon ORDER BY po.horizon
             """,
             [today - timedelta(days=30), PRODUCTION_METRICS_START_DATE],

@@ -69,7 +69,11 @@ def test_fork_case_in_appearance_index():
         ]
         for run_id, run_date, gen_at in runs:
             con.execute(
-                "INSERT INTO recommendation_runs (run_id, run_date, generated_at) VALUES (?, ?, ?)",
+                """
+                INSERT INTO recommendation_runs (
+                    run_id, run_date, strategy_version, model_version, universe_scope, generated_at, status
+                ) VALUES (?, ?, 'test_strategy', 'test_model', 'system_tech_universe', ?, 'generated')
+                """,
                 [run_id, run_date, gen_at],
             )
 

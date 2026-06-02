@@ -374,10 +374,22 @@ def _load_factor_scores(market_scope: str = "US") -> dict | None:
     except Exception as e:
         logger.error("加载 stock_db 失败: %s", e)
         return None
-    picks = [
-        p for p in fetch_latest_recommendation_picks()
+    latest_picks = fetch_latest_recommendation_picks()
+    non_buy_in_scope = [
+        p for p in latest_picks
         if _in_scope(str(p.get("symbol") or ""), str(p.get("market") or ""))
+        and str(p.get("signal") or "").lower() != "buy"
     ]
+    picks = [
+        p for p in latest_picks
+        if _in_scope(str(p.get("symbol") or ""), str(p.get("market") or ""))
+        and str(p.get("signal") or "").lower() == "buy"
+    ]
+    if non_buy_in_scope:
+        logger.info(
+            "AI 组合候选池 %s：过滤非 buy 推荐 %d 只（组合方案只接受 actionable picks）",
+            market_scope, len(non_buy_in_scope),
+        )
     if not picks:
         logger.error("V2 recommendation_picks 无 %s 最新 run", market_scope)
         return None
@@ -445,8 +457,12 @@ def _load_factor_scores(market_scope: str = "US") -> dict | None:
         "fallback_v2": True,  # 保留旧名,触发 run() 中的 lite 分支
         "fallback_run_id": picks[0].get("run_id"),
         "fallback_run_date": str(picks[0].get("run_date")),
+        "fallback_strategy_version": picks[0].get("strategy_version"),
+        "fallback_model_version": picks[0].get("model_version"),
         "v2_universe_run_id": picks[0].get("run_id"),
         "v2_universe_run_date": str(picks[0].get("run_date")),
+        "v2_strategy_version": picks[0].get("strategy_version"),
+        "v2_model_version": picks[0].get("model_version"),
         "v2_universe_count": len(picks),
         "market_scope": market_scope,
     }

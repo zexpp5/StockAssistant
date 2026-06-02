@@ -36,8 +36,9 @@ sys.path.insert(0, str(REPO / "scripts" / "lib"))
 from stock_db import DB_PATH  # noqa: E402
 
 OUT_PATH = REPO / "data" / "latest" / "strategy_validation_report.json"
-FACTORS = ("valuation", "momentum", "data_quality", "coverage")
+FACTORS = ("valuation", "momentum", "reversal", "data_quality", "coverage")
 PRODUCTION_METRICS_START_DATE = os.environ.get("STOCK_ASSISTANT_METRICS_START_DATE", "2026-05-25")
+DEFAULT_STRATEGY_VERSION = os.environ.get("STOCK_ASSISTANT_STRATEGY_VERSION", "latest")
 
 
 def _tables(conn: duckdb.DuckDBPyConnection) -> set[str]:
@@ -55,6 +56,30 @@ def _as_date(value: Any) -> date | None:
         return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
     except Exception:
         return None
+
+
+def _latest_strategy_version(conn: duckdb.DuckDBPyConnection) -> str | None:
+    row = conn.execute(
+        """
+        SELECT strategy_version
+        FROM recommendation_runs
+        WHERE universe_scope = 'system_tech_universe' AND status = 'generated'
+        ORDER BY generated_at DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    return str(row[0]) if row and row[0] else None
+
+
+def _resolve_strategy_version(conn: duckdb.DuckDBPyConnection, requested: str | None) -> str | None:
+    if requested is None:
+        return None
+    key = str(requested).strip()
+    if not key or key.lower() in {"all", "*"}:
+        return None
+    if key.lower() in {"latest", "current"}:
+        return _latest_strategy_version(conn)
+    return key
 
 
 def _pearson(xs: list[float], ys: list[float]) -> float | None:
@@ -83,9 +108,8 @@ def _conclusion(sample_size: int, avg_alpha: float | None, win_rate: float | Non
     return "策略中性：继续使用并观察下一批成熟样本。", "continue_observe"
 
 
-def _load_outcome_summary(conn: duckdb.DuckDBPyConnection) -> tuple[dict, dict]:
-    rows = conn.execute(
-        """
+def _load_outcome_summary(conn: duckdb.DuckDBPyConnection, strategy_version: str | None) -> tuple[dict, dict]:
+    sql = """
         SELECT rr.strategy_version, po.market, po.horizon,
                COUNT(*) AS sample_size,
                SUM(CASE WHEN po.is_success THEN 1 ELSE 0 END) AS wins,
@@ -98,11 +122,16 @@ def _load_outcome_summary(conn: duckdb.DuckDBPyConnection) -> tuple[dict, dict]:
         WHERE rr.universe_scope = 'system_tech_universe'
           AND rr.run_date >= ?
           AND po.alpha_pct IS NOT NULL
+    """
+    params: list[Any] = [PRODUCTION_METRICS_START_DATE]
+    if strategy_version:
+        sql += " AND rr.strategy_version = ?"
+        params.append(strategy_version)
+    sql += """
         GROUP BY rr.strategy_version, po.market, po.horizon
         ORDER BY rr.strategy_version, po.market, po.horizon
-        """,
-        [PRODUCTION_METRICS_START_DATE],
-    ).fetchall()
+        """
+    rows = conn.execute(sql, params).fetchall()
     by_strategy_market: dict[tuple[str, str], dict[str, Any]] = defaultdict(lambda: {"by_horizon": {}})
     by_market_total: dict[str, dict[str, Any]] = {}
     for strategy_version, market, horizon, n, wins, avg_alpha, avg_return, start, end in rows:
@@ -188,9 +217,8 @@ def _write_strategy_reports(conn: duckdb.DuckDBPyConnection, grouped: dict) -> l
     return written
 
 
-def _write_factor_attribution(conn: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
-    rows = conn.execute(
-        """
+def _write_factor_attribution(conn: duckdb.DuckDBPyConnection, strategy_version_filter: str | None) -> list[dict[str, Any]]:
+    sql = """
         SELECT rr.strategy_version, rp.market, rp.factor_scores_json, po.alpha_pct,
                rr.run_date, po.outcome_date
         FROM pick_outcomes po
@@ -201,9 +229,12 @@ def _write_factor_attribution(conn: duckdb.DuckDBPyConnection) -> list[dict[str,
           AND rr.run_date >= ?
           AND po.horizon = '1d'
           AND po.alpha_pct IS NOT NULL
-        """,
-        [PRODUCTION_METRICS_START_DATE],
-    ).fetchall()
+    """
+    params: list[Any] = [PRODUCTION_METRICS_START_DATE]
+    if strategy_version_filter:
+        sql += " AND rr.strategy_version = ?"
+        params.append(strategy_version_filter)
+    rows = conn.execute(sql, params).fetchall()
     grouped: dict[tuple[str, str], dict[str, Any]] = defaultdict(lambda: {"factors": defaultdict(list), "alphas": [], "starts": [], "ends": []})
     for strategy_version, market, factor_json, alpha, run_date, outcome_date in rows:
         try:
@@ -284,18 +315,22 @@ def _latest_close(
     return row[0], float(row[1])
 
 
-def _write_portfolio_performance(conn: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
-    plan_keys = conn.execute(
-        """
+def _write_portfolio_performance(conn: duckdb.DuckDBPyConnection, strategy_version: str | None) -> list[dict[str, Any]]:
+    sql = """
         SELECT pp.run_id, pp.plan_version, rr.run_date
         FROM portfolio_plans pp
         JOIN recommendation_runs rr ON rr.run_id = pp.run_id
         WHERE rr.universe_scope = 'system_tech_universe'
           AND rr.run_date >= ?
+    """
+    params: list[Any] = [PRODUCTION_METRICS_START_DATE]
+    if strategy_version:
+        sql += " AND rr.strategy_version = ?"
+        params.append(strategy_version)
+    sql += """
         GROUP BY pp.run_id, pp.plan_version, rr.run_date
-        """,
-        [PRODUCTION_METRICS_START_DATE],
-    ).fetchall()
+        """
+    plan_keys = conn.execute(sql, params).fetchall()
     written: list[dict[str, Any]] = []
     for run_id, plan_version, run_date in plan_keys:
         rows = conn.execute(
@@ -386,16 +421,33 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         missing = sorted(required - tables)
         if missing:
             raise RuntimeError(f"当前 DB 缺少 V2 策略验证表: {missing}")
-        grouped, market_totals = _load_outcome_summary(conn)
+        strategy_version = _resolve_strategy_version(conn, getattr(args, "strategy_version", DEFAULT_STRATEGY_VERSION))
+        grouped, market_totals = _load_outcome_summary(conn, strategy_version)
         reports = _write_strategy_reports(conn, grouped)
-        attribution = _write_factor_attribution(conn)
-        portfolio = _write_portfolio_performance(conn)
+        attribution = _write_factor_attribution(conn, strategy_version)
+        portfolio = _write_portfolio_performance(conn, strategy_version)
+        validation_status = "PASS" if reports else "WARN"
+        portfolio_status = "PASS" if portfolio else "WARN"
+        status_reason = (
+            "strategy_reports_available"
+            if reports else
+            "INSUFFICIENT_SAMPLE: 当前策略还没有可写入 strategy_review_reports 的成熟推荐样本；"
+            "组合表现只能说明已有组合可回看，不能证明推荐策略有效。"
+        )
         payload = {
             "generated_at": datetime.now().isoformat(timespec="seconds"),
             "db_path": str(db_path),
             "metrics_start_date": PRODUCTION_METRICS_START_DATE,
-            "sample_policy": f"Only V2 recommendation runs on/after {PRODUCTION_METRICS_START_DATE} are included in user-facing validation; older debug rows remain in DuckDB for audit.",
-            "status": "PASS" if reports or portfolio else "WARN",
+            "strategy_version_filter": strategy_version or "all",
+            "sample_policy": (
+                f"Only V2 recommendation runs on/after {PRODUCTION_METRICS_START_DATE} "
+                f"and matching strategy_version={strategy_version or 'all'} are included in "
+                "user-facing validation; older or different-formula rows remain in DuckDB for audit."
+            ),
+            "status": validation_status,
+            "validation_status": validation_status,
+            "portfolio_status": portfolio_status,
+            "status_reason": status_reason,
             "summary": {
                 "strategy_review_reports_written": len(reports),
                 "factor_attribution_rows_written": len(attribution),
@@ -416,6 +468,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build V2 strategy validation summaries.")
     parser.add_argument("--db", default=os.environ.get("STOCK_DB_PATH") or str(DB_PATH))
+    parser.add_argument("--strategy-version", default=DEFAULT_STRATEGY_VERSION,
+                        help="默认 latest/current，只验证最新策略版本；传 all 可跨版本汇总。")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     payload = run(args)
