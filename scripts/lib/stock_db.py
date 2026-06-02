@@ -106,6 +106,60 @@ ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS entry_fx_as_of DATE;
 ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS entry_fx_source VARCHAR;
 ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS cost_rmb_locked DOUBLE;
 ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS name VARCHAR;
+-- 账本 v2 聚合缓存列：real_holdings 升级为「交易流水聚合结果」。
+-- 旧列 entry_price/shares/entry_date/cost_rmb_locked 继续作为兼容字段，由 rebuild 回写。
+ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS total_buy_shares DOUBLE;
+ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS remaining_shares DOUBLE;
+ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS avg_cost_local_per_share DOUBLE;
+ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS avg_cost_rmb_per_share DOUBLE;
+ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS remaining_cost_rmb DOUBLE;
+ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS position_epoch INTEGER;
+ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS first_entry_date DATE;
+ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS last_trade_date DATE;
+ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS close_status VARCHAR;
+
+-- 交易流水：账本 v2 的唯一事实源。real_holdings 由本表 rebuild 聚合得到。
+-- 一笔 buy/sell 一行；加权平均成本、已实现盈亏、持仓轮次都从这里回放。
+CREATE SEQUENCE IF NOT EXISTS real_holding_trades_id_seq;
+CREATE TABLE IF NOT EXISTS real_holding_trades (
+    trade_id          INTEGER PRIMARY KEY DEFAULT nextval('real_holding_trades_id_seq'),
+    account           VARCHAR DEFAULT 'default',
+    market            VARCHAR NOT NULL,
+    symbol            VARCHAR NOT NULL,
+    name              VARCHAR,
+    side              VARCHAR NOT NULL,           -- buy | sell
+    trade_price       DOUBLE  NOT NULL,           -- 原币成交价
+    quantity          DOUBLE  NOT NULL,           -- 股数（支持小数股）
+    trade_date        DATE    NOT NULL,           -- 真实成交日（rebuild 主排序键）
+    executed_at       TIMESTAMP,                  -- 可选：同日多笔成交排序
+    order_in_day      INTEGER,                    -- 可选：无成交时间时的人工同日顺序
+    currency          VARCHAR,
+    fx_rate           DOUBLE,                     -- 成交日锁定汇率：1 本币 = ? RMB
+    fx_as_of          DATE,
+    fx_source         VARCHAR,
+    gross_amount_rmb  DOUBLE,                     -- trade_price * quantity * fx_rate
+    fee_amount        DOUBLE  DEFAULT 0,
+    fee_currency      VARCHAR,
+    fee_fx_rate       DOUBLE,
+    fee_rmb           DOUBLE  DEFAULT 0,
+    client_request_id VARCHAR,                    -- 幂等键：同键重复提交返回同一笔
+    position_epoch    INTEGER,                    -- 由 rebuild 按轮次赋值
+    status            VARCHAR NOT NULL DEFAULT 'active',  -- active | voided
+    realized_pnl_rmb  DOUBLE,                     -- sell 专用派生快照（rebuild 重算）
+    realized_pnl_pct  DOUBLE,                     -- sell 专用派生快照
+    cost_basis_rmb    DOUBLE,                     -- sell 专用派生快照：本次卖出对应成本
+    notes             VARCHAR,
+    source            VARCHAR DEFAULT 'manual',
+    voided_at         TIMESTAMP,
+    void_reason       VARCHAR,
+    created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+-- 幂等键唯一：同 account 下同一 client_request_id 只入账一次（NULL 视为彼此相异，允许多条）。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rht_client_request
+    ON real_holding_trades(account, client_request_id);
+CREATE INDEX IF NOT EXISTS idx_rht_key
+    ON real_holding_trades(account, market, symbol, status);
 
 -- 模型模拟仓：只承载 AI 组合方案推演，不代表真实成交。
 CREATE SEQUENCE IF NOT EXISTS model_sim_holdings_id_seq;
@@ -1392,6 +1446,24 @@ REAL_HOLDINGS_COLS = [
     "entry_fx_rate", "entry_fx_as_of", "entry_fx_source", "cost_rmb_locked", "notes",
 ]
 REAL_HOLDINGS_FULL_COLS = ["id"] + REAL_HOLDINGS_COLS + ["created_at", "updated_at"]
+# 账本 v2 聚合列（rebuild 回写）。读路径在 FULL_COLS 之外额外暴露这些，供下游和前端用显式字段。
+REAL_HOLDINGS_AGG_COLS = [
+    "total_buy_shares", "remaining_shares", "avg_cost_local_per_share",
+    "avg_cost_rmb_per_share", "remaining_cost_rmb", "position_epoch",
+    "first_entry_date", "last_trade_date", "close_status",
+]
+REAL_HOLDINGS_READ_COLS = REAL_HOLDINGS_FULL_COLS + REAL_HOLDINGS_AGG_COLS
+REAL_HOLDING_TRADES_COLS = [
+    "account", "market", "symbol", "name", "side", "trade_price", "quantity",
+    "trade_date", "executed_at", "order_in_day", "currency", "fx_rate", "fx_as_of",
+    "fx_source", "gross_amount_rmb", "fee_amount", "fee_currency", "fee_fx_rate",
+    "fee_rmb", "client_request_id", "position_epoch", "status",
+    "realized_pnl_rmb", "realized_pnl_pct", "cost_basis_rmb", "notes", "source",
+]
+REAL_HOLDING_TRADES_FULL_COLS = (
+    ["trade_id"] + REAL_HOLDING_TRADES_COLS + ["voided_at", "void_reason", "created_at", "updated_at"]
+)
+_SHARE_EPS = 1e-9
 MODEL_SIM_HOLDINGS_COLS = [
     "plan_run_id", "plan_version", "market", "symbol", "target_weight", "amount_rmb",
     "entry_price", "shares", "entry_date", "currency", "notes",
@@ -1597,10 +1669,10 @@ def fetch_all_real_holdings(*, conn: duckdb.DuckDBPyConnection | None = None) ->
         # selecting newly-added locked FX columns.
         conn = get_db()
     rows = conn.execute(
-        f"SELECT {','.join(REAL_HOLDINGS_FULL_COLS)} "
+        f"SELECT {','.join(REAL_HOLDINGS_READ_COLS)} "
         "FROM real_holdings ORDER BY entry_date DESC NULLS LAST, symbol"
     ).fetchall()
-    out = [_rowdict(REAL_HOLDINGS_FULL_COLS, r) for r in rows]
+    out = [_rowdict(REAL_HOLDINGS_READ_COLS, r) for r in rows]
     if own:
         conn.close()
     return out
@@ -1797,13 +1869,471 @@ def fetch_real_holding_by_id(
     if own:
         conn = get_db()
     row = conn.execute(
-        f"SELECT {','.join(REAL_HOLDINGS_FULL_COLS)} FROM real_holdings WHERE id = ?",
+        f"SELECT {','.join(REAL_HOLDINGS_READ_COLS)} FROM real_holdings WHERE id = ?",
         [int(holding_id)],
     ).fetchone()
-    out = _rowdict(REAL_HOLDINGS_FULL_COLS, row) if row else None
+    out = _rowdict(REAL_HOLDINGS_READ_COLS, row) if row else None
     if own:
         conn.close()
     return out
+
+
+# ---------------------------------------------------------------------------
+# 账本 v2：交易流水（real_holding_trades）+ rebuild 聚合
+# ---------------------------------------------------------------------------
+
+
+class LedgerError(ValueError):
+    """账本写入/重建错误基类。"""
+
+
+class LedgerConflict(LedgerError):
+    """交易导致任一时点剩余股数为负，或卖出无对应持仓轮次。"""
+
+
+def _normalize_trade(item: Mapping[str, Any], side: str) -> dict[str, Any]:
+    """把买入/卖出 payload 规整为 real_holding_trades 一行（不含派生 PnL）。
+
+    汇率口径与 _normalize_real_holding 同源：成交日锁定汇率。买入手续费在
+    rebuild 时计入成本基；这里只把 fee 折成 RMB 存好。
+    """
+    side = (side or "").strip().lower()
+    if side not in ("buy", "sell"):
+        raise LedgerError(f"trade side must be buy|sell, got {side!r}")
+    symbol = item.get("symbol") or item.get("code")
+    if not symbol:
+        raise LedgerError("trade requires symbol (or legacy code)")
+    market = item.get("market") or _infer_market_from_ticker(symbol)
+    currency = (item.get("currency") or "").strip().upper() or _infer_currency_from_ticker(symbol)
+    trade_price = float(item.get("trade_price") if item.get("trade_price") is not None else item.get("entry_price") or item.get("price") or 0)
+    quantity = float(item.get("quantity") if item.get("quantity") is not None else item.get("shares") or 0)
+    if trade_price <= 0:
+        raise LedgerError("trade_price must be > 0")
+    if quantity <= 0:
+        raise LedgerError("quantity must be > 0")
+    trade_date = _to_date(item.get("trade_date") or item.get("entry_date") or item.get("date"))
+    if trade_date is None:
+        raise LedgerError("trade_date is required")
+    if trade_date > date.today():
+        raise LedgerError("trade_date cannot be in the future")
+    # 成交汇率：复用真实持仓的锁定 FX 解析（manual > fx_rates > static fallback）。
+    fx_rate, fx_as_of, fx_source, _cost = _resolve_real_holding_entry_fx(
+        item, currency=currency, entry_date=trade_date, entry_price=trade_price, shares=quantity,
+    )
+    gross_amount_rmb = trade_price * quantity * fx_rate
+    fee_amount = item.get("fee_amount")
+    fee_amount = float(fee_amount) if fee_amount not in (None, "") else 0.0
+    if fee_amount < 0:
+        raise LedgerError("fee_amount must be >= 0")
+    fee_currency = (item.get("fee_currency") or "").strip().upper() or currency
+    if fee_amount == 0:
+        fee_fx_rate, fee_rmb = (fx_rate if fee_currency == currency else None), 0.0
+    elif fee_currency == currency:
+        fee_fx_rate, fee_rmb = fx_rate, fee_amount * fx_rate
+    else:
+        ffx = _as_float_or_none(item.get("fee_fx_rate"))
+        if ffx is None:
+            _ffx, _a, _s, _c = _resolve_real_holding_entry_fx(
+                {"currency": fee_currency}, currency=fee_currency, entry_date=trade_date,
+                entry_price=fee_amount, shares=1,
+            )
+            ffx = _ffx
+        fee_fx_rate, fee_rmb = ffx, fee_amount * ffx
+    name = item.get("name")
+    name = (str(name).strip() or None) if name is not None else None
+    executed_at = item.get("executed_at")
+    order_in_day = item.get("order_in_day")
+    order_in_day = int(order_in_day) if order_in_day not in (None, "") else None
+    return {
+        "account": item.get("account") or "default",
+        "market": market,
+        "symbol": symbol,
+        "name": name,
+        "side": side,
+        "trade_price": trade_price,
+        "quantity": quantity,
+        "trade_date": trade_date,
+        "executed_at": executed_at,
+        "order_in_day": order_in_day,
+        "currency": currency,
+        "fx_rate": fx_rate,
+        "fx_as_of": fx_as_of,
+        "fx_source": fx_source,
+        "gross_amount_rmb": gross_amount_rmb,
+        "fee_amount": fee_amount,
+        "fee_currency": fee_currency,
+        "fee_fx_rate": fee_fx_rate,
+        "fee_rmb": fee_rmb,
+        "client_request_id": _clean_text(item.get("client_request_id") or item.get("idempotency_key")),
+        "position_epoch": None,
+        "status": "active",
+        "realized_pnl_rmb": None,
+        "realized_pnl_pct": None,
+        "cost_basis_rmb": None,
+        "notes": item.get("notes"),
+        "source": item.get("source") or "manual",
+    }
+
+
+def _existing_trade_by_request_id(account: str, client_request_id: str, *, conn) -> dict | None:
+    if not client_request_id:
+        return None
+    row = conn.execute(
+        f"SELECT {','.join(REAL_HOLDING_TRADES_FULL_COLS)} FROM real_holding_trades "
+        "WHERE account = ? AND client_request_id = ? LIMIT 1",
+        [account, client_request_id],
+    ).fetchone()
+    return _rowdict(REAL_HOLDING_TRADES_FULL_COLS, row) if row else None
+
+
+def _insert_trade(item: Mapping[str, Any], side: str, *, conn) -> dict[str, Any]:
+    vals = _normalize_trade(item, side)
+    # 幂等：同 account 同 client_request_id 已有交易则直接返回，不重复记账。
+    existing = _existing_trade_by_request_id(vals["account"], vals["client_request_id"], conn=conn)
+    if existing is not None:
+        holding = _current_holding_id(vals["account"], vals["market"], vals["symbol"], conn=conn)
+        return {"trade_id": int(existing["trade_id"]), "holding_id": holding,
+                "created": False, "deduped": True}
+    insert_cols = REAL_HOLDING_TRADES_COLS
+    conn.execute(
+        f"INSERT INTO real_holding_trades ({','.join(insert_cols)}, updated_at) "
+        f"VALUES ({','.join(['?'] * len(insert_cols))}, CURRENT_TIMESTAMP)",
+        [vals[c] for c in insert_cols],
+    )
+    trade_id = int(conn.execute("SELECT currval('real_holding_trades_id_seq')").fetchone()[0])
+    try:
+        rebuild_real_holdings_from_trades(
+            conn=conn, account=vals["account"], market=vals["market"], symbol=vals["symbol"],
+        )
+    except LedgerConflict:
+        # rebuild 是权威校验：冲突时回滚刚插入的这一笔再抛出。
+        conn.execute("DELETE FROM real_holding_trades WHERE trade_id = ?", [trade_id])
+        raise
+    holding = _current_holding_id(vals["account"], vals["market"], vals["symbol"], conn=conn)
+    return {"trade_id": trade_id, "holding_id": holding, "created": True, "deduped": False}
+
+
+def insert_real_holding_buy(item: Mapping[str, Any], *, conn=None) -> dict[str, Any]:
+    """记录一笔买入/加仓成交，并 rebuild 当前聚合持仓。"""
+    own = conn is None
+    if own:
+        conn = get_db()
+    try:
+        return _insert_trade(item, "buy", conn=conn)
+    finally:
+        if own:
+            conn.close()
+
+
+def insert_real_holding_sell(item: Mapping[str, Any], *, conn=None) -> dict[str, Any]:
+    """记录一笔卖出/平仓成交，并 rebuild 当前聚合持仓。"""
+    own = conn is None
+    if own:
+        conn = get_db()
+    try:
+        return _insert_trade(item, "sell", conn=conn)
+    finally:
+        if own:
+            conn.close()
+
+
+def void_latest_real_holding_trade(
+    account: str, market: str, symbol: str, *, reason: str | None = None, conn=None,
+) -> dict[str, Any]:
+    """P0 纠错：撤销该标的当前轮次最近一笔 active trade（软删 status=voided）后 rebuild。"""
+    own = conn is None
+    if own:
+        conn = get_db()
+    try:
+        account = account or "default"
+        rows = conn.execute(
+            f"SELECT {','.join(REAL_HOLDING_TRADES_FULL_COLS)} FROM real_holding_trades "
+            "WHERE account = ? AND market = ? AND UPPER(symbol) = UPPER(?) AND status = 'active'",
+            [account, market, symbol],
+        ).fetchall()
+        trades = [_rowdict(REAL_HOLDING_TRADES_FULL_COLS, r) for r in rows]
+        if not trades:
+            raise LedgerError("no active trade to void for this holding")
+        latest = sorted(trades, key=_trade_sort_key)[-1]
+        conn.execute(
+            "UPDATE real_holding_trades SET status='voided', voided_at=CURRENT_TIMESTAMP, "
+            "void_reason=?, updated_at=CURRENT_TIMESTAMP WHERE trade_id = ?",
+            [reason or "user_void", int(latest["trade_id"])],
+        )
+        rebuild_real_holdings_from_trades(conn=conn, account=account, market=market, symbol=symbol)
+        return {"voided_trade_id": int(latest["trade_id"]),
+                "holding_id": _current_holding_id(account, market, symbol, conn=conn)}
+    finally:
+        if own:
+            conn.close()
+
+
+def _trade_sort_key(t: Mapping[str, Any]):
+    """权威排序键：trade_date > executed_at > order_in_day > created_at > trade_id。"""
+    td = _to_date(t.get("trade_date"))
+    td_ord = td.toordinal() if td else 0
+    ex = t.get("executed_at")
+    ex_key = str(ex) if ex is not None else "~"          # None 排最后
+    oid = t.get("order_in_day")
+    oid_key = oid if oid is not None else float("inf")
+    created = str(t.get("created_at") or "")
+    return (td_ord, ex_key, oid_key, created, int(t.get("trade_id") or 0))
+
+
+def _current_holding_id(account: str, market: str, symbol: str, *, conn) -> int | None:
+    row = conn.execute(
+        "SELECT id FROM real_holdings WHERE account = ? AND market = ? AND UPPER(symbol) = UPPER(?) "
+        "AND close_status IN ('open','partial') ORDER BY id LIMIT 1",
+        [account or "default", market, symbol],
+    ).fetchone()
+    return int(row[0]) if row else None
+
+
+def _distinct_trade_keys(conn, account=None, market=None, symbol=None) -> list[tuple]:
+    where, params = ["status = 'active'"], []
+    if account:
+        where.append("account = ?"); params.append(account)
+    if market:
+        where.append("market = ?"); params.append(market)
+    if symbol:
+        where.append("UPPER(symbol) = UPPER(?)"); params.append(symbol)
+    rows = conn.execute(
+        f"SELECT DISTINCT account, market, symbol FROM real_holding_trades WHERE {' AND '.join(where)}",
+        params,
+    ).fetchall()
+    return [(r[0], r[1], r[2]) for r in rows]
+
+
+def rebuild_real_holdings_from_trades(
+    *, conn, account=None, market=None, symbol=None,
+) -> dict[tuple, dict]:
+    """从 active 交易流水按持仓轮次回放，重算 sell 派生 PnL，并 upsert 当前聚合持仓。
+
+    返回 {(account,market,symbol): {holding_id, merged_from}}，供迁移做 holding_id remap。
+    """
+    remap: dict[tuple, dict] = {}
+    for acct, mkt, sym in _distinct_trade_keys(conn, account, market, symbol):
+        rows = conn.execute(
+            f"SELECT {','.join(REAL_HOLDING_TRADES_FULL_COLS)} FROM real_holding_trades "
+            "WHERE account = ? AND market = ? AND symbol = ? AND status = 'active'",
+            [acct, mkt, sym],
+        ).fetchall()
+        trades = [_rowdict(REAL_HOLDING_TRADES_FULL_COLS, r) for r in rows]
+        trades.sort(key=_trade_sort_key)
+
+        epoch = 0
+        rem_shares = 0.0
+        rem_cost_rmb = 0.0           # 剩余 RMB 成本（含买入手续费）
+        rem_local_basis = 0.0        # 剩余原币展示成本（不含手续费）
+        epoch_buy_shares = 0.0
+        epoch_first_date = None
+        epoch_had_sell = False
+        cur = None  # 当前轮次状态快照
+        updates = []  # (trade_id, epoch, cost_basis_rmb, realized_pnl_rmb, realized_pnl_pct)
+
+        for t in trades:
+            side = t["side"]
+            qty = float(t["quantity"])
+            price = float(t["trade_price"])
+            fx = float(t["fx_rate"] or 0)
+            fee_rmb = float(t["fee_rmb"] or 0)
+            if side == "buy":
+                if rem_shares <= _SHARE_EPS:
+                    epoch += 1
+                    rem_shares = 0.0; rem_cost_rmb = 0.0; rem_local_basis = 0.0
+                    epoch_buy_shares = 0.0; epoch_first_date = t["trade_date"]; epoch_had_sell = False
+                rem_shares += qty
+                rem_local_basis += price * qty
+                rem_cost_rmb += price * qty * fx + fee_rmb
+                epoch_buy_shares += qty
+                updates.append((int(t["trade_id"]), epoch, None, None, None))
+            else:  # sell
+                if rem_shares <= _SHARE_EPS:
+                    raise LedgerConflict(
+                        f"sell trade {t['trade_id']} ({sym}) has no open position at {t['trade_date']}"
+                    )
+                if qty > rem_shares + 1e-6:
+                    raise LedgerConflict(
+                        f"sell trade {t['trade_id']} ({sym}) oversells: {qty} > remaining {rem_shares}"
+                    )
+                avg_rmb = rem_cost_rmb / rem_shares
+                avg_local = rem_local_basis / rem_shares
+                cost_basis_rmb = avg_rmb * qty
+                income_rmb = price * qty * fx
+                realized = income_rmb - cost_basis_rmb - fee_rmb
+                pct = (realized / cost_basis_rmb) if cost_basis_rmb else None
+                updates.append((int(t["trade_id"]), epoch, cost_basis_rmb, realized, pct))
+                rem_shares -= qty
+                rem_cost_rmb -= avg_rmb * qty
+                rem_local_basis -= avg_local * qty
+                epoch_had_sell = True
+                if rem_shares <= _SHARE_EPS:
+                    rem_shares = 0.0; rem_cost_rmb = 0.0; rem_local_basis = 0.0
+            cur = {
+                "epoch": epoch, "rem_shares": rem_shares, "rem_cost_rmb": rem_cost_rmb,
+                "rem_local_basis": rem_local_basis, "buy_shares": epoch_buy_shares,
+                "first_date": epoch_first_date, "had_sell": epoch_had_sell,
+                "last_date": t["trade_date"], "name": t.get("name"), "currency": t.get("currency"),
+            }
+
+        # 回写每笔 trade 的 epoch + sell 派生快照
+        for tid, ep, cb, rl, pct in updates:
+            conn.execute(
+                "UPDATE real_holding_trades SET position_epoch=?, cost_basis_rmb=?, "
+                "realized_pnl_rmb=?, realized_pnl_pct=?, updated_at=CURRENT_TIMESTAMP WHERE trade_id=?",
+                [ep, cb, rl, pct, tid],
+            )
+
+        # 协调 real_holdings 聚合行
+        existing_ids = [int(r[0]) for r in conn.execute(
+            "SELECT id FROM real_holdings WHERE account = ? AND market = ? AND UPPER(symbol) = UPPER(?) ORDER BY id",
+            [acct, mkt, sym],
+        ).fetchall()]
+        has_open = cur is not None and cur["rem_shares"] > _SHARE_EPS
+        if has_open:
+            target_id = existing_ids[0] if existing_ids else int(
+                conn.execute("SELECT nextval('real_holdings_id_seq')").fetchone()[0]
+            )
+            avg_rmb = cur["rem_cost_rmb"] / cur["rem_shares"]
+            avg_local = cur["rem_local_basis"] / cur["rem_shares"]
+            close_status = "partial" if cur["had_sell"] else "open"
+            payload = {
+                "id": target_id, "account": acct, "market": mkt, "symbol": sym,
+                "name": cur["name"], "currency": cur["currency"],
+                "entry_price": avg_local, "shares": cur["rem_shares"],
+                "entry_date": cur["first_date"], "cost_rmb_locked": cur["rem_cost_rmb"],
+                "total_buy_shares": cur["buy_shares"], "remaining_shares": cur["rem_shares"],
+                "avg_cost_local_per_share": avg_local, "avg_cost_rmb_per_share": avg_rmb,
+                "remaining_cost_rmb": cur["rem_cost_rmb"], "position_epoch": cur["epoch"],
+                "first_entry_date": cur["first_date"], "last_trade_date": cur["last_date"],
+                "close_status": close_status,
+            }
+            _upsert_real_holding_row(payload, exists=bool(existing_ids), conn=conn)
+            for dead in existing_ids[1:]:
+                conn.execute("DELETE FROM real_holdings WHERE id = ?", [dead])
+            remap[(acct, mkt, sym)] = {"holding_id": target_id, "merged_from": existing_ids}
+        else:
+            for dead in existing_ids:
+                conn.execute("DELETE FROM real_holdings WHERE id = ?", [dead])
+            remap[(acct, mkt, sym)] = {"holding_id": None, "merged_from": existing_ids}
+    return remap
+
+
+_REAL_HOLDINGS_UPSERT_COLS = [
+    "account", "market", "symbol", "name", "entry_price", "shares", "entry_date",
+    "currency", "cost_rmb_locked", "total_buy_shares", "remaining_shares",
+    "avg_cost_local_per_share", "avg_cost_rmb_per_share", "remaining_cost_rmb",
+    "position_epoch", "first_entry_date", "last_trade_date", "close_status",
+]
+
+
+def _upsert_real_holding_row(payload: Mapping[str, Any], *, exists: bool, conn) -> None:
+    cols = _REAL_HOLDINGS_UPSERT_COLS
+    if exists:
+        set_clause = ", ".join(f"{c}=?" for c in cols)
+        conn.execute(
+            f"UPDATE real_holdings SET {set_clause}, updated_at=CURRENT_TIMESTAMP WHERE id = ?",
+            [payload.get(c) for c in cols] + [payload["id"]],
+        )
+    else:
+        conn.execute(
+            f"INSERT INTO real_holdings (id, {','.join(cols)}, updated_at) "
+            f"VALUES (?, {','.join(['?'] * len(cols))}, CURRENT_TIMESTAMP)",
+            [payload["id"]] + [payload.get(c) for c in cols],
+        )
+
+
+def fetch_real_holding_records(
+    *, account=None, market=None, symbol=None, holding_id=None,
+    include_voided=False, conn=None,
+) -> list[dict]:
+    """某标的的完整买卖时间线（默认只 active），按权威顺序升序。"""
+    own = conn is None
+    if own:
+        conn = get_db()
+    try:
+        if holding_id is not None:
+            h = fetch_real_holding_by_id(int(holding_id), conn=conn)
+            if not h:
+                return []
+            account, market, symbol = h.get("account"), h.get("market"), h.get("symbol")
+        where, params = ["account = ?", "market = ?", "UPPER(symbol) = UPPER(?)"], [account or "default", market, symbol]
+        if not include_voided:
+            where.append("status = 'active'")
+        rows = conn.execute(
+            f"SELECT {','.join(REAL_HOLDING_TRADES_FULL_COLS)} FROM real_holding_trades "
+            f"WHERE {' AND '.join(where)}",
+            params,
+        ).fetchall()
+        trades = [_rowdict(REAL_HOLDING_TRADES_FULL_COLS, r) for r in rows]
+        trades.sort(key=_trade_sort_key)
+        return trades
+    finally:
+        if own:
+            conn.close()
+
+
+def fetch_real_holding_trade_history(*, include_voided=False, conn=None) -> list[dict]:
+    """全部卖出成交，按卖出日期倒序，供「已卖出/交易历史」区。"""
+    own = conn is None
+    if own:
+        conn = get_db()
+    try:
+        where = ["side = 'sell'"]
+        if not include_voided:
+            where.append("status = 'active'")
+        rows = conn.execute(
+            f"SELECT {','.join(REAL_HOLDING_TRADES_FULL_COLS)} FROM real_holding_trades "
+            f"WHERE {' AND '.join(where)} ORDER BY trade_date DESC, trade_id DESC",
+            [],
+        ).fetchall()
+        return [_rowdict(REAL_HOLDING_TRADES_FULL_COLS, r) for r in rows]
+    finally:
+        if own:
+            conn.close()
+
+
+def fetch_pnl_summary(*, price_lookup=None, as_of=None, conn=None) -> dict[str, Any]:
+    """收益摘要：已实现（成交日锁定汇率）+ 未实现（当前价/当前汇率盯市）+ 合计。
+
+    price_lookup(market, symbol) -> (current_price_local, current_fx_rate) 或 None。
+    不提供时只算已实现，unrealized 记为 None（前端/调用方决定是否盯市）。
+    """
+    own = conn is None
+    if own:
+        conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(realized_pnl_rmb),0), MIN(trade_date) FROM real_holding_trades "
+            "WHERE side='sell' AND status='active'"
+        ).fetchone()
+        realized = float(row[0] or 0.0)
+        realized_since = row[1]
+        unrealized = None
+        if price_lookup is not None:
+            unrealized = 0.0
+            for h in conn.execute(
+                "SELECT market, symbol, remaining_shares, remaining_cost_rmb FROM real_holdings "
+                "WHERE close_status IN ('open','partial')"
+            ).fetchall():
+                mkt, sym, rem_sh, rem_cost = h
+                got = price_lookup(mkt, sym)
+                if not got:
+                    continue
+                cur_price, cur_fx = got
+                mv = float(cur_price) * float(rem_sh or 0) * float(cur_fx or 0)
+                unrealized += mv - float(rem_cost or 0)
+        total = realized + (unrealized or 0.0)
+        return {
+            "realized_pnl_rmb": realized,
+            "unrealized_pnl_rmb": unrealized,
+            "total_pnl_rmb": (realized + unrealized) if unrealized is not None else None,
+            "as_of": as_of,
+            "realized_since": realized_since,
+        }
+    finally:
+        if own:
+            conn.close()
 
 
 def _clean_text(value: Any) -> str | None:
