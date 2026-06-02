@@ -134,11 +134,24 @@ def main() -> int:
         wrote = 0
         backfilled = 0
         skipped_immature = 0
+        # 2026-06-02 幂等清除 non-buy outcomes:
+        # 历史 evaluate_v2_picks 无 signal 过滤，把 watch / avoid 也写进 outcomes,
+        # alpha 统计因此被污染。每次跑都重新对齐 picks.signal:
+        # 凡当前 picks.signal != 'buy' 的 (run_id, market, symbol) 一律删 outcome。
+        conn.execute("""
+            DELETE FROM pick_outcomes
+            WHERE (run_id, market, symbol) IN (
+              SELECT run_id, market, symbol FROM recommendation_picks
+              WHERE COALESCE(signal, 'buy') != 'buy'
+            )
+        """)
+
         for run_id, run_date in runs:
             picks = conn.execute(
                 """
                 SELECT market, symbol, entry_price FROM recommendation_picks
                 WHERE run_id = ?
+                  AND COALESCE(signal, 'buy') = 'buy'
                 """,
                 [run_id],
             ).fetchall()
