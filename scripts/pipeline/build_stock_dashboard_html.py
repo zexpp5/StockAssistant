@@ -1268,6 +1268,7 @@ function switchDiscoveryView(view) {
           <th class="px-3 py-2 text-center whitespace-nowrap w-[120px]" title="按市面常见口径归类:股票/ETF/基金/商品/债券/现金">资产类别</th>
           <th class="px-3 py-2 text-center whitespace-nowrap w-[145px]" title="这只股票用哪种方式分析：有没有美股组合建议、算不算因子分、还是只看仓位盈亏">分析方式</th>
           <th class="px-3 py-2 text-center whitespace-nowrap w-[118px]" title="GICS 板块 ETF 近 60 日涨跌 · 来自 openbb_intel 行业轮动">板块热度</th>
+          <th class="px-3 py-2 text-left whitespace-nowrap w-[180px]" title="你为真实持仓手动确认的价格纪律线；只提醒，不自动交易，不写推荐池">纪律提醒</th>
           <th class="px-3 py-2 text-right whitespace-nowrap w-[150px]">成本/数量</th>
           <th class="px-3 py-2 text-right whitespace-nowrap w-[150px]">现价/市值</th>
           <th class="px-3 py-2 text-left whitespace-nowrap w-[130px]">买入/汇率</th>
@@ -1276,7 +1277,6 @@ function switchDiscoveryView(view) {
           <th class="px-3 py-2 text-right whitespace-nowrap w-[90px]" title="这只股票市值占你总本金（默认50万）的百分之几">你现在占比</th>
           <th class="px-3 py-2 text-right whitespace-nowrap w-[155px]" title="来自「AI组合方案」：若按模型买，这只应占百分之几；下一行是你现在比建议多还是少几个百分点">模型建议仓位</th>
           <th class="px-3 py-2 text-right whitespace-nowrap w-[140px]" title="仅供参考：按目标仓位差与半Kelly上限估算，不构成交易指令">建议规模</th>
-          <th class="px-3 py-2 text-left whitespace-nowrap w-[180px]" title="你为真实持仓手动确认的价格纪律线；只提醒，不自动交易，不写推荐池">纪律提醒</th>
           <th class="px-3 py-2 text-center whitespace-nowrap w-[230px]">
             <span class="inline-flex items-center justify-center gap-1">
               今日建议
@@ -8590,6 +8590,7 @@ async function renderRealHoldings() {
       <td class="px-3 py-2 text-center whitespace-nowrap">${_badge(assetMeta, verdict ? verdict.asset_hint : assetMeta.hint)}</td>
       <td class="px-3 py-2 text-center whitespace-nowrap">${_badge(treatmentMeta, treatmentMeta.hint || meta.hint)}</td>
       ${reviewItem ? _industryHeatCell(reviewItem) : `<td class="px-3 py-2 text-center text-[11px] text-slate-300">—</td>`}
+      ${disciplineCell}
       <td class="px-3 py-2 text-right font-mono whitespace-nowrap">
         ${Number(x.h.entry_price || 0).toFixed(2)} <span class="text-[10px] text-slate-400">${_esc(x.h.currency || _currencyForTicker(x.code))}</span>
         <div class="text-[11px] text-slate-500">${Number(x.h.shares || 0)} 股</div>
@@ -8616,7 +8617,6 @@ async function renderRealHoldings() {
       <td class="px-3 py-2 text-right font-mono" title="占你总本金（默认50万）的比例">${(x.currentWeight * 100).toFixed(1)}%</td>
       ${planWeightCell}
       ${sizeCell}
-      ${disciplineCell}
       ${verdictCell}
       <td class="px-3 py-2 text-center whitespace-nowrap">
         <button onclick="editRealHolding(${x.h.id})" class="text-violet-600 text-xs">编辑</button>

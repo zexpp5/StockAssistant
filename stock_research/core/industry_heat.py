@@ -71,6 +71,30 @@ _EXTRA_BENCHMARK_ETFS = {
     "GLD": "黄金 (Gold)",
 }
 
+# 持仓页的最后兜底: 有些真实持仓不在系统科技池,也没有手工 industry。
+# 这里按市面常用行业基准 ETF 做保守映射,只用于展示"板块热度"。
+_SYMBOL_BENCHMARK_ETFS = {
+    "MRVL": "XLK",
+    "MCD": "XLY",
+    "BRK-B": "XLF",
+    "BRK.B": "XLF",
+    "9992.HK": "XLY",
+    "IAUM": "GLD",
+    "GLD": "GLD",
+}
+
+
+def _symbol_benchmark_etf(symbol: str, *, asset_class: str | None = None) -> str | None:
+    sym = str(symbol or "").strip().upper()
+    if not sym:
+        return None
+    if sym in _SYMBOL_BENCHMARK_ETFS:
+        return _SYMBOL_BENCHMARK_ETFS[sym]
+    if str(asset_class or "").lower() == "commodity":
+        if any(k in sym for k in ("GOLD", "GLD", "IAU", "IAUM")):
+            return "GLD"
+    return None
+
 
 def _fetch_extra_etf_return(ticker: str, lookback_days: int = 60) -> float | None:
     """GLD 等不在 GICS 轮动榜里的基准，按需拉 60d 收益。"""
@@ -94,6 +118,37 @@ def _fetch_extra_etf_return(ticker: str, lookback_days: int = 60) -> float | Non
         return None
 
 
+def _local_symbol_return(conn, symbol: str, lookback_days: int = 60) -> tuple[float, int] | None:
+    """外部基准拉不到时,用本地 price_daily 估算持仓自身可用区间收益。"""
+    try:
+        rows = conn.execute(
+            """
+            SELECT trade_date, close
+            FROM price_daily
+            WHERE symbol = ?
+              AND interval = '1d'
+              AND close IS NOT NULL
+            ORDER BY trade_date DESC
+            LIMIT ?
+            """,
+            [str(symbol).strip().upper(), max(2, int(lookback_days) + 10)],
+        ).fetchall()
+    except Exception:
+        return None
+    vals = [(r[0], float(r[1])) for r in rows if r and r[1] is not None and float(r[1]) > 0]
+    if len(vals) < 2:
+        return None
+    latest_date, latest = vals[0]
+    oldest_date, oldest = vals[-1]
+    if oldest <= 0:
+        return None
+    try:
+        days = max(1, (latest_date - oldest_date).days)
+    except Exception:
+        days = min(lookback_days, len(vals))
+    return round((latest / oldest - 1) * 100, 2), int(days)
+
+
 def _map_theme_to_etf(
     theme: str | None,
     market: str,
@@ -103,9 +158,10 @@ def _map_theme_to_etf(
     """主题/行业 → GICS 板块 ETF。匹配不到时返回 None，禁止默认 XLK（会误标消费/黄金）。"""
     ac = str(asset_class or "").lower()
     raw = str(theme or "").strip()
+    raw_l = raw.lower()
 
     if ac in {"commodity", "crypto"}:
-        if any(k in raw for k in ("黄金", "贵金属", "金矿")):
+        if any(k in raw for k in ("黄金", "贵金属", "金矿")) or any(k in raw_l for k in ("gold", "precious metal")):
             return "GLD"
         return None
 
@@ -120,6 +176,11 @@ def _map_theme_to_etf(
         if "消费" in raw:
             return "XLY"
         if any(k in raw for k in ("科技", "半导体", "软件", "算力", "芯片", "AI", "互联网", "云")):
+            return "XLK"
+        if any(k in raw_l for k in (
+            "asic", "networking", "semiconductor", "chip", "gpu", "datacenter",
+            "data center", "ai infrastructure", "software", "cloud", "server",
+        )):
             return "XLK"
         if any(k in raw for k in ("通信", "传媒", "媒体", "社交")):
             return "XLC"
@@ -167,12 +228,21 @@ def resolve_industry_heat(
         return None
     theme = _theme_for_symbol(conn, symbol, market)
     etf = _map_theme_to_etf(theme, market, asset_class=asset_class)
+    mapping_source = "theme"
+    if not etf:
+        etf = _symbol_benchmark_etf(symbol, asset_class=asset_class)
+        mapping_source = "symbol_fallback"
     if not etf:
         return None
     lookback = int(rot.get("lookback_days") or 60)
     ret = etf_returns.get(etf)
     if ret is None and etf in _EXTRA_BENCHMARK_ETFS:
         ret = _fetch_extra_etf_return(etf, lookback_days=lookback)
+        if ret is None:
+            local = _local_symbol_return(conn, symbol, lookback_days=lookback)
+            if local is not None:
+                ret, lookback = local
+                mapping_source = "local_symbol_fallback"
     if ret is None:
         return None
     badge = classify_etf_return(ret)
@@ -196,7 +266,8 @@ def resolve_industry_heat(
         "etf_name": etf_name,
         "sector_return_60d_pct": ret,
         "industry_heat_badge": badge,
-        "theme_used": theme,
+        "theme_used": theme or f"{symbol} fallback",
+        "mapping_source": mapping_source,
         "hint": hint,
-        "lookback_days": rot.get("lookback_days", 60),
+        "lookback_days": lookback,
     }

@@ -10,6 +10,7 @@ sys.path.insert(0, str(REPO))
 
 from stock_research.core.industry_heat import (  # type: ignore
     _map_theme_to_etf,
+    _symbol_benchmark_etf,
     classify_etf_return,
 )
 
@@ -37,6 +38,17 @@ class IndustryHeatTest(unittest.TestCase):
             _map_theme_to_etf("商品 / 黄金", "US", asset_class="commodity"),
             "GLD",
         )
+
+    def test_english_ai_infrastructure_maps_technology(self):
+        self.assertEqual(_map_theme_to_etf("ASIC / networking", "US"), "XLK")
+        self.assertEqual(_map_theme_to_etf("semiconductor data center chips", "US"), "XLK")
+
+    def test_real_holding_symbol_fallbacks(self):
+        self.assertEqual(_symbol_benchmark_etf("MRVL"), "XLK")
+        self.assertEqual(_symbol_benchmark_etf("MCD"), "XLY")
+        self.assertEqual(_symbol_benchmark_etf("BRK-B"), "XLF")
+        self.assertEqual(_symbol_benchmark_etf("9992.HK"), "XLY")
+        self.assertEqual(_symbol_benchmark_etf("IAUM", asset_class="commodity"), "GLD")
 
     def test_no_default_xlk_for_unknown(self):
         self.assertIsNone(_map_theme_to_etf(None, "US"))
