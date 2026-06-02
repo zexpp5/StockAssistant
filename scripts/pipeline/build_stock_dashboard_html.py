@@ -7838,16 +7838,16 @@ document.addEventListener("keydown", e => {
   }
 });
 
-// 立刻触发行情拉取(fetch_stock_prices --source watchlist)
-// 持仓必须先在 manual_watchlist 里(走过 sync 或新录入)才会被拉
+// 立刻触发真实持仓轻量行情刷新(intraday_refresh_holdings)
+// 只刷新 real_holdings 中实际持仓的标的，不依赖 manual_watchlist。
 async function fetchHoldingsPricesNow() {
-  if (!confirm("立刻拉一次行情数据。约 1-2 分钟后刷新页面,现价 / 市值 / 盈亏就有真实数据了。\n\n继续？")) return;
+  if (!confirm("立刻刷新一次真实持仓行情。约几十秒到 1 分钟后刷新页面,现价 / 市值 / 盈亏就会更新。\n\n继续？")) return;
   try {
     const r = await fetch(WATCHLIST_API_BASE + "/api/real-holdings/fetch-prices", { method: "POST" });
     if (!r.ok) { alert("触发失败: HTTP " + r.status); return; }
     const data = await r.json();
     if (data.status === "started") {
-      alert(`✓ 行情拉取已启动(PID ${data.pid})\n约 1-2 分钟后刷新页面就能看到现价。\n\n日志路径:${data.log || ''}`);
+      alert(`✓ 真实持仓行情刷新已启动(PID ${data.pid})\n约几十秒到 1 分钟后刷新页面就能看到现价。\n\n日志路径:${data.log || ''}`);
     } else {
       alert("启动失败: " + (data.error || JSON.stringify(data)));
     }

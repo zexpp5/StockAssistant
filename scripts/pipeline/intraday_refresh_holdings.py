@@ -1,18 +1,19 @@
-"""盘中刷新真实持仓的行情快照。
+"""刷新真实持仓的行情快照。
 
-只针对 `real_holdings` 表里的 4-10 只个股，用 yfinance fast_info 拉实时价，
-upsert 到 price_daily（覆盖当日 row），然后重跑 real_holding_review，
-让 dashboard 的"今日持仓体检"板块看到盘中价。
+只针对 `real_holdings` 表里的 4-10 只个股，用 yfinance fast_info / daily bar
+拉轻量行情，upsert 到 price_daily（覆盖当日 row），然后重跑 real_holding_review，
+让 dashboard 的"今日持仓体检"板块看到最近有效价。
 
 设计目标：
 - 轻量：只动真实持仓那几只，跑完 < 10s
 - 不推飞书：和 daily_refresh.sh --morning 区分开，避免盘中重复推送
 - 容错：单只失败不中断；DuckDB 写锁冲突自动 retry
-- 节能：周末 / 北京时间 05-08 + 17-20 这两段三大市场都不交易的时段直接跳过
+- 节能：周末直接跳过；工作日允许收盘后补写已出现的当日 daily bar
 """
 from __future__ import annotations
 
 import logging
+import math
 import sys
 import time
 import zoneinfo
@@ -38,15 +39,10 @@ logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 
 def _skip_reason() -> str | None:
-    """三大市场都不交易的整点直接跳过，省 yfinance 配额 + 减少 DB 锁竞争。"""
+    """非交易日直接跳过，省 yfinance 配额 + 减少 DB 锁竞争。"""
     now = datetime.now()
     if now.weekday() >= 5:
         return f"周末({['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][now.weekday()]})"
-    h = now.hour
-    # 北京时间 05-08: A/HK 未开 + 美股 04:00 后已收盘
-    # 北京时间 17-20: A/HK 已收盘 + 美股 21:30 还没开
-    if 5 <= h <= 8 or 17 <= h <= 20:
-        return f"盘外({h:02d}:00 三大市场均不交易)"
     return None
 
 
@@ -59,46 +55,68 @@ def _infer_market(symbol: str) -> str:
     return "US"
 
 
-def _market_trade_date(symbol: str) -> "date | None":
-    """返回 symbol 当前应贴的 trade_date；若该市场当前不在交易时段则 None（不写 phantom 行）。
+def _market_now(symbol: str) -> datetime:
+    market = _infer_market(symbol)
+    if market == "US":
+        tz = zoneinfo.ZoneInfo("America/New_York")
+    elif market == "HK":
+        tz = zoneinfo.ZoneInfo("Asia/Hong_Kong")
+    else:
+        tz = zoneinfo.ZoneInfo("Asia/Shanghai")
+    return datetime.now(tz)
+
+
+def _regular_session_minutes(symbol: str) -> list[tuple[int, int]]:
+    market = _infer_market(symbol)
+    if market == "US":
+        return [(570, 960)]  # 美股常规时段 ET 09:30-16:00
+    if market == "HK":
+        return [(570, 720), (780, 960)]  # 港股 9:30-12:00 + 13:00-16:00
+    return [(570, 690), (780, 900)]  # A 股 9:30-11:30 + 13:00-15:00
+
+
+def _in_regular_session(symbol: str, now: datetime) -> bool:
+    minutes = now.hour * 60 + now.minute
+    return any(start <= minutes < end for start, end in _regular_session_minutes(symbol))
+
+
+def _coerce_trade_date(value) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except Exception:
+        return None
+
+
+def _market_trade_date(symbol: str, fetched_trade_date=None) -> "date | None":
+    """返回 symbol 当前应贴的 trade_date；无法确认当日行情时返回 None（不写 phantom 行）。
 
     Bug fix 2026-06-01: 原代码用 `now.date()`（北京日历日）当所有市场的 trade_date，
     导致盘外整点跑时 fast_info.lastPrice（上一交易日收盘）被误贴成今天。
     例：6-01 周一 09:01 跑美股 MCD，fast_info 返回的是 5-30 周五收盘价，但被写成
     `trade_date=2026-06-01` 的 phantom 行，real_holding_review 又据此算「今日盈亏」。
+
+    2026-06-02: 收盘后 yfinance daily bar 已出现今天时，允许写入今天。
+    这样港股 16:02 不会继续停在 6/1；若数据源还没给出今天日 K，仍跳过。
     """
-    market = _infer_market(symbol)
-    if market == "US":
-        # 美股常规时段 ET 09:30-16:00（不含盘前/盘后；fast_info 盘前盘后会更新但日级落地不安全）
-        tz = zoneinfo.ZoneInfo("America/New_York")
-        now = datetime.now(tz)
-        if now.weekday() >= 5:
+    now = _market_now(symbol)
+    if now.weekday() >= 5:
+        return None
+    today = now.date()
+    fetched_date = _coerce_trade_date(fetched_trade_date)
+    if fetched_date is not None:
+        if fetched_date == today:
+            return fetched_date
+        if fetched_date > today:
             return None
-        minutes = now.hour * 60 + now.minute
-        if not (570 <= minutes < 960):
-            return None
-        return now.date()
-    if market == "HK":
-        tz = zoneinfo.ZoneInfo("Asia/Hong_Kong")
-        now = datetime.now(tz)
-        if now.weekday() >= 5:
-            return None
-        minutes = now.hour * 60 + now.minute
-        # 港股 9:30-12:00 + 13:00-16:00
-        if not ((570 <= minutes < 720) or (780 <= minutes < 960)):
-            return None
-        return now.date()
-    if market == "CN":
-        tz = zoneinfo.ZoneInfo("Asia/Shanghai")
-        now = datetime.now(tz)
-        if now.weekday() >= 5:
-            return None
-        minutes = now.hour * 60 + now.minute
-        # A 股 9:30-11:30 + 13:00-15:00
-        if not ((570 <= minutes < 690) or (780 <= minutes < 900)):
-            return None
-        return now.date()
-    return None
+        # 数据源只给到上一交易日时，只在常规交易时段内才允许 fast_info 作为今天盘中价。
+        return today if _in_regular_session(symbol, now) else None
+    return today if _in_regular_session(symbol, now) else None
 
 
 def _to_yf_ticker(symbol: str) -> str:
@@ -106,22 +124,108 @@ def _to_yf_ticker(symbol: str) -> str:
     return symbol.strip().upper()
 
 
+def _currency_for_symbol(symbol: str) -> str:
+    market = _infer_market(symbol)
+    if market == "HK":
+        return "HKD"
+    if market == "CN":
+        return "CNY"
+    return "USD"
+
+
+def _positive_float(value) -> float | None:
+    try:
+        f = float(value)
+    except Exception:
+        return None
+    if math.isfinite(f) and f > 0:
+        return f
+    return None
+
+
+def _latest_daily_bar(symbol: str) -> dict | None:
+    yf_symbol = _to_yf_ticker(symbol)
+    try:
+        hist = yf.download(
+            yf_symbol,
+            period="7d",
+            interval="1d",
+            progress=False,
+            auto_adjust=False,
+            threads=False,
+        )
+    except Exception as exc:
+        logger.warning("%s: daily bar 拉取失败 %s", symbol, exc)
+        return None
+    if hist is None or hist.empty:
+        return None
+    close_data = None
+    if "Close" in hist:
+        close_data = hist["Close"]
+    elif getattr(hist, "columns", None) is not None:
+        # yfinance 1.3 单 ticker 也可能返回 MultiIndex: (Price, Ticker)。
+        for col in hist.columns:
+            if isinstance(col, tuple) and "Close" in col:
+                close_data = hist[col]
+                break
+    if close_data is None:
+        return None
+
+    close = None
+    if getattr(close_data, "columns", None) is not None:
+        for col in close_data.columns:
+            series = close_data[col].dropna()
+            if not series.empty:
+                close = series
+                break
+    else:
+        close = close_data.dropna()
+    if close is None:
+        return None
+    if close.empty:
+        return None
+    try:
+        latest_price = _positive_float(close.iloc[-1])
+        if latest_price is None:
+            return None
+        latest_date = close.index[-1].date()
+        prev_close = None
+        if len(close) >= 2:
+            prev_close = _positive_float(close.iloc[-2])
+        return {"price": latest_price, "prev_close": prev_close, "trade_date": latest_date}
+    except Exception:
+        return None
+
+
 def _fetch_one(symbol: str) -> dict | None:
     """yfinance fast_info 拉单只实时价。返回 None 表示拉失败。"""
     try:
-        t = yf.Ticker(_to_yf_ticker(symbol))
-        fi = t.fast_info
-        price = fi.get("lastPrice") or fi.get("last_price")
-        prev = fi.get("previousClose") or fi.get("previous_close")
-        currency = fi.get("currency")
+        yf_symbol = _to_yf_ticker(symbol)
+        daily = _latest_daily_bar(symbol) or {}
+        price = None
+        prev = None
+        currency = None
+        try:
+            fi = yf.Ticker(yf_symbol).fast_info or {}
+            price = _positive_float(fi.get("lastPrice") or fi.get("last_price"))
+            prev = _positive_float(fi.get("previousClose") or fi.get("previous_close"))
+            currency = fi.get("currency")
+        except Exception as exc:
+            logger.info("%s: fast_info 不可用，使用 daily bar 兜底: %s", symbol, exc)
         if price is None:
-            logger.warning("%s: fast_info 没有 lastPrice，跳过", symbol)
+            price = daily.get("price")
+        if prev is None:
+            prev = daily.get("prev_close")
+        currency = currency or _currency_for_symbol(symbol)
+        if price is None:
+            logger.warning("%s: fast_info/daily bar 都没有可用价格，跳过", symbol)
             return None
         return {
             "symbol": symbol.upper(),
-            "price": float(price),
-            "prev_close": float(prev) if prev is not None else None,
+            "price": price,
+            "prev_close": prev,
             "currency": currency,
+            "trade_date": daily.get("trade_date"),
         }
     except Exception as exc:
         logger.warning("%s: 拉价失败 %s", symbol, exc)
@@ -138,7 +242,7 @@ def _upsert_price_daily(rows: list[dict]) -> int:
         skipped_off_hours: list[str] = []
         for r in rows:
             market = _infer_market(r["symbol"])
-            trade_date = _market_trade_date(r["symbol"])
+            trade_date = _market_trade_date(r["symbol"], r.get("trade_date"))
             if trade_date is None:
                 skipped_off_hours.append(r["symbol"])
                 continue
@@ -148,7 +252,7 @@ def _upsert_price_daily(rows: list[dict]) -> int:
                 "yfinance_intraday", now, now,
             ))
         if skipped_off_hours:
-            logger.info("市场未开盘跳过 (不写 phantom 行): %s", ", ".join(skipped_off_hours))
+            logger.info("未确认当日行情，跳过 (不写 phantom 行): %s", ", ".join(skipped_off_hours))
         if not payload:
             return 0
         con.executemany(
