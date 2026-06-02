@@ -29,6 +29,10 @@
 #   ./daily_refresh.sh --a-share-only  仅跑 A 股闭环 + DuckDB 同步 + 重建 HTML
 #   ./daily_refresh.sh --skip-a-share  完全跳过 A 股闭环（极端 fallback）
 
+# 提高文件句柄上限：launchd 默认 256，次新股雷达批量拉数百只 yfinance + SEC filings
+# 会打满句柄 → "Too many open files" → 雷达失败 + 连锁 DuckDB 锁冲突（2026-06-02 事故）。
+ulimit -n 8192 2>/dev/null || true
+
 MODE="full"
 for arg in "$@"; do
     case "$arg" in
