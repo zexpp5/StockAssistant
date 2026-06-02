@@ -142,6 +142,33 @@ def _step_sec_scan(scan: bool) -> dict:
         return {"step": "sec_evidence_scan", "status": "error", "error": str(e), "trace": traceback.format_exc()}
 
 
+def _step_third_party_a_source() -> dict:
+    """Step 3b: 第 3 类 A 源 fetcher (WNA / USGS / DOE / NRC etc.).
+
+    2026-06-02 引入：跟 SEC scan 互补的第三方权威 source_id，
+    为 aggregate_tags 算 confirmed (≥2 独立 source) 提供第三条线。
+    """
+    try:
+        r = subprocess.run(
+            [PYTHON, str(REPO / "scripts" / "tools" / "third_party_a_source_scan.py")],
+            capture_output=True, text=True, timeout=120,
+        )
+        ok = r.returncode == 0
+        n_third_party = _query_all("""
+            SELECT source_id, COUNT(*) FROM ai_theme_company_evidence
+            WHERE source_id NOT LIKE 'sec_edgar_%'
+            GROUP BY source_id
+        """)
+        return {
+            "step": "third_party_a_source_scan",
+            "status": "ok" if ok else "error",
+            "by_source_id": {sid: n for sid, n in n_third_party},
+            "stderr_tail": (r.stderr or "")[-300:] if not ok else None,
+        }
+    except Exception as e:
+        return {"step": "third_party_a_source_scan", "status": "error", "error": str(e)}
+
+
 def _step_topic_metrics() -> dict:
     """Step 4: 宏观指标新鲜度审计（不自动重抓 — 数据来自 WebFetch 实测）"""
     try:
@@ -242,22 +269,25 @@ def main() -> int:
     started_at = datetime.now()
     results = []
 
-    print("\n[Step 1/6] 数据源健康检查")
+    print("\n[Step 1/7] 数据源健康检查")
     r = _step_seed_sources(); results.append(r); print(f"  → {r['status']} · ok={r.get('n_ok')}/{r.get('n_total')}")
 
-    print("\n[Step 2/6] ETF 持仓刷新")
+    print("\n[Step 2/7] ETF 持仓刷新")
     r = _step_refresh_etf(args.refresh_etf); results.append(r); print(f"  → {r['status']} · {r.get('action')}")
 
-    print("\n[Step 3/6] SEC 公司证据扫描 + stale 规则")
+    print("\n[Step 3/7] SEC 公司证据扫描 + stale 规则")
     r = _step_sec_scan(args.scan_sec); results.append(r); print(f"  → {r['status']} · {r.get('action')}")
 
-    print("\n[Step 4/6] 宏观指标新鲜度审计")
+    print("\n[Step 3b/7] 第 3 类 A 源 fetcher (WNA/USGS/DOE)")
+    r = _step_third_party_a_source(); results.append(r); print(f"  → {r['status']} · {r.get('by_source_id')}")
+
+    print("\n[Step 4/7] 宏观指标新鲜度审计")
     r = _step_topic_metrics(); results.append(r); print(f"  → {r['status']}")
 
-    print("\n[Step 5/6] 公司标签聚合")
+    print("\n[Step 5/7] 公司标签聚合")
     r = _step_aggregate_tags(); results.append(r); print(f"  → {r['status']} · tags={r.get('n_tags')} · {r.get('by_status')}")
 
-    print("\n[Step 6/6] 覆盖率审计")
+    print("\n[Step 6/7] 覆盖率审计")
     r = _step_coverage_audit(); results.append(r); print(f"  → {r['status']} · issues={r.get('n_total_issues')} · counts={r.get('counts')}")
 
     wl_after = _watchlist_count()
