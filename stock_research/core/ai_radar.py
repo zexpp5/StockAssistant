@@ -2276,42 +2276,19 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
         '</div>'
     )
 
-    # ─── 系统池其它高分板块：AI 关联="无" 的链（创新药/新能源车/军工等）
-    # 不在主视图但仍 surface，避免用户以为 AI 雷达漏看市场，同时明确"这不属于 AI 主线"
+    # 非 AI 链（创新药/新能源车/军工等）只显示数字，不出具体票
+    # 2026-06-02：AI 雷达页边界严格化——具体票去 AI 推荐 / 产业链地图看
+    # 之前把整组 picks 灌出来违背"AI 雷达只看 AI"的产品定位
     other_chains = payload.get("filtered_non_ai_chains") or []
-    if other_chains:
-        other_rows = []
-        for c in other_chains:
-            pick_chips = []
-            for p in c.get("top_picks") or []:
-                pick_chips.append(
-                    f'<span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white ring-1 ring-slate-200 text-[11px]">'
-                    f'{_market_label(p["market"])} <span class="font-mono">{_esc(p["symbol"])}</span> '
-                    f'<span class="text-slate-500">{_esc((p["name"] or "")[:10])}</span> '
-                    f'<span class="font-semibold text-slate-700">{p["score"]:.0f}</span>'
-                    f'</span>'
-                )
-            other_rows.append(f"""
-<details class="py-2 border-b border-slate-100 last:border-0">
-  <summary class="cursor-pointer list-none flex items-center justify-between gap-2 text-[12px]">
-    <span class="font-semibold text-slate-700">{_esc(c["chain"])}</span>
-    <span class="text-[11px] text-slate-500">{c["n_stocks"]} 只 · 均分 {c["avg_score"]:.1f}</span>
-  </summary>
-  <div class="mt-2 flex flex-wrap gap-1.5">{"".join(pick_chips)}</div>
-</details>
-""")
-        other_chains_html = f"""
-<details class="bg-slate-50 ring-1 ring-slate-200 rounded-xl p-4 mb-3">
-  <summary class="cursor-pointer list-none flex items-center justify-between gap-2">
-    <div>
-      <div class="text-sm font-bold text-slate-700">📊 系统池其它高分板块（非 AI 主线）</div>
-      <div class="text-[11px] text-slate-500 mt-0.5">这些链系统打分也高，但 AI 关联强度为"无"，不在 AI 主题雷达主视图。点开看具体票。</div>
-    </div>
-    <span class="text-[11px] text-slate-500">{len(other_chains)} 条链</span>
-  </summary>
-  <div class="mt-3 pt-3 border-t border-slate-200">{"".join(other_rows)}</div>
-</details>
-"""
+    n_filtered_chains = len(other_chains)
+    n_filtered_stocks = sum(c.get("n_stocks", 0) for c in other_chains)
+    if n_filtered_chains:
+        other_chains_html = (
+            '<div class="bg-slate-50 ring-1 ring-slate-200 rounded-xl px-4 py-2 mb-3 text-[12px] text-slate-500">'
+            f'已过滤非 AI 链 {n_filtered_chains} 条（{n_filtered_stocks} 只）— '
+            '这些票去 AI 推荐 / 产业链地图查看，不在 AI 主题雷达范围。'
+            '</div>'
+        )
     else:
         other_chains_html = ""
 
