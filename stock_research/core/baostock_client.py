@@ -12,6 +12,10 @@
 
 API：
   fetch_a_share_quote(code) → {code, bs_code, price, name, industry, date, source}
+  fetch_a_share_p5_inputs(code) → {ni_y0, cfo_y0, roa_y0, roa_y4, lev_y0, lev_y4, ...}
+      P5-Lite F-Score 的 5 项原始输入（净利润/CFO/ROA YoY/杠杆 YoY）。
+      2026-06-02 替换 akshare.stock_financial_abstract —— 后者按 IP 限流，220 只批量
+      连打成功率仅 ~20%。baostock 拉交易所官方季报，无此封禁。
 """
 from __future__ import annotations
 
@@ -125,3 +129,101 @@ def fetch_a_share_quote(code: str, lookback_days: int = 10) -> dict[str, Any]:
     except Exception as e:
         logger.warning("baostock fetch failed for %s: %s", code, e)
         return {}
+
+
+def _to_float(v: Any) -> float | None:
+    try:
+        f = float(v)
+        return f
+    except (ValueError, TypeError):
+        return None
+
+
+def _stmt_row(fn: Any, bsc: str, year: int, quarter: int) -> dict[str, str] | None:
+    """拉单季单表，返回 {field: value} dict；无数据返回 None。"""
+    try:
+        rs = fn(code=bsc, year=year, quarter=quarter)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("baostock %s %s %sQ%s 失败: %s", fn.__name__, bsc, year, quarter, e)
+        return None
+    while rs.error_code == "0" and rs.next():
+        return dict(zip(rs.fields, rs.get_row_data()))
+    return None
+
+
+def fetch_a_share_p5_inputs(code: str) -> dict[str, Any] | None:
+    """A 股 P5-Lite F-Score 的 5 项原始输入（最新季 y0 + 去年同季 y4）。
+
+    返回 ni_y0/cfo_y0/roa_y0/roa_y4/lev_y0/lev_y4，组装与打分留在
+    compute_piotroski_v2.compute_p5_lite_baostock，本函数只负责取数。
+
+    derive 说明（baostock 无直接 ROA / liabilityToAsset 个别季返脏值）：
+      ROA = roeAvg / assetToEquity（= ROE × 权益/资产）
+      杠杆 = 1 - 1/assetToEquity（内部一致，比直接读 liabilityToAsset 稳）
+      CFO  = CFOToNP × netProfit（baostock 现金流表只给比率）
+    """
+    bsc = _code_to_bs(code)
+    if not bsc or not _ensure_login():
+        return None
+    try:
+        import baostock as bs
+    except ImportError:
+        return None
+
+    now = datetime.now()
+    # 候选报告期：近 3 年全部季度，新→旧
+    cands = sorted(
+        [(y, q) for y in range(now.year, now.year - 3, -1) for q in (4, 3, 2, 1)],
+        reverse=True,
+    )
+    # 扫到最新一个有净利润数据的季作为 y0
+    y0 = None
+    p0_row = None
+    for y, q in cands:
+        if (y, q) > (now.year, (now.month - 1) // 3 + 1):
+            continue  # 跳过未来季度
+        row = _stmt_row(bs.query_profit_data, bsc, y, q)
+        if row and _to_float(row.get("netProfit")) is not None:
+            y0, p0_row = (y, q), row
+            break
+    if y0 is None or p0_row is None:
+        return None
+    y4 = (y0[0] - 1, y0[1])  # 去年同季
+
+    p4_row = _stmt_row(bs.query_profit_data, bsc, *y4)
+    b0_row = _stmt_row(bs.query_balance_data, bsc, *y0)
+    b4_row = _stmt_row(bs.query_balance_data, bsc, *y4)
+    c0_row = _stmt_row(bs.query_cash_flow_data, bsc, *y0)
+
+    ni_y0 = _to_float(p0_row.get("netProfit"))
+    cfo_to_np = _to_float(c0_row.get("CFOToNP")) if c0_row else None
+    cfo_y0 = cfo_to_np * ni_y0 if (cfo_to_np is not None and ni_y0 is not None) else None
+
+    def _roa(profit_row: dict | None, bal_row: dict | None) -> float | None:
+        if not profit_row or not bal_row:
+            return None
+        roe = _to_float(profit_row.get("roeAvg"))
+        a2e = _to_float(bal_row.get("assetToEquity"))
+        if roe is None or not a2e:  # a2e 为 0/None 都跳过
+            return None
+        return roe / a2e
+
+    def _lev(bal_row: dict | None) -> float | None:
+        if not bal_row:
+            return None
+        a2e = _to_float(bal_row.get("assetToEquity"))
+        if not a2e:
+            return None
+        return 1.0 - 1.0 / a2e
+
+    return {
+        "ni_y0": ni_y0,
+        "cfo_y0": cfo_y0,
+        "roa_y0": _roa(p0_row, b0_row),
+        "roa_y4": _roa(p4_row, b4_row),
+        "lev_y0": _lev(b0_row),
+        "lev_y4": _lev(b4_row),
+        "report_periods": {"y0": p0_row.get("statDate"),
+                           "y4": p4_row.get("statDate") if p4_row else None},
+        "cfo_to_np": cfo_to_np,
+    }

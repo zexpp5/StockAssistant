@@ -9,11 +9,14 @@
   5. 杠杆同比下降      (leverage_down) Total Debt / Total Equity 下降
 
 每项 1 分，0-5 总分；写入 factor_metadata.f_score 时映射到 0-9 量级（×1.8）以与完整版兼容。
-source 字段标 "yfinance_p5_lite" 或 "akshare_p5_lite_a_share"，明示是简化版。
+source 字段标 "yfinance_p5_lite" / "baostock_p5_lite_a_share" / "akshare_p5_lite_a_share"，
+明示是简化版与数据源。
 
 数据源：
   - 美/港股：yfinance.Ticker.financials/balance_sheet/cashflow（最近 2 年）
-  - A 股：暂未实现（akshare 财报接口结构差异较大，留 TODO；接入 baostock_client.py 后激活）
+  - A 股：baostock 交易所官方季报（主源，无 IP 限流）；返 None 时回退 akshare。
+          2026-06-02 切换：akshare.stock_financial_abstract 按 IP 限流，220 只批量
+          连打成功率仅 ~20%，故主源改 baostock_client.fetch_a_share_p5_inputs。
 
 用法：
   python3 scripts/tools/compute_piotroski_v2.py --markets US,HK            # 算 US+HK
@@ -271,6 +274,81 @@ def compute_p5_lite_akshare(symbol_with_suffix: str) -> dict | None:
     }
 
 
+def _score_p5_lite(ni_y0, cfo_y0, roa_y0, roa_y4, lev_y0, lev_y4, source) -> dict | None:
+    """P5-Lite 5 项打分 —— akshare/baostock 共用，逻辑与原 akshare 版逐项一致。"""
+    details: dict[str, dict | None] = {}
+    score = 0
+    # 1. 净利润 > 0
+    if ni_y0 is not None:
+        ok = ni_y0 > 0
+        details["profitable"] = {"value": ni_y0, "pass": ok}
+        score += int(ok)
+    else:
+        details["profitable"] = None
+    # 2. CFO > 0
+    if cfo_y0 is not None:
+        ok = cfo_y0 > 0
+        details["cfo_positive"] = {"value": cfo_y0, "pass": ok}
+        score += int(ok)
+    else:
+        details["cfo_positive"] = None
+    # 3. ROA 同比改善
+    if roa_y0 is not None and roa_y4 is not None:
+        ok = roa_y0 > roa_y4
+        details["roa_improving"] = {"roa_y0": roa_y0, "roa_y4": roa_y4, "pass": ok}
+        score += int(ok)
+    else:
+        details["roa_improving"] = None
+    # 4. CFO > NI（现金流质量）
+    if cfo_y0 is not None and ni_y0 is not None:
+        ok = cfo_y0 > ni_y0
+        details["cfo_quality"] = {"cfo": cfo_y0, "ni": ni_y0, "pass": ok}
+        score += int(ok)
+    else:
+        details["cfo_quality"] = None
+    # 5. 杠杆同比下降
+    if lev_y0 is not None and lev_y4 is not None:
+        ok = lev_y0 < lev_y4
+        details["leverage_down"] = {"lev_y0": lev_y0, "lev_y4": lev_y4, "pass": ok}
+        score += int(ok)
+    else:
+        details["leverage_down"] = None
+
+    covered = sum(1 for v in details.values() if v is not None)
+    if covered == 0:
+        return None
+    return {
+        "f_score_raw_5": score,
+        "f_score_norm_9": round(score / 5.0 * 9.0, 2),
+        "covered_items": covered,
+        "details": details,
+        "source": source,
+    }
+
+
+def compute_p5_lite_baostock(symbol_with_suffix: str) -> dict | None:
+    """A 股 P5-Lite —— baostock 季报取数（替换 akshare，规避 IP 限流）。
+
+    打分逻辑与 compute_p5_lite_akshare 完全一致；只是数据源换成交易所官方季报。
+    """
+    try:
+        from stock_research.core.baostock_client import fetch_a_share_p5_inputs  # type: ignore
+    except ImportError:
+        return None
+    inp = fetch_a_share_p5_inputs(symbol_with_suffix)
+    if not inp:
+        return None
+    result = _score_p5_lite(
+        inp.get("ni_y0"), inp.get("cfo_y0"),
+        inp.get("roa_y0"), inp.get("roa_y4"),
+        inp.get("lev_y0"), inp.get("lev_y4"),
+        source="baostock_p5_lite_a_share",
+    )
+    if result is not None:
+        result["report_periods"] = inp.get("report_periods")
+    return result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--markets", default="US,HK", help="逗号分隔市场代码")
@@ -323,8 +401,10 @@ def main() -> int:
     by_market = {}
     for market, symbol in targets:
         if market == "CN":
-            result = compute_p5_lite_akshare(symbol)
-            time.sleep(0.15)  # 轻节流：降低 akshare 连打限流概率
+            # baostock 主源（交易所官方季报，无 IP 限流）；返 None 时回退 akshare
+            result = compute_p5_lite_baostock(symbol)
+            if result is None:
+                result = compute_p5_lite_akshare(symbol)
         else:
             result = compute_p5_lite_yfinance(symbol)
         if result is None:
