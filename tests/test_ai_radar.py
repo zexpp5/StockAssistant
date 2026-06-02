@@ -156,6 +156,39 @@ class TestNonAIFilteredOut(unittest.TestCase):
         self.assertFalse(is_ai_relevant_universe("C38电气机械和器材制造业", "C38电气机械和器材制造业"))
         self.assertFalse(is_ai_relevant_universe("C35专用设备制造业", "C35专用设备制造业"))
 
+    def test_render_hides_filtered_non_ai_stock_names(self):
+        """渲染层只能提示过滤数量，不能露出非 AI 具体股票。"""
+        from stock_research.core.ai_radar import render_ai_radar_section
+
+        html = render_ai_radar_section({
+            "n_picks_total": 10,
+            "n_picks_with_chain": 0,
+            "n_picks_with_any_chain": 2,
+            "data_generated_at": "2026-06-02T10:00:00",
+            "data_universe": "system_tech_universe",
+            "chains": [],
+            "filtered_non_ai_chains": [{
+                "chain": "创新药",
+                "n_stocks": 2,
+                "avg_score": 91.0,
+                "top_picks": [
+                    {"market": "HK", "symbol": "9999.HK", "name": "非AI高分票", "score": 91.0},
+                    {"market": "CN", "symbol": "000001.SZ", "name": "普通高分票", "score": 90.0},
+                ],
+            }],
+            "coverage_audit": {
+                "n_uncovered": 0,
+                "threshold_score": 70,
+                "items": [],
+            },
+        })
+
+        self.assertIn("已过滤非 AI 链 1 条（2 只）", html)
+        self.assertNotIn("9999.HK", html)
+        self.assertNotIn("000001.SZ", html)
+        self.assertNotIn("非AI高分票", html)
+        self.assertNotIn("普通高分票", html)
+
 
 # ──────────────────────────────────────────────────────────────
 # T3: candidate 不当 confirmed
