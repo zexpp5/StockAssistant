@@ -1276,6 +1276,7 @@ function switchDiscoveryView(view) {
           <th class="px-3 py-2 text-right whitespace-nowrap w-[90px]" title="这只股票市值占你总本金（默认50万）的百分之几">你现在占比</th>
           <th class="px-3 py-2 text-right whitespace-nowrap w-[155px]" title="来自「AI组合方案」：若按模型买，这只应占百分之几；下一行是你现在比建议多还是少几个百分点">模型建议仓位</th>
           <th class="px-3 py-2 text-right whitespace-nowrap w-[140px]" title="仅供参考：按目标仓位差与半Kelly上限估算，不构成交易指令">建议规模</th>
+          <th class="px-3 py-2 text-left whitespace-nowrap w-[180px]" title="你为真实持仓手动确认的价格纪律线；只提醒，不自动交易，不写推荐池">纪律提醒</th>
           <th class="px-3 py-2 text-center whitespace-nowrap w-[230px]">
             <span class="inline-flex items-center justify-center gap-1">
               今日建议
@@ -1288,7 +1289,7 @@ function switchDiscoveryView(view) {
         </tr>
       </thead>
       <tbody id="real-holdings-table">
-        <tr><td colspan="14" class="text-center text-slate-500 py-8">暂无持仓 · 点击右上角「+ 录入持仓」添加</td></tr>
+        <tr><td colspan="15" class="text-center text-slate-500 py-8">暂无持仓 · 点击右上角「+ 录入持仓」添加</td></tr>
       </tbody>
     </table>
   </div>
@@ -1434,8 +1435,9 @@ function switchDiscoveryView(view) {
 
         <div class="flex gap-2 pt-1">
           <button onclick="closeHoldingModal()" class="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 py-2 rounded font-medium">取消</button>
-          <button onclick="saveRealHolding()" class="flex-1 bg-violet-600 hover:bg-violet-700 text-white py-2 rounded font-medium">保存</button>
+          <button id="real-form-save-btn" onclick="saveRealHolding()" class="flex-1 bg-violet-600 hover:bg-violet-700 text-white py-2 rounded font-medium disabled:opacity-60 disabled:cursor-not-allowed">保存</button>
         </div>
+        <div id="real-form-save-status" class="min-h-[18px] text-[11px] text-slate-500"></div>
       </div>
       <p class="text-[11px] text-slate-500 mt-3 leading-relaxed">真实持仓写入 DuckDB <span class="font-mono">real_holdings</span>。AI 跟踪仓写入 <span class="font-mono">model_sim_holdings</span>,两者不会混用。</p>
     </div>
@@ -1568,6 +1570,8 @@ function switchDiscoveryView(view) {
       💡 这里是"如果照模型买,会怎样"的模拟账本 · 买入价/股数由模型估算 · <strong class="text-rose-700">不是真实成交</strong>。
     </div>
 
+    <div id="portfolio-data-meta" class="rounded-lg border border-slate-200 bg-white px-4 py-3 mb-4 text-xs text-slate-600 leading-relaxed"></div>
+
   <!-- 2026-05-21: "数据窗口/年化 95%/夏普 2.95/NVDA +330%" 黄底说明块已删除：
        1) 数字过时（V2 当前 Sharpe 2.55 而非 2.95）2) 内容是策略层 disclaimer，
        已合并到「AI 助手 → AI 配仓」tab 顶部 v6 模型卡的 disclaimer 行 -->
@@ -1627,15 +1631,15 @@ function switchDiscoveryView(view) {
         <tr>
           <th class="px-3 py-2 text-left sticky left-0 bg-slate-100 z-10 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.15)] whitespace-nowrap">股票</th>
           <th class="px-3 py-2 text-left whitespace-nowrap">行业</th>
-          <th class="px-3 py-2 text-right whitespace-nowrap">买入价</th>
+          <th class="px-3 py-2 text-right whitespace-nowrap" title="模型生成模拟仓时使用的本币买入价">买入价</th>
           <th class="px-3 py-2 text-right whitespace-nowrap">数量</th>
-          <th class="px-3 py-2 text-right whitespace-nowrap">成本</th>
-          <th class="px-3 py-2 text-right whitespace-nowrap">现价</th>
-          <th class="px-3 py-2 text-right whitespace-nowrap">市值</th>
+          <th class="px-3 py-2 text-right whitespace-nowrap" title="优先使用 model_sim_holdings.amount_rmb 作为入仓时锁定成本；缺失时才按买入价×股数×汇率估算">锁定成本</th>
+          <th class="px-3 py-2 text-right whitespace-nowrap" title="最新可用行情价格，并显示对应交易日/抓取时间">现价/行情</th>
+          <th class="px-3 py-2 text-right whitespace-nowrap">市值 RMB</th>
           <th class="px-3 py-2 text-right whitespace-nowrap">盈亏 RMB</th>
-          <th class="px-3 py-2 text-right whitespace-nowrap">盈亏%</th>
-          <th class="px-3 py-2 text-right whitespace-nowrap">仓位%</th>
-          <th class="px-3 py-2 text-left whitespace-nowrap" title="加入持仓的日期（holdings.entry_date）">加入时间</th>
+          <th class="px-3 py-2 text-right whitespace-nowrap" title="股票仓收益率 = 股票盈亏 / 锁定成本">盈亏%</th>
+          <th class="px-3 py-2 text-right whitespace-nowrap" title="当前股票市值 / 模拟本金；上涨后可能超过 100%，不是资金占用比例">仓位%</th>
+          <th class="px-3 py-2 text-left whitespace-nowrap" title="模拟仓创建/更新时间，来自 model_sim_holdings.created_at / updated_at">加入/更新</th>
           <th class="px-3 py-2 text-center whitespace-nowrap">操作</th>
         </tr>
       </thead>
@@ -3115,6 +3119,28 @@ function _fmtAddedAt(iso) {
   if (diffDays > 0 && diffDays <= 7) return `${diffDays} 天前`;
   if (d.getFullYear() === now.getFullYear()) return `${d.getMonth()+1}-${String(d.getDate()).padStart(2,"0")}`;
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+
+// 完整时间格式：页面上涉及数据口径/持仓创建/行情抓取时统一显示到秒。
+function _fmtFullDateTime(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "—";
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+  if (!m) return _esc(raw);
+  const [, y, mo, d, hh, mm, ss] = m;
+  return `${y}-${mo}-${d} ${hh || "00"}:${mm || "00"}:${ss || "00"}`;
+}
+
+function _maxDateTimeText(values) {
+  const clean = (values || []).filter(Boolean);
+  if (!clean.length) return "—";
+  return _fmtFullDateTime(clean.sort((a, b) => Date.parse(String(a).replace(" ", "T")) - Date.parse(String(b).replace(" ", "T"))).at(-1));
+}
+
+function _minDateTimeText(values) {
+  const clean = (values || []).filter(Boolean);
+  if (!clean.length) return "—";
+  return _fmtFullDateTime(clean.sort((a, b) => Date.parse(String(a).replace(" ", "T")) - Date.parse(String(b).replace(" ", "T")))[0]);
 }
 
 // 持仓「持仓 / 方案」标记 — 区分 source：
@@ -7023,7 +7049,7 @@ function _historyTooltipText(history) {
     const p = h.pnl_pct == null ? "" : ` ${Number(h.pnl_pct) >= 0 ? "+" : ""}${Number(h.pnl_pct).toFixed(1)}%`;
     return `${d} ${a}${p}`;
   });
-  return "近 " + history.length + " 日轨迹:\\n" + lines.join("\\n");
+  return "近 " + history.length + " 日轨迹:\n" + lines.join("\n");
 }
 
 function _verdictByCode() {
@@ -7064,11 +7090,14 @@ function _reviewByHoldingId() {
 }
 
 function _lookupReviewItemForHolding(holding) {
-  // 2026-05-29: 优先按 holding.id 查 review (lot 独立);兜底按 code (旧 review 未带 holding_id)
+  // 2026-05-29: 优先按 holding.id 查 review (lot 独立)。
+  // 如果当前 review 已经带 holding_id，就绝不按 ticker 兜底，否则新录入的同 ticker lot
+  // 会误套旧 lot 的价格/盈亏。
   if (holding && holding.id != null) {
     const byId = _reviewByHoldingId();
     const hit = byId[String(holding.id)];
     if (hit) return hit;
+    if (Object.keys(byId).length > 0) return null;
   }
   return _lookupReviewItem(holding && (holding.code || holding.symbol));
 }
@@ -7371,6 +7400,74 @@ function _suggestedSizeCell(item) {
   </td>`;
 }
 
+function _disciplineCell(item) {
+  const d = item && item.discipline;
+  if (!d || !d.plan_id) {
+    return `<td class="px-3 py-2 text-left text-[11px] text-slate-400 whitespace-nowrap" title="这笔持仓还没有单独设置纪律线"><div>未设置</div></td>`;
+  }
+  const status = d.status || "watching";
+  const price = d.current_price == null ? "" : Number(d.current_price).toFixed(2);
+  const priceLine = price ? `${_esc(d.symbol || "")} 当前 ${price}` : _esc(d.symbol || "");
+  const cleanRange = (raw) => String(raw || "")
+    .replace(/\.00/g, "")
+    .replace(/-</g, "-")
+    .replace(/^</, "跌破 ")
+    .replace(/^>/, "突破 ");
+  const splitTrigger = (trigger) => {
+    const range = cleanRange(trigger && trigger.threshold_text);
+    const action = String((trigger && trigger.action_label) || "").replace("观察不加仓", "观察，不加仓").replace("持有不加仓", "持有，不加仓");
+    return {range, action};
+  };
+  const allTriggers = d.all_triggers || d.next_triggers || [];
+  const findTrigger = (predicate) => allTriggers
+    .filter(predicate)
+    .sort((a, b) => (Number(a.distance ?? 999999) - Number(b.distance ?? 999999)) || ((Number(a.priority) || 99) - (Number(b.priority) || 99)))[0] || null;
+  const nextOne = (d.next_triggers || [])[0] || null;
+  const profitTrigger = findTrigger(t => String(t.trigger_type || "").includes("profit") || String(t.action_label || "").includes("止盈"));
+  const riskTrigger = findTrigger(t => String(t.trigger_type || "").includes("risk") || String(t.trigger_type || "").includes("invalidation") || String(t.action_label || "").includes("风险") || String(t.action_label || "").includes("失败"));
+  const n1 = splitTrigger(nextOne);
+  const profit = splitTrigger(profitTrigger);
+  const risk = splitTrigger(riskTrigger);
+  const titleLines = [
+    priceLine,
+    d.message || "纪律线未触发",
+    profit.range ? `止盈线: ${profit.range} ${profit.action}` : "",
+    n1.range ? `当前最近线: ${n1.range} ${n1.action}` : "",
+    risk.range ? `风控线: ${risk.range} ${risk.action}` : "",
+    "这只是人工提醒，不会自动交易。",
+  ].filter(Boolean);
+  const title = titleLines.join("\n");
+  if (status === "stale_price" || status === "missing_price") {
+    return `<td class="px-3 py-2 text-left whitespace-normal cursor-help leading-snug" title="${_esc(title)}">
+      <div class="text-[12px] font-semibold text-amber-800">先刷新行情</div>
+      <div class="text-[11px] text-amber-700">${status === "stale_price" ? "旧价格不触发规则" : "缺价格不触发规则"}</div>
+    </td>`;
+  }
+  if (status === "triggered") {
+    const sev = String(d.severity || "info").toLowerCase();
+    const cls = sev === "critical" || sev === "high" ? "text-rose-800" : sev === "warning" || sev === "medium" ? "text-amber-800" : "text-blue-800";
+    const detail = d.suggested_size_text || d.threshold_text || "触发纪律线";
+    const triggerRange = cleanRange(d.threshold_text);
+    return `<td class="px-3 py-2 text-left whitespace-normal cursor-help leading-snug" title="${_esc(title)}">
+      <div class="text-[12px] font-semibold ${cls}">触发：${_esc(d.action_label || "纪律提醒")}</div>
+      <div class="text-[11px] text-slate-700">${_esc(triggerRange || "纪律线")}</div>
+      <div class="text-[10px] text-slate-500">${_esc(detail)}</div>
+    </td>`;
+  }
+  if (status === "watching") {
+    return `<td class="px-3 py-2 text-left whitespace-normal cursor-help leading-snug" title="${_esc(title)}">
+      <div class="text-[12px] font-semibold text-slate-700">未到纪律线</div>
+      ${profit.range ? `<div class="text-[10px] text-amber-700">止盈 ${_esc(profit.range)} · ${_esc(profit.action)}</div>` : ""}
+      <div class="text-[11px] text-slate-700">${n1.range ? `最近 ${_esc(n1.range)} · ${_esc(n1.action)}` : "等待价格触发"}</div>
+      ${risk.range ? `<div class="text-[10px] text-rose-700">风控 ${_esc(risk.range)} · ${_esc(risk.action)}</div>` : ""}
+    </td>`;
+  }
+  return `<td class="px-3 py-2 text-center whitespace-nowrap cursor-help" title="${_esc(title)}">
+    <span class="inline-flex px-2 py-0.5 rounded-full border text-[11px] font-semibold bg-slate-50 text-slate-600 border-slate-200">${_esc(d.action_label || status)}</span>
+    <div class="text-[10px] text-slate-400 mt-0.5">只提醒，不自动交易</div>
+  </td>`;
+}
+
 function _reviewCell(item) {
   const action = item.action_label || "未评估";
   const meta = _REVIEW_ACTION_META[action] || {cls: "bg-slate-50 text-slate-600 border-slate-200"};
@@ -7392,7 +7489,7 @@ function _reviewCell(item) {
     .concat(risks.map(r => "风险: " + r))
     .concat(dataFlags.map(r => "数据: " + r));
   if (historyTooltip) titleParts.push("", historyTooltip);
-  const title = titleParts.join("\\n");
+  const title = titleParts.join("\n");
   const trendLine = trend
     ? `<div class="text-[10px] ${trend.cls} mt-0.5">${trend.arrow} ${trend.prevDate} 由 ${_esc(trend.prevAction)} ${trend.delta < 0 ? "升级" : "缓和"}</div>`
     : "";
@@ -7421,7 +7518,7 @@ function _fallbackVerdictCell(verdict, cls) {
       <div class="text-[10px] text-rose-700 leading-tight mt-0.5">需修正 ${_hintIcon(fixHint)}</div></td>`;
   }
   if (!verdict) return `<td class="px-3 py-2 text-center text-slate-300">—</td>`;
-  const reasonsTitle = (verdict.reasons || []).map(r => "· " + r.text).join("\\n") || verdict.label_text;
+  const reasonsTitle = (verdict.reasons || []).map(r => "· " + r.text).join("\n") || verdict.label_text;
   return `<td class="px-3 py-2 text-center cursor-help whitespace-nowrap" title="${_esc(reasonsTitle)}">
     <div class="text-base leading-tight">${verdict.label_emoji}</div>
     <div class="text-[10px] text-slate-500 leading-tight mt-0.5">${_esc(verdict.label_text)} ${_hintIcon(reasonsTitle)}</div></td>`;
@@ -7563,13 +7660,36 @@ function getCurrentPriceRMB(code) {
     else currency = "USD";  // 裸 ticker 默认美股
   }
   const fx = FX_TO_RMB[currency] || 1;
-  return { rmb_price: p.price * fx, raw_price: p.price, currency: currency, fx };
+  return {
+    rmb_price: p.price * fx,
+    raw_price: p.price,
+    currency: currency,
+    fx,
+    trade_date: r.price_trade_date || r.price_date || "",
+    fetched_at: r.price_fetched_at || "",
+    source: r.price_source || "",
+  };
 }
 
 let _realHoldingsCache = [];      // 真实持仓：/api/real-holdings
 let _simHoldingsCache = [];       // 推荐模拟仓：/api/model-sim-holdings
 let _holdingsCache = [];          // 合并快照，仅供 stockPill badge 等展示
 let _holdingsLoaded = false;      // 是否已从新 API 拉过一次
+let __realHoldingSaveInFlight = false;
+
+function _holdingRows(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (payload && Array.isArray(payload.rows)) return payload.rows;
+  if (payload && Array.isArray(payload.items)) return payload.items;
+  if (payload && Array.isArray(payload.data)) return payload.data;
+  return [];
+}
+
+function _refreshMergedHoldingsCache() {
+  _realHoldingsCache = _holdingRows(_realHoldingsCache);
+  _simHoldingsCache = _holdingRows(_simHoldingsCache);
+  _holdingsCache = _realHoldingsCache.concat(_simHoldingsCache.map(h => ({...h, source: "ai_plan"})));
+}
 
 async function _ensureHoldingsLoaded() {
   if (_holdingsLoaded) return;
@@ -7584,7 +7704,7 @@ async function _ensureHoldingsLoaded() {
     _realHoldingsCache = [];
     _simHoldingsCache = [];
   }
-  _holdingsCache = _realHoldingsCache.concat(_simHoldingsCache.map(h => ({...h, source: "ai_plan"})));
+  _refreshMergedHoldingsCache();
   _holdingsLoaded = true;
 }
 
@@ -7728,7 +7848,7 @@ async function refreshHoldingsAndRender() {
     _realHoldingsCache = realResp.ok ? await realResp.json() : [];
     _simHoldingsCache = simResp.ok ? await simResp.json() : [];
   } catch (e) {}
-  _holdingsCache = _realHoldingsCache.concat(_simHoldingsCache.map(h => ({...h, source: "ai_plan"})));
+  _refreshMergedHoldingsCache();
   _holdingsLoaded = true;
   if (typeof renderPortfolio === "function") renderPortfolio();
   if (typeof renderRealHoldings === "function") renderRealHoldings();
@@ -7809,6 +7929,22 @@ function resetRealHoldingForm() {
   if (curEl) curEl.value = "USD";
   const hint = document.getElementById("real-form-price-currency-hint");
   if (hint) hint.textContent = "（按 USD 填）";
+  _setRealHoldingSaveState(false, "");
+}
+
+function _setRealHoldingSaveState(inFlight, message, kind = "neutral") {
+  __realHoldingSaveInFlight = !!inFlight;
+  const btn = document.getElementById("real-form-save-btn");
+  const status = document.getElementById("real-form-save-status");
+  if (btn) {
+    btn.disabled = !!inFlight;
+    btn.textContent = inFlight ? "保存中…" : "保存";
+  }
+  if (status) {
+    const cls = kind === "error" ? "text-rose-600" : (kind === "success" ? "text-emerald-700" : "text-slate-500");
+    status.className = `min-h-[18px] text-[11px] ${cls}`;
+    status.textContent = message || "";
+  }
 }
 
 function openHoldingModal({mode = "create"} = {}) {
@@ -7883,6 +8019,7 @@ document.addEventListener("change", e => {
 });
 
 async function saveRealHolding() {
+  if (__realHoldingSaveInFlight) return;
   const id = (document.getElementById("real-form-id")?.value || "").trim();
   const code = (document.getElementById("real-form-code")?.value || "").trim().toUpperCase();
   const name = (document.getElementById("real-form-name")?.value || "").trim();
@@ -7902,6 +8039,8 @@ async function saveRealHolding() {
     item.entry_fx_rate = entry_fx_rate;
     item.entry_fx_source = "manual";
   }
+  _setRealHoldingSaveState(true, id ? "正在更新持仓…" : "正在保存持仓，别急着再点…");
+  let saveData = null;
   try {
     const url = WATCHLIST_API_BASE + "/api/real-holdings" + (id ? "/" + id : "");
     const r = await fetch(url, {
@@ -7911,10 +8050,13 @@ async function saveRealHolding() {
     });
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
+      _setRealHoldingSaveState(false, "保存失败: " + (err.detail || r.status), "error");
       alert("保存真实持仓失败: " + (err.detail || r.status));
       return;
     }
+    saveData = await r.json().catch(() => ({}));
   } catch (e) {
+    _setRealHoldingSaveState(false, "保存失败: " + e.message, "error");
     alert("保存真实持仓失败: " + e.message);
     return;
   }
@@ -7947,9 +8089,16 @@ async function saveRealHolding() {
       console.warn("补充信息保存失败(主持仓已写入):", e);
     }
   }
+  _setRealHoldingSaveState(true, "已写入，正在刷新持仓列表…", "success");
+  _realHoldingReviewCache = null;
   closeHoldingModal();
   resetRealHoldingForm();
   await refreshHoldingsAndRender();
+  _setRealHoldingSaveState(false, "", "success");
+  const msg = saveData && saveData.deduped
+    ? "已存在相同持仓，本次未重复添加；列表已刷新。"
+    : "真实持仓已保存，列表已刷新。新录入持仓会等真实持仓行情/体检刷新后再显示现价和盈亏。";
+  alert("✓ " + msg);
 }
 
 function editRealHolding(id) {
@@ -8045,7 +8194,7 @@ async function renderRealHoldings() {
   const holdingsFetchFailed = !hRes || !hRes.ok;
   try { if (hRes && hRes.ok) _realHoldingsCache = await hRes.json(); } catch (e) {}
   _renderVerdictAggregateCard();
-  _holdingsCache = _realHoldingsCache.concat(_simHoldingsCache.map(h => ({...h, source: "ai_plan"})));
+  _refreshMergedHoldingsCache();
   const list = document.getElementById("real-form-code-list");
   if (list && !list.innerHTML) list.innerHTML = RECORDS.map(r => `<option value="${r.code}">${r.name}</option>`).join("");
   const dateInput = document.getElementById("real-form-date");
@@ -8090,7 +8239,7 @@ async function renderRealHoldings() {
           ? "无法读取持仓：DuckDB 正被 daily_refresh 等脚本占用，请稍后再点刷新。"
           : "无法连接本地 API；登录后应由 launchd 自动启动（com.linearview.stockassistant.api）。")
       : "暂无持仓 · 点击右上角「+ 录入持仓」添加";
-    tbody.innerHTML = `<tr><td colspan="14" class="text-center ${holdingsFetchFailed ? "text-amber-800" : "text-slate-500"} py-8">${emptyMsg}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="15" class="text-center ${holdingsFetchFailed ? "text-amber-800" : "text-slate-500"} py-8">${emptyMsg}</td></tr>`;
     const realAlloc = document.getElementById("chart-real-allocation");
     const realTheme = document.getElementById("chart-real-theme");
     if (realAlloc) realAlloc.innerHTML = '<div class="text-sm text-slate-400 p-6">暂无持仓分布</div>';
@@ -8118,11 +8267,10 @@ async function renderRealHoldings() {
     const dayChangeRmb = _numOrNull(reviewItem && reviewItem.day_change_rmb);
     const dayChangePct = _numOrNull(reviewItem && reviewItem.day_change_pct);
     let cur = _curFromReviewSnapshot(reviewItem, h, code);
-    if (!cur) cur = getCurrentPriceRMB(code);
     const costRmb = reviewCost != null ? reviewCost : _lockedCostRmbForHolding(h, code, cur);
     const valueRmb = reviewValue != null ? reviewValue : (cur ? cur.raw_price * Number(h.shares || 0) * cur.fx : costRmb);
-    const pnlRmb = reviewPnl != null ? reviewPnl : valueRmb - costRmb;
-    const pnlPct = reviewPnlPct != null ? reviewPnlPct : (costRmb > 0 ? pnlRmb / costRmb * 100 : 0);
+    const pnlRmb = reviewPnl != null ? reviewPnl : (cur ? valueRmb - costRmb : null);
+    const pnlPct = reviewPnlPct != null ? reviewPnlPct : (cur && costRmb > 0 ? pnlRmb / costRmb * 100 : null);
     totalCost += costRmb;
     totalValue += valueRmb;
     if (dayChangeRmb != null) {
@@ -8372,13 +8520,13 @@ async function renderRealHoldings() {
     if (!items || items.length === 0) return [];
     const meta = _assetMeta(asset);
     const subHeader = `<tr class="bg-slate-50 border-t-2 border-slate-200">
-      <td colspan="14" class="px-3 py-2 text-[13px] font-semibold text-slate-800">
+      <td colspan="15" class="px-3 py-2 text-[13px] font-semibold text-slate-800">
         ${meta.emoji} ${meta.text} · <span class="text-slate-500 font-normal">${items.length} 只 · ${meta.hint}</span>
       </td>
     </tr>`;
     return [subHeader, ...items.map(x => _renderHoldingRow(x, x._verdict, x._cls, CLASS_META[x._cls], x._reviewItem || _lookupReviewItem(x.code)))];
   }).join("");
-  tbody.innerHTML = rendered || '<tr><td colspan="14" class="text-center text-slate-500 py-8">这个类别暂无持仓</td></tr>';
+  tbody.innerHTML = rendered || '<tr><td colspan="15" class="text-center text-slate-500 py-8">这个类别暂无持仓</td></tr>';
 
   function _renderHoldingRow(x, verdict, cls, meta, reviewItem) {
   // 优先级: 用户手填的 holding.name > watchlist record.name > ticker fallback
@@ -8402,7 +8550,7 @@ async function renderRealHoldings() {
         ? `<div class="text-[10px] text-amber-600" title="盘前/闭市，行情还停留在上一交易日收盘，待盘中刷新">昨收 ${_esc(priceDate || reviewStamp)}</div>`
         : `<div class="text-[10px] text-violet-500" title="行情来自最近一次持仓体检快照">体检价 ${_esc(reviewStamp || (reviewRun && reviewRun.as_of_date) || "")}</div>`)
     : "";
-  const pnlCls = x.pnlRmb >= 0 ? "text-emerald-600" : "text-rose-600";
+  const pnlCls = x.pnlRmb == null ? "text-slate-300" : (x.pnlRmb >= 0 ? "text-emerald-600" : "text-rose-600");
   const entryFx = _entryFxForHolding(x.h, x.code, x.cur);
   const fxSource = x.h.entry_fx_source || (x.h.entry_fx_rate ? "locked" : "current");
   const fxAsOf = x.h.entry_fx_as_of || "";
@@ -8410,6 +8558,7 @@ async function renderRealHoldings() {
 
   const planWeightCell = _plainPlanWeightCell(cls, x);
   const sizeCell = reviewItem ? _suggestedSizeCell(reviewItem) : `<td class="px-3 py-2 text-right text-[11px] text-slate-300">—</td>`;
+  const disciplineCell = _disciplineCell(reviewItem);
   const verdictCell = reviewItem ? _reviewCell(reviewItem) : _fallbackVerdictCell(verdict, cls);
 
   // 买入日期 + 持有天数
@@ -8431,7 +8580,8 @@ async function renderRealHoldings() {
     ? `${displayPrice != null ? Number(displayPrice).toFixed(2) : "—"} <span class="text-[10px] text-slate-400">${_esc((x.cur && x.cur.currency) || (reviewItem && reviewItem.current_currency) || _currencyForTicker(x.code))}</span>
        <div>${x.valueRmb.toLocaleString(undefined, {maximumFractionDigits:0})} <span class="text-[10px] text-slate-400">RMB</span></div>${snapTag}`
     : `<span class="text-slate-400">无行情</span>
-       <div class="text-[11px] text-amber-700">市值用成本估算</div>`;
+       <div class="text-[11px] text-amber-700">待持仓行情刷新</div>
+       <div class="text-[10px] text-slate-400">暂按成本计入总览</div>`;
   return `<tr class="border-t border-slate-100 hover:bg-slate-50 group ${rowBg}">
       <td class="px-3 py-2 font-medium sticky left-0 ${stickyBg} group-hover:bg-slate-50 z-10 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.15)] w-[200px] min-w-[200px] max-w-[200px]">
         ${stockPill(x.code, {nameOverride: name})}
@@ -8458,12 +8608,15 @@ async function renderRealHoldings() {
            </td>`
         : `<td class="px-3 py-2 text-right font-mono whitespace-nowrap text-slate-300" title="${priorSession ? "盘前/未刷新,暂无本地今日行情" : "缺少前一日收盘价,无法算今日变化"}">—</td>`}
       <td class="px-3 py-2 text-right font-mono whitespace-nowrap ${pnlCls}">
-        ${x.pnlRmb >= 0 ? "+" : ""}${x.pnlRmb.toLocaleString(undefined, {maximumFractionDigits:0})} <span class="text-[10px] text-slate-400">RMB</span>
-        <div class="text-[11px]">${x.pnlPct >= 0 ? "+" : ""}${x.pnlPct.toFixed(2)}%</div>
+        ${x.pnlRmb == null
+          ? `<span title="新录入或体检未覆盖，暂不使用系统池行情计算累计盈亏">—</span><div class="text-[10px] text-slate-400">待体检</div>`
+          : `${x.pnlRmb >= 0 ? "+" : ""}${x.pnlRmb.toLocaleString(undefined, {maximumFractionDigits:0})} <span class="text-[10px] text-slate-400">RMB</span>
+             <div class="text-[11px]">${x.pnlPct >= 0 ? "+" : ""}${x.pnlPct.toFixed(2)}%</div>`}
       </td>
       <td class="px-3 py-2 text-right font-mono" title="占你总本金（默认50万）的比例">${(x.currentWeight * 100).toFixed(1)}%</td>
       ${planWeightCell}
       ${sizeCell}
+      ${disciplineCell}
       ${verdictCell}
       <td class="px-3 py-2 text-center whitespace-nowrap">
         <button onclick="editRealHolding(${x.h.id})" class="text-violet-600 text-xs">编辑</button>
@@ -8510,7 +8663,7 @@ async function renderPortfolio() {
     const r = await fetch(WATCHLIST_API_BASE + "/api/model-sim-holdings");
     if (r.ok) _simHoldingsCache = await r.json();
   } catch (e) { /* keep cache */ }
-  _holdingsCache = _realHoldingsCache.concat(_simHoldingsCache.map(h => ({...h, source: "ai_plan"})));
+  _refreshMergedHoldingsCache();
   const holdings = _holdingsBySource("ai_plan");
   const tbody = document.getElementById("holdings-table");
   if (!tbody) return;
@@ -8519,6 +8672,8 @@ async function renderPortfolio() {
   if (holdings.length === 0) {
     tbody.innerHTML = '<tr><td colspan="12" class="text-center text-slate-500 py-8">暂无推荐模拟仓 · 点击「用 AI 配仓刷新模拟仓」开始观察模型能力</td></tr>';
     document.getElementById("portfolio-summary").innerHTML = "";
+    const metaEl = document.getElementById("portfolio-data-meta");
+    if (metaEl) metaEl.innerHTML = '<span class="text-slate-500">暂无模拟仓数据。刷新模拟仓后会显示建仓时间、行情交易日、抓取时间和收益率口径。</span>';
     document.getElementById("alert-line").innerHTML = '<div class="text-sm text-slate-500">生成模拟仓后会显示模型账户警戒线</div>';
     return;
   }
@@ -8526,6 +8681,25 @@ async function renderPortfolio() {
   let totalCost = 0, totalValue = 0;
   const themeAlloc = {};
   const stockAlloc = [];
+  const simCreatedTimes = [];
+  const simUpdatedTimes = [];
+  const priceBasis = {};
+  let missingPriceCount = 0;
+
+  function _portfolioMarketLabel(h) {
+    const m = String((h && h.market) || "").toUpperCase();
+    if (m) return _marketLabelShort(m);
+    return _marketLabelShort(_inferMarketFromHoldingRow(h));
+  }
+
+  function _recordPriceBasis(h, cur) {
+    if (!cur) return;
+    const label = _portfolioMarketLabel(h);
+    const b = priceBasis[label] || (priceBasis[label] = {label, tradeDates: new Set(), fetchedTimes: [], count: 0});
+    b.count += 1;
+    if (cur.trade_date) b.tradeDates.add(String(cur.trade_date).slice(0, 10));
+    if (cur.fetched_at) b.fetchedTimes.push(cur.fetched_at);
+  }
 
   const rows = holdings.map((h, idx) => {
     const r = RECORDS.find(x => x.code === h.code);
@@ -8534,16 +8708,27 @@ async function renderPortfolio() {
     const industry = r ? (r.theme || r.industry || "-") : "-";
     const cur = getCurrentPriceRMB(h.code);
     // 优先 created_at（TIMESTAMP，带时分），entry_date 只是 DATE 没时分会被显示成"今天 08:00"误导
-    const addedAt = _fmtAddedAt(h.created_at || h.entry_date);
+    const createdAt = _fmtFullDateTime(h.created_at || h.entry_date);
+    const updatedAt = h.updated_at ? _fmtFullDateTime(h.updated_at) : "";
+    const hasLaterUpdate = Boolean(updatedAt && updatedAt !== createdAt);
+    const updateCellHtml = hasLaterUpdate
+      ? `<div>生成 ${_esc(createdAt)}</div><div class="text-slate-400">更新 ${_esc(updatedAt)}</div>`
+      : `<div>生成 ${_esc(createdAt)}</div><div class="text-slate-400">持仓记录未改动</div>`;
+    const updateCellTitle = hasLaterUpdate
+      ? `生成 ${_esc(createdAt)}；持仓记录最近更新 ${_esc(updatedAt)}；这里只表示股数/买入价/锁定成本有没有重新生成，行情更新时间见「现价/行情」列`
+      : `生成 ${_esc(createdAt)}；持仓记录未被再次编辑（股数/买入价/锁定成本未变）；行情更新时间见「现价/行情」列`;
+    simCreatedTimes.push(h.created_at || h.entry_date);
+    simUpdatedTimes.push(h.updated_at || h.created_at || h.entry_date);
     if (!cur) {
+      missingPriceCount += 1;
       return `<tr class="border-t border-slate-100 group">
         <td class="px-3 py-2 sticky left-0 bg-white group-hover:bg-slate-50 z-10 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.15)]">${stockPill(h.code, {nameOverride: name})}</td>
         <td class="px-3 py-2 text-xs text-slate-600">${industry}</td>
-        <td class="px-3 py-2 text-right">${h.entry_price}</td>
-        <td class="px-3 py-2 text-right">${h.shares}</td>
+        <td class="px-3 py-2 text-right font-mono">${Number(h.entry_price || 0).toFixed(2)} ${_esc(h.currency || "")}</td>
+        <td class="px-3 py-2 text-right font-mono">${h.shares}</td>
         <td class="px-3 py-2 text-right">-</td>
         <td class="px-3 py-2 text-right text-slate-400" colspan="5">无价格数据</td>
-        <td class="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">${addedAt}</td>
+        <td class="px-3 py-2 text-[11px] text-slate-500 whitespace-nowrap font-mono" title="${updateCellTitle}">${updateCellHtml}</td>
         <td class="px-3 py-2 text-center">
           <span class="text-xs text-slate-400">模拟</span>
           <button onclick="deleteHolding(${h.id})" class="text-rose-500 text-xs ml-2">删除</button>
@@ -8556,11 +8741,15 @@ async function renderPortfolio() {
     // 正常 h.currency == cur.currency（同一只股一种本币），分歧时 RMB 金额仍各自正确
     const cost_fx = h.currency ? (FX_TO_RMB[h.currency] || 1) : cur.fx;
     const cost_local = h.entry_price * h.shares;
-    const cost_rmb = cost_local * cost_fx;
+    const estimatedCostRmb = cost_local * cost_fx;
+    const lockedAmountRmb = Number(h.amount_rmb || 0);
+    const cost_rmb = lockedAmountRmb > 0 ? lockedAmountRmb : estimatedCostRmb;
+    const costSource = lockedAmountRmb > 0 ? "amount_rmb 锁定成本" : "买入价×股数×当前汇率估算";
     const value_local = cur.raw_price * h.shares;
     const value_rmb = value_local * cur.fx;
     const pnl_rmb = value_rmb - cost_rmb;
-    const pnl_pct = (cur.raw_price / h.entry_price - 1) * 100;
+    const pnl_pct = cost_rmb > 0 ? (pnl_rmb / cost_rmb * 100) : 0;
+    _recordPriceBasis(h, cur);
 
     totalCost += cost_rmb;
     totalValue += value_rmb;
@@ -8572,18 +8761,27 @@ async function renderPortfolio() {
     stockAlloc.push({ name, value: value_rmb });
 
     const pnlColor = pnl_rmb >= 0 ? "text-emerald-600" : "text-rose-600";
+    const quoteTitle = `行情交易日 ${_esc(_fmtFullDateTime(cur.trade_date))}；抓取时间 ${_esc(_fmtFullDateTime(cur.fetched_at))}；汇率 ${_esc(cur.currency)}→RMB ${Number(cur.fx || 1).toFixed(4)}（${_esc(FX_AS_OF || "—")}）`;
+    const costTitle = `${costSource}；估算本币成本 ${Number(cost_local || 0).toLocaleString(undefined, {maximumFractionDigits:2})} ${_esc(h.currency || cur.currency)}；当前汇率 ${Number(cost_fx || 1).toFixed(4)}`;
     return `<tr class="border-t border-slate-100 hover:bg-slate-50 group">
       <td class="px-3 py-2 font-medium sticky left-0 bg-white group-hover:bg-slate-50 z-10 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.15)]">${stockPill(h.code, {nameOverride: name})}</td>
       <td class="px-3 py-2 text-xs text-slate-700 max-w-[140px]">${industry}</td>
       <td class="px-3 py-2 text-right font-mono">${h.entry_price.toFixed(2)} ${h.currency || cur.currency}</td>
       <td class="px-3 py-2 text-right font-mono">${h.shares}</td>
-      <td class="px-3 py-2 text-right font-mono">${cost_rmb.toFixed(0)}</td>
-      <td class="px-3 py-2 text-right font-mono">${cur.raw_price.toFixed(2)}</td>
+      <td class="px-3 py-2 text-right font-mono" title="${costTitle}">
+        <div>${cost_rmb.toFixed(0)}</div>
+        <div class="text-[10px] text-slate-400">${lockedAmountRmb > 0 ? "锁定" : "估算"}</div>
+      </td>
+      <td class="px-3 py-2 text-right font-mono" title="${quoteTitle}">
+        <div>${cur.raw_price.toFixed(2)} ${cur.currency}</div>
+        <div class="text-[10px] text-slate-400">行情 ${_esc(String(cur.trade_date || "—").slice(0, 10))}</div>
+        <div class="text-[10px] text-slate-400">抓取 ${_esc(_fmtFullDateTime(cur.fetched_at))}</div>
+      </td>
       <td class="px-3 py-2 text-right font-mono">${value_rmb.toFixed(0)}</td>
       <td class="px-3 py-2 text-right font-mono ${pnlColor}">${pnl_rmb >= 0 ? '+' : ''}${pnl_rmb.toFixed(0)}</td>
       <td class="px-3 py-2 text-right font-mono ${pnlColor}">${pnl_pct >= 0 ? '+' : ''}${pnl_pct.toFixed(2)}%</td>
       <td class="px-3 py-2 text-right font-mono">${(value_rmb / TOTAL_CAPITAL * 100).toFixed(1)}%</td>
-      <td class="px-3 py-2 text-xs text-slate-500 whitespace-nowrap" title="${_esc(h.created_at || h.entry_date || '')}">${addedAt}</td>
+      <td class="px-3 py-2 text-[11px] text-slate-500 whitespace-nowrap font-mono" title="${updateCellTitle}">${updateCellHtml}</td>
       <td class="px-3 py-2 text-center">
         <span class="text-xs text-slate-400">模拟</span>
         <button onclick="deleteHolding(${h.id})" class="text-rose-500 text-xs ml-2">删除</button>
@@ -8620,18 +8818,50 @@ async function renderPortfolio() {
   const total_pnl_pct = totalCost > 0 ? (total_pnl / totalCost * 100) : 0;
   const cash = TOTAL_CAPITAL - totalCost;
   const portfolio_value = totalValue + cash;
+  const account_pnl = portfolio_value - TOTAL_CAPITAL;
+  const account_ret_pct = TOTAL_CAPITAL > 0 ? (account_pnl / TOTAL_CAPITAL * 100) : 0;
   const stockColor = total_pnl >= 0 ? "text-emerald-600" : "text-rose-600";
+  const basisParts = Object.values(priceBasis).map(b => {
+    const dates = Array.from(b.tradeDates).filter(Boolean).sort();
+    const dateText = dates.length ? (dates.length === 1 ? dates[0] : `${dates[0]}~${dates.at(-1)}`) : "行情日待补";
+    return `${_esc(b.label)} ${dateText} 收盘 · 抓取 ${_esc(_maxDateTimeText(b.fetchedTimes))}`;
+  });
+  const simGeneratedAt = _minDateTimeText(simCreatedTimes);
+  const simLastUpdatedAt = _maxDateTimeText(simUpdatedTimes);
+  const simUpdateMeta = simLastUpdatedAt && simLastUpdatedAt !== simGeneratedAt
+    ? `持仓记录更新 <span class="font-mono">${_esc(simLastUpdatedAt)}</span>`
+    : `持仓记录 <span class="font-mono">未改动</span>`;
+  const metaEl = document.getElementById("portfolio-data-meta");
+  if (metaEl) {
+    metaEl.innerHTML = `
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <span class="font-semibold text-slate-800">🧾 数据口径</span>
+        <span>模拟仓生成 <span class="font-mono">${_esc(simGeneratedAt)}</span></span>
+        <span>${simUpdateMeta}</span>
+        <span>行情 ${basisParts.length ? basisParts.join("；") : "暂无行情"}</span>
+        <span>汇率 as_of <span class="font-mono">${_esc(FX_AS_OF || "—")}</span></span>
+      </div>
+      <div class="mt-1 text-slate-500">
+        顶部统计卡 = 锁定成本 + 最新行情实时估值；所以行情更新后统计会变，即使持仓记录未改动。
+        成本优先读 <span class="font-mono">model_sim_holdings.amount_rmb</span>；市值 = 最新行情 × 股数 × 最新汇率。
+        持仓记录时间只表示这批模拟仓的股数/买入价/锁定成本有没有被重新生成或编辑；价格是否更新看「行情/抓取」时间。
+        股票仓收益率 = 股票盈亏 / 锁定成本；总资产收益率 = 组合盈亏 / 模拟本金。
+        ${missingPriceCount ? `<span class="text-amber-700">有 ${missingPriceCount} 只缺行情，已用空值提示。</span>` : ""}
+      </div>
+    `;
+  }
 
   document.getElementById("portfolio-summary").innerHTML = `
-    <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200" title="本金 + 股票当前市值变化">
+    <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200" title="组合总值 = 当前股票市值 + 未持仓现金">
       <div class="text-2xl font-bold text-slate-900">${portfolio_value.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
       <div class="text-xs text-slate-500 mt-1">组合总值 RMB（含现金）</div>
+      <div class="text-[11px] ${account_pnl >= 0 ? "text-emerald-600" : "text-rose-600"} mt-1">总资产 ${account_pnl >= 0 ? "+" : ""}${account_pnl.toLocaleString(undefined, {maximumFractionDigits:0})} · ${account_ret_pct >= 0 ? "+" : ""}${account_ret_pct.toFixed(2)}%</div>
     </div>
-    <div class="bg-blue-50 rounded-lg p-3 shadow-sm border border-blue-200" title="所有持仓股票按入选时价格 × 股数 求和（你买入花了多少钱）">
+    <div class="bg-blue-50 rounded-lg p-3 shadow-sm border border-blue-200" title="优先读取 model_sim_holdings.amount_rmb，代表模型生成模拟仓时锁定的入仓金额；不是实时汇率反推值">
       <div class="text-2xl font-bold text-blue-900">${totalCost.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
-      <div class="text-xs text-blue-700 mt-1">已投入成本 RMB <span class="text-blue-500">(买股花的钱)</span></div>
+      <div class="text-xs text-blue-700 mt-1">锁定成本 RMB <span class="text-blue-500">(模拟买入金额)</span></div>
     </div>
-    <div class="bg-violet-50 rounded-lg p-3 shadow-sm border border-violet-200" title="所有持仓股票按现价 × 股数 求和（现在能值多少钱）">
+    <div class="bg-violet-50 rounded-lg p-3 shadow-sm border border-violet-200" title="所有持仓按最新行情 × 股数 × 最新汇率估值">
       <div class="text-2xl font-bold text-violet-900">${totalValue.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
       <div class="text-xs text-violet-700 mt-1">当前股票市值 RMB <span class="text-violet-500">(现价 × 股数)</span></div>
     </div>
@@ -8641,9 +8871,9 @@ async function renderPortfolio() {
     </div>
     <div class="bg-slate-50 rounded-lg p-3 border border-slate-100">
       <div class="text-2xl font-bold ${stockColor}">${total_pnl_pct >= 0 ? '+' : ''}${total_pnl_pct.toFixed(2)}%</div>
-      <div class="text-xs text-slate-500 mt-1">股票仓收益率</div>
+      <div class="text-xs text-slate-500 mt-1">股票仓收益率 <span class="text-slate-400">(盈亏/成本)</span></div>
     </div>
-    <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200" title="50 万本金 - 已投入成本 = 还没买的钱">
+    <div class="bg-white rounded-lg p-3 shadow-sm border border-slate-200" title="模拟本金 - 锁定成本 = 还没投入股票的现金">
       <div class="text-2xl font-bold text-slate-900">${cash.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
       <div class="text-xs text-slate-500 mt-1">未持仓现金 RMB <span class="text-slate-400">(本金 - 成本)</span></div>
     </div>
@@ -13864,8 +14094,13 @@ def today_decision_panel_html() -> str:
         except Exception:
             return "—"
 
+    # 用户不想看 A 股科技/AI 池，这里只显示美股 Top 5（按各自 rank/总分排序）
+    us_candidates = [
+        c for c in discovery_candidates
+        if str(c.get("market") or c.get("location") or "").upper() == "US"
+    ]
     top_rows = []
-    for c in discovery_candidates[:5]:
+    for c in us_candidates[:5]:
         ticker = c.get("ticker") or c.get("code") or "?"
         name = c.get("name") or ""
         market = c.get("market") or c.get("location") or "—"
@@ -13884,7 +14119,7 @@ def today_decision_panel_html() -> str:
     if not top_rows:
         top_rows.append("""
           <tr>
-            <td colspan="5" class="py-6 text-center text-sm text-slate-500">暂无 AI 推荐候选；请先运行 AI 推荐生成链路。</td>
+            <td colspan="5" class="py-6 text-center text-sm text-slate-500">暂无美股推荐候选；请先运行 AI 推荐生成链路。</td>
           </tr>
 """)
 
@@ -14051,8 +14286,8 @@ def today_decision_panel_html() -> str:
     <div class="lg:col-span-2 bg-white rounded-xl border border-slate-200 overflow-hidden">
       <div class="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3">
         <div>
-          <h3 class="font-bold text-slate-900">今日 AI 推荐 Top 5</h3>
-          <p class="text-xs text-slate-500">来自系统科技/AI 股票池，不是你的手动自选股。来源：{html_lib.escape(discovery_source)}</p>
+          <h3 class="font-bold text-slate-900">今日美股推荐 Top 5</h3>
+          <p class="text-xs text-slate-500">来自系统美股池，不是你的手动自选股。来源：{html_lib.escape(discovery_source)}</p>
         </div>
         <a href="#discovery" onclick="setTimeout(()=>switchDiscoveryView('today'),50)"
            class="text-xs text-violet-700 hover:text-violet-900">完整列表 →</a>

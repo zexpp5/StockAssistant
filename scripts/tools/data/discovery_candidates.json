@@ -1,0 +1,598 @@
+{
+  "generated_at": "2026-05-12T10:28:24",
+  "universe_size": 425,
+  "watchlist_excluded": 108,
+  "etf_sources": [
+    "SOXX",
+    "IGM",
+    "IRBO",
+    "BAI",
+    "MCHI"
+  ],
+  "method": "Piotroski F-Score + 12-1 momentum + PEAD + analyst (z-score 等权)",
+  "min_market_cap_usd": 5000000000.0,
+  "candidates": [
+    {
+      "ticker": "TTMI",
+      "name": "TTM TECHNOLOGIES INC",
+      "sector": "Information Technology",
+      "location": "United States",
+      "etfs": [
+        "IGM"
+      ],
+      "market_cap_usd": 16926521344,
+      "f_score": 7.0,
+      "momentum_12_1": 364.77,
+      "pead": 6.39,
+      "analyst_score": 10.0,
+      "composite_z": 1.1589721543484888,
+      "rank": 1,
+      "detail": {
+        "piotroski_details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": false,
+          "7_no_new_shares": false,
+          "8_dgm>0": true,
+          "9_dat>0": true,
+          "latest_fiscal_date": "2025-12-31"
+        },
+        "momentum": {
+          "momentum_12_1": 364.77,
+          "reversal_1m": -34.16,
+          "error": null
+        },
+        "pead": {
+          "acceleration": 6.39,
+          "method": "QoQ",
+          "qoq_now_pct": 9.25,
+          "qoq_prev_pct": 2.87,
+          "error": null
+        },
+        "analyst": {
+          "window_days": 90,
+          "events_total": 3,
+          "raises": 3,
+          "lowers": 0,
+          "upgrades": 0,
+          "downgrades": 0,
+          "avg_target_raise_pct": 36.51
+        },
+        "insider": {
+          "buy_shares_6m": 445460.0,
+          "sell_shares_6m": 154344.0,
+          "net_shares_6m": 291116.0,
+          "net_transactions_6m": 35.0,
+          "net_value_usd_approx": 47448998.43914795
+        }
+      }
+    },
+    {
+      "ticker": "FORM",
+      "name": "FORMFACTOR INC",
+      "sector": "Information Technology",
+      "location": "United States",
+      "etfs": [
+        "IGM"
+      ],
+      "market_cap_usd": 11802351616,
+      "f_score": 4.0,
+      "momentum_12_1": 313.08,
+      "pead": -1.06,
+      "analyst_score": 15.0,
+      "composite_z": 1.0136874003792034,
+      "rank": 2,
+      "detail": {
+        "piotroski_details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": false,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": false,
+          "7_no_new_shares": false,
+          "8_dgm>0": false,
+          "9_dat>0": false,
+          "latest_fiscal_date": "2025-12-31"
+        },
+        "momentum": {
+          "momentum_12_1": 313.08,
+          "reversal_1m": -22.29,
+          "error": null
+        },
+        "pead": {
+          "acceleration": -1.06,
+          "method": "QoQ",
+          "qoq_now_pct": 5.1,
+          "qoq_prev_pct": 6.16,
+          "error": null
+        },
+        "analyst": {
+          "window_days": 90,
+          "events_total": 6,
+          "raises": 6,
+          "lowers": 0,
+          "upgrades": 0,
+          "downgrades": 1,
+          "avg_target_raise_pct": 39.22
+        },
+        "insider": {
+          "buy_shares_6m": 35952.0,
+          "sell_shares_6m": 137178.0,
+          "net_shares_6m": -101226.0,
+          "net_transactions_6m": 25.0,
+          "net_value_usd_approx": -15325615.782165527
+        }
+      }
+    },
+    {
+      "ticker": "DELL",
+      "name": "DELL TECHNOLOGIES INC CLASS C",
+      "sector": "Information Technology",
+      "location": "United States",
+      "etfs": [
+        "IGM"
+      ],
+      "market_cap_usd": 160622624768,
+      "f_score": 7.0,
+      "momentum_12_1": 87.02,
+      "pead": 32.91,
+      "analyst_score": 15.0,
+      "composite_z": 0.8731656397385376,
+      "rank": 3,
+      "detail": {
+        "piotroski_details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": true,
+          "6_dcr>0": true,
+          "7_no_new_shares": true,
+          "8_dgm>0": false,
+          "9_dat>0": false,
+          "latest_fiscal_date": "2026-01-31"
+        },
+        "momentum": {
+          "momentum_12_1": 87.02,
+          "reversal_1m": -39.37,
+          "error": null
+        },
+        "pead": {
+          "acceleration": 32.91,
+          "method": "QoQ",
+          "qoq_now_pct": 23.6,
+          "qoq_prev_pct": -9.31,
+          "error": null
+        },
+        "analyst": {
+          "window_days": 90,
+          "events_total": 14,
+          "raises": 10,
+          "lowers": 3,
+          "upgrades": 0,
+          "downgrades": 1,
+          "avg_target_raise_pct": 20.64
+        },
+        "insider": {
+          "buy_shares_6m": 5591316.0,
+          "sell_shares_6m": 3942667.0,
+          "net_shares_6m": 1648649.0,
+          "net_transactions_6m": 39.0,
+          "net_value_usd_approx": 407282237.8911896
+        }
+      }
+    },
+    {
+      "ticker": "KEYS",
+      "name": "KEYSIGHT TECHNOLOGIES INC",
+      "sector": "Information Technology",
+      "location": "United States",
+      "etfs": [
+        "IGM"
+      ],
+      "market_cap_usd": 62831652864,
+      "f_score": 5.0,
+      "momentum_12_1": 112.94,
+      "pead": 7.8,
+      "analyst_score": 15.0,
+      "composite_z": 0.8355173878705087,
+      "rank": 4,
+      "detail": {
+        "piotroski_details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": false,
+          "7_no_new_shares": true,
+          "8_dgm>0": false,
+          "9_dat>0": false,
+          "latest_fiscal_date": "2025-10-31"
+        },
+        "momentum": {
+          "momentum_12_1": 112.94,
+          "reversal_1m": -13.01,
+          "error": null
+        },
+        "pead": {
+          "acceleration": 7.8,
+          "method": "QoQ",
+          "qoq_now_pct": 12.76,
+          "qoq_prev_pct": 4.96,
+          "error": null
+        },
+        "analyst": {
+          "window_days": 90,
+          "events_total": 13,
+          "raises": 12,
+          "lowers": 0,
+          "upgrades": 0,
+          "downgrades": 0,
+          "avg_target_raise_pct": 23.75
+        },
+        "insider": {
+          "buy_shares_6m": 153016.0,
+          "sell_shares_6m": 119987.0,
+          "net_shares_6m": 33029.0,
+          "net_transactions_6m": 45.0,
+          "net_value_usd_approx": 12100503.956176758
+        }
+      }
+    },
+    {
+      "ticker": "AMKR",
+      "name": "AMKOR TECHNOLOGY INC",
+      "sector": "Information Technology",
+      "location": "United States",
+      "etfs": [
+        "IGM",
+        "IRBO"
+      ],
+      "market_cap_usd": 19009343488,
+      "f_score": 5.0,
+      "momentum_12_1": 225.83,
+      "pead": -5.79,
+      "analyst_score": 15.0,
+      "composite_z": 0.8315035220793197,
+      "rank": 5,
+      "detail": {
+        "piotroski_details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": false,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": true,
+          "7_no_new_shares": true,
+          "8_dgm>0": false,
+          "9_dat>0": false,
+          "latest_fiscal_date": "2025-12-31"
+        },
+        "momentum": {
+          "momentum_12_1": 225.83,
+          "reversal_1m": -32.32,
+          "error": null
+        },
+        "pead": {
+          "acceleration": -5.79,
+          "method": "QoQ",
+          "qoq_now_pct": -10.77,
+          "qoq_prev_pct": -4.98,
+          "error": null
+        },
+        "analyst": {
+          "window_days": 90,
+          "events_total": 5,
+          "raises": 5,
+          "lowers": 0,
+          "upgrades": 0,
+          "downgrades": 0,
+          "avg_target_raise_pct": 32.76
+        },
+        "insider": {
+          "buy_shares_6m": 21188350.0,
+          "sell_shares_6m": 20241440.0,
+          "net_shares_6m": 946910.0,
+          "net_transactions_6m": 74.0,
+          "net_value_usd_approx": 72618530.21179199
+        }
+      }
+    },
+    {
+      "ticker": "SATS",
+      "name": "ECHOSTAR CORP CLASS A",
+      "sector": "Communication",
+      "location": "United States",
+      "etfs": [
+        "BAI"
+      ],
+      "market_cap_usd": 37426515968,
+      "f_score": 3.0,
+      "momentum_12_1": 439.16,
+      "pead": 8.0,
+      "analyst_score": 5.0,
+      "composite_z": 0.8149635419509661,
+      "rank": 6,
+      "detail": {
+        "piotroski_details": {
+          "1_roa>0": false,
+          "2_cfo>0": false,
+          "3_droa>0": false,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": false,
+          "7_no_new_shares": false,
+          "8_dgm>0": true,
+          "9_dat>0": true,
+          "latest_fiscal_date": "2025-12-31"
+        },
+        "momentum": {
+          "momentum_12_1": 439.16,
+          "reversal_1m": -0.43,
+          "error": null
+        },
+        "pead": {
+          "acceleration": 8.0,
+          "method": "QoQ",
+          "qoq_now_pct": 5.03,
+          "qoq_prev_pct": -2.97,
+          "error": null
+        },
+        "analyst": {
+          "window_days": 90,
+          "events_total": 1,
+          "raises": 1,
+          "lowers": 0,
+          "upgrades": 0,
+          "downgrades": 0,
+          "avg_target_raise_pct": 1.6
+        },
+        "insider": {
+          "buy_shares_6m": 999881.0,
+          "sell_shares_6m": 449710.0,
+          "net_shares_6m": 550171.0,
+          "net_transactions_6m": 18.0,
+          "net_value_usd_approx": 71049082.60420227
+        }
+      }
+    },
+    {
+      "ticker": "DIOD",
+      "name": "DIODES INC",
+      "sector": "Information Technology",
+      "location": "United States",
+      "etfs": [
+        "IGM"
+      ],
+      "market_cap_usd": 5145350656,
+      "f_score": 7.0,
+      "momentum_12_1": 108.04,
+      "pead": -7.24,
+      "analyst_score": 15.0,
+      "composite_z": 0.7913770258833723,
+      "rank": 7,
+      "detail": {
+        "piotroski_details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": true,
+          "7_no_new_shares": true,
+          "8_dgm>0": false,
+          "9_dat>0": true,
+          "latest_fiscal_date": "2025-12-31"
+        },
+        "momentum": {
+          "momentum_12_1": 108.04,
+          "reversal_1m": -34.81,
+          "error": null
+        },
+        "pead": {
+          "acceleration": -7.24,
+          "method": "QoQ",
+          "qoq_now_pct": -0.15,
+          "qoq_prev_pct": 7.09,
+          "error": null
+        },
+        "analyst": {
+          "window_days": 90,
+          "events_total": 5,
+          "raises": 5,
+          "lowers": 0,
+          "upgrades": 1,
+          "downgrades": 0,
+          "avg_target_raise_pct": 33.24
+        },
+        "insider": {
+          "buy_shares_6m": 216000.0,
+          "sell_shares_6m": 136589.0,
+          "net_shares_6m": 79411.0,
+          "net_transactions_6m": 16.0,
+          "net_value_usd_approx": 8893237.720359802
+        }
+      }
+    },
+    {
+      "ticker": "WULF",
+      "name": "TERAWULF INC",
+      "sector": "Information Technology",
+      "location": "United States",
+      "etfs": [
+        "IGM"
+      ],
+      "market_cap_usd": 11580598272,
+      "f_score": 1.0,
+      "momentum_12_1": 471.82,
+      "pead": -35.32,
+      "analyst_score": 15.0,
+      "composite_z": 0.7698178115532709,
+      "rank": 8,
+      "detail": {
+        "piotroski_details": {
+          "1_roa>0": false,
+          "2_cfo>0": false,
+          "3_droa>0": false,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": false,
+          "7_no_new_shares": false,
+          "8_dgm>0": false,
+          "9_dat>0": false,
+          "latest_fiscal_date": "2025-12-31"
+        },
+        "momentum": {
+          "momentum_12_1": 471.82,
+          "reversal_1m": -23.85,
+          "error": null
+        },
+        "pead": {
+          "acceleration": -35.32,
+          "method": "QoQ",
+          "qoq_now_pct": -29.15,
+          "qoq_prev_pct": 6.18,
+          "error": null
+        },
+        "analyst": {
+          "window_days": 90,
+          "events_total": 11,
+          "raises": 6,
+          "lowers": 1,
+          "upgrades": 0,
+          "downgrades": 0,
+          "avg_target_raise_pct": 21.49
+        },
+        "insider": {
+          "buy_shares_6m": 7808121.0,
+          "sell_shares_6m": 1543852.0,
+          "net_shares_6m": 6264269.0,
+          "net_transactions_6m": 33.0,
+          "net_value_usd_approx": 146395971.78718376
+        }
+      }
+    },
+    {
+      "ticker": "CGNX",
+      "name": "COGNEX CORP",
+      "sector": "Information Technology",
+      "location": "United States",
+      "etfs": [
+        "IGM"
+      ],
+      "market_cap_usd": 11193372672,
+      "f_score": 7.0,
+      "momentum_12_1": 83.01,
+      "pead": -20.03,
+      "analyst_score": 15.0,
+      "composite_z": 0.769542901782682,
+      "rank": 9,
+      "detail": {
+        "piotroski_details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": true,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": true,
+          "7_no_new_shares": true,
+          "8_dgm>0": false,
+          "9_dat>0": true,
+          "latest_fiscal_date": "2025-12-31"
+        },
+        "momentum": {
+          "momentum_12_1": 83.01,
+          "reversal_1m": -25.93,
+          "error": null
+        },
+        "pead": {
+          "acceleration": -20.03,
+          "method": "QoQ",
+          "qoq_now_pct": -8.87,
+          "qoq_prev_pct": 11.16,
+          "error": null
+        },
+        "analyst": {
+          "window_days": 90,
+          "events_total": 16,
+          "raises": 14,
+          "lowers": 1,
+          "upgrades": 2,
+          "downgrades": 0,
+          "avg_target_raise_pct": 24.15
+        },
+        "insider": {
+          "buy_shares_6m": 480697.0,
+          "sell_shares_6m": 318467.0,
+          "net_shares_6m": 162230.0,
+          "net_transactions_6m": 38.0,
+          "net_value_usd_approx": 10911590.146560669
+        }
+      }
+    },
+    {
+      "ticker": "LSCC",
+      "name": "LATTICE SEMICONDUCTOR CORP",
+      "sector": "Information Technology",
+      "location": "United States",
+      "etfs": [
+        "IGM",
+        "BAI"
+      ],
+      "market_cap_usd": 17668534272,
+      "f_score": 5.0,
+      "momentum_12_1": 115.74,
+      "pead": 7.89,
+      "analyst_score": 15.0,
+      "composite_z": 0.759416521251681,
+      "rank": 10,
+      "detail": {
+        "piotroski_details": {
+          "1_roa>0": true,
+          "2_cfo>0": true,
+          "3_droa>0": false,
+          "4_cfo>ni": true,
+          "5_dltd<0": false,
+          "6_dcr>0": false,
+          "7_no_new_shares": true,
+          "8_dgm>0": true,
+          "9_dat>0": false,
+          "latest_fiscal_date": "2025-12-31"
+        },
+        "momentum": {
+          "momentum_12_1": 115.74,
+          "reversal_1m": -21.55,
+          "error": null
+        },
+        "pead": {
+          "acceleration": 7.89,
+          "method": "QoQ",
+          "qoq_now_pct": 17.22,
+          "qoq_prev_pct": 9.33,
+          "error": null
+        },
+        "analyst": {
+          "window_days": 90,
+          "events_total": 17,
+          "raises": 17,
+          "lowers": 0,
+          "upgrades": 0,
+          "downgrades": 0,
+          "avg_target_raise_pct": 27.67
+        },
+        "insider": {
+          "buy_shares_6m": 243951.0,
+          "sell_shares_6m": 147697.0,
+          "net_shares_6m": 96254.0,
+          "net_transactions_6m": 60.0,
+          "net_value_usd_approx": 12412916.486236572
+        }
+      }
+    }
+  ]
+}

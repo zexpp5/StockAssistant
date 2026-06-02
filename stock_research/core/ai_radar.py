@@ -680,6 +680,9 @@ def build_etf_consensus_panel(con) -> dict[str, Any]:
             "n_holdings_total": sum(e["n_total"] for e in etfs),
             "n_holdings_in_universe": sum(e["n_in_universe"] for e in etfs),
             "n_holdings_in_picks": sum(e["n_in_picks"] for e in etfs),
+            "latest_fetched_at": max(
+                [str(e.get("last_fetched_at") or "") for e in etfs] or [""]
+            ),
         },
     }
 
@@ -1590,6 +1593,7 @@ def _render_etf_consensus_panel(panel: dict[str, Any]) -> str:
     n_uni = summary.get("n_holdings_in_universe", 0)
     n_pick = summary.get("n_holdings_in_picks", 0)
     n_total = summary.get("n_holdings_total", 0)
+    latest_fetched = (summary.get("latest_fetched_at") or "")[:19].replace("T", " ") or "—"
 
     etf_cards = []
     for e in panel["etfs"]:
@@ -1602,25 +1606,31 @@ def _render_etf_consensus_panel(panel: dict[str, Any]) -> str:
             # 状态 badge
             if h["in_picks"]:
                 badge = (f'<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] '
-                         f'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200">✓ picks {h["pick_score"]:.0f}</span>')
+                         f'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200">✓ picks {h["pick_score"]:.0f}（今日推荐分）</span>')
             elif h["in_universe"]:
                 badge = ('<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] '
-                         'bg-sky-50 text-sky-700 ring-1 ring-sky-200">○ universe</span>')
+                         'bg-sky-50 text-sky-700 ring-1 ring-sky-200">○ universe（已收录未推荐）</span>')
             else:
                 badge = ('<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] '
-                         'bg-amber-50 text-amber-700 ring-1 ring-amber-200">⚠️ 未收</span>')
+                         'bg-amber-50 text-amber-700 ring-1 ring-amber-200">⚠️ 未收（扩池候选）</span>')
             mkt_inferred = h.get("market_inferred") or "?"
             uni_match = h.get("universe_match") or h["raw_ticker"]
+            system_match = (
+                f'{_esc(h.get("universe_match"))} <span class="text-slate-400">({_esc(h.get("universe_market") or mkt_inferred)})</span>'
+                if h.get("universe_match") else '<span class="text-slate-300">—</span>'
+            )
             rows.append(f"""
 <tr class="border-t border-slate-100">
   <td class="py-1.5 pr-2 align-top text-[11px] text-slate-400 text-right whitespace-nowrap">#{h["rank"]}</td>
   <td class="py-1.5 pr-2 align-top text-[12px] whitespace-nowrap font-mono text-slate-700">{_esc(h["raw_ticker"])}</td>
+  <td class="py-1.5 pr-2 align-top text-[11px] whitespace-nowrap font-mono text-slate-600">{system_match}</td>
   <td class="py-1.5 pr-2 align-top text-[12px]">{_esc(h.get("company_name") or "")}</td>
-  <td class="py-1.5 pr-2 align-top text-[12px] font-semibold text-slate-800 text-right whitespace-nowrap">{h["weight"]:.2f}%</td>
+  <td class="py-1.5 pr-2 align-top text-[12px] font-semibold text-slate-800 text-right whitespace-nowrap" title="该股票在这只 ETF 官方持仓里的占比，不是系统推荐仓位">{h["weight"]:.2f}%</td>
   <td class="py-1.5 pl-2 align-top text-[11px] whitespace-nowrap">{badge}</td>
 </tr>
 """)
 
+        fetched_at = (e.get("last_fetched_at") or "")[:19].replace("T", " ") or "—"
         etf_cards.append(f"""
 <details class="bg-white ring-1 ring-slate-200 rounded-xl p-4 mb-3 group">
   <summary class="cursor-pointer list-none flex items-start justify-between gap-2">
@@ -1634,9 +1644,11 @@ def _render_etf_consensus_panel(panel: dict[str, Any]) -> str:
       <div class="mt-1 text-[11px]">
         <span class="text-slate-500">universe 命中 </span>
         <span class="font-semibold {cov_color}">{e["n_in_universe"]}/{e["n_total"]}</span>
-        <span class="text-slate-400"> (权重 {e["weight_in_universe"]:.0f}%) · </span>
+        <span class="text-slate-400">（系统已收录；覆盖权重 {e["weight_in_universe"]:.0f}%） · </span>
         <span class="text-slate-500">picks 命中 </span>
         <span class="font-semibold text-emerald-700">{e["n_in_picks"]}/{e["n_total"]}</span>
+        <span class="text-slate-400">（今日推荐）</span>
+        <span class="text-slate-400"> · 持仓刷新 {_esc(fetched_at)}</span>
       </div>
     </div>
     <span class="text-slate-400 text-[12px] group-open:rotate-180 transition select-none">▾</span>
@@ -1645,11 +1657,12 @@ def _render_etf_consensus_panel(panel: dict[str, Any]) -> str:
     <table class="w-full text-[12px]">
       <thead>
         <tr class="text-[10px] text-slate-400 uppercase tracking-wide">
-          <th class="py-1 pr-2 text-right font-normal">排名</th>
-          <th class="py-1 pr-2 text-left font-normal">ETF Ticker</th>
-          <th class="py-1 pr-2 text-left font-normal">公司</th>
-          <th class="py-1 pr-2 text-right font-normal">权重</th>
-          <th class="py-1 pl-2 text-left font-normal">系统状态</th>
+          <th class="py-1 pr-2 text-right font-normal">排名（基金内顺序）</th>
+          <th class="py-1 pr-2 text-left font-normal">基金原始代码（基金披露）</th>
+          <th class="py-1 pr-2 text-left font-normal">系统匹配（系统股票代码）</th>
+          <th class="py-1 pr-2 text-left font-normal">公司（基金披露名称）</th>
+          <th class="py-1 pr-2 text-right font-normal">权重（基金持仓占比）</th>
+          <th class="py-1 pl-2 text-left font-normal">系统状态（推荐/收录/未收）</th>
         </tr>
       </thead>
       <tbody>{"".join(rows)}</tbody>
@@ -1666,16 +1679,25 @@ def _render_etf_consensus_panel(panel: dict[str, Any]) -> str:
   <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
     <div>
       <div class="text-sm font-bold text-slate-900">📈 ETF 共识热门主题</div>
-      <div class="text-[11px] text-slate-500">客观市场共识：抄 {n_etfs} 个主流主题 ETF 的持仓 Top — 不依赖任何 hardcode 主题清单</div>
+      <div class="text-[11px] text-slate-500">客观市场共识：读取 {n_etfs} 个主流主题 ETF 的官方/公开持仓 Top，用来发现市场共识和系统缺口。</div>
     </div>
     <div class="text-[11px] text-slate-500">
       universe 命中 <span class="font-semibold text-emerald-700">{n_uni}/{n_total}</span> ·
-      picks 命中 <span class="font-semibold">{n_pick}/{n_total}</span>
+      picks 命中 <span class="font-semibold">{n_pick}/{n_total}</span> ·
+      主题基金持股名单最近刷新 <span class="font-mono">{_esc(latest_fetched)}</span>
     </div>
+  </div>
+  <div class="bg-slate-50 ring-1 ring-slate-200 rounded-lg px-3 py-2 mb-3 text-[11px] text-slate-600 leading-relaxed">
+    <strong class="text-slate-800">怎么看这张表：</strong>
+    <span class="font-semibold">权重</span> = 这家公司在主题基金里的占比，不是本系统建议仓位；
+    <span class="font-semibold">系统匹配</span> = 主题基金里的股票代码是否能映射到我们库里的股票代码；
+    <span class="font-semibold">picks</span> = 已进入今日系统推荐并显示推荐分；
+    <span class="font-semibold">universe</span> = 已在系统股票池但今天没进推荐；
+    <span class="font-semibold">未收</span> = 主题基金有这家公司，但系统股票池尚未覆盖，适合作为扩池候选。
   </div>
   {"".join(etf_cards)}
   <div class="text-[10px] text-slate-400 mt-1 leading-relaxed">
-    ✓ picks = 在系统最新一批 picks 命中 · ○ universe = 在我们 universe 但未入 picks · ⚠️ 未收 = universe 缺口（扩张候选）
+    更新频率：每天早盘检查数据有没有断、把公司证据重新汇总一次；每周一重新抓一遍主题基金持股名单，并扫描美股公司的年报/季报/公告，看看公司自己有没有提到 AI、数据中心、液冷、核电等关键词。主题基金名单和公司公告都有披露延迟，因此本页只做主题共识和扩池线索，不直接构成买入建议。
   </div>
 </div>
 """
@@ -2328,7 +2350,7 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
   <strong class="text-slate-700">本页定位：</strong>
   AI 主题雷达只解释「这些票为什么和 AI 有关、当前主线在哪一层」，不是买入清单。
   系统分高与 AI 关联强都只是分类指标，不构成买入信号。
-  创新药、新能源车、军工等 AI 关联强度为"无"的链条已从本页主视图过滤，仍保留在 AI 推荐和产业链地图中。
+  AI 关联强度为"无"的链条已从本页主视图过滤，仍保留在 AI 推荐和产业链地图中。
   实际下单仍由「AI 推荐 / AI 配仓 / 买前研究」共同决定，本页不写自选股、不写真实持仓。
 </div>
 """

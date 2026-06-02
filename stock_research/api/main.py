@@ -1056,23 +1056,28 @@ _sys.exit(rc)
         symbol = item.get("code") or item.get("symbol")
         if not symbol:
             raise HTTPException(400, "code is required")
-        new_id = stock_db.insert_real_holding(item)
+        insert_result = stock_db.insert_real_holding_result(item)
+        new_id = int(insert_result["id"])
 
-        # 自动同步到 manual_watchlist + 触发评级,失败不影响主流程返回
+        # 自动同步到 manual_watchlist + 触发评级,失败不影响主流程返回。
+        # 幂等命中的重复提交不再重复触发评级任务。
         sync_info: dict[str, Any] = {"status": "skipped"}
-        try:
-            stock_db.upsert_manual_watchlist([{
-                "code": symbol,
-                "symbol": symbol,
-                "name": item.get("name"),
-                "notes": "auto-sync from real_holdings",
-            }])
-            sync_info = _spawn_picks_rerun(trigger=f"watchlist:holding:{symbol}")
-            sync_info["watchlist_synced"] = True
-        except Exception as e:
-            sync_info = {"status": "error", "error": str(e), "watchlist_synced": False}
+        if insert_result.get("created"):
+            try:
+                stock_db.upsert_manual_watchlist([{
+                    "code": symbol,
+                    "symbol": symbol,
+                    "name": item.get("name"),
+                    "notes": "auto-sync from real_holdings",
+                }])
+                sync_info = _spawn_picks_rerun(trigger=f"watchlist:holding:{symbol}")
+                sync_info["watchlist_synced"] = True
+            except Exception as e:
+                sync_info = {"status": "error", "error": str(e), "watchlist_synced": False}
+        elif insert_result.get("deduped"):
+            sync_info = {"status": "skipped", "reason": "recent_duplicate", "watchlist_synced": False}
 
-        return {"status": "ok", "id": new_id, "sync": sync_info}
+        return {"status": "ok", "id": new_id, "sync": sync_info, **insert_result}
 
     @app.post("/api/real-holdings/fetch-prices")
     def fetch_holdings_prices() -> dict[str, Any]:
@@ -1131,6 +1136,64 @@ _sys.exit(rc)
             except Exception as e:
                 rerun_info = {"status": "error", "error": str(e)}
         return {"status": "ok", "synced": n, "rerun": rerun_info}
+
+    @app.get("/api/real-holdings/discipline")
+    def list_real_holding_discipline(status: str = "active") -> dict[str, Any]:
+        """真实持仓纪律计划列表。只读 real_holding_discipline_*，不写推荐池。"""
+        import stock_db
+        status_filter = None if status == "all" else status
+        plans = stock_db.fetch_real_holding_discipline_plans(status=status_filter)
+        return _json_any({"status": "ok", "plans": plans})
+
+    @app.get("/api/real-holdings/{holding_id}/discipline")
+    def get_real_holding_discipline(holding_id: int) -> dict[str, Any]:
+        """查看单个真实持仓的纪律计划与近期触发历史。"""
+        import stock_db
+        holding = stock_db.fetch_real_holding_by_id(holding_id)
+        if not holding:
+            raise HTTPException(404, f"real holding id not found: {holding_id}")
+        plans = stock_db.fetch_real_holding_discipline_plans(holding_id=holding_id, status=None)
+        events = stock_db.fetch_real_holding_discipline_events(holding_id=holding_id, limit=50)
+        return _json_any({"status": "ok", "holding": holding, "plans": plans, "events": events})
+
+    @app.post("/api/real-holdings/{holding_id}/discipline")
+    def create_real_holding_discipline(
+        holding_id: int,
+        item: dict[str, Any] = Body(...),
+    ) -> dict[str, Any]:
+        """为一笔真实持仓创建用户确认的纪律计划。
+
+        这不是交易指令；后端强制 auto_trade_allowed=false。
+        """
+        import stock_db
+        try:
+            plan = stock_db.create_real_holding_discipline_plan(
+                holding_id,
+                item,
+                replace_active=bool(item.get("replace_active")),
+            )
+        except stock_db.DisciplinePlanConflict as e:
+            raise HTTPException(409, str(e))
+        except stock_db.DisciplinePlanNotFound as e:
+            raise HTTPException(404, str(e))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return _json_any({"status": "ok", "plan": plan})
+
+    @app.patch("/api/real-holdings/discipline/{plan_id}")
+    def update_real_holding_discipline_status(
+        plan_id: str,
+        item: dict[str, Any] = Body(...),
+    ) -> dict[str, Any]:
+        """暂停/归档纪律计划；不改持仓、不下单。"""
+        import stock_db
+        new_status = str(item.get("status") or "").strip()
+        if new_status not in {"active", "paused", "archived"}:
+            raise HTTPException(400, "status must be active|paused|archived")
+        n = stock_db.update_real_holding_discipline_plan_status(plan_id, new_status)
+        if n == 0:
+            raise HTTPException(404, f"discipline plan not found: {plan_id}")
+        return {"status": "ok", "plan_id": plan_id, "rows_affected": n}
 
     @app.put("/api/real-holdings/{holding_id}")
     def update_real_holding_one(holding_id: int, item: dict[str, Any] = Body(...)) -> dict[str, Any]:

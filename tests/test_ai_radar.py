@@ -184,6 +184,7 @@ class TestNonAIFilteredOut(unittest.TestCase):
         })
 
         self.assertIn("已过滤非 AI 链 1 条（2 只）", html)
+        self.assertNotIn("创新药", html)
         self.assertNotIn("9999.HK", html)
         self.assertNotIn("000001.SZ", html)
         self.assertNotIn("非AI高分票", html)

@@ -26,6 +26,7 @@ V2 核心表：
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -183,12 +184,72 @@ CREATE TABLE IF NOT EXISTS real_holding_review_items (
     price_is_prior_session BOOLEAN,
     size_advisory_json VARCHAR,
     industry_heat_json VARCHAR,
+    discipline_json    VARCHAR,
     created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (review_run_id, holding_id)
 );
 ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS price_trade_date VARCHAR;
 ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS day_change_basis VARCHAR;
 ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS price_is_prior_session BOOLEAN;
+ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS discipline_json VARCHAR;
+
+-- 真实持仓纪律计划：只绑定 real_holdings，不写 watchlist / AI 推荐 / 模拟仓。
+CREATE TABLE IF NOT EXISTS real_holding_discipline_plans (
+    plan_id           VARCHAR PRIMARY KEY,
+    holding_id        INTEGER NOT NULL,
+    account           VARCHAR,
+    market            VARCHAR NOT NULL,
+    symbol            VARCHAR NOT NULL,
+    plan_type         VARCHAR NOT NULL DEFAULT 'manual_price_plan',
+    source_type       VARCHAR NOT NULL DEFAULT 'manual_confirmed',
+    validation_status VARCHAR NOT NULL DEFAULT 'manual_guardrail_unvalidated',
+    status            VARCHAR NOT NULL DEFAULT 'active',
+    cost_basis_price  DOUBLE,
+    shares_snapshot   DOUBLE,
+    thesis            VARCHAR,
+    invalidation_note VARCHAR,
+    notes             VARCHAR,
+    created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    confirmed_at      TIMESTAMP,
+    updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS real_holding_discipline_triggers (
+    trigger_id          VARCHAR PRIMARY KEY,
+    plan_id             VARCHAR NOT NULL,
+    trigger_type        VARCHAR NOT NULL,
+    comparator          VARCHAR NOT NULL,
+    price_min           DOUBLE,
+    price_max           DOUBLE,
+    severity            VARCHAR NOT NULL DEFAULT 'info',
+    priority            INTEGER NOT NULL DEFAULT 99,
+    action_label        VARCHAR NOT NULL,
+    suggested_size_text VARCHAR,
+    rationale           VARCHAR,
+    auto_trade_allowed  BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS real_holding_discipline_events (
+    event_id        VARCHAR PRIMARY KEY,
+    plan_id         VARCHAR NOT NULL,
+    trigger_id      VARCHAR NOT NULL,
+    holding_id      INTEGER NOT NULL,
+    account         VARCHAR,
+    market          VARCHAR NOT NULL,
+    symbol          VARCHAR NOT NULL,
+    current_price   DOUBLE,
+    price_trade_date VARCHAR,
+    severity        VARCHAR,
+    action_label    VARCHAR,
+    message         VARCHAR,
+    evaluation_json VARCHAR,
+    triggered_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    user_ack_status VARCHAR DEFAULT 'new',
+    user_ack_at     TIMESTAMP,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 -- 注：manual_watchlist 的 industry / business 字段升级 ALTER 已从这里移除，
 -- 因为 manual_watchlist 表由 init_stock_db_v2.py 建（已含这两列）。
 -- 在不跑 init_stock_db_v2 的新 DB（test/临时）上，ALTER 不存在的表会 crash。
@@ -466,6 +527,8 @@ def _to_ts(v) -> datetime | None:
         return None
     if isinstance(v, datetime):
         return v
+    if isinstance(v, date):
+        return datetime.combine(v, datetime.min.time())
     if isinstance(v, str):
         # 支持 "2026-05-09 12:06" 或 ISO
         for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
@@ -1348,8 +1411,39 @@ REAL_HOLDING_REVIEW_ITEM_COLS = [
     "day_change_rmb", "day_change_pct", "price_is_prior_session",
     "size_advisory_json",
     "industry_heat_json",
+    "discipline_json",
 ]
 REAL_HOLDING_REVIEW_ITEM_FULL_COLS = REAL_HOLDING_REVIEW_ITEM_COLS + ["created_at"]
+REAL_HOLDING_DISCIPLINE_PLAN_COLS = [
+    "plan_id", "holding_id", "account", "market", "symbol", "plan_type", "source_type",
+    "validation_status", "status", "cost_basis_price", "shares_snapshot", "thesis",
+    "invalidation_note", "notes", "confirmed_at",
+]
+REAL_HOLDING_DISCIPLINE_PLAN_FULL_COLS = REAL_HOLDING_DISCIPLINE_PLAN_COLS + ["created_at", "updated_at"]
+REAL_HOLDING_DISCIPLINE_TRIGGER_COLS = [
+    "trigger_id", "plan_id", "trigger_type", "comparator", "price_min", "price_max",
+    "severity", "priority", "action_label", "suggested_size_text", "rationale",
+    "auto_trade_allowed",
+]
+REAL_HOLDING_DISCIPLINE_TRIGGER_FULL_COLS = REAL_HOLDING_DISCIPLINE_TRIGGER_COLS + ["created_at", "updated_at"]
+REAL_HOLDING_DISCIPLINE_EVENT_COLS = [
+    "event_id", "plan_id", "trigger_id", "holding_id", "account", "market", "symbol",
+    "current_price", "price_trade_date", "severity", "action_label", "message",
+    "evaluation_json", "user_ack_status", "user_ack_at",
+]
+REAL_HOLDING_DISCIPLINE_EVENT_FULL_COLS = REAL_HOLDING_DISCIPLINE_EVENT_COLS + ["triggered_at", "created_at"]
+
+
+class DisciplinePlanError(ValueError):
+    """Base error for real-holding discipline plans."""
+
+
+class DisciplinePlanConflict(DisciplinePlanError):
+    """Raised when a holding already has an active discipline plan."""
+
+
+class DisciplinePlanNotFound(DisciplinePlanError):
+    """Raised when a requested holding or plan cannot be found."""
 
 
 def _infer_market_from_ticker(ticker: str) -> str:
@@ -1403,6 +1497,14 @@ def _rowdict(cols: list[str], row: tuple) -> dict:
     if "symbol" in d:
         d["code"] = d.get("symbol")
     return d
+
+
+def _table_has_column(conn: duckdb.DuckDBPyConnection, table: str, column: str) -> bool:
+    try:
+        rows = conn.execute(f"PRAGMA table_info('{table}')").fetchall()
+    except Exception:
+        return False
+    return any(str(r[1]).lower() == column.lower() for r in rows)
 
 
 def _normalize_real_holding(item: Mapping[str, Any]) -> list:
@@ -1504,17 +1606,93 @@ def fetch_all_real_holdings(*, conn: duckdb.DuckDBPyConnection | None = None) ->
     return out
 
 
-def insert_real_holding(item: Mapping[str, Any], *, conn: duckdb.DuckDBPyConnection | None = None) -> int:
+def _recent_duplicate_real_holding_id(
+    vals: list,
+    *,
+    conn: duckdb.DuckDBPyConnection,
+    window_minutes: int = 10,
+) -> int | None:
+    """Return an id for a recent identical lot submission, if one exists.
+
+    This is deliberately time-windowed: it catches double-click/retry duplicate
+    POSTs without blocking a user from intentionally adding a separate identical
+    lot later.
+    """
+    account, market, symbol, _name, entry_price, shares, entry_date, currency, *_ = vals
+    minutes = max(1, min(int(window_minutes or 10), 60))
+    row = conn.execute(
+        f"""
+        SELECT id
+        FROM real_holdings
+        WHERE account = ?
+          AND market = ?
+          AND UPPER(symbol) = UPPER(?)
+          AND entry_date IS NOT DISTINCT FROM ?
+          AND UPPER(COALESCE(currency, '')) = UPPER(?)
+          AND ABS(entry_price - ?) < 0.000001
+          AND ABS(shares - ?) < 0.000001
+          AND created_at >= CURRENT_TIMESTAMP - INTERVAL '{minutes} minutes'
+        ORDER BY created_at ASC, id ASC
+        LIMIT 1
+        """,
+        [account, market, symbol, entry_date, currency or "", entry_price, shares],
+    ).fetchone()
+    return int(row[0]) if row else None
+
+
+def insert_real_holding_result(
+    item: Mapping[str, Any],
+    *,
+    conn: duckdb.DuckDBPyConnection | None = None,
+    dedupe_window_minutes: int = 10,
+) -> dict[str, Any]:
     own = conn is None
     if own:
         conn = get_db()
     vals = _normalize_real_holding(item)
+    existing_id = _recent_duplicate_real_holding_id(
+        vals,
+        conn=conn,
+        window_minutes=dedupe_window_minutes,
+    )
+    if existing_id is not None:
+        if own:
+            conn.close()
+        return {"id": existing_id, "created": False, "deduped": True}
     conn.execute(
         f"INSERT INTO real_holdings ({','.join(REAL_HOLDINGS_COLS)}, updated_at) "
         f"VALUES ({','.join(['?'] * len(REAL_HOLDINGS_COLS))}, CURRENT_TIMESTAMP)",
         vals,
     )
     new_id = int(conn.execute("SELECT currval('real_holdings_id_seq')").fetchone()[0])
+    canonical_id = _recent_duplicate_real_holding_id(
+        vals,
+        conn=conn,
+        window_minutes=dedupe_window_minutes,
+    )
+    if canonical_id is not None and canonical_id != new_id:
+        # Covers concurrent double-submit races: two requests may both pass the
+        # pre-insert check, but only the earliest lot should survive.
+        conn.execute("DELETE FROM real_holdings WHERE id = ?", [new_id])
+        if own:
+            conn.close()
+        return {
+            "id": canonical_id,
+            "created": False,
+            "deduped": True,
+            "dedupe_deleted_id": new_id,
+        }
+    if own:
+        conn.close()
+    return {"id": new_id, "created": True, "deduped": False}
+
+
+def insert_real_holding(item: Mapping[str, Any], *, conn: duckdb.DuckDBPyConnection | None = None) -> int:
+    own = conn is None
+    if own:
+        conn = get_db()
+    result = insert_real_holding_result(item, conn=conn)
+    new_id = int(result["id"])
     if own:
         conn.close()
     return new_id
@@ -1610,9 +1788,533 @@ def backfill_real_holding_entry_fx(*, conn: duckdb.DuckDBPyConnection | None = N
     return n
 
 
+def fetch_real_holding_by_id(
+    holding_id: int,
+    *,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> dict[str, Any] | None:
+    own = conn is None
+    if own:
+        conn = get_db()
+    row = conn.execute(
+        f"SELECT {','.join(REAL_HOLDINGS_FULL_COLS)} FROM real_holdings WHERE id = ?",
+        [int(holding_id)],
+    ).fetchone()
+    out = _rowdict(REAL_HOLDINGS_FULL_COLS, row) if row else None
+    if own:
+        conn.close()
+    return out
+
+
+def _clean_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    s = str(value).strip()
+    return s or None
+
+
+def _generate_discipline_id(prefix: str, *parts: Any) -> str:
+    stamp = int(time.time() * 1000)
+    clean_parts = [str(p).replace(" ", "_") for p in parts if p is not None and str(p) != ""]
+    base = "_".join([prefix] + clean_parts + [str(stamp)])
+    if len(base) <= 96:
+        return base
+    digest = hashlib.sha1(base.encode("utf-8")).hexdigest()[:12]
+    return "_".join([prefix] + clean_parts[:2] + [digest])
+
+
+def _normalize_discipline_trigger(
+    trigger: Mapping[str, Any],
+    *,
+    plan_id: str,
+    idx: int,
+) -> list[Any]:
+    threshold = _as_float_or_none(trigger.get("threshold_price") or trigger.get("price"))
+    price_min = _as_float_or_none(trigger.get("price_min") or trigger.get("min_price"))
+    price_max = _as_float_or_none(trigger.get("price_max") or trigger.get("max_price"))
+    comparator = str(trigger.get("comparator") or "").strip().lower()
+    if not comparator:
+        if price_min is not None and price_max is not None:
+            comparator = "between"
+        elif price_max is not None or threshold is not None:
+            comparator = "lte"
+        else:
+            comparator = "gte"
+    if threshold is not None:
+        if price_min is None and comparator in {"gte", "gt", "above"}:
+            price_min = threshold
+        elif price_max is None and comparator in {"lte", "lt", "below"}:
+            price_max = threshold
+        elif price_min is None and price_max is None:
+            price_min = threshold
+    if price_min is None and price_max is None:
+        raise ValueError("discipline trigger requires price_min/price_max/threshold_price")
+    trigger_id = _clean_text(trigger.get("trigger_id")) or f"{plan_id}_t{idx:02d}"
+    trigger_type = _clean_text(trigger.get("trigger_type") or trigger.get("kind")) or "price"
+    severity = (_clean_text(trigger.get("severity")) or "info").lower()
+    action_label = _clean_text(trigger.get("action_label") or trigger.get("action")) or trigger_type
+    priority = int(trigger.get("priority") or idx)
+    return [
+        trigger_id,
+        plan_id,
+        trigger_type,
+        comparator,
+        price_min,
+        price_max,
+        severity,
+        priority,
+        action_label,
+        _clean_text(trigger.get("suggested_size_text") or trigger.get("size_text")),
+        _clean_text(trigger.get("rationale") or trigger.get("reason")),
+        False,
+    ]
+
+
+def create_real_holding_discipline_plan(
+    holding_id: int,
+    payload: Mapping[str, Any],
+    *,
+    conn: duckdb.DuckDBPyConnection | None = None,
+    replace_active: bool = False,
+) -> dict[str, Any]:
+    """Create a user-confirmed discipline plan for one real holding.
+
+    The plan is advisory only. It never writes watchlist, recommendations,
+    model_sim_holdings, or any trade table.
+    """
+    own = conn is None
+    if own:
+        conn = get_db()
+    holding = fetch_real_holding_by_id(int(holding_id), conn=conn)
+    if not holding:
+        if own:
+            conn.close()
+        raise DisciplinePlanNotFound(f"real holding id not found: {holding_id}")
+
+    existing = conn.execute(
+        "SELECT plan_id FROM real_holding_discipline_plans WHERE holding_id = ? AND status = 'active' LIMIT 1",
+        [int(holding_id)],
+    ).fetchone()
+    if existing and not replace_active:
+        if own:
+            conn.close()
+        raise DisciplinePlanConflict(f"active discipline plan already exists for holding {holding_id}: {existing[0]}")
+    if existing and replace_active:
+        conn.execute(
+            "UPDATE real_holding_discipline_plans SET status = 'archived', updated_at = CURRENT_TIMESTAMP WHERE holding_id = ? AND status = 'active'",
+            [int(holding_id)],
+        )
+
+    triggers = list(payload.get("triggers") or payload.get("rules") or [])
+    if not triggers:
+        if own:
+            conn.close()
+        raise ValueError("discipline plan requires at least one trigger")
+
+    plan_id = _clean_text(payload.get("plan_id")) or _generate_discipline_id("disc", holding_id, holding.get("symbol"))
+    plan_type = _clean_text(payload.get("plan_type")) or "manual_price_plan"
+    source_type = _clean_text(payload.get("source_type")) or "manual_confirmed"
+    validation_status = _clean_text(payload.get("validation_status")) or "manual_guardrail_unvalidated"
+    confirmed_at = payload.get("confirmed_at")
+    if confirmed_at is None and source_type == "manual_confirmed":
+        confirmed_at = datetime.now()
+    cost_basis_price = _as_float_or_none(payload.get("cost_basis_price")) or _as_float_or_none(holding.get("entry_price"))
+    shares_snapshot = _as_float_or_none(payload.get("shares_snapshot")) or _as_float_or_none(holding.get("shares"))
+    vals = [
+        plan_id,
+        int(holding_id),
+        holding.get("account") or "default",
+        holding.get("market") or _infer_market_from_ticker(str(holding.get("symbol"))),
+        holding.get("symbol"),
+        plan_type,
+        source_type,
+        validation_status,
+        _clean_text(payload.get("status")) or "active",
+        cost_basis_price,
+        shares_snapshot,
+        _clean_text(payload.get("thesis")),
+        _clean_text(payload.get("invalidation_note")),
+        _clean_text(payload.get("notes")),
+        _to_ts(confirmed_at) if confirmed_at is not None else None,
+    ]
+    conn.execute(
+        f"INSERT INTO real_holding_discipline_plans ({','.join(REAL_HOLDING_DISCIPLINE_PLAN_COLS)}) "
+        f"VALUES ({','.join(['?'] * len(REAL_HOLDING_DISCIPLINE_PLAN_COLS))})",
+        vals,
+    )
+    for idx, trigger in enumerate(triggers, start=1):
+        tvals = _normalize_discipline_trigger(trigger, plan_id=plan_id, idx=idx)
+        conn.execute(
+            f"INSERT INTO real_holding_discipline_triggers ({','.join(REAL_HOLDING_DISCIPLINE_TRIGGER_COLS)}) "
+            f"VALUES ({','.join(['?'] * len(REAL_HOLDING_DISCIPLINE_TRIGGER_COLS))})",
+            tvals,
+        )
+
+    plan = fetch_real_holding_discipline_plan(plan_id, conn=conn)
+    if own:
+        conn.close()
+    return plan or {"plan_id": plan_id, "triggers": []}
+
+
+def fetch_real_holding_discipline_plan(
+    plan_id: str,
+    *,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> dict[str, Any] | None:
+    plans = fetch_real_holding_discipline_plans(plan_id=plan_id, status=None, conn=conn)
+    return plans[0] if plans else None
+
+
+def fetch_real_holding_discipline_plans(
+    *,
+    holding_id: int | None = None,
+    plan_id: str | None = None,
+    status: str | None = "active",
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> list[dict[str, Any]]:
+    own = conn is None
+    if own:
+        conn = get_db()
+    where = []
+    params: list[Any] = []
+    if holding_id is not None:
+        where.append("holding_id = ?")
+        params.append(int(holding_id))
+    if plan_id:
+        where.append("plan_id = ?")
+        params.append(str(plan_id))
+    if status:
+        where.append("status = ?")
+        params.append(str(status))
+    sql = (
+        f"SELECT {','.join(REAL_HOLDING_DISCIPLINE_PLAN_FULL_COLS)} "
+        "FROM real_holding_discipline_plans"
+    )
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY created_at DESC, plan_id DESC"
+    rows = conn.execute(sql, params).fetchall()
+    plans = [_rowdict(REAL_HOLDING_DISCIPLINE_PLAN_FULL_COLS, r) for r in rows]
+    for plan in plans:
+        trigger_rows = conn.execute(
+            f"SELECT {','.join(REAL_HOLDING_DISCIPLINE_TRIGGER_FULL_COLS)} "
+            "FROM real_holding_discipline_triggers WHERE plan_id = ? ORDER BY priority ASC, trigger_id ASC",
+            [plan["plan_id"]],
+        ).fetchall()
+        plan["triggers"] = [_rowdict(REAL_HOLDING_DISCIPLINE_TRIGGER_FULL_COLS, r) for r in trigger_rows]
+    if own:
+        conn.close()
+    return plans
+
+
+def update_real_holding_discipline_plan_status(
+    plan_id: str,
+    status: str,
+    *,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> int:
+    own = conn is None
+    if own:
+        conn = get_db()
+    exists = conn.execute(
+        "SELECT 1 FROM real_holding_discipline_plans WHERE plan_id = ?",
+        [str(plan_id)],
+    ).fetchone()
+    if not exists:
+        if own:
+            conn.close()
+        return 0
+    n = conn.execute(
+        "UPDATE real_holding_discipline_plans SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE plan_id = ?",
+        [str(status), str(plan_id)],
+    ).rowcount
+    if own:
+        conn.close()
+    return 1 if n is None or n < 0 else int(n)
+
+
+def _trigger_threshold_text(trigger: Mapping[str, Any]) -> str:
+    comp = str(trigger.get("comparator") or "").lower()
+    lo = trigger.get("price_min")
+    hi = trigger.get("price_max")
+    if comp in {"between", "range"} and lo is not None and hi is not None:
+        return f"{float(lo):.2f}-{float(hi):.2f}"
+    if comp in {"between_open_high", "left_closed_right_open"} and lo is not None and hi is not None:
+        return f"{float(lo):.2f}-<{float(hi):.2f}"
+    if comp in {"gte", "gt", "above"}:
+        v = lo if lo is not None else hi
+        return f"{'>=' if comp == 'gte' else '>'}{float(v):.2f}" if v is not None else "—"
+    if comp in {"lte", "lt", "below"}:
+        v = hi if hi is not None else lo
+        return f"{'<=' if comp == 'lte' else '<'}{float(v):.2f}" if v is not None else "—"
+    if lo is not None:
+        return f"{float(lo):.2f}"
+    if hi is not None:
+        return f"{float(hi):.2f}"
+    return "—"
+
+
+def _discipline_trigger_matches(trigger: Mapping[str, Any], price: float) -> bool:
+    comp = str(trigger.get("comparator") or "").lower()
+    lo = _as_float_or_none(trigger.get("price_min"))
+    hi = _as_float_or_none(trigger.get("price_max"))
+    if comp in {"between", "range"}:
+        return (lo is None or price >= lo) and (hi is None or price <= hi)
+    if comp in {"between_open_high", "left_closed_right_open"}:
+        return (lo is None or price >= lo) and (hi is None or price < hi)
+    if comp in {"gte", "above"}:
+        threshold = lo if lo is not None else hi
+        return threshold is not None and price >= threshold
+    if comp == "gt":
+        threshold = lo if lo is not None else hi
+        return threshold is not None and price > threshold
+    if comp in {"lte", "below"}:
+        threshold = hi if hi is not None else lo
+        return threshold is not None and price <= threshold
+    if comp == "lt":
+        threshold = hi if hi is not None else lo
+        return threshold is not None and price < threshold
+    return False
+
+
+def _discipline_trigger_distance(trigger: Mapping[str, Any], price: float) -> float:
+    comp = str(trigger.get("comparator") or "").lower()
+    lo = _as_float_or_none(trigger.get("price_min"))
+    hi = _as_float_or_none(trigger.get("price_max"))
+    if comp in {"between", "range", "between_open_high", "left_closed_right_open"}:
+        if lo is not None and price < lo:
+            return lo - price
+        if hi is not None and price > hi:
+            return price - hi
+        return 0.0
+    if comp in {"gte", "gt", "above"}:
+        threshold = lo if lo is not None else hi
+        return abs(price - threshold) if threshold is not None else float("inf")
+    if comp in {"lte", "lt", "below"}:
+        threshold = hi if hi is not None else lo
+        return abs(price - threshold) if threshold is not None else float("inf")
+    threshold = lo if lo is not None else hi
+    return abs(price - threshold) if threshold is not None else float("inf")
+
+
+def evaluate_real_holding_discipline_plan(
+    plan: Mapping[str, Any] | None,
+    *,
+    current_price: Any,
+    price_trade_date: Any = None,
+    price_is_stale: bool = False,
+) -> dict[str, Any]:
+    """Evaluate a discipline plan against one quote snapshot.
+
+    This pure function is intentionally advisory-only. Stale or missing prices
+    block triggers so prior-session quotes cannot produce trade guidance.
+    """
+    if not plan:
+        return {"status": "no_plan", "triggered": False}
+    symbol = str(plan.get("symbol") or "")
+    base = {
+        "plan_id": plan.get("plan_id"),
+        "holding_id": plan.get("holding_id"),
+        "market": plan.get("market"),
+        "symbol": symbol,
+        "plan_type": plan.get("plan_type"),
+        "source_type": plan.get("source_type"),
+        "validation_status": plan.get("validation_status"),
+        "current_price": None,
+        "price_trade_date": str(price_trade_date)[:10] if price_trade_date else None,
+        "auto_trade_allowed": False,
+        "triggered": False,
+    }
+    if str(plan.get("status") or "active") != "active":
+        return {**base, "status": "inactive", "message": "纪律计划未启用"}
+    price = _as_float_or_none(current_price)
+    if price is None:
+        return {
+            **base,
+            "status": "missing_price",
+            "action_label": "先刷新行情",
+            "data_blocked": True,
+            "message": f"{symbol or '该持仓'} 暂无可用行情，纪律规则不触发",
+        }
+    base["current_price"] = price
+    if price_is_stale:
+        return {
+            **base,
+            "status": "stale_price",
+            "action_label": "先刷新行情",
+            "data_blocked": True,
+            "message": f"{symbol or '该持仓'} 行情停留在 {base['price_trade_date'] or '上一交易日'}，先刷新，暂不触发纪律规则",
+        }
+
+    triggers = list(plan.get("triggers") or [])
+    matches = [t for t in triggers if _discipline_trigger_matches(t, price)]
+    matches.sort(key=lambda t: (int(t.get("priority") or 99), str(t.get("trigger_id") or "")))
+    if matches:
+        t = matches[0]
+        action = str(t.get("action_label") or t.get("trigger_type") or "纪律提醒")
+        severity = str(t.get("severity") or "info")
+        msg = f"{symbol or '该持仓'} {price:.2f} 触发纪律：{action}"
+        if t.get("suggested_size_text"):
+            msg += f" · {t.get('suggested_size_text')}"
+        return {
+            **base,
+            "status": "triggered",
+            "triggered": True,
+            "trigger_id": t.get("trigger_id"),
+            "trigger_type": t.get("trigger_type"),
+            "comparator": t.get("comparator"),
+            "threshold_text": _trigger_threshold_text(t),
+            "severity": severity,
+            "priority": int(t.get("priority") or 99),
+            "action_label": action,
+            "suggested_size_text": t.get("suggested_size_text"),
+            "rationale": t.get("rationale"),
+            "message": msg,
+        }
+
+    ordered_next = sorted(
+        triggers,
+        key=lambda t: (
+            _discipline_trigger_distance(t, price),
+            int(t.get("priority") or 99),
+            str(t.get("trigger_id") or ""),
+        ),
+    )
+    all_triggers = [
+        {
+            "trigger_id": t.get("trigger_id"),
+            "trigger_type": t.get("trigger_type"),
+            "threshold_text": _trigger_threshold_text(t),
+            "action_label": t.get("action_label"),
+            "severity": t.get("severity"),
+            "priority": int(t.get("priority") or 99),
+            "distance": _discipline_trigger_distance(t, price),
+        }
+        for t in triggers
+    ]
+    next_triggers = [
+        {
+            "trigger_id": t.get("trigger_id"),
+            "trigger_type": t.get("trigger_type"),
+            "threshold_text": _trigger_threshold_text(t),
+            "action_label": t.get("action_label"),
+            "severity": t.get("severity"),
+            "priority": int(t.get("priority") or 99),
+        }
+        for t in ordered_next[:4]
+    ]
+    return {
+        **base,
+        "status": "watching",
+        "action_label": "未触发",
+        "message": f"{symbol or '该持仓'} {price:.2f} 尚未触发纪律价位",
+        "next_triggers": next_triggers,
+        "all_triggers": all_triggers,
+    }
+
+
+def save_real_holding_discipline_event(
+    evaluation: Mapping[str, Any],
+    *,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> dict[str, Any] | None:
+    if not evaluation or evaluation.get("status") != "triggered" or evaluation.get("data_blocked"):
+        return None
+    plan_id = _clean_text(evaluation.get("plan_id"))
+    trigger_id = _clean_text(evaluation.get("trigger_id"))
+    holding_id = evaluation.get("holding_id")
+    symbol = _clean_text(evaluation.get("symbol"))
+    if not plan_id or not trigger_id or holding_id is None or not symbol:
+        return None
+    price_trade_date = _clean_text(evaluation.get("price_trade_date"))
+    fingerprint = json.dumps(
+        [plan_id, trigger_id, int(holding_id), symbol, price_trade_date, evaluation.get("current_price")],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    event_id = "disc_evt_" + hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()[:20]
+    own = conn is None
+    if own:
+        conn = get_db()
+    existing = conn.execute(
+        "SELECT event_id FROM real_holding_discipline_events WHERE event_id = ?",
+        [event_id],
+    ).fetchone()
+    if existing:
+        if own:
+            conn.close()
+        return {"event_id": event_id, "created": False}
+    vals = [
+        event_id,
+        plan_id,
+        trigger_id,
+        int(holding_id),
+        _clean_text(evaluation.get("account")),
+        _clean_text(evaluation.get("market")) or _infer_market_from_ticker(symbol),
+        symbol,
+        evaluation.get("current_price"),
+        price_trade_date,
+        _clean_text(evaluation.get("severity")) or "info",
+        _clean_text(evaluation.get("action_label")) or "纪律提醒",
+        _clean_text(evaluation.get("message")),
+        json.dumps(evaluation, ensure_ascii=False, sort_keys=True),
+        "new",
+        None,
+    ]
+    conn.execute(
+        f"INSERT INTO real_holding_discipline_events ({','.join(REAL_HOLDING_DISCIPLINE_EVENT_COLS)}) "
+        f"VALUES ({','.join(['?'] * len(REAL_HOLDING_DISCIPLINE_EVENT_COLS))})",
+        vals,
+    )
+    if own:
+        conn.close()
+    return {"event_id": event_id, "created": True}
+
+
+def fetch_real_holding_discipline_events(
+    *,
+    holding_id: int | None = None,
+    plan_id: str | None = None,
+    limit: int = 100,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> list[dict[str, Any]]:
+    own = conn is None
+    if own:
+        conn = get_db()
+    where = []
+    params: list[Any] = []
+    if holding_id is not None:
+        where.append("holding_id = ?")
+        params.append(int(holding_id))
+    if plan_id:
+        where.append("plan_id = ?")
+        params.append(str(plan_id))
+    sql = (
+        f"SELECT {','.join(REAL_HOLDING_DISCIPLINE_EVENT_FULL_COLS)} "
+        "FROM real_holding_discipline_events"
+    )
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    safe_limit = max(1, min(int(limit or 100), 500))
+    sql += f" ORDER BY triggered_at DESC, event_id DESC LIMIT {safe_limit}"
+    rows = conn.execute(sql, params).fetchall()
+    events = []
+    for r in rows:
+        d = _rowdict(REAL_HOLDING_DISCIPLINE_EVENT_FULL_COLS, r)
+        d["evaluation"] = _load_json_field(d.pop("evaluation_json", None), None)
+        events.append(d)
+    if own:
+        conn.close()
+    return events
+
+
 def _dump_json_field(value: Any) -> str:
     if value is None:
         value = []
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _dump_json_value(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
@@ -1705,12 +2407,21 @@ def save_real_holding_review(
             bool(item.get("price_is_prior_session")),
             _dump_json_field(item.get("size_advisory")),
             _dump_json_field(item.get("industry_heat")),
+            _dump_json_value(item.get("discipline")),
         ]
         conn.execute(
             f"INSERT INTO real_holding_review_items ({','.join(REAL_HOLDING_REVIEW_ITEM_COLS)}) "
             f"VALUES ({','.join(['?'] * len(REAL_HOLDING_REVIEW_ITEM_COLS))})",
             vals,
         )
+        discipline = item.get("discipline")
+        if isinstance(discipline, Mapping):
+            enriched_discipline = dict(discipline)
+            enriched_discipline.setdefault("holding_id", int(holding_id))
+            enriched_discipline.setdefault("account", item.get("account") or "default")
+            enriched_discipline.setdefault("market", item.get("market") or _infer_market_from_ticker(str(symbol)))
+            enriched_discipline.setdefault("symbol", symbol)
+            save_real_holding_discipline_event(enriched_discipline, conn=conn)
         n += 1
 
     if own:
@@ -1797,20 +2508,24 @@ def fetch_latest_real_holding_review(
         return None
 
     run = _rowdict(REAL_HOLDING_REVIEW_RUN_FULL_COLS, row)
+    item_cols = list(REAL_HOLDING_REVIEW_ITEM_FULL_COLS)
+    if not _table_has_column(conn, "real_holding_review_items", "discipline_json"):
+        item_cols = [c for c in item_cols if c != "discipline_json"]
     item_rows = conn.execute(
-        f"SELECT {','.join(REAL_HOLDING_REVIEW_ITEM_FULL_COLS)} "
+        f"SELECT {','.join(item_cols)} "
         "FROM real_holding_review_items WHERE review_run_id = ? "
         "ORDER BY action_priority ASC, symbol ASC",
         [run["review_run_id"]],
     ).fetchall()
     items = []
     for r in item_rows:
-        d = _rowdict(REAL_HOLDING_REVIEW_ITEM_FULL_COLS, r)
+        d = _rowdict(item_cols, r)
         d["reasons"] = _load_json_field(d.pop("reasons_json", None), [])
         d["risk_flags"] = _load_json_field(d.pop("risk_flags_json", None), [])
         d["data_flags"] = _load_json_field(d.pop("data_flags_json", None), [])
         d["size_advisory"] = _load_json_field(d.pop("size_advisory_json", None), None)
         d["industry_heat"] = _load_json_field(d.pop("industry_heat_json", None), None)
+        d["discipline"] = _load_json_field(d.pop("discipline_json", None), None)
         d["trade_date"] = d.get("price_trade_date")
         items.append(d)
 

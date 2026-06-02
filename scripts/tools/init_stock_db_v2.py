@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS real_holdings (
     account     VARCHAR DEFAULT 'default',
     market      VARCHAR NOT NULL,
     symbol      VARCHAR NOT NULL,
+    name        VARCHAR,
     entry_price DOUBLE NOT NULL,
     shares      DOUBLE NOT NULL,
     entry_date  DATE,
@@ -79,6 +80,64 @@ ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS entry_fx_rate DOUBLE;
 ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS entry_fx_as_of DATE;
 ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS entry_fx_source VARCHAR;
 ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS cost_rmb_locked DOUBLE;
+ALTER TABLE real_holdings ADD COLUMN IF NOT EXISTS name VARCHAR;
+
+CREATE TABLE IF NOT EXISTS real_holding_discipline_plans (
+    plan_id           VARCHAR PRIMARY KEY,
+    holding_id        BIGINT NOT NULL,
+    account           VARCHAR,
+    market            VARCHAR NOT NULL,
+    symbol            VARCHAR NOT NULL,
+    plan_type         VARCHAR NOT NULL DEFAULT 'manual_price_plan',
+    source_type       VARCHAR NOT NULL DEFAULT 'manual_confirmed',
+    validation_status VARCHAR NOT NULL DEFAULT 'manual_guardrail_unvalidated',
+    status            VARCHAR NOT NULL DEFAULT 'active',
+    cost_basis_price  DOUBLE,
+    shares_snapshot   DOUBLE,
+    thesis            VARCHAR,
+    invalidation_note VARCHAR,
+    notes             VARCHAR,
+    created_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    confirmed_at      TIMESTAMP,
+    updated_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS real_holding_discipline_triggers (
+    trigger_id          VARCHAR PRIMARY KEY,
+    plan_id             VARCHAR NOT NULL,
+    trigger_type        VARCHAR NOT NULL,
+    comparator          VARCHAR NOT NULL,
+    price_min           DOUBLE,
+    price_max           DOUBLE,
+    severity            VARCHAR NOT NULL DEFAULT 'info',
+    priority            INTEGER NOT NULL DEFAULT 99,
+    action_label        VARCHAR NOT NULL,
+    suggested_size_text VARCHAR,
+    rationale           VARCHAR,
+    auto_trade_allowed  BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS real_holding_discipline_events (
+    event_id         VARCHAR PRIMARY KEY,
+    plan_id          VARCHAR NOT NULL,
+    trigger_id       VARCHAR NOT NULL,
+    holding_id       BIGINT NOT NULL,
+    account          VARCHAR,
+    market           VARCHAR NOT NULL,
+    symbol           VARCHAR NOT NULL,
+    current_price    DOUBLE,
+    price_trade_date VARCHAR,
+    severity         VARCHAR,
+    action_label     VARCHAR,
+    message          VARCHAR,
+    evaluation_json  VARCHAR,
+    triggered_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    user_ack_status  VARCHAR DEFAULT 'new',
+    user_ack_at      TIMESTAMP,
+    created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
 CREATE SEQUENCE IF NOT EXISTS model_sim_holdings_id_seq;
 CREATE TABLE IF NOT EXISTS model_sim_holdings (
