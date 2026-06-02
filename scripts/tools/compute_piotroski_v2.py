@@ -27,6 +27,7 @@ import argparse
 import json
 import logging
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -170,12 +171,22 @@ def compute_p5_lite_akshare(symbol_with_suffix: str) -> dict | None:
         return None
 
     code = symbol_with_suffix.split(".")[0]
-    try:
-        df = ak.stock_financial_abstract(symbol=code)
-    except Exception as e:
-        logger.debug("akshare stock_financial_abstract %s 失败: %s", code, e)
-        return None
+    # akshare 批量连打（220 只 active CN）会触发限流/超时，整批可掉 ~80%（2026-06-02
+    # CN F-Score 覆盖只剩 6/20 事故）。数据本身可得，故 retry + 退避把瞬时失败救回来。
+    df = None
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            df = ak.stock_financial_abstract(symbol=code)
+            if df is not None and not df.empty:
+                break
+        except Exception as e:  # noqa: BLE001 — 网络/限流均退避重试
+            last_err = e
+        if attempt < 2:
+            time.sleep(0.8 * (attempt + 1))  # 0.8s / 1.6s 退避
     if df is None or df.empty:
+        if last_err is not None:
+            logger.debug("akshare stock_financial_abstract %s 3 次仍失败: %s", code, last_err)
         return None
 
     # 报告期列（按时间倒序：最新在前）
@@ -313,6 +324,7 @@ def main() -> int:
     for market, symbol in targets:
         if market == "CN":
             result = compute_p5_lite_akshare(symbol)
+            time.sleep(0.15)  # 轻节流：降低 akshare 连打限流概率
         else:
             result = compute_p5_lite_yfinance(symbol)
         if result is None:
