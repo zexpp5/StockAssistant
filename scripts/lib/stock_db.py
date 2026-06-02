@@ -874,7 +874,11 @@ def upsert_chain_metadata(
         symbol = r.get("symbol") or r.get("code")
         if not symbol:
             continue
-        market = r.get("market") or _infer_market_from_ticker(symbol)
+        # 2026-06-02: market 一律从 ticker 后缀推断成 ISO(US/HK/CN)，与 rule_classify 同源。
+        # 不能用前端传的展示值('美股'/'港股'/'A股·沪交所')，否则会和 rule_classify 的 ISO 行
+        # 按 (market,symbol) PK 撞不上 → 同一只票留两行 → 自选股重复(见 fetch_manual_watchlist
+        # 去重注释)。symbol 带后缀全局唯一，后缀即市场的单一可信来源。
+        market = _infer_market_from_ticker(symbol)
         chain = (r.get("chain") or "").strip() or None
         tier = (r.get("chain_tier") or "").strip() or None
         role = (r.get("chain_role") or "").strip() or None
