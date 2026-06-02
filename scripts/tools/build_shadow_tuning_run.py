@@ -26,6 +26,8 @@ from scripts.tools import strategy_tuning_proposal  # noqa: E402
 
 OUT_JSON = REPO / "data" / "latest" / "shadow_tuning_run.json"
 OUT_MD = REPO / "data" / "reports" / "shadow_tuning_run.md"
+ARCHIVE_DIR = REPO / "data" / "shadow_tuning_runs"
+REPORT_ARCHIVE_DIR = REPO / "data" / "reports" / "shadow_tuning_runs"
 PROPOSAL_JSON = REPO / "data" / "latest" / "strategy_tuning_proposal.json"
 
 MARKET_LABELS = {"US": "美股", "CN": "A股", "HK": "港股"}
@@ -564,11 +566,35 @@ def to_markdown(payload: dict[str, Any], *, top_n: int = 20) -> str:
     return "\n".join(lines) + "\n"
 
 
-def write_outputs(payload: dict[str, Any], *, output_json: Path = OUT_JSON, output_md: Path = OUT_MD, top_n: int = 20) -> None:
+def write_outputs(
+    payload: dict[str, Any],
+    *,
+    output_json: Path = OUT_JSON,
+    output_md: Path = OUT_MD,
+    top_n: int = 20,
+    archive: bool = True,
+) -> None:
     output_json.parent.mkdir(parents=True, exist_ok=True)
     output_md.parent.mkdir(parents=True, exist_ok=True)
+    artifact_paths = {
+        "latest_json": str(output_json),
+        "latest_md": str(output_md),
+    }
+    archive_json = None
+    archive_md = None
+    if archive and payload.get("run_id"):
+        ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+        REPORT_ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+        archive_json = ARCHIVE_DIR / f"{payload['run_id']}.json"
+        archive_md = REPORT_ARCHIVE_DIR / f"{payload['run_id']}.md"
+        artifact_paths["archive_json"] = str(archive_json)
+        artifact_paths["archive_md"] = str(archive_md)
+    payload["artifact_paths"] = artifact_paths
     output_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     output_md.write_text(to_markdown(payload, top_n=top_n), encoding="utf-8")
+    if archive_json and archive_md:
+        archive_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        archive_md.write_text(to_markdown(payload, top_n=top_n), encoding="utf-8")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -579,6 +605,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--strategy-version", default="latest")
     parser.add_argument("--horizon", default="1d")
     parser.add_argument("--top-n-report", type=int, default=20)
+    parser.add_argument("--no-archive", action="store_true", help="Only write latest artifacts; do not archive PIT shadow run.")
     args = parser.parse_args(argv)
 
     proposal = load_proposal(Path(args.proposal_json), strategy_version=args.strategy_version, horizon=args.horizon)
@@ -589,6 +616,7 @@ def main(argv: list[str] | None = None) -> int:
         output_json=Path(args.output_json),
         output_md=Path(args.output_md),
         top_n=args.top_n_report,
+        archive=not args.no_archive,
     )
     print(
         json.dumps(

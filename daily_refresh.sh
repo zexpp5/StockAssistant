@@ -184,6 +184,7 @@ pipeline_sink_for_label() {
         *"策略失败诊断"*) echo "data/latest/strategy_failure_diagnosis.json + data/reports/strategy_failure_diagnosis.md" ;;
         *"策略调权建议"*) echo "data/latest/strategy_tuning_proposal.json + data/reports/strategy_tuning_proposal.md" ;;
         *"shadow 调权模拟"*) echo "data/latest/shadow_tuning_run.json + data/reports/shadow_tuning_run.md" ;;
+        *"shadow 生产门禁"*) echo "data/latest/shadow_tuning_evidence.json + data/reports/shadow_tuning_evidence.md" ;;
         *"DuckDB pipeline"*) echo "DuckDB.snapshots(category='pipeline')" ;;
         *"产业链分级"*) echo "DuckDB.system_universe(theme/industry → chain 推断)" ;;
         *"重建 HTML"*) echo "stock_dashboard.html" ;;
@@ -565,6 +566,7 @@ run_step "23d/25 推荐有效性证据报告" "scripts/tools/recommendation_evid
 run_step "23d2/25 策略失败诊断（只读归因）" "scripts/tools/strategy_failure_diagnosis.py --markets all --horizon 1d"
 run_step "23d3/25 策略调权建议（只读灰度）" "scripts/tools/strategy_tuning_proposal.py --horizon 1d"
 run_step "23d4/25 shadow 调权模拟（只读对照）" "scripts/tools/build_shadow_tuning_run.py --horizon 1d"
+run_step "23d5/25 shadow 生产门禁（只读证据）" "scripts/tools/evaluate_shadow_tuning_run.py"
 # 2026-05-21 V2 cutover 补洞：替代被删的 V1 audit_picks，喂 dashboard「买前审查」tab
 run_step "23e/25 picks 反向审查（V2 · Risk Parity + 估值 + Markowitz）" "-m stock_research.jobs.audit_picks_v2 --fast"
 run_step "23f/25 真实持仓每日体检（评分/建议/说明）" "-m stock_research.jobs.real_holding_review"
