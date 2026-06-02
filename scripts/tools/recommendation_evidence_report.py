@@ -103,11 +103,15 @@ def _v2_market_metrics(conn, strategy_version: str | None = None) -> list[dict[s
     """V2 路径：pick_outcomes 按 (market, horizon) 聚合 alpha 评估指标。
 
     返回与 _source_metrics 一致的字段形状，让 _grade / markdown 渲染兼容。
-    market_source 用 'v2_us/v2_hk/v2_cn'，signal 全部当 'buy'（V2 picks 只产 buy/avoid，
-    其中只有 alpha_pct 不空的进入 outcomes，全是 buy）。
+    market_source 用 'v2_us/v2_hk/v2_cn'，仅统计 picks.signal='buy'。
+
+    2026-06-02 加 JOIN picks WHERE signal='buy':
+      历史 picks 已经出现 watch 信号（1810.HK 等），evaluate_v2_picks
+      之前没过滤把 watch 也算进 outcomes；这里 alpha 聚合再加一层防御性
+      过滤，确保即使 outcomes 含历史污染也不影响策略证据指标。
     """
     tables = _tables(conn)
-    if not {"pick_outcomes", "recommendation_runs"}.issubset(tables):
+    if not {"pick_outcomes", "recommendation_runs", "recommendation_picks"}.issubset(tables):
         return []
     strategy_clause, strategy_params = _strategy_filter(conn, strategy_version)
     rows = conn.execute(
@@ -120,9 +124,12 @@ def _v2_market_metrics(conn, strategy_version: str | None = None) -> list[dict[s
                ROUND(SUM(CASE WHEN po.is_success THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) AS hit_rate
         FROM pick_outcomes po
         JOIN recommendation_runs rr ON rr.run_id = po.run_id
+        JOIN recommendation_picks p
+          ON p.run_id = po.run_id AND p.market = po.market AND p.symbol = po.symbol
         WHERE po.alpha_pct IS NOT NULL
           AND rr.universe_scope = 'system_tech_universe'
           AND rr.run_date >= ?
+          AND COALESCE(p.signal, 'buy') = 'buy'
           {strategy_clause}
         GROUP BY po.market, po.horizon
         ORDER BY po.market, po.horizon
@@ -198,18 +205,56 @@ def _review_coverage(conn, strategy_version: str | None = None) -> dict[str, Any
     v2_total_reviewed = 0
     v2_total_mature = 0
     tables = _tables(conn)
-    if {"pick_outcomes", "recommendation_picks", "recommendation_runs", "price_daily"}.issubset(tables):
+    if {"pick_outcomes", "recommendation_picks", "recommendation_runs"}.issubset(tables):
         strategy_clause, strategy_params = _strategy_filter(conn, strategy_version)
         v2_mature_rows = conn.execute(
             f"""
-            SELECT horizon, COUNT(*) FROM (
+            SELECT h.horizon, COUNT(*)
+            FROM recommendation_picks rp
+            JOIN recommendation_runs rr ON rp.run_id = rr.run_id
+            CROSS JOIN (VALUES ('1d', 1), ('5d', 5), ('20d', 20)) AS h(horizon, days)
+            WHERE rr.universe_scope = 'system_tech_universe'
+              AND rr.status = 'generated'
+              AND COALESCE(rp.signal, 'buy') = 'buy'
+              AND rp.entry_price IS NOT NULL
+              AND rp.entry_price > 0
+              AND rr.run_date >= ?
+              {strategy_clause}
+              AND (rr.run_date + INTERVAL (h.days) DAY) <= CURRENT_DATE
+            GROUP BY h.horizon
+            """,
+            [PRODUCTION_METRICS_START_DATE, *strategy_params],
+        ).fetchall()
+        v2_reviewed_rows = conn.execute(
+            f"""
+            SELECT po.horizon, COUNT(*)
+            FROM pick_outcomes po
+            JOIN recommendation_runs rr ON rr.run_id = po.run_id
+            JOIN recommendation_picks rp
+              ON rp.run_id = po.run_id AND rp.market = po.market AND rp.symbol = po.symbol
+            WHERE po.alpha_pct IS NOT NULL
+              AND rr.universe_scope = 'system_tech_universe'
+              AND rr.run_date >= ?
+              AND COALESCE(rp.signal, 'buy') = 'buy'
+              {strategy_clause}
+            GROUP BY po.horizon
+            """,
+            [PRODUCTION_METRICS_START_DATE, *strategy_params],
+        ).fetchall()
+        local_price_ready_rows = []
+        if "price_daily" in tables:
+            local_price_ready_rows = conn.execute(
+                f"""
+                SELECT horizon, COUNT(*) FROM (
                 SELECT rp.run_id, rp.market, rp.symbol, h.horizon
                 FROM recommendation_picks rp
                 JOIN recommendation_runs rr ON rp.run_id = rr.run_id
                 CROSS JOIN (VALUES ('1d', 1), ('5d', 5), ('20d', 20)) AS h(horizon, days)
                 WHERE rr.universe_scope = 'system_tech_universe'
                   AND rr.status = 'generated'
-                  AND rp.signal = 'buy'
+                  AND COALESCE(rp.signal, 'buy') = 'buy'
+                  AND rp.entry_price IS NOT NULL
+                  AND rp.entry_price > 0
                   AND rr.run_date >= ?
                   {strategy_clause}
                   AND (rr.run_date + INTERVAL (h.days) DAY) <= CURRENT_DATE
@@ -250,27 +295,20 @@ def _review_coverage(conn, strategy_version: str | None = None) -> dict[str, Any
             )
             GROUP BY horizon
             """,
-            [PRODUCTION_METRICS_START_DATE, *strategy_params],
-        ).fetchall()
-        v2_reviewed_rows = conn.execute(
-            f"""
-            SELECT po.horizon, COUNT(*)
-            FROM pick_outcomes po
-            JOIN recommendation_runs rr ON rr.run_id = po.run_id
-            WHERE po.alpha_pct IS NOT NULL
-              AND rr.universe_scope = 'system_tech_universe'
-              AND rr.run_date >= ?
-              {strategy_clause}
-            GROUP BY po.horizon
-            """,
-            [PRODUCTION_METRICS_START_DATE, *strategy_params],
-        ).fetchall()
+                [PRODUCTION_METRICS_START_DATE, *strategy_params],
+            ).fetchall()
         mature_by_h = {h: int(n) for h, n in v2_mature_rows}
         reviewed_by_h = {h: int(n) for h, n in v2_reviewed_rows}
+        local_ready_by_h = {h: int(n) for h, n in local_price_ready_rows}
         for h in ("1d", "5d", "20d"):
             m = mature_by_h.get(h, 0)
             r = reviewed_by_h.get(h, 0)
-            by_horizon[h] = {"mature": m, "reviewed": r, "coverage": _coverage(r, m)}
+            by_horizon[h] = {
+                "mature": m,
+                "reviewed": r,
+                "coverage": _coverage(r, m),
+                "local_price_ready": local_ready_by_h.get(h, 0),
+            }
             v2_total_mature += m
             v2_total_reviewed += r
     return {
@@ -287,7 +325,7 @@ def _discovery_metrics(conn, strategy_version: str | None = None) -> dict[str, A
     """V2 path：pick_outcomes 按 horizon 聚合（取代 V1 discovery_tracking）。"""
     out: dict[str, Any] = {}
     tables = _tables(conn)
-    if not {"pick_outcomes", "recommendation_runs"}.issubset(tables):
+    if not {"pick_outcomes", "recommendation_runs", "recommendation_picks"}.issubset(tables):
         return {f"{w}d": {"n": 0, "avg_alpha_pct": None, "hit_rate": None} for w in (1, 5, 20)}
     strategy_clause, strategy_params = _strategy_filter(conn, strategy_version)
     for horizon in ("1d", "5d", "20d"):
@@ -299,9 +337,12 @@ def _discovery_metrics(conn, strategy_version: str | None = None) -> dict[str, A
                          / NULLIF(COUNT(po.alpha_pct), 0), 1) AS hit_rate
             FROM pick_outcomes po
             JOIN recommendation_runs rr ON rr.run_id = po.run_id
+            JOIN recommendation_picks rp
+              ON rp.run_id = po.run_id AND rp.market = po.market AND rp.symbol = po.symbol
             WHERE po.horizon = ?
               AND rr.universe_scope = 'system_tech_universe'
               AND rr.run_date >= ?
+              AND COALESCE(rp.signal, 'buy') = 'buy'
               {strategy_clause}
             """,
             [horizon, PRODUCTION_METRICS_START_DATE, *strategy_params],
@@ -364,12 +405,16 @@ def _to_markdown(payload: dict[str, Any]) -> str:
         f"Total reviewed/mature: **{cov.get('total_reviewed', 0)} / {cov.get('total_mature', 0)}** "
         f"({(cov.get('coverage') or 0) * 100:.1f}%)",
         "",
-        "| Horizon | Mature | Reviewed | Coverage |",
-        "|---|---:|---:|---:|",
+        "| Horizon | Mature | Reviewed | Coverage | Local Price Ready |",
+        "|---|---:|---:|---:|---:|",
     ])
     for src, row in (cov.get("v2_by_horizon") or cov.get("by_source") or {}).items():
         coverage = row.get("coverage")
-        lines.append(f"| {src} | {row.get('mature', 0)} | {row.get('reviewed', 0)} | {'—' if coverage is None else f'{coverage * 100:.1f}%'} |")
+        lines.append(
+            f"| {src} | {row.get('mature', 0)} | {row.get('reviewed', 0)} | "
+            f"{'—' if coverage is None else f'{coverage * 100:.1f}%'} | "
+            f"{row.get('local_price_ready', '—')} |"
+        )
 
     lines.extend([
         "",

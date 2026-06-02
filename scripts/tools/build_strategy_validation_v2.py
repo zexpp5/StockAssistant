@@ -103,9 +103,32 @@ def _conclusion(sample_size: int, avg_alpha: float | None, win_rate: float | Non
         return "弱负向/中性：样本仍不足，暂不调参。", "observe"
     if avg_alpha is not None and avg_alpha >= 1.0 and (win_rate or 0) >= 55:
         return "策略健康：成熟样本显示正 alpha。", "continue"
-    if avg_alpha is not None and avg_alpha < -2.0 and (win_rate or 0) < 45:
+    if avg_alpha is not None and (avg_alpha <= -1.0 or (win_rate or 0) < 45):
         return "策略承压：建议复核因子权重和市场分组。", "review_weights"
     return "策略中性：继续使用并观察下一批成熟样本。", "continue_observe"
+
+
+def _validation_status_from_reports(reports: list[dict[str, Any]]) -> tuple[str, str]:
+    if not reports:
+        return (
+            "WARN",
+            "INSUFFICIENT_SAMPLE: 当前策略还没有可写入 strategy_review_reports 的成熟推荐样本；"
+            "组合表现只能说明已有组合可回看，不能证明推荐策略有效。",
+        )
+    actions = {str(r.get("recommended_action") or "") for r in reports}
+    if "review_weights" in actions:
+        return (
+            "WARN",
+            "NEGATIVE_ALPHA_OR_LOW_HIT_RATE: 当前成熟样本显示负 alpha 或低胜率；"
+            "推荐策略可继续观察，但不应视为已验证可依赖。",
+        )
+    if actions - {"continue"}:
+        return (
+            "WARN",
+            "ACCUMULATING_OR_NEUTRAL_EVIDENCE: 已有策略报告，但结论仍是观察/中性；"
+            "不应把 validation PASS 理解为策略有效。",
+        )
+    return "PASS", "strategy_positive_alpha_available"
 
 
 def _load_outcome_summary(conn: duckdb.DuckDBPyConnection, strategy_version: str | None) -> tuple[dict, dict]:
@@ -119,9 +142,12 @@ def _load_outcome_summary(conn: duckdb.DuckDBPyConnection, strategy_version: str
                MAX(po.outcome_date) AS period_end
         FROM pick_outcomes po
         JOIN recommendation_runs rr ON rr.run_id = po.run_id
+        JOIN recommendation_picks rp
+          ON rp.run_id = po.run_id AND rp.market = po.market AND rp.symbol = po.symbol
         WHERE rr.universe_scope = 'system_tech_universe'
           AND rr.run_date >= ?
           AND po.alpha_pct IS NOT NULL
+          AND COALESCE(rp.signal, 'buy') = 'buy'
     """
     params: list[Any] = [PRODUCTION_METRICS_START_DATE]
     if strategy_version:
@@ -229,6 +255,7 @@ def _write_factor_attribution(conn: duckdb.DuckDBPyConnection, strategy_version_
           AND rr.run_date >= ?
           AND po.horizon = '1d'
           AND po.alpha_pct IS NOT NULL
+          AND COALESCE(rp.signal, 'buy') = 'buy'
     """
     params: list[Any] = [PRODUCTION_METRICS_START_DATE]
     if strategy_version_filter:
@@ -426,14 +453,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         reports = _write_strategy_reports(conn, grouped)
         attribution = _write_factor_attribution(conn, strategy_version)
         portfolio = _write_portfolio_performance(conn, strategy_version)
-        validation_status = "PASS" if reports else "WARN"
+        validation_status, status_reason = _validation_status_from_reports(reports)
         portfolio_status = "PASS" if portfolio else "WARN"
-        status_reason = (
-            "strategy_reports_available"
-            if reports else
-            "INSUFFICIENT_SAMPLE: 当前策略还没有可写入 strategy_review_reports 的成熟推荐样本；"
-            "组合表现只能说明已有组合可回看，不能证明推荐策略有效。"
-        )
         payload = {
             "generated_at": datetime.now().isoformat(timespec="seconds"),
             "db_path": str(db_path),
