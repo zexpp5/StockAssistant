@@ -476,7 +476,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="max-w-7xl mx-auto px-6 py-10">
     <div class="flex items-center gap-3 mb-3">
       <span class="bg-violet-500/20 text-violet-300 text-xs font-bold px-3 py-1 rounded-full">AI 投资研究 · 资深分析员视角</span>
-      <span class="text-slate-400 text-sm">数据更新 {UPDATE_TIME}</span>
+      <span class="text-slate-400 text-sm">页面生成 {UPDATE_TIME}</span>
     </div>
     <h1 class="text-4xl md:text-5xl font-bold mb-3 leading-tight">{HEADLINE}</h1>
     <p class="text-lg text-slate-300 max-w-4xl mb-6">{SUMMARY}</p>
@@ -2965,7 +2965,7 @@ function switchDiscoveryView(view) {
   <div class="max-w-7xl mx-auto px-6 text-sm">
     <p class="mb-2"><strong class="text-white">免责声明</strong>：本看板由 Claude AI 基于公开信息生成，仅作研究学习参考，<strong class="text-rose-300">绝不构成任何投资建议</strong>。</p>
     <p class="mb-2">投资有风险，所有交易决策需自行判断、自负盈亏。本看板的数据可能滞后、错误或解读偏差。</p>
-    <p class="text-slate-500">数据源：本地 DuckDB 自选股表 · WebSearch 抓取的最新公司财报 · 数据更新时间 {UPDATE_TIME}</p>
+    <p class="text-slate-500">数据源：本地 DuckDB 自选股表 · WebSearch 抓取的最新公司财报 · 页面生成时间 {UPDATE_TIME}</p>
   </div>
 </footer>
 
@@ -7082,6 +7082,61 @@ function _fmtGeneratedAt(value) {
   return "";
 }
 
+function _marketLabelShort(m) {
+  return ({US: "美股", HK: "港股", CN: "A股"}[m] || (m || "其他"));
+}
+
+function _marketSortKey(m) {
+  return ({HK: 1, US: 2, CN: 3}[m] || 9);
+}
+
+function _dateOnlyText(d) {
+  return String(d || "").slice(0, 10);
+}
+
+function _dateSetTextFrom(set) {
+  const arr = Array.from(set || []).filter(Boolean).sort();
+  if (!arr.length) return "";
+  if (arr.length === 1) return arr[0];
+  return `${arr[0]}~${arr[arr.length - 1]}`;
+}
+
+function _inferMarketFromHoldingRow(row) {
+  const code = String((row && (row.symbol || row.code)) || "").toUpperCase();
+  const m = String((row && row.market) || "").toUpperCase();
+  if (m) return m;
+  if (code.endsWith(".HK")) return "HK";
+  if (code.endsWith(".SS") || code.endsWith(".SZ") || code.endsWith(".SH") || code.endsWith(".BJ")) return "CN";
+  return "US";
+}
+
+function _quoteBasisSummary(items) {
+  const buckets = {};
+  (items || []).forEach(item => {
+    const m = _inferMarketFromHoldingRow(item);
+    const b = buckets[m] || (buckets[m] = {market: m, count: 0, dates: new Set(), prior: 0});
+    b.count += 1;
+    const d = _dateOnlyText(item.price_trade_date || item.trade_date);
+    if (d) b.dates.add(d);
+    if (item.price_is_prior_session) b.prior += 1;
+  });
+  return Object.values(buckets)
+    .sort((a, b) => _marketSortKey(a.market) - _marketSortKey(b.market))
+    .map(b => ({
+      market: b.market,
+      label: _marketLabelShort(b.market),
+      dates: _dateSetTextFrom(b.dates) || "日期待补",
+      count: b.count,
+      prior: b.prior,
+    }));
+}
+
+function _quoteBasisText(items) {
+  const rows = _quoteBasisSummary(items);
+  if (!rows.length) return "";
+  return rows.map(r => `${r.label} ${r.dates}${r.prior ? " 昨收/待刷新" : ""}`).join(" · ");
+}
+
 // 让用户一眼看出"行情/评分快照"是不是今天的;否则不知道页面是不是 stale。
 function _renderRealHoldingDataAsof() {
   const el = document.getElementById("real-holding-data-asof");
@@ -7103,12 +7158,13 @@ function _renderRealHoldingDataAsof() {
   const today = new Date().toISOString().slice(0, 10);
   const generatedFull = _fmtGeneratedAt(run.generated_at);  // "YYYY-MM-DD HH:MM:SS"
   const hms = generatedFull.length >= 19 ? generatedFull.slice(11, 19) : "";
+  const quoteText = _quoteBasisText((_realHoldingReviewCache && _realHoldingReviewCache.items) || []);
   if (el) {
     if (asOf === today) {
-      el.innerHTML = `<span class="text-emerald-700">✓ 今日已更新${hms ? " · 体检 " + _esc(hms) : ""}</span>`;
+      el.innerHTML = `<span class="text-emerald-700">✓ 今日已生成体检${hms ? " · " + _esc(hms) : ""}</span>${quoteText ? `<span class="ml-2 text-slate-500">行情基准 ${_esc(quoteText)}</span>` : ""}`;
     } else {
       const lag = Math.max(0, Math.floor((new Date(today) - new Date(asOf)) / 86400000));
-      el.innerHTML = `<span class="text-amber-700">⚠ 数据 ${_esc(asOf)} · 落后 ${lag} 天${hms ? " · 上次体检 " + _esc(hms) : ""}</span>`;
+      el.innerHTML = `<span class="text-amber-700">⚠ 体检日期 ${_esc(asOf)} · 落后 ${lag} 天${hms ? " · 上次体检 " + _esc(hms) : ""}</span>${quoteText ? `<span class="ml-2 text-slate-500">行情基准 ${_esc(quoteText)}</span>` : ""}`;
     }
   }
   if (adviceEl) {
@@ -7128,17 +7184,17 @@ function _renderRealHoldingDataAsof() {
     if (asOf !== today) {
       const lag = Math.max(0, Math.floor((new Date(today) - new Date(asOf)) / 86400000));
       bigEl.className = "inline-flex items-center gap-1 px-3 py-1 rounded-md text-sm font-medium border bg-amber-50 text-amber-800 border-amber-200";
-      bigEl.title = "数据不是今天的，可能 launchd 没跑起来";
-      bigEl.textContent = "⚠ 数据 " + (generatedFull || asOf) + " · 落后 " + lag + " 天";
+      bigEl.title = "体检快照不是今天的；行情基准日期按各市场单独显示";
+      bigEl.textContent = "⚠ 体检快照 " + (generatedFull || asOf) + " · 落后 " + lag + " 天";
     } else if (tooOld) {
       bigEl.className = "inline-flex items-center gap-1 px-3 py-1 rounded-md text-sm font-medium border bg-amber-50 text-amber-800 border-amber-200";
       const ageH = (ageMinutes / 60).toFixed(1);
-      bigEl.title = `intraday_holdings cron 期望每小时跑一次，但距上次刷新已 ${ageH}h，疑似挂了或闭市跳过`;
-      bigEl.textContent = `⚠ 数据 ${generatedFull} · ${ageH}h 未刷新`;
+      bigEl.title = `这是体检快照生成时间，不代表所有持仓都有同一天行情；行情基准：${quoteText || "待补"}`;
+      bigEl.textContent = `⚠ 体检快照 ${generatedFull} · ${ageH}h 未刷新`;
     } else {
       bigEl.className = "inline-flex items-center gap-1 px-3 py-1 rounded-md text-sm font-medium border bg-emerald-50 text-emerald-700 border-emerald-200";
-      bigEl.title = `盘中每整点自动刷新 (intraday_holdings launchd) · 距上次 ${ageMinutes} 分钟`;
-      bigEl.textContent = "🕐 数据更新 " + (generatedFull || asOf);
+      bigEl.title = `这是体检快照生成时间，不代表所有持仓都有同一天行情；行情基准：${quoteText || "待补"}`;
+      bigEl.textContent = "🕐 体检快照 " + (generatedFull || asOf);
     }
   }
 }
@@ -8178,7 +8234,8 @@ async function renderRealHoldings() {
         <span class="text-slate-500">${_dayMarketLabel(b.market)} · ${dateText} 最近行情 · ${b.count} 笔</span>
         <span class="font-mono font-semibold text-slate-700 whitespace-nowrap">${b.value.toLocaleString(undefined, {maximumFractionDigits:0})}</span>
       </div>`;
-    }).join("");
+  }).join("");
+  const quoteBasisLine = _quoteBasisText((_realHoldingReviewCache && _realHoldingReviewCache.items) || []);
   const totalPnlTooltip = "累计盈亏 = 按每只持仓最近一次成功行情估算的市值 - 买入锁定成本；港股、美股、A股可能对应不同的行情日期。";
   const coveredByAi = enrichedWithGap.filter(x => x.targetWeight != null);
   const stockWeightCovered = coveredByAi.reduce((sum, x) => sum + x.currentWeight, 0);
@@ -8201,6 +8258,7 @@ async function renderRealHoldings() {
     const hasReviewMarket = ri && (_numOrNull(ri.current_price) != null || _numOrNull(ri.current_value_rmb) != null);
     return !x.cur && !hasReviewMarket;
   });
+  const valuationFreshnessLabel = hasFallbackValue ? "部分持仓无行情,市值用成本兜底" : "按最近有效行情估值";
   const valueLabel = hasFallbackValue ? "估算持仓市值 RMB" : "持仓市值 RMB";
   const assetBar = _ASSET_ORDER
     .filter(k => (assetBuckets[k] || 0) > 0 || k === "cash")
@@ -8216,7 +8274,7 @@ async function renderRealHoldings() {
       <div class="flex items-center justify-between gap-3 flex-wrap mb-2">
         <div class="flex items-baseline gap-2">
           <h3 class="text-sm font-semibold text-slate-700">账户总览</h3>
-          <span class="text-[11px] text-slate-400">实时估值 · ${hasFallbackValue ? "部分持仓无行情,市值用成本兜底" : "已按当前行情估算"} · 本金 ${TOTAL_CAPITAL.toLocaleString(undefined, {maximumFractionDigits:0})} RMB</span>
+          <span class="text-[11px] text-slate-400">${valuationFreshnessLabel}${quoteBasisLine ? " · " + _esc(quoteBasisLine) : ""} · 本金 ${TOTAL_CAPITAL.toLocaleString(undefined, {maximumFractionDigits:0})} RMB</span>
         </div>
         <span class="text-[11px] text-slate-500">${aiCoverageLabel}${coveredByAi.length ? " " + totalDiffText : ""}</span>
       </div>
