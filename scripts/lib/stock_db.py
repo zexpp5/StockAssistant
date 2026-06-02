@@ -2013,6 +2013,24 @@ def _insert_trade(item: Mapping[str, Any], side: str, *, conn) -> dict[str, Any]
     return {"trade_id": trade_id, "holding_id": holding, "created": True, "deduped": False}
 
 
+def insert_real_holding_trade_raw(item: Mapping[str, Any], side: str, *, conn) -> dict[str, Any]:
+    """插入一笔 trade 但**不** rebuild（批量/迁移用）。带 client_request_id 幂等。
+
+    调用方负责在批量结束后调用 rebuild_real_holdings_from_trades()。
+    """
+    vals = _normalize_trade(item, side)
+    existing = _existing_trade_by_request_id(vals["account"], vals["client_request_id"], conn=conn)
+    if existing is not None:
+        return {"trade_id": int(existing["trade_id"]), "created": False, "deduped": True}
+    conn.execute(
+        f"INSERT INTO real_holding_trades ({','.join(REAL_HOLDING_TRADES_COLS)}, updated_at) "
+        f"VALUES ({','.join(['?'] * len(REAL_HOLDING_TRADES_COLS))}, CURRENT_TIMESTAMP)",
+        [vals[c] for c in REAL_HOLDING_TRADES_COLS],
+    )
+    trade_id = int(conn.execute("SELECT currval('real_holding_trades_id_seq')").fetchone()[0])
+    return {"trade_id": trade_id, "created": True, "deduped": False}
+
+
 def insert_real_holding_buy(item: Mapping[str, Any], *, conn=None) -> dict[str, Any]:
     """记录一笔买入/加仓成交，并 rebuild 当前聚合持仓。"""
     own = conn is None
