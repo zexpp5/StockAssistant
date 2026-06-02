@@ -109,6 +109,20 @@ SCAN_SPECS = {
             "evidence_kind": "filing_metric",
             "evidence_text_template": "10-K 提及 immersion cooling（浸没式液冷）",
         },
+        # 2026-06-02 扩 query 让 VRT/MOD 等真散热龙头命中
+        # （VRT 10-K 不用 "direct-to-chip" 词组，用 "thermal management"）
+        {
+            "query": '"thermal management" "data center"',
+            "forms": "10-K",
+            "evidence_kind": "filing_metric",
+            "evidence_text_template": "10-K 提及 thermal management + data center（散热配套）",
+        },
+        {
+            "query": '"cold plate"',
+            "forms": "10-K",
+            "evidence_kind": "filing_metric",
+            "evidence_text_template": "10-K 提及 cold plate（液冷板）",
+        },
     ],
     "ai_data": [
         # AI 训练数据 / 内容授权主营关键词
@@ -164,6 +178,16 @@ SCAN_SPECS_8K = {
         {"query": '"data center" "liquid cooling"', "forms": "8-K",
          "evidence_kind": "project_status",
          "evidence_text_template": "8-K 提及 data center liquid cooling"},
+        # 2026-06-02 扩 8-K query 覆盖更多液冷事件类公告
+        {"query": '"thermal management" "data center"', "forms": "8-K",
+         "evidence_kind": "project_status",
+         "evidence_text_template": "8-K 提及 thermal management + data center 项目/合同"},
+        {"query": '"liquid-cooled"', "forms": "8-K",
+         "evidence_kind": "project_status",
+         "evidence_text_template": "8-K 提及 liquid-cooled 产品/订单"},
+        {"query": '"cold plate" "data center"', "forms": "8-K",
+         "evidence_kind": "project_status",
+         "evidence_text_template": "8-K 提及 cold plate + data center"},
     ],
     "ai_data": [
         {"query": '"data licensing" "OpenAI"', "forms": "8-K",
