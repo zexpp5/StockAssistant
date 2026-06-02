@@ -791,18 +791,23 @@ def build_theme_evidence_panel(con) -> dict[str, Any]:
             "latest_metrics": theme_latest_metrics.get(tid, []),
         })
 
-    # Phase 1 三档化（修复之前的过度乐观 ✅）：
+    # Phase 1 三档化：
     #   未启动 = evidence 表为空
-    #   PoC    = 有 evidence 条目但全部 candidate，或 confirmed 主题覆盖率 < 80%
-    #   完成   = ≥ 80% 主题有 confirmed 公司证据
+    #   PoC    = 有 evidence 条目但 confirmed 主题覆盖率 < 80%
+    #   完成   = ≥ 80% 主题有 confirmed 公司
+    #
+    # 口径修正 2026-06-02:
+    #   confirmed 不是 evidence 行的状态，而是 aggregate_theme_tags 跑完后
+    #   写到 ai_theme_company_tags 的公司级状态。原代码 from ai_theme_company_evidence
+    #   永远拿不到 confirmed，导致 phase_1_n_confirmed 恒 0 跟主题卡片 confirmed 数自相矛盾。
     n_evi_total = con.execute(
         "SELECT COUNT(*) FROM ai_theme_company_evidence"
     ).fetchone()[0]
     n_confirmed = con.execute(
-        "SELECT COUNT(*) FROM ai_theme_company_evidence WHERE evidence_status = 'confirmed'"
+        "SELECT COUNT(*) FROM ai_theme_company_tags WHERE evidence_status = 'confirmed'"
     ).fetchone()[0]
     themes_with_confirmed = con.execute(
-        "SELECT COUNT(DISTINCT theme) FROM ai_theme_company_evidence WHERE evidence_status = 'confirmed'"
+        "SELECT COUNT(DISTINCT theme) FROM ai_theme_company_tags WHERE evidence_status = 'confirmed'"
     ).fetchone()[0]
     n_themes_total = len(THEME_ORDER)
     confirmed_coverage = themes_with_confirmed / n_themes_total if n_themes_total else 0.0
