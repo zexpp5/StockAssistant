@@ -735,7 +735,8 @@ def _build_item(
     current_value_rmb = cost_rmb if missing_price else current_price * shares * fx
     pnl_rmb = current_value_rmb - cost_rmb
     pnl_pct = (pnl_rmb / cost_rmb * 100.0) if cost_rmb else None
-    # 今日盈亏: 最近收盘 vs 前一日收盘,统一口径而不按本地日历日。
+    # 当日盈亏: 只有行情日期已到市场本地今天时才计算。
+    # 若仍停留在上一交易日收盘(盘前/未刷新),不能把上一交易日涨跌冒充成今天盈亏。
     # 2026-05-29 修复: 当日新建仓 (entry_date > prev_trade_date) 时改用 entry_price 作基准 —
     # 否则会把"持有一整天的市场涨跌"算给今天才进场的仓位,造成虚假浮盈/浮亏。
     # 2026-05-29 修复 v2: 当日建仓直接复用累计盈亏 (= 现市值 − 锁定成本),把汇兑变动也算进去,
@@ -761,7 +762,9 @@ def _build_item(
     day_change_rmb = None
     day_change_pct = None
     day_change_basis = None
-    if use_entry_as_baseline and not missing_price:
+    if price_is_prior_session:
+        day_change_basis = "prior_session"
+    elif use_entry_as_baseline and not missing_price:
         day_change_rmb = pnl_rmb
         day_change_pct = pnl_pct
         day_change_basis = "entry_cost"
@@ -837,6 +840,7 @@ def _build_item(
         # 文案标"昨收"而非"最新"，并显示这条收盘的真实日期，避免误当成当日实时价。
         if price_is_prior_session:
             reasons.append(f"昨收价 {price_trade_date} · {current_price:.2f} {current_currency}（盘前/未开盘，待盘中刷新）")
+            data_flags.append("prior_session_price")
         else:
             reasons.append(f"最新行情 {price_trade_date} · {current_price:.2f} {current_currency}")
     else:

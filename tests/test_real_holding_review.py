@@ -24,6 +24,27 @@ from stock_research.jobs.real_holding_review import (  # type: ignore
 
 
 class RealHoldingReviewTest(unittest.TestCase):
+    def _insert_holding(
+        self,
+        conn,
+        *,
+        symbol: str,
+        market: str = "US",
+        currency: str = "USD",
+    ) -> int:
+        return stock_db.insert_real_holding(
+            {
+                "symbol": symbol,
+                "market": market,
+                "entry_price": 100,
+                "shares": 1,
+                "entry_date": "2026-05-20",
+                "currency": currency,
+                "entry_fx_rate": 1.0,
+            },
+            conn=conn,
+        )
+
     def test_stock_without_model_score_is_data_action(self):
         item = _build_item(
             {"symbol": "MCD", "market": "US", "entry_price": 280, "shares": 10,
@@ -39,16 +60,17 @@ class RealHoldingReviewTest(unittest.TestCase):
 
     def test_day_change_filled_when_prev_close_available(self):
         """有 prev_close 时,snapshot 必须输出今日盈亏 (RMB + %)。"""
-        item = _build_item(
-            {"symbol": "MCD", "market": "US", "entry_price": 280, "shares": 10,
-             "currency": "USD", "entry_fx_rate": 7.1},
-            price={"close": 285, "prev_close": 282, "currency": "USD",
-                   "trade_date": "2026-05-22", "prev_trade_date": "2026-05-21"},
-            pick=None,
-            verdict={"coverage_class": "picks_only", "treatment_class": "picks_only", "asset_class": "equity"},
-            total_capital=500000,
-            target_weights={},
-        )
+        with patch("stock_research.jobs.real_holding_review._market_local_date", return_value=date(2026, 5, 22)):
+            item = _build_item(
+                {"symbol": "MCD", "market": "US", "entry_price": 280, "shares": 10,
+                 "currency": "USD", "entry_fx_rate": 7.1},
+                price={"close": 285, "prev_close": 282, "currency": "USD",
+                       "trade_date": "2026-05-22", "prev_trade_date": "2026-05-21"},
+                pick=None,
+                verdict={"coverage_class": "picks_only", "treatment_class": "picks_only", "asset_class": "equity"},
+                total_capital=500000,
+                target_weights={},
+            )
         self.assertEqual(item["prev_close"], 282)
         self.assertEqual(item["prev_trade_date"], "2026-05-21")
         # day_change_pct = (285/282 - 1) * 100 ≈ 1.0638
@@ -56,6 +78,24 @@ class RealHoldingReviewTest(unittest.TestCase):
         # day_change_rmb = (285-282) * 10 * fx(USD)
         self.assertIsNotNone(item["day_change_rmb"])
         self.assertGreater(item["day_change_rmb"], 0)
+
+    def test_day_change_suppressed_for_prior_session_price(self):
+        """盘前/未刷新时,上一交易日涨跌不能冒充成今日盈亏。"""
+        item = _build_item(
+            {"symbol": "9992.HK", "market": "HK", "entry_price": 176.5, "shares": 2000,
+             "currency": "HKD", "entry_fx_rate": 0.8627},
+            price={"close": 179.6, "prev_close": 173.4, "currency": "HKD",
+                   "trade_date": "2000-01-03", "prev_trade_date": "2000-01-02"},
+            pick=None,
+            verdict={"coverage_class": "picks_only", "treatment_class": "picks_only", "asset_class": "equity"},
+            total_capital=500000,
+            target_weights={},
+        )
+        self.assertTrue(item["price_is_prior_session"])
+        self.assertEqual(item["day_change_basis"], "prior_session")
+        self.assertIsNone(item["day_change_rmb"])
+        self.assertIsNone(item["day_change_pct"])
+        self.assertIn("prior_session_price", item["data_flags"])
 
     def test_day_change_missing_when_prev_close_absent(self):
         """没有 prev_close 时,day_change 字段保持 None,不应崩。"""
@@ -249,6 +289,7 @@ class RealHoldingReviewTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             conn = stock_db.get_db(str(Path(d) / "test.duckdb"))
             try:
+                holding_id = self._insert_holding(conn, symbol="MCD")
                 run = {
                     "review_run_id": "test_run",
                     "as_of_date": "2026-05-22",
@@ -258,6 +299,7 @@ class RealHoldingReviewTest(unittest.TestCase):
                     "notes": "unit test",
                 }
                 item = {
+                    "holding_id": holding_id,
                     "symbol": "MCD",
                     "market": "US",
                     "asset_class": "equity",
@@ -285,6 +327,7 @@ class RealHoldingReviewTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             conn = stock_db.get_db(str(Path(d) / "test.duckdb"))
             try:
+                holding_id = self._insert_holding(conn, symbol="IAUM")
                 for as_of, action, pnl in [("2026-05-20", "持有观察", -1.0),
                                             ("2026-05-21", "减仓观察", -5.0),
                                             ("2026-05-22", "风险复查", -9.0)]:
@@ -292,7 +335,7 @@ class RealHoldingReviewTest(unittest.TestCase):
                         {"review_run_id": f"run_{as_of}", "as_of_date": as_of,
                          "status": "generated", "holding_count": 1,
                          "data_quality": "OK", "notes": ""},
-                        [{"symbol": "IAUM", "market": "US", "asset_class": "commodity",
+                        [{"holding_id": holding_id, "symbol": "IAUM", "market": "US", "asset_class": "commodity",
                           "treatment_class": "risk_only", "score": None, "coverage_score": 0.7,
                           "rating": "tracking", "action_label": action,
                           "action_priority": stock_db.USER_CONFIG_DEFAULTS.get("noop", 0) or 7,
@@ -300,7 +343,7 @@ class RealHoldingReviewTest(unittest.TestCase):
                           "reasons": [], "risk_flags": [], "data_flags": []}],
                         conn=conn,
                     )
-                hist = stock_db.fetch_real_holding_review_history(symbols=["IAUM"], days=10, conn=conn)
+                hist = stock_db.fetch_real_holding_review_history(symbols=["IAUM"], days=30, conn=conn)
             finally:
                 conn.close()
         self.assertIn("IAUM", hist)
@@ -315,10 +358,11 @@ class RealHoldingReviewTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             conn = stock_db.get_db(str(Path(d) / "test.duckdb"))
             try:
+                holding_id = self._insert_holding(conn, symbol="IAUM")
                 stock_db.save_real_holding_review(
                     {"review_run_id": "morning", "as_of_date": "2026-05-22",
                      "status": "generated", "holding_count": 1, "data_quality": "OK", "notes": ""},
-                    [{"symbol": "IAUM", "market": "US", "asset_class": "commodity",
+                    [{"holding_id": holding_id, "symbol": "IAUM", "market": "US", "asset_class": "commodity",
                       "treatment_class": "risk_only", "score": None, "coverage_score": 0.7,
                       "rating": "tracking", "action_label": "持有观察", "action_priority": 6,
                       "pnl_pct": -1.0, "reasons": [], "risk_flags": [], "data_flags": []}],
@@ -328,13 +372,13 @@ class RealHoldingReviewTest(unittest.TestCase):
                 stock_db.save_real_holding_review(
                     {"review_run_id": "rerun", "as_of_date": "2026-05-22",
                      "status": "generated", "holding_count": 1, "data_quality": "OK", "notes": ""},
-                    [{"symbol": "IAUM", "market": "US", "asset_class": "commodity",
+                    [{"holding_id": holding_id, "symbol": "IAUM", "market": "US", "asset_class": "commodity",
                       "treatment_class": "risk_only", "score": None, "coverage_score": 0.7,
                       "rating": "tracking", "action_label": "风险复查", "action_priority": 1,
                       "pnl_pct": -9.0, "reasons": [], "risk_flags": [], "data_flags": []}],
                     conn=conn,
                 )
-                hist = stock_db.fetch_real_holding_review_history(symbols=["IAUM"], days=10, conn=conn)
+                hist = stock_db.fetch_real_holding_review_history(symbols=["IAUM"], days=30, conn=conn)
             finally:
                 conn.close()
         self.assertEqual(len(hist["IAUM"]), 1)
@@ -353,22 +397,24 @@ class RealHoldingReviewTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             conn = stock_db.get_db(str(Path(d) / "test.duckdb"))
             try:
+                iaum_id = self._insert_holding(conn, symbol="IAUM")
+                mcd_id = self._insert_holding(conn, symbol="MCD")
                 stock_db.save_real_holding_review(
                     {"review_run_id": "r1", "as_of_date": "2026-05-22",
                      "status": "generated", "holding_count": 2, "data_quality": "OK", "notes": ""},
                     [
-                        {"symbol": "IAUM", "market": "US", "asset_class": "commodity",
+                        {"holding_id": iaum_id, "symbol": "IAUM", "market": "US", "asset_class": "commodity",
                          "treatment_class": "risk_only", "score": None, "coverage_score": 0.7,
                          "rating": "tracking", "action_label": "仅风控跟踪", "action_priority": 7,
                          "pnl_pct": -1.0, "reasons": [], "risk_flags": [], "data_flags": []},
-                        {"symbol": "MCD", "market": "US", "asset_class": "equity",
+                        {"holding_id": mcd_id, "symbol": "MCD", "market": "US", "asset_class": "equity",
                          "treatment_class": "stock_score", "score": 72, "coverage_score": 0.8,
                          "rating": "buy", "action_label": "持有观察", "action_priority": 6,
                          "pnl_pct": 2.0, "reasons": [], "risk_flags": [], "data_flags": []},
                     ],
                     conn=conn,
                 )
-                hist = stock_db.fetch_real_holding_review_history(days=10, conn=conn)
+                hist = stock_db.fetch_real_holding_review_history(days=30, conn=conn)
             finally:
                 conn.close()
         self.assertEqual(set(hist.keys()), {"IAUM", "MCD"})

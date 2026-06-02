@@ -1271,7 +1271,7 @@ function switchDiscoveryView(view) {
           <th class="px-3 py-2 text-right whitespace-nowrap w-[150px]">成本/数量</th>
           <th class="px-3 py-2 text-right whitespace-nowrap w-[150px]">现价/市值</th>
           <th class="px-3 py-2 text-left whitespace-nowrap w-[130px]">买入/汇率</th>
-          <th class="px-3 py-2 text-right whitespace-nowrap w-[120px]" title="今日盈亏 = 最近一次有效收盘 vs 前一日收盘 · 与本地日历日无关">今日盈亏</th>
+          <th class="px-3 py-2 text-right whitespace-nowrap w-[120px]" title="当日盈亏只在该市场已有本地今日行情时显示；盘前/未刷新时不把上一交易日涨跌冒充成今日盈亏">当日盈亏</th>
           <th class="px-3 py-2 text-right whitespace-nowrap w-[120px]" title="自买入以来累计盈亏 = 现市值 − 锁定成本">累计盈亏</th>
           <th class="px-3 py-2 text-right whitespace-nowrap w-[90px]" title="这只股票市值占你总本金（默认50万）的百分之几">你现在占比</th>
           <th class="px-3 py-2 text-right whitespace-nowrap w-[155px]" title="来自「AI组合方案」：若按模型买，这只应占百分之几；下一行是你现在比建议多还是少几个百分点">模型建议仓位</th>
@@ -7331,7 +7331,7 @@ function _reviewCell(item) {
   const history = _reviewHistoryFor(item.symbol || item.code);
   const trend = _historyTrend(history);
   const historyTooltip = _historyTooltipText(history);
-  const titleParts = ["今日建议: " + action, actionHint, metricLine, "数据完整度: " + coverage, "今日市值: " + snapValue, "今日盈亏: " + snapPnl]
+  const titleParts = ["今日建议: " + action, actionHint, metricLine, "数据完整度: " + coverage, "当前市值: " + snapValue, "累计盈亏: " + snapPnl]
     .concat(reasons.map(r => "· " + r))
     .concat(risks.map(r => "风险: " + r))
     .concat(dataFlags.map(r => "数据: " + r));
@@ -8158,8 +8158,8 @@ async function renderRealHoldings() {
       <span class="font-mono font-semibold ${cls} whitespace-nowrap">${b.change >= 0 ? "+" : ""}${b.change.toLocaleString(undefined, {maximumFractionDigits:0})}${pct == null ? "" : ` · ${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`}</span>
     </div>`;
   }).join("");
-  const dayPnlLabel = "最新收盘变动";
-  const dayPnlTooltip = "按各市场最近两次收盘分别计算；美股、港股、A股最新收盘日可能不同；当天新仓按买入成本计算。";
+  const dayPnlLabel = "可用当日盈亏";
+  const dayPnlTooltip = "只汇总该市场已有本地今日行情的持仓；盘前/未刷新时不把上一交易日涨跌冒充成今日盈亏。";
   const quoteBuckets = {};
   enriched.forEach(x => {
     const m = _inferMarketForHolding(x);
@@ -8398,7 +8398,7 @@ async function renderRealHoldings() {
              ${x.dayChangeRmb >= 0 ? "+" : ""}${x.dayChangeRmb.toLocaleString(undefined, {maximumFractionDigits:0})} <span class="text-[10px] text-slate-400">RMB</span>
              <div class="text-[11px]">${x.dayChangePct >= 0 ? "+" : ""}${x.dayChangePct.toFixed(2)}%</div>
            </td>`
-        : `<td class="px-3 py-2 text-right font-mono whitespace-nowrap text-slate-300" title="缺少前一日收盘价,无法算今日变化">—</td>`}
+        : `<td class="px-3 py-2 text-right font-mono whitespace-nowrap text-slate-300" title="${priorSession ? "盘前/未刷新,暂无本地今日行情" : "缺少前一日收盘价,无法算今日变化"}">—</td>`}
       <td class="px-3 py-2 text-right font-mono whitespace-nowrap ${pnlCls}">
         ${x.pnlRmb >= 0 ? "+" : ""}${x.pnlRmb.toLocaleString(undefined, {maximumFractionDigits:0})} <span class="text-[10px] text-slate-400">RMB</span>
         <div class="text-[11px]">${x.pnlPct >= 0 ? "+" : ""}${x.pnlPct.toFixed(2)}%</div>

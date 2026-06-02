@@ -35,7 +35,7 @@ try:
 except Exception:
     TOTAL_CAPITAL = 500000
 
-from fx_rates import FX_TO_RMB  # 单一汇率源（2026-05-22 收敛，HKD 统一为 0.917）
+from fx_rates import FX_TO_RMB  # 单一汇率源（2026-05-22 收敛）
 
 RISK_FREE_RATE = 0.045  # 美国 10Y 国债收益率 ~4.5%
 TRADING_DAYS = 252

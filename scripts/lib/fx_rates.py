@@ -23,17 +23,17 @@ CACHE_PATH = REPO / "data" / "latest" / "fx_rates.json"
 # when Yahoo/remote refresh and local cache are both unavailable.
 FALLBACK_FX_TO_RMB: dict[str, float] = {
     "CNY": 1.0,
-    "USD": 7.10,
-    "HKD": 0.917,
-    "JPY": 0.046,
-    "KRW": 0.0052,
-    "TWD": 0.22,
-    "EUR": 7.80,
-    "AUD": 4.60,
-    "GBP": 9.00,
+    "USD": 6.7645,
+    "HKD": 0.8627,
+    "JPY": 0.0423,
+    "KRW": 0.0045,
+    "TWD": 0.2151,
+    "EUR": 7.8698,
+    "AUD": 4.8450,
+    "GBP": 9.1041,
 }
 
-FALLBACK_AS_OF = "2026-05-22"
+FALLBACK_AS_OF = "2026-06-02"
 
 _YAHOO_SYMBOLS: dict[str, str] = {
     "USD": "CNY=X",       # CNY per USD
