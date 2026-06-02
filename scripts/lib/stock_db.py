@@ -781,8 +781,20 @@ def fetch_manual_watchlist(
                "  ON u.symbol = mw.symbol") if has_su else ""
     chain_sel = ("cm.chain, cm.chain_tier, cm.chain_role, cm.layman_intro"
                  if has_chain else "NULL AS chain, NULL AS chain_tier, NULL AS chain_role, NULL AS layman_intro")
-    chain_join = ("LEFT JOIN chain_metadata cm "
-                  "  ON cm.symbol = mw.symbol") if has_chain else ""
+    # 2026-06-02: chain_metadata 同一 symbol 可能存多行（manual_override 用 market='美股'，
+    # rule_classify 用 market='US'，(market,symbol) PK 不互相覆盖）→ 直接 LEFT JOIN 会一对多
+    # 放大成重复自选股行。先按 symbol 去重再 JOIN：manual_override 优先，再取最新 classified_at。
+    chain_join = (
+        "LEFT JOIN ("
+        "  SELECT symbol, chain, chain_tier, chain_role, layman_intro,"
+        "         ROW_NUMBER() OVER ("
+        "           PARTITION BY symbol"
+        "           ORDER BY CASE WHEN source = 'manual_override' THEN 0 ELSE 1 END,"
+        "                    classified_at DESC"
+        "         ) AS _rn"
+        "  FROM chain_metadata"
+        ") cm ON cm.symbol = mw.symbol AND cm._rn = 1"
+    ) if has_chain else ""
     sql = (
         f"SELECT mw.market, mw.symbol, {cn_sel}, {industry_sel}, {business_sel}, mw.notes, mw.created_at, mw.updated_at, "
         f"{chain_sel} "
