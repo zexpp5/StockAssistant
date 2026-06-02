@@ -2993,7 +2993,7 @@ const PICKS_TIMESTAMPS = {PICKS_TIMESTAMPS_JSON};
 const WATCHLIST_RATINGS = {WATCHLIST_RATINGS_JSON};  // {code: {rating, total_score, ai_score}}  来自 picks 最新一日
 // 2026-05-25: 自选股每只 code 在 picks universe 里的覆盖状态 — 让"未评级" badge 能告诉用户原因
 //   {code: "in_universe" | "dropped_from_universe" | "not_in_universe"}
-//   in_universe            → 现役科技池但今日没截入 top 20 → "📊 池外"
+//   in_universe            → 现役科技池但今日没截入 top 20 → "📊 今日未入选 Top20"
 //   dropped_from_universe  → 曾在科技池，最近重建时被剔除 → "📉 已下池"
 //   not_in_universe        → 从没进过 universe（消费/ETF/防御类）→ "📦 非科技 · 模型不评"
 const WATCHLIST_COVERAGE = {WATCHLIST_COVERAGE_JSON};
@@ -3157,7 +3157,7 @@ function _wlRatingBadge(code) {
     // 2026-05-25: 按 coverage 区分"为什么没评级"，避免让用户猜机制
     const cov = WATCHLIST_COVERAGE[code];
     if (cov === "in_universe") {
-      return '<span class="inline-flex px-2 py-0.5 rounded text-xs bg-slate-100 text-slate-600" title="在科技 universe 内，但今日 picks top 20 之外（被其它科技股压下去了）— 不是没跑，是没截入">📊 池外</span>';
+      return '<span class="inline-flex px-2 py-0.5 rounded text-xs bg-slate-100 text-slate-600" title="AI 每天只给打分最高的前 20 名出评级。这只今天排在 20 名外，所以暂无评级 — 不是没分析，是没截入。明天重新打分可能上榜。">📊 今日未入选 Top20</span>';
     }
     if (cov === "dropped_from_universe") {
       return '<span class="inline-flex px-2 py-0.5 rounded text-xs bg-orange-50 text-orange-700" title="曾在科技池里，最近一次 universe 重建时被剔除（可能因子表现退化 / 行情归类调整）— 你加的自选股仍保留，但模型不再为它打分">📉 已下池</span>';
