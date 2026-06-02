@@ -33,7 +33,8 @@ class TestStrategyFailureDiagnosis(unittest.TestCase):
                VALUES
                ('system_tech_universe', 'CN', 'TOPBAD', 'Top Bad', 'AI', 'software', 'test'),
                ('system_tech_universe', 'CN', 'TAILBAD', 'Tail Bad', 'AI', 'software', 'test'),
-               ('system_tech_universe', 'CN', 'WATCH', 'Watch Bad', 'AI', 'software', 'test')"""
+               ('system_tech_universe', 'CN', 'WATCH', 'Watch Bad', 'AI', 'software', 'test'),
+               ('system_tech_universe', 'US', 'USPENDING', 'US Pending', 'AI', 'software', 'test')"""
         )
         self.conn.execute(
             """INSERT INTO chain_metadata (market, symbol, chain, chain_role, source)
@@ -53,6 +54,9 @@ class TestStrategyFailureDiagnosis(unittest.TestCase):
                 '{"valuation":30,"momentum":20,"reversal":30,"data_quality":100,"coverage":1,"f_score":20}',
                 '[]', 100, 'system_tech_universe', 'test'),
                ('run_test', 'CN', 'WATCH', 'Watch Bad', 13, 'B', 'watch', 59,
+                '{"valuation":90,"momentum":90,"reversal":90}', '[]',
+                100, 'system_tech_universe', 'test'),
+               ('run_test', 'US', 'USPENDING', 'US Pending', 1, 'A', 'buy', 88,
                 '{"valuation":90,"momentum":90,"reversal":90}', '[]',
                 100, 'system_tech_universe', 'test')"""
         )
@@ -136,6 +140,27 @@ class TestStrategyFailureDiagnosis(unittest.TestCase):
             for row in report["risk_flag_summary"]
         }
         self.assertEqual(risk_rows["STRUCTURAL_DOWNTREND_REVIEW_GATE"]["n"], 1)
+
+    def test_pending_us_evidence_is_visible_even_without_alpha(self):
+        report = diagnosis.build_report(
+            self.conn,
+            strategy_version="strategy_test",
+            horizon="1d",
+            markets=["CN", "US"],
+        )
+
+        coverage = {
+            (row["market"], row["horizon"]): row
+            for row in report["coverage_summary"]
+        }
+        self.assertEqual(coverage[("US", "1d")]["calendar_due"], 1)
+        self.assertEqual(coverage[("US", "1d")]["reviewed"], 0)
+        self.assertEqual(coverage[("US", "1d")]["pending_data_ready"], 1)
+        actions = [
+            row for row in report["recommended_actions"]
+            if row["market"] == "US" and row["action"] == "await_market_evidence"
+        ]
+        self.assertEqual(len(actions), 1)
 
 
 if __name__ == "__main__":

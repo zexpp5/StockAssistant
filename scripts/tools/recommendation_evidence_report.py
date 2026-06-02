@@ -297,17 +297,24 @@ def _review_coverage(conn, strategy_version: str | None = None) -> dict[str, Any
             """,
                 [PRODUCTION_METRICS_START_DATE, *strategy_params],
             ).fetchall()
-        mature_by_h = {h: int(n) for h, n in v2_mature_rows}
+        calendar_due_by_h = {h: int(n) for h, n in v2_mature_rows}
         reviewed_by_h = {h: int(n) for h, n in v2_reviewed_rows}
         local_ready_by_h = {h: int(n) for h, n in local_price_ready_rows}
         for h in ("1d", "5d", "20d"):
-            m = mature_by_h.get(h, 0)
             r = reviewed_by_h.get(h, 0)
+            local_ready = local_ready_by_h.get(h, 0)
+            calendar_due = calendar_due_by_h.get(h, 0)
+            # "Mature" means actually evaluable: either alpha has already been written
+            # or local stock/benchmark prices are ready. Calendar-only due dates can be
+            # wrong around market close/timezone boundaries, especially US 1D samples.
+            m = max(r, local_ready)
             by_horizon[h] = {
                 "mature": m,
                 "reviewed": r,
                 "coverage": _coverage(r, m),
-                "local_price_ready": local_ready_by_h.get(h, 0),
+                "local_price_ready": local_ready,
+                "calendar_due": calendar_due,
+                "pending_data_ready": max(calendar_due - m, 0),
             }
             v2_total_mature += m
             v2_total_reviewed += r
@@ -405,15 +412,17 @@ def _to_markdown(payload: dict[str, Any]) -> str:
         f"Total reviewed/mature: **{cov.get('total_reviewed', 0)} / {cov.get('total_mature', 0)}** "
         f"({(cov.get('coverage') or 0) * 100:.1f}%)",
         "",
-        "| Horizon | Mature | Reviewed | Coverage | Local Price Ready |",
-        "|---|---:|---:|---:|---:|",
+        "| Horizon | Calendar Due | Mature | Reviewed | Coverage | Local Price Ready | Pending Data |",
+        "|---|---:|---:|---:|---:|---:|---:|",
     ])
     for src, row in (cov.get("v2_by_horizon") or cov.get("by_source") or {}).items():
         coverage = row.get("coverage")
         lines.append(
-            f"| {src} | {row.get('mature', 0)} | {row.get('reviewed', 0)} | "
+            f"| {src} | {row.get('calendar_due', row.get('mature', 0))} | "
+            f"{row.get('mature', 0)} | {row.get('reviewed', 0)} | "
             f"{'—' if coverage is None else f'{coverage * 100:.1f}%'} | "
-            f"{row.get('local_price_ready', '—')} |"
+            f"{row.get('local_price_ready', '—')} | "
+            f"{row.get('pending_data_ready', 0)} |"
         )
 
     lines.extend([

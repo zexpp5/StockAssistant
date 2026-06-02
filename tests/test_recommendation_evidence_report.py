@@ -34,7 +34,9 @@ class TestRecommendationEvidenceReport(unittest.TestCase):
                VALUES
                ('run_test', 'US', 'BUY', 'Buy Co', 1, 'A', 'buy', 80.0,
                 100.0, 'system_tech_universe', 'test'),
-               ('run_test', 'US', 'WATCH', 'Watch Co', 2, 'B', 'watch', 59.0,
+               ('run_test', 'US', 'PENDING', 'Pending Co', 2, 'A', 'buy', 79.0,
+                100.0, 'system_tech_universe', 'test'),
+               ('run_test', 'US', 'WATCH', 'Watch Co', 3, 'B', 'watch', 59.0,
                 100.0, 'system_tech_universe', 'test')"""
         )
         self.conn.execute(
@@ -59,6 +61,8 @@ class TestRecommendationEvidenceReport(unittest.TestCase):
         self.assertEqual(cov["total_reviewed"], 1)
         self.assertEqual(cov["coverage"], 1.0)
         self.assertEqual(cov["v2_by_horizon"]["1d"]["local_price_ready"], 0)
+        self.assertEqual(cov["v2_by_horizon"]["1d"]["calendar_due"], 2)
+        self.assertEqual(cov["v2_by_horizon"]["1d"]["pending_data_ready"], 1)
 
     def test_discovery_metrics_ignore_non_buy_outcomes(self):
         metrics = evidence._discovery_metrics(self.conn, "strategy_test")

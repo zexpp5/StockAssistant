@@ -161,6 +161,12 @@ def _mean(values: list[float]) -> float | None:
     return sum(clean) / len(clean)
 
 
+def _coverage(reviewed: int, mature: int) -> float | None:
+    if mature <= 0:
+        return None
+    return reviewed / mature
+
+
 def _round(value: float | None, ndigits: int = 4) -> float | None:
     return round(float(value), ndigits) if value is not None else None
 
@@ -320,6 +326,160 @@ def _load_samples(
             "chain_role": str(chain_role or ""),
         })
     return samples
+
+
+def _coverage_summary(
+    conn,
+    *,
+    strategy_version: str | None,
+    horizon: str | None,
+    markets: list[str] | None,
+) -> list[dict[str, Any]]:
+    ok, missing = _required_tables_ok(conn)
+    if not ok:
+        raise RuntimeError(f"当前 DB 缺少策略诊断必需表: {missing}")
+
+    has_strategy_col = "strategy_version" in _table_columns(conn, "recommendation_runs")
+    strategy_clause = " AND rr.strategy_version = ?" if strategy_version and has_strategy_col else ""
+    horizon_clause = " AND h.horizon = ?" if horizon else ""
+    outcome_horizon_clause = " AND po.horizon = ?" if horizon else ""
+    market_clause = ""
+    params: list[Any] = [PRODUCTION_METRICS_START_DATE]
+    if strategy_clause:
+        params.append(strategy_version)
+    if horizon_clause:
+        params.append(horizon)
+    if markets:
+        market_clause = " AND rp.market IN (" + ",".join(["?"] * len(markets)) + ")"
+        params.extend(markets)
+
+    due_rows = conn.execute(
+        f"""
+        SELECT rp.market, h.horizon, COUNT(*)
+        FROM recommendation_runs rr
+        JOIN recommendation_picks rp ON rp.run_id = rr.run_id
+        CROSS JOIN (VALUES ('1d', 1), ('5d', 5), ('20d', 20)) AS h(horizon, days)
+        WHERE rr.universe_scope = 'system_tech_universe'
+          AND rr.status = 'generated'
+          AND rr.run_date >= ?
+          AND COALESCE(rp.signal, 'buy') = 'buy'
+          AND rp.entry_price IS NOT NULL
+          AND rp.entry_price > 0
+          AND (rr.run_date + INTERVAL (h.days) DAY) <= CURRENT_DATE
+          {strategy_clause}
+          {horizon_clause}
+          {market_clause}
+        GROUP BY rp.market, h.horizon
+        """,
+        params,
+    ).fetchall()
+
+    reviewed_params: list[Any] = [PRODUCTION_METRICS_START_DATE]
+    if strategy_clause:
+        reviewed_params.append(strategy_version)
+    if outcome_horizon_clause:
+        reviewed_params.append(horizon)
+    if markets:
+        reviewed_params.extend(markets)
+    reviewed_rows = conn.execute(
+        f"""
+        SELECT rp.market, po.horizon, COUNT(*)
+        FROM pick_outcomes po
+        JOIN recommendation_runs rr ON rr.run_id = po.run_id
+        JOIN recommendation_picks rp
+          ON rp.run_id = po.run_id AND rp.market = po.market AND rp.symbol = po.symbol
+        WHERE rr.universe_scope = 'system_tech_universe'
+          AND rr.status = 'generated'
+          AND rr.run_date >= ?
+          AND po.alpha_pct IS NOT NULL
+          AND COALESCE(rp.signal, 'buy') = 'buy'
+          {strategy_clause}
+          {outcome_horizon_clause}
+          {market_clause}
+        GROUP BY rp.market, po.horizon
+        """,
+        reviewed_params,
+    ).fetchall()
+
+    local_ready_rows = []
+    if "price_daily" in _tables(conn):
+        local_ready_rows = conn.execute(
+            f"""
+            SELECT market, horizon, COUNT(*) FROM (
+              SELECT rp.market, rp.symbol, h.horizon
+              FROM recommendation_runs rr
+              JOIN recommendation_picks rp ON rp.run_id = rr.run_id
+              CROSS JOIN (VALUES ('1d', 1), ('5d', 5), ('20d', 20)) AS h(horizon, days)
+              WHERE rr.universe_scope = 'system_tech_universe'
+                AND rr.status = 'generated'
+                AND rr.run_date >= ?
+                AND COALESCE(rp.signal, 'buy') = 'buy'
+                AND rp.entry_price IS NOT NULL
+                AND rp.entry_price > 0
+                AND (rr.run_date + INTERVAL (h.days) DAY) <= CURRENT_DATE
+                {strategy_clause}
+                {horizon_clause}
+                {market_clause}
+                AND EXISTS (
+                  SELECT 1 FROM price_daily ps
+                  WHERE ps.market = rp.market
+                    AND ps.symbol = rp.symbol
+                    AND ps.close IS NOT NULL
+                    AND ps.trade_date >= (rr.run_date + INTERVAL (h.days) DAY)
+                )
+                AND EXISTS (
+                  SELECT 1 FROM price_daily be
+                  WHERE be.market = rp.market
+                    AND be.symbol = CASE rp.market
+                      WHEN 'US' THEN 'SPY'
+                      WHEN 'HK' THEN '^HSI'
+                      WHEN 'CN' THEN '000300.SS'
+                      ELSE NULL
+                    END
+                    AND be.close IS NOT NULL
+                    AND be.trade_date >= rr.run_date
+                )
+                AND EXISTS (
+                  SELECT 1 FROM price_daily bx
+                  WHERE bx.market = rp.market
+                    AND bx.symbol = CASE rp.market
+                      WHEN 'US' THEN 'SPY'
+                      WHEN 'HK' THEN '^HSI'
+                      WHEN 'CN' THEN '000300.SS'
+                      ELSE NULL
+                    END
+                    AND bx.close IS NOT NULL
+                    AND bx.trade_date >= (rr.run_date + INTERVAL (h.days) DAY)
+                )
+            )
+            GROUP BY market, horizon
+            """,
+            params,
+        ).fetchall()
+
+    keys = {(str(m), str(h)) for m, h, _ in due_rows}
+    keys |= {(str(m), str(h)) for m, h, _ in reviewed_rows}
+    keys |= {(str(m), str(h)) for m, h, _ in local_ready_rows}
+    due = {(str(m), str(h)): int(n or 0) for m, h, n in due_rows}
+    reviewed = {(str(m), str(h)): int(n or 0) for m, h, n in reviewed_rows}
+    local_ready = {(str(m), str(h)): int(n or 0) for m, h, n in local_ready_rows}
+    rows: list[dict[str, Any]] = []
+    for market, h in sorted(keys):
+        d = due.get((market, h), 0)
+        r = reviewed.get((market, h), 0)
+        local = local_ready.get((market, h), 0)
+        evaluable = max(r, local)
+        rows.append({
+            "market": market,
+            "horizon": h,
+            "calendar_due": d,
+            "reviewed": r,
+            "local_price_ready": local,
+            "evaluable_mature": evaluable,
+            "pending_data_ready": max(d - evaluable, 0),
+            "coverage": _round(_coverage(r, evaluable), 4),
+        })
+    return rows
 
 
 def _aggregate(samples: list[dict[str, Any]], key_fields: tuple[str, ...]) -> list[dict[str, Any]]:
@@ -491,6 +651,37 @@ def _recommended_actions(
     return actions
 
 
+def _coverage_actions(coverage_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+    for row in coverage_rows:
+        market = str(row.get("market") or "")
+        horizon = str(row.get("horizon") or "")
+        due = int(row.get("calendar_due") or 0)
+        reviewed = int(row.get("reviewed") or 0)
+        pending = int(row.get("pending_data_ready") or 0)
+        if due > 0 and reviewed == 0 and pending > 0:
+            actions.append({
+                "market": market,
+                "severity": "medium",
+                "action": "await_market_evidence",
+                "reason": (
+                    f"{MARKET_LABELS.get(market, market)} {horizon} 有 {due} 个日历到期样本，"
+                    f"但 {pending} 个仍缺行情/基准收盘数据；暂不能判断该市场策略好坏。"
+                ),
+            })
+        elif pending > 0:
+            actions.append({
+                "market": market,
+                "severity": "low",
+                "action": "complete_evidence_backfill",
+                "reason": (
+                    f"{MARKET_LABELS.get(market, market)} {horizon} 仍有 {pending}/{due} 个样本缺行情/基准数据，"
+                    "需要等 daily_refresh 或 benchmark ingestion 补齐。"
+                ),
+            })
+    return actions
+
+
 def _worst_examples(samples: list[dict[str, Any]], limit: int = 20) -> list[dict[str, Any]]:
     sorted_items = sorted(samples, key=lambda x: (x.get("alpha_pct") if x.get("alpha_pct") is not None else 999))
     keep_fields = (
@@ -529,6 +720,23 @@ def _to_markdown(payload: dict[str, Any]) -> str:
             f"| {market} | {row.get('n', 0)} | {_format_pct(row.get('win_rate'))} | "
             f"{_format_pct(row.get('avg_alpha_pct'))} | {_format_pct(row.get('avg_return_pct'))} | "
             f"{_format_pct(row.get('worst_alpha_pct'))} |"
+        )
+
+    lines.extend([
+        "",
+        "## Evidence Coverage",
+        "",
+        "| Market | Horizon | Calendar Due | Evaluable Mature | Reviewed Alpha | Pending Data | Coverage |",
+        "|---|---|---:|---:|---:|---:|---:|",
+    ])
+    for row in payload.get("coverage_summary") or []:
+        market = MARKET_LABELS.get(str(row.get("market")), str(row.get("market")))
+        coverage = row.get("coverage")
+        lines.append(
+            f"| {market} | {row.get('horizon')} | {row.get('calendar_due', 0)} | "
+            f"{row.get('evaluable_mature', 0)} | {row.get('reviewed', 0)} | "
+            f"{row.get('pending_data_ready', 0)} | "
+            f"{'—' if coverage is None else f'{coverage * 100:.1f}%'} |"
         )
 
     lines.extend(["", "## Recommended Next Actions", ""])
@@ -618,6 +826,12 @@ def build_report(
             horizon=horizon,
             markets=markets,
         )
+        coverage_rows = _coverage_summary(
+            conn,
+            strategy_version=resolved_strategy,
+            horizon=horizon,
+            markets=markets,
+        )
     finally:
         if owns_conn and conn is not None:
             conn.close()
@@ -630,6 +844,7 @@ def build_report(
     risk_rows = _risk_flag_summary(samples)
     factor_diag = _factor_diagnostics(factor_rows)
     actions = _recommended_actions(market_summary, rank_summary, factor_diag)
+    actions.extend(_coverage_actions(coverage_rows))
 
     return {
         "schema_version": "strategy_failure_diagnosis_v1",
@@ -650,6 +865,7 @@ def build_report(
             "action_count": len(actions),
             "negative_alpha_count": sum(1 for x in samples if (x.get("alpha_pct") or 0) < 0),
         },
+        "coverage_summary": coverage_rows,
         "market_summary": market_summary,
         "rank_bucket_summary": rank_summary,
         "loss_bucket_summary": loss_summary,
