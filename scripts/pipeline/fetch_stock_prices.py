@@ -18,6 +18,7 @@ sys.path.insert(0, _REPO)
 sys.path.insert(0, os.path.join(_REPO, "scripts", "lib"))  # 2026-05-11 lib 迁移
 import json
 import argparse
+import zoneinfo
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
@@ -73,12 +74,15 @@ def _upsert_v2_price_daily(results: list[dict], db_path: str, *, total_count: in
         raise RuntimeError("当前 DB 不是 v2 schema：缺少 price_daily")
 
     now = datetime.now()
-    trade_date = now.date()
+    today = now.date()
     rows = []
     for r in results:
         code = str(r.get("code") or "").strip()
         market = _market_code(code, str(r.get("market") or ""))
         symbol = code.upper()
+        # 2026-06-02 修复：优先用历史 K 线的真实 bar 日期；只有退化到 info 缓存价 /
+        # 市场快照 fallback（无 bar_date）时才回落到本地今天。
+        trade_date = r.get("bar_date") or today
         rows.append((
             market,
             symbol,
@@ -466,27 +470,75 @@ def _download_history_batch(yf_tickers: list[str]) -> dict[str, pd.DataFrame]:
     return out
 
 
-def _history_metrics(hist: pd.DataFrame | None, price: float | None) -> dict:
+def _market_session_close(yf_ticker: str) -> tuple[str, int]:
+    """返回 (市场时区名, 收盘分钟数)。用于判定历史最后一根日 K 是否已结算。"""
+    s = str(yf_ticker or "").upper()
+    if s.endswith(".HK"):
+        return "Asia/Hong_Kong", 16 * 60  # 港股 16:00 收
+    if s.endswith(".SS") or s.endswith(".SZ") or s.endswith(".BJ"):
+        return "Asia/Shanghai", 15 * 60   # A 股 15:00 收
+    return "America/New_York", 16 * 60     # 美股 16:00 ET 收
+
+
+def _trailing_unsettled_count(close_index, yf_ticker: str) -> int:
+    """末尾有多少根日 K 还没结算（盘前/盘中的 partial bar），调用方据此裁掉。
+
+    2026-06-02 修复（popmart 今日盈亏 -2.6% 事故）：yfinance 在盘前/盘中会给"今天"
+    生成一根随时变动的 partial 日 K。本批是「结算收盘价」抓取器（盘中实时价交给
+    intraday_refresh_holdings，source=yfinance_intraday），绝不能把未收盘的 partial bar
+    当成当日结算收盘价写库 —— 否则 real_holding_review 会拿它当"今天"算今日盈亏。
+    """
+    try:
+        tzname, close_min = _market_session_close(yf_ticker)
+        now = datetime.now(zoneinfo.ZoneInfo(tzname))
+        today = now.date()
+        now_min = now.hour * 60 + now.minute
+        last_date = close_index[-1].date()
+        # 末根 bar 的日期晚于市场本地今天，或就是今天但本地尚未到收盘 → 未结算，裁掉。
+        if last_date > today or (last_date == today and now_min < close_min):
+            return 1
+    except Exception:
+        return 0
+    return 0
+
+
+def _history_metrics(hist: pd.DataFrame | None, price: float | None,
+                     yf_ticker: str | None = None) -> dict:
     ytd_pct = one_year_pct = one_month_pct = one_week_pct = None
     prev_close = None
     hist_price = None
+    hist_trade_date = None
     if hist is None or hist.empty or "Close" not in hist:
         return {
             "history_price": None, "history_prev_close": None,
+            "history_trade_date": None,
             "ytd_pct": None, "one_year_pct": None,
             "one_month_pct": None, "one_week_pct": None,
         }
 
     close = hist["Close"].dropna()
+    # 裁掉末尾未结算的 partial bar（盘前/盘中的"今天"），让 iloc[-1] 始终是已收盘的结算价。
+    if yf_ticker and not close.empty:
+        drop = _trailing_unsettled_count(close.index, yf_ticker)
+        if drop:
+            close = close.iloc[:-drop]
     if close.empty:
         return {
             "history_price": None, "history_prev_close": None,
+            "history_trade_date": None,
             "ytd_pct": None, "one_year_pct": None,
             "one_month_pct": None, "one_week_pct": None,
         }
 
     try:
         hist_price = float(close.iloc[-1])
+        # 2026-06-02 修复（popmart 今日盈亏 -2.6% 事故）：trade_date 必须取最后一根
+        # K 线的真实日期，而不是 now.date()。盘前跑批时最后一根 bar 仍是上一交易日，
+        # 若按本地日历日贴成"今天"会造出一条 phantom 当日行，被「今日盈亏」误算成下跌。
+        try:
+            hist_trade_date = close.index[-1].date()
+        except Exception:
+            hist_trade_date = None
         if len(close) >= 2:
             prev_close = float(close.iloc[-2])
         effective_price = float(price) if price is not None else hist_price
@@ -516,6 +568,7 @@ def _history_metrics(hist: pd.DataFrame | None, price: float | None) -> dict:
     return {
         "history_price": hist_price,
         "history_prev_close": prev_close,
+        "history_trade_date": hist_trade_date,
         "ytd_pct": ytd_pct,
         "one_year_pct": one_year_pct,
         "one_month_pct": one_month_pct,
@@ -541,12 +594,12 @@ def fetch_price_data(yf_ticker: str, *, hist: pd.DataFrame | None = None,
     # 当天首次抓到的盘中价会被冻住：收盘后（以及之后 12h 内每次拉）仍吐几小时前的
     # 盘中价，而不是官方结算收盘价。改为优先用每次都重新下载、不进缓存的历史 K 线
     # Close 作权威价，info 缓存价仅在历史缺当天 bar 时兜底。
-    hist_price = _history_metrics(hist, None).get("history_price")
+    hist_price = _history_metrics(hist, None, yf_ticker).get("history_price")
     price = hist_price if hist_price is not None else info_price
     if price is None:
         return None
 
-    hist_metrics = _history_metrics(hist, price)
+    hist_metrics = _history_metrics(hist, price, yf_ticker)
     prev_close = hist_metrics.get("history_prev_close") or info_fields.get("prev_close")
     currency = info_fields.get("currency") or "USD"
     market_cap = info_fields.get("market_cap")
@@ -564,6 +617,9 @@ def fetch_price_data(yf_ticker: str, *, hist: pd.DataFrame | None = None,
     return {
         "price": price,
         "prev_close": prev_close,
+        # 当日权威价的真实交易日 —— 写库时据此贴 trade_date（盘前跑批不再造 phantom 当日行）。
+        # 仅当 price 取自历史 K 线时有值；退化到 info 缓存价时为 None，由写库端兜底成 now.date()。
+        "bar_date": hist_metrics.get("history_trade_date") if hist_price is not None else None,
         "currency": currency,
         "market_cap": market_cap,
         "forward_pe": round(forward_pe, 2) if forward_pe else None,
