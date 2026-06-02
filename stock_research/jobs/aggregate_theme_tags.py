@@ -132,10 +132,16 @@ def aggregate_tags(con) -> dict:
         days_old = (today - latest_date).days if latest_date else None
 
         # 状态判定
-        # rejected 已在 query 排除；stale 是 evidence 表自己标的，承接
+        # rejected 已在 query 排除；stale / needs_review 承接 evidence 表
         all_stale = all(s == "stale" for s in b["evidence_statuses"])
+        # SIC 主营业务穿透：若所有 evidence 都是 needs_review（SIC 不匹配主题）→
+        #   该公司主营不在该主题上，标 needs_review 不算 confirmed（文档 §九）
+        # 2026-06-02：SIC filter 落地后的关键防 noise 步骤
+        all_needs_review = all(s == "needs_review" for s in b["evidence_statuses"])
         if all_stale:
             status = "stale"
+        elif all_needs_review:
+            status = "needs_review"
         elif not b["market"] or not b["company_name"]:
             status = "needs_review"
         elif not latest_date:

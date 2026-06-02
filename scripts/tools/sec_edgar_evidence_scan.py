@@ -40,6 +40,63 @@ EDGAR_HEADERS = {
 }
 EDGAR_FULLTEXT = "https://efts.sec.gov/LATEST/search-index"
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+SEC_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
+
+# 主题 → 主营业务 SIC code 白名单（标 candidate；不在白名单标 needs_review，aggregate 不会算 confirmed）
+# SIC 来源：SEC Division of Corporation Finance Standard Industrial Classification Codes
+# https://www.sec.gov/info/edgar/siccodes.htm
+THEME_SIC_WHITELIST: dict[str, set[str]] = {
+    "uranium": {
+        "1040",  # Gold Mining (有些铀矿被分这里)
+        "1090",  # Misc Metal Ores (含 Uranium-Radium-Vanadium Ores)
+        "1094",  # Uranium-Radium-Vanadium Ores
+        "1400",  # Mining & Quarrying Of Nonmetallic Minerals
+    },
+    "smr": {
+        "3441",  # Fabricated Structural Metal Products (核岛/反应堆压力容器)
+        "3621",  # Motors & Generators
+        "3674",  # Semiconductors (核控制系统)
+        "4911",  # Electric Services (核电运营商)
+        "4931",  # Electric & Other Services Combined
+        "4932",  # Gas & Other Services Combined
+        "4939",  # Combination Utilities (反应堆 owner-operators)
+        "3590",  # Industrial & Commercial Machinery
+        "1731",  # Electrical Work (核电站工程)
+    },
+    "rare_earths": {
+        "1040",  # Gold Mining
+        "1090",  # Misc Metal Ores
+        "1400",  # Mining & Quarrying Of Nonmetallic Minerals
+        "3357",  # Drawing & Insulating Of Nonferrous Wire (磁材线材)
+        "3479",  # Coating, Engraving (磁材后处理)
+    },
+    "liquid_cooling": {
+        "3585",  # Refrigeration & Service Industry Machinery (Vertiv, Modine 类)
+        "3669",  # Communication Equipment (网通/IDC 散热)
+        "3674",  # Semiconductors (芯片液冷)
+        "3571",  # Electronic Computers (服务器整机)
+        "3576",  # Computer Communications Equipment
+        "3577",  # Computer Peripheral Equipment
+        "5045",  # Computer & Computer Peripheral Equipment & Software
+        "7370",  # Services-Computer Services (数据中心 service)
+    },
+    "ai_data": {
+        "7370",  # Services-Computer Services
+        "7372",  # Services-Prepackaged Software (SaaS)
+        "7374",  # Services-Computer Processing & Data Preparation
+        "5045",  # Computer Wholesale
+        "2741",  # Misc Publishing (内容授权方)
+        "7389",  # Services-Business Services Not Elsewhere Classified
+        "3674",  # Semiconductors (NVDA/AMD/AVGO — AI 算力核心)
+        "3576",  # Computer Communications Equipment (网通)
+        "3571",  # Electronic Computers (服务器整机)
+        "3577",  # Computer Peripheral Equipment
+        "6770",  # Blank Checks/Holding Companies (一些 AI infra holdcos)
+    },
+}
+
+# 公司 SIC 缓存（避免 220+ 公司每个 SEC API 重复拉）
+_SIC_CACHE: dict[str, str | None] = {}
 
 # 原文 snippet 抽取参数
 SNIPPET_WINDOW_CHARS = 220          # 关键词命中前后各取多少字符
@@ -309,6 +366,46 @@ def _fetch_json(url: str, params: dict | None = None, timeout: float = 15.0) -> 
         return None
 
 
+def fetch_sic_for_cik(cik: str) -> str | None:
+    """从 SEC submissions API 拉公司 SIC code（带缓存）.
+
+    cik 形如 "0001234567" (10 digit padded).
+    返回 4-digit SIC 字符串，未知返回 None.
+    """
+    if cik in _SIC_CACHE:
+        return _SIC_CACHE[cik]
+    url = SEC_SUBMISSIONS_URL.format(cik=cik)
+    data = _fetch_json(url, timeout=10.0)
+    if not data:
+        _SIC_CACHE[cik] = None
+        return None
+    sic = str(data.get("sic") or "").strip()
+    _SIC_CACHE[cik] = sic if sic else None
+    return _SIC_CACHE[cik]
+
+
+def determine_evidence_status(theme: str, sic: str | None) -> tuple[str, str]:
+    """按 SIC 主营业务 + 主题白名单判断 evidence 初始状态.
+
+    Returns:
+        (evidence_status, reason)
+        evidence_status: 'candidate' (SIC 在主题白名单) / 'needs_review' (SIC 不匹配)
+        reason: 人类可读说明，存进 reviewer_note
+    """
+    whitelist = THEME_SIC_WHITELIST.get(theme, set())
+    if not whitelist:
+        # 主题没定义白名单 → 不 filter
+        return "candidate", "主题未定义 SIC 白名单，跳过主营业务穿透"
+    if not sic:
+        return "needs_review", "SIC 拉取失败，需人工核实主营业务"
+    if sic in whitelist:
+        return "candidate", f"SIC {sic} 命中主题 '{theme}' 白名单"
+    return "needs_review", (
+        f"SIC {sic} 不在主题 '{theme}' 白名单 "
+        f"({sorted(whitelist)[:5]}...) — 可能主营业务非该主题，需人工核实"
+    )
+
+
 def load_cik_ticker_map() -> dict[str, dict]:
     """SEC 官方 CIK → ticker / company name 映射。"""
     print(f"  拉取 SEC company_tickers.json …")
@@ -362,19 +459,29 @@ def upsert_evidence_candidate(con, theme: str, ticker: str | None, cik: str,
                               accession: str | None = None,
                               expires_at=None,
                               source_id: str = "sec_edgar_api") -> None:
-    """灌一条 candidate 证据。同一 (theme, cik, source_url) 重跑会替换。
+    """灌一条 evidence。同一 (theme, cik, source_url) 重跑会替换。
 
-    source_id 参数化（2026-06-01 ↑）：
-      不同 SEC form 用不同 source_id 让 aggregate_tags 算多独立来源:
-        sec_edgar_api (历史，等价 10-K)
-        sec_edgar_10k (新)
-        sec_edgar_8k (新)
+    source_id 参数化（2026-06-01）:
+      不同 SEC form 用不同 source_id 让 aggregate_tags 算多独立来源
+      sec_edgar_10k / sec_edgar_8k
 
-    accession 存进 metric_json（schema 没有独立列），便于后续审计追踪。
-    expires_at = source_date + 180 天（文档 §九 stale 规则）；过期标 stale。
+    SIC 主营业务穿透（2026-06-02）:
+      拉公司 SIC code，跟 THEME_SIC_WHITELIST 比对
+        命中 → evidence_status=candidate
+        不命中或 SIC 缺失 → evidence_status=needs_review
+      aggregate_theme_tags 算 confirmed 时跳过 needs_review，noise 自然不会 confirm
+
+    accession 存进 metric_json；expires_at = source_date + 180 天.
     """
+    sic = fetch_sic_for_cik(cik)
+    status, sic_reason = determine_evidence_status(theme, sic)
+
     eid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{theme}|{cik}|{source_url}"))
-    metric_json = json.dumps({"accession": accession, "cik": cik, "form_source": source_id}) if accession else None
+    metric_json = json.dumps({
+        "accession": accession, "cik": cik,
+        "form_source": source_id, "sic": sic,
+    }) if (accession or sic) else None
+    reviewer_note = sic_reason + " · PoC 自动灌入，原文 snippet 待 SEC 全文下载补完。"
     con.execute("""
         INSERT INTO ai_theme_company_evidence
           (evidence_id, theme, market, symbol, company_name,
@@ -391,14 +498,15 @@ def upsert_evidence_candidate(con, theme: str, ticker: str | None, cik: str,
           metric_json = excluded.metric_json,
           confidence_score = excluded.confidence_score,
           expires_at = excluded.expires_at,
-          evidence_status = excluded.evidence_status
+          evidence_status = excluded.evidence_status,
+          reviewer_note = excluded.reviewer_note
     """, [
         eid, theme, "US" if ticker else None, ticker, company_name,
-        "candidate",  # PoC 阶段一律 candidate
+        status,
         source_id, "A", source_url, source_title,
         source_date, evidence_text, evidence_kind, metric_json,
         0.5, expires_at,
-        "PoC 自动灌入；尚未做两源验证或主营业务核实。原文 snippet 待 SEC 全文下载工程补完。",
+        reviewer_note,
     ])
 
 
