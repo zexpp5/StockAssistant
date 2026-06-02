@@ -266,32 +266,79 @@ class TestConfirmedRule(unittest.TestCase):
 # ──────────────────────────────────────────────────────────────
 # T4: 第 4 卡数据缺口必须 surface 真问题
 # ──────────────────────────────────────────────────────────────
-class TestDataGapVisible(unittest.TestCase):
-    """生产 FAIL / 数据 stale / confirmed=0 时，第 4 卡必须列出 + 染色."""
+class TestPhase1Confirmed(unittest.TestCase):
+    """phase_1_n_confirmed 必须读 ai_theme_company_tags，不是 evidence 表.
 
-    def test_no_confirmed_shown_as_gap(self):
-        """0/5 主题 confirmed 时，gap 列表必须显示警示."""
-        from stock_research.core.ai_radar import build_freshness_panel, build_theme_evidence_panel
-        # 现实状态：confirmed = 0 → gap 不能为空
-        # 用生产 DB（read-only）验证
-        prod_db = REPO / "stock_history_v2.duckdb"
-        if not prod_db.exists():
-            self.skipTest("生产 DB 不存在")
-        con = duckdb.connect(str(prod_db), read_only=True)
-        try:
-            theme_panel = build_theme_evidence_panel(con)
-            phase = theme_panel.get("phase_status") or {}
-            n_confirmed = phase.get("phase_1_n_confirmed", 0)
-            n_theme_done = phase.get("phase_1_themes_with_confirmed", 0)
-            n_theme_total = phase.get("phase_1_themes_total", 5)
-        finally:
-            con.close()
-        # 当前所有 confirmed = 0 → 必须 ≥ 1 个 gap 显示
-        if n_confirmed == 0:
-            self.assertEqual(n_theme_done, 0,
-                "0 confirmed 时 themes_with_confirmed 必须也是 0")
-            self.assertLess(n_theme_done, n_theme_total,
-                "n_theme_done < n_theme_total 才会触发第 4 卡 gap 提示")
+    2026-06-02 重写：之前 test_no_confirmed_shown_as_gap 跑生产库 + 只在
+    n_confirmed==0 时断言，等于把"0 confirmed 的错口径"当默认状态。
+    现在用 fixture 灌已知数据，直接断言 phase_1 数字 = tags 表 confirmed 数。
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.tmpdir, "test.duckdb")
+        self.con = duckdb.connect(self.db_path)
+        _make_schema(self.con)
+
+    def tearDown(self):
+        self.con.close()
+
+    def _insert_tag(self, theme, symbol, status):
+        self.con.execute(
+            """INSERT INTO ai_theme_company_tags
+               (theme, market, symbol, company_name, evidence_status,
+                source_count_a, source_count_b, source_count_c, latest_source_date)
+               VALUES (?, 'US', ?, ?, ?, 2, 0, 0, ?)""",
+            [theme, symbol, f"Test {symbol}", status, date.today()]
+        )
+
+    def _insert_evidence_row(self, theme, symbol, source_id):
+        """灌一条 evidence 让 phase_1_n_evidence > 0（避免 not_started 分支）."""
+        self.con.execute(
+            """INSERT INTO ai_theme_company_evidence
+               (evidence_id, theme, market, symbol, company_name,
+                evidence_status, source_id, source_tier, source_url, source_title,
+                source_date, evidence_kind)
+               VALUES (?, ?, 'US', ?, ?, 'candidate', ?, 'A',
+                       'https://x', 'x', ?, 'filing_metric')""",
+            [f"e_{theme}_{symbol}", theme, symbol, f"Test {symbol}",
+             source_id, date.today()]
+        )
+
+    def test_phase_1_counts_from_tags_table(self):
+        """phase_1_n_confirmed 必须等于 ai_theme_company_tags 里 confirmed 行数."""
+        from stock_research.core.ai_radar import build_theme_evidence_panel
+        # 灌 3 confirmed + 2 candidate 公司，分布在 2 个主题
+        self._insert_tag("uranium", "CCJ", "confirmed")
+        self._insert_tag("uranium", "URG", "confirmed")
+        self._insert_tag("smr",     "SMR", "confirmed")
+        self._insert_tag("smr",     "GEV", "candidate")
+        self._insert_tag("ai_data", "VERI", "candidate")
+        # 也灌点 evidence 让 not_started 不触发
+        for theme, sym in [("uranium", "CCJ"), ("uranium", "URG"),
+                           ("smr", "SMR"), ("smr", "GEV"), ("ai_data", "VERI")]:
+            self._insert_evidence_row(theme, sym, "sec_edgar_10k")
+
+        panel = build_theme_evidence_panel(self.con)
+        phase = panel["phase_status"]
+        self.assertEqual(phase["phase_1_n_confirmed"], 3,
+            f"应等于 tags 表 confirmed 行数 3，实际 {phase['phase_1_n_confirmed']}")
+        self.assertEqual(phase["phase_1_themes_with_confirmed"], 2,
+            "uranium + smr 两主题各有 ≥1 confirmed，应=2")
+
+    def test_phase_1_zero_when_only_evidence_no_tags(self):
+        """evidence 表有行但 tags 表空 → phase_1_n_confirmed=0（口径正确性）."""
+        from stock_research.core.ai_radar import build_theme_evidence_panel
+        # 故意只灌 evidence 不灌 tags（模拟 aggregate_tags 还没跑）
+        self._insert_evidence_row("uranium", "CCJ", "sec_edgar_10k")
+        self._insert_evidence_row("uranium", "URG", "sec_edgar_8k")
+        panel = build_theme_evidence_panel(self.con)
+        phase = panel["phase_status"]
+        self.assertEqual(phase["phase_1_n_confirmed"], 0,
+            "evidence 表里不存在 confirmed 状态；只有 tags 表聚合后才有")
+        self.assertEqual(phase["phase_1_themes_with_confirmed"], 0)
+        self.assertGreater(phase["phase_1_n_evidence"], 0,
+            "evidence 行数应来自 evidence 表（这部分口径没变）")
 
 
 if __name__ == "__main__":
