@@ -149,6 +149,31 @@ def _fetch_yahoo_rate(symbol: str, *, timeout_sec: float = 6.0) -> float | None:
     return None
 
 
+def _fetch_yahoo_rate_yf(symbol: str) -> float | None:
+    """Fallback via the yfinance library when the raw v8 chart endpoint is blocked.
+
+    2026-06-02 修复（HKD 0.917 vs 0.863 漂移事故）：某些环境下
+    query1.finance.yahoo.com 的 v8 chart 端点会 timeout/拒连，但 yfinance 库走自己的
+    session 仍可用（价格抓取就靠它）。FX 单一来源不能因这一路不通就退化到 real-world
+    静态表 —— 那会和入场时锁定的 yahoo_historical 汇率口径打架，把持仓盈亏算虚高。
+    """
+    try:
+        import yfinance as yf  # 延迟导入，保持本模块默认零额外依赖
+    except Exception:
+        return None
+    try:
+        fi = yf.Ticker(symbol).fast_info
+        value = (
+            fi.get("lastPrice") or fi.get("last_price")
+            or fi.get("previousClose") or fi.get("previous_close")
+        )
+        if value is not None and math.isfinite(float(value)):
+            return float(value)
+    except Exception:
+        return None
+    return None
+
+
 def _coerce_date(value: Any) -> date | None:
     if value is None:
         return None
@@ -218,6 +243,9 @@ def refresh_fx_rates(*, timeout_sec: float = 6.0, write_cache: bool = True) -> d
     for ccy, symbol in _YAHOO_SYMBOLS.items():
         try:
             value = _fetch_yahoo_rate(symbol, timeout_sec=timeout_sec)
+            if value is None or not _is_valid_rate(ccy, value):
+                # 原始 HTTP 端点不通/超范围 → 退到 yfinance 库再试一次，仍不行才记 error。
+                value = _fetch_yahoo_rate_yf(symbol)
             if value is None or not _is_valid_rate(ccy, value):
                 raise ValueError(f"invalid {symbol}={value}")
             rates[ccy] = float(value)
