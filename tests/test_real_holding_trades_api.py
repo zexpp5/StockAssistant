@@ -117,6 +117,22 @@ class LedgerApiTest(unittest.TestCase):
         # 但交易历史仍在
         self.assertEqual(len(self.client.get("/api/real-holdings/trade-history").json()["sells"]), 1)
 
+    def test_close_inherits_holding_currency(self):
+        # 买入按 CNY 计价（ticker「测试」后端会推断成 USD，但持仓币种是 CNY）
+        r = self.client.post("/api/real-holdings/buy", json={
+            "symbol": "测试", "market": "CN", "currency": "CNY",
+            "trade_price": 10, "quantity": 10, "trade_date": "2026-06-01", "fx_rate": 1.0})
+        self.assertEqual(r.status_code, 200, r.text)
+        hid = r.json()["holding"]["id"]
+        # 卖出不带 currency → 必须继承持仓的 CNY，而不是按 ticker 推断成 USD
+        r = self.client.post(f"/api/real-holdings/{hid}/close",
+                             json={"trade_price": 12, "quantity": 10, "trade_date": "2026-06-02", "fx_rate": 1.0})
+        self.assertEqual(r.status_code, 200, r.text)
+        sells = self.client.get("/api/real-holdings/trade-history").json()["sells"]
+        self.assertEqual(sells[0]["currency"], "CNY")          # 不是 USD
+        self.assertAlmostEqual(sells[0]["realized_pnl_rmb"], 20)  # (12-10)*10*1.0，不是 fx 串成几百
+        self.assertAlmostEqual(sells[0]["realized_pnl_pct"], 0.20)
+
     def test_idempotent_buy_via_api(self):
         a = self._buy(symbol="MCD", trade_price=10, quantity=100, trade_date="2026-06-01",
                       client_request_id="req-1").json()

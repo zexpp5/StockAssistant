@@ -1455,7 +1455,7 @@ function switchDiscoveryView(view) {
         <thead class="bg-slate-50 text-slate-500 text-[11px]">
           <tr>
             <th class="px-3 py-2 text-left whitespace-nowrap">股票</th>
-            <th class="px-3 py-2 text-right whitespace-nowrap">买入均价 → 卖出价</th>
+            <th class="px-3 py-2 text-right whitespace-nowrap">卖出价 / 卖出成本基</th>
             <th class="px-3 py-2 text-right whitespace-nowrap">卖出股数</th>
             <th class="px-3 py-2 text-left whitespace-nowrap">卖出日期</th>
             <th class="px-3 py-2 text-right whitespace-nowrap">已实现盈亏(¥)</th>
@@ -8356,7 +8356,7 @@ async function _loadLedgerTradeHistory() {
     const undoBtn = idx === 0 ? `<button onclick="voidTrade(${s.trade_id})" class="text-[11px] text-slate-400 hover:text-rose-600" title="撤销最近一笔交易（软删，可重建）">撤销</button>` : "";
     return `<tr class="border-t border-slate-100">
       <td class="px-3 py-2 whitespace-nowrap">${_esc(s.name || s.symbol)}</td>
-      <td class="px-3 py-2 text-right font-mono whitespace-nowrap">${Number(s.trade_price).toFixed(2)} <span class="text-[10px] text-slate-400">${_esc(s.currency || "")}</span></td>
+      <td class="px-3 py-2 text-right font-mono whitespace-nowrap">${Number(s.trade_price).toFixed(2)} <span class="text-[10px] text-slate-400">${_esc(s.currency || "")}</span>${s.cost_basis_rmb!=null?`<div class="text-[10px] text-slate-400">成本基 ¥${Number(s.cost_basis_rmb).toLocaleString(undefined,{maximumFractionDigits:0})}</div>`:""}</td>
       <td class="px-3 py-2 text-right font-mono">${Number(s.quantity)}</td>
       <td class="px-3 py-2 whitespace-nowrap">${_esc(String(s.trade_date).slice(0,10))}</td>
       <td class="px-3 py-2 text-right font-mono ${pnlCls}">${pnl >= 0 ? "+" : ""}${pnl.toLocaleString(undefined,{maximumFractionDigits:0})}</td>

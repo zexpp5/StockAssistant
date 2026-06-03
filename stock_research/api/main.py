@@ -1184,8 +1184,10 @@ _sys.exit(rc)
         """加仓：对已存在持仓追加一笔买入成交，rebuild 后返回更新后的聚合持仓。"""
         import stock_db
         h = _holding_key_or_404(holding_id)
+        # 加仓必须沿用持仓本身的币种，不能按 ticker 重新推断（否则与买入 fx 口径打架）。
         payload = {**item, "account": h.get("account"), "market": h.get("market"),
-                   "symbol": h.get("symbol"), "name": item.get("name") or h.get("name")}
+                   "symbol": h.get("symbol"), "name": item.get("name") or h.get("name"),
+                   "currency": item.get("currency") or h.get("currency")}
         try:
             res = stock_db.insert_real_holding_buy(payload)
         except stock_db.LedgerError as e:
@@ -1198,8 +1200,10 @@ _sys.exit(rc)
         """卖出 / 平仓：记录一笔卖出成交，rebuild 并返回已实现盈亏 + 剩余持仓。"""
         import stock_db
         h = _holding_key_or_404(holding_id)
+        # 卖出必须沿用持仓本身的币种，不能按 ticker 重新推断（否则已实现盈亏 fx 口径错）。
         payload = {**item, "account": h.get("account"), "market": h.get("market"),
-                   "symbol": h.get("symbol"), "name": item.get("name") or h.get("name")}
+                   "symbol": h.get("symbol"), "name": item.get("name") or h.get("name"),
+                   "currency": item.get("currency") or h.get("currency")}
         try:
             res = stock_db.insert_real_holding_sell(payload)
         except stock_db.LedgerConflict as e:
