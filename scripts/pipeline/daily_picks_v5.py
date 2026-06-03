@@ -101,6 +101,10 @@ def _write_factor_cache(
         payload["dry_run"] = bool(dry_run)
     with open(cache_file, "w", encoding="utf-8") as cf:
         json.dump(payload, cf, ensure_ascii=False, indent=2, default=str)
+    # 写后自检：这是 daily_picks_v5 唯一的持久产物，绝不能"写了个寂寞"。
+    # 2026-06-03 出过 step 报 OK 但文件缺失的静默失败，靠下游 acceptance 才暴露。
+    if not os.path.exists(cache_file) or os.path.getsize(cache_file) == 0:
+        raise RuntimeError(f"factor_scores_today 写入后仍缺失/为空: {cache_file}")
 
 
 def _load_entry_prices(codes: list[str]) -> dict[str, dict]:
@@ -112,7 +116,8 @@ def _load_entry_prices(codes: list[str]) -> dict[str, dict]:
     conn = None
     try:
         from stock_db import get_db
-        conn = get_db()
+        # 只读取价 → force_read_only：拿到锁感知 retry，且不与 nightly 写步骤抢写锁
+        conn = get_db(force_read_only=True)
         # V2：price_daily 取最新 close（V1 prices.latest_price 已删）
         for code in codes:
             row = conn.execute(
@@ -590,3 +595,15 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # 入口兜底自检：daily_picks_v5 的唯一产物是 factor_scores_today.json。
+    # 历史上(2026-06-03)出现过 step 报 OK 却无产出的静默失败，下游 acceptance 才暴露。
+    # 这里把"跑完却没产出"变成当场非零退出 + trace，而不是悬案；nightly run_step 会逮到 FAIL。
+    _cache = "data/latest/factor_scores_today.json"
+    if "--cache" in sys.argv:
+        _cache = sys.argv[sys.argv.index("--cache") + 1]
+    if not os.path.exists(_cache) or os.path.getsize(_cache) == 0:
+        sys.stderr.write(
+            f"[FATAL] daily_picks_v5 跑完但唯一产物缺失/为空: {_cache}\n"
+            "  这是静默失败，拒绝以 OK 退出（下游 optimize_portfolio/morning_brief 会缺数据）。\n"
+        )
+        sys.exit(1)
