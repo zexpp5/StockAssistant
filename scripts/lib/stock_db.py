@@ -1808,6 +1808,31 @@ def update_real_holding(holding_id: int, item: Mapping[str, Any], *, conn: duckd
     return n
 
 
+def update_real_holding_meta(holding_id: int, *, name=None, notes=None, conn=None) -> int:
+    """只更新账本持仓的名称/备注；数量与成本由交易流水决定，不在此处改。"""
+    own = conn is None
+    if own:
+        conn = get_db()
+    try:
+        sets, params = [], []
+        if name is not None:
+            sets.append("name=?"); params.append(str(name).strip() or None)
+        if notes is not None:
+            sets.append("notes=?"); params.append(notes)
+        if not sets:
+            return 0
+        params.append(int(holding_id))
+        n = conn.execute(
+            f"UPDATE real_holdings SET {', '.join(sets)}, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            params,
+        ).fetchall()
+        exists = conn.execute("SELECT 1 FROM real_holdings WHERE id=?", [int(holding_id)]).fetchone()
+        return 1 if exists else 0
+    finally:
+        if own:
+            conn.close()
+
+
 def delete_real_holding(holding_id: int, *, conn: duckdb.DuckDBPyConnection | None = None) -> int:
     own = conn is None
     if own:

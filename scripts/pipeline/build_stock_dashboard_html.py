@@ -8025,6 +8025,12 @@ function resetRealHoldingForm() {
   if (curEl) curEl.value = "USD";
   const hint = document.getElementById("real-form-price-currency-hint");
   if (hint) hint.textContent = "（按 USD 填）";
+  // 录入新持仓：确保价格/数量/日期/汇率/币种可编辑（编辑账本持仓时会被禁用，这里复位）。
+  ["real-form-price","real-form-shares","real-form-date","real-form-entry-fx-rate","real-form-currency"].forEach(i => {
+    const el = document.getElementById(i); if (el) { el.disabled = false; el.classList.remove("bg-slate-100","cursor-not-allowed"); }
+  });
+  const modeHint = document.getElementById("real-form-mode-hint");
+  if (modeHint) modeHint.textContent = "填股票、成本价、数量、买入日期；点保存后写入真实持仓表。";
   _setRealHoldingSaveState(false, "");
 }
 
@@ -8224,6 +8230,15 @@ function editRealHolding(id) {
   }
   const hint = document.getElementById("real-form-price-currency-hint");
   if (hint) hint.textContent = `（按 ${document.getElementById("real-form-currency").value} 填）`;
+  // 账本持仓：数量/成本由交易流水决定，编辑只能改名称/补充信息，禁用价格/数量/日期/汇率/币种。
+  const isLedger = !!h.close_status;
+  ["real-form-price","real-form-shares","real-form-date","real-form-entry-fx-rate","real-form-currency"].forEach(i => {
+    const el = document.getElementById(i); if (el) { el.disabled = isLedger; el.classList.toggle("bg-slate-100", isLedger); el.classList.toggle("cursor-not-allowed", isLedger); }
+  });
+  const modeHint = document.getElementById("real-form-mode-hint");
+  if (modeHint) modeHint.innerHTML = isLedger
+    ? "📒 账本持仓：<strong>数量和成本由买入/卖出交易决定</strong>，这里只改名称和补充信息。要改数量请用持仓行的「加仓 / 卖出」。"
+    : "填股票、成本价、数量、买入日期；点保存后写入真实持仓表。";
   _renderRealFormLookupHint(h.code || h.symbol);
 
   // 异步回填补充信息(行业 / 主营 / 产业链 / 一句话) — 从 /api/watchlist/{code} 拉

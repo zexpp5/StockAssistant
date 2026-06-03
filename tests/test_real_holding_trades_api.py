@@ -133,6 +133,16 @@ class LedgerApiTest(unittest.TestCase):
         self.assertAlmostEqual(sells[0]["realized_pnl_rmb"], 20)  # (12-10)*10*1.0，不是 fx 串成几百
         self.assertAlmostEqual(sells[0]["realized_pnl_pct"], 0.20)
 
+    def test_edit_ledger_holding_cannot_change_shares(self):
+        hid = self._buy(symbol="MCD", trade_price=10, quantity=10, trade_date="2026-06-01").json()["holding"]["id"]
+        # 直接编辑（PUT）试图把数量改成 999 → 账本持仓应忽略数量，只改名称
+        r = self.client.put(f"/api/real-holdings/{hid}", json={"name": "改个名", "shares": 999, "entry_price": 1})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertTrue(r.json().get("ledger_managed"))
+        h = [x for x in self.client.get("/api/real-holdings").json() if x["id"] == hid][0]
+        self.assertEqual(h["remaining_shares"], 10)   # 数量没被编辑改掉
+        self.assertEqual(h["name"], "改个名")          # 名称改了
+
     def test_idempotent_buy_via_api(self):
         a = self._buy(symbol="MCD", trade_price=10, quantity=100, trade_date="2026-06-01",
                       client_request_id="req-1").json()

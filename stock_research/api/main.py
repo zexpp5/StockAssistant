@@ -1333,9 +1333,15 @@ _sys.exit(rc)
     @app.put("/api/real-holdings/{holding_id}")
     def update_real_holding_one(holding_id: int, item: dict[str, Any] = Body(...)) -> dict[str, Any]:
         import stock_db
-        n = stock_db.update_real_holding(holding_id, item)
-        if n == 0:
+        h = stock_db.fetch_real_holding_by_id(holding_id)
+        if not h:
             raise HTTPException(404, f"real holding id not found: {holding_id}")
+        # 账本持仓：数量/成本由交易流水决定，编辑只改名称/备注，避免与 remaining_shares 打架。
+        if h.get("close_status"):
+            n = stock_db.update_real_holding_meta(holding_id, name=item.get("name"), notes=item.get("notes"))
+            return {"status": "ok", "id": holding_id, "rows_affected": n, "ledger_managed": True,
+                    "note": "账本持仓的数量与成本由交易流水决定，已只更新名称/备注；改数量请用「加仓 / 卖出」。"}
+        n = stock_db.update_real_holding(holding_id, item)
         return {"status": "ok", "id": holding_id, "rows_affected": n}
 
     @app.delete("/api/real-holdings/{holding_id}")
