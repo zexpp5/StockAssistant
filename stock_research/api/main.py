@@ -1174,6 +1174,9 @@ _sys.exit(rc)
                 sync_info["watchlist_synced"] = True
             except Exception as e:
                 sync_info = {"status": "error", "error": str(e), "watchlist_synced": False}
+        # 新建仓后用缓存行情立即重算持仓体检，让新标的当场进入「今日持仓体检」列表，
+        # 不必等下一次拉行情/定时任务（与 /add /close /undo 行为对齐）。fail-soft。
+        _refresh_holding_review_safe()
         new_h = stock_db.fetch_real_holding_by_id(res["holding_id"]) if res.get("holding_id") else None
         return _json_any({"status": "ok", "holding": new_h, "sync": sync_info, **res})
 

@@ -8111,18 +8111,50 @@ document.addEventListener("keydown", e => {
 // 立刻触发真实持仓轻量行情刷新(intraday_refresh_holdings)
 // 只刷新 real_holdings 中实际持仓的标的，不依赖 manual_watchlist。
 async function fetchHoldingsPricesNow() {
-  if (!confirm("立刻刷新一次真实持仓行情。约几十秒到 1 分钟后刷新页面,现价 / 市值 / 盈亏就会更新。\n\n继续？")) return;
+  if (!confirm("立刻刷新一次真实持仓行情。约几十秒到 1 分钟,期间不用手动刷新,现价 / 市值 / 盈亏会自动更新。\n\n继续？")) return;
+  // 触发前记下当前体检的 generated_at,用于轮询判断「拉价+重算」是否真的完成了。
+  let prevGen = null;
+  try {
+    const pr = await fetch(WATCHLIST_API_BASE + "/api/real-holdings/daily-review/latest");
+    if (pr.ok) { const pj = await pr.json(); prevGen = (pj.run || {}).generated_at || null; }
+  } catch (e) {}
+  let data;
   try {
     const r = await fetch(WATCHLIST_API_BASE + "/api/real-holdings/fetch-prices", { method: "POST" });
     if (!r.ok) { alert("触发失败: HTTP " + r.status); return; }
-    const data = await r.json();
-    if (data.status === "started") {
-      alert(`✓ 真实持仓行情刷新已启动(PID ${data.pid})\n约几十秒到 1 分钟后刷新页面就能看到现价。\n\n日志路径:${data.log || ''}`);
-    } else {
-      alert("启动失败: " + (data.error || JSON.stringify(data)));
-    }
+    data = await r.json();
   } catch (e) {
     alert("触发失败: " + e.message);
+    return;
+  }
+  if (data.status !== "started") {
+    alert("启动失败: " + (data.error || JSON.stringify(data)));
+    return;
+  }
+  // 后台 intraday_refresh_holdings 异步跑 ~40s。轮询体检接口,generated_at 一变就自动重渲染,
+  // 不再让用户手动刷新页面(Bug 修复:之前点完只弹 alert、界面不动)。
+  const btn = document.querySelector('button[onclick="fetchHoldingsPricesNow()"]');
+  const btnTxt = btn ? btn.innerHTML : null;
+  if (btn) { btn.disabled = true; btn.innerHTML = "⏳ 拉行情中…"; }
+  const deadline = Date.now() + 90000;  // 最多等 90s
+  let done = false;
+  while (Date.now() < deadline) {
+    await new Promise(res => setTimeout(res, 5000));
+    try {
+      const r = await fetch(WATCHLIST_API_BASE + "/api/real-holdings/daily-review/latest");
+      if (r.ok) {
+        const j = await r.json();
+        const gen = (j.run || {}).generated_at || null;
+        if (gen && gen !== prevGen) { done = true; break; }
+      }
+    } catch (e) {}
+  }
+  if (btn) { btn.disabled = false; btn.innerHTML = btnTxt; }
+  // 不管是否在 90s 内确认完成,都重新拉一次体检 + 持仓并重渲染,把最新现价/盈亏带到界面。
+  if (typeof _loadRealHoldingReview === "function") await _loadRealHoldingReview();
+  await refreshHoldingsAndRender();
+  if (!done) {
+    alert("行情刷新已触发,但 90s 内未确认完成(可能赶上拉价较慢或市场休市跳过)。\n界面已按当前数据重渲染,稍后可再点一次。");
   }
 }
 
