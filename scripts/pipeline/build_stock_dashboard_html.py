@@ -978,6 +978,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <!-- 分市场研究观察 advisory：哪些市场被策略诊断判为 degraded/research_only(早期实测 alpha 偏弱)。
        数据源: strategy_tuning_proposal.json market_actions(shadow 诊断,服务端渲染,只读)。 -->
   {STRATEGY_MARKET_ADVISORY}
+  <!-- 分市场策略验证进度: US 单独走 验证中→可小仓试探→正式可用; CN/HK 冻结 research-only。
+       数据源: shadow_tuning_evidence.json(服务端派生,只读) -->
+  {US_VALIDATION_PROGRESS}
   <!-- 2026-05-26: 移除 discovery-meta + discovery-accuracy 两条系统信息行 (用户反馈无用); JS 仍可安全空操作 -->
 
   <!-- 2026-05-11 PM: 顶部 sub-tab 切换(今日候选 / 推荐历史) -->
@@ -14819,6 +14822,71 @@ def strategy_market_advisory_html() -> str:
     )
 
 
+def us_validation_progress_html() -> str:
+    """分市场策略验证进度 —— US 单独走「验证中 → 可小仓试探 → 正式可用」;CN/HK 冻结 research-only。
+    全部派生自 shadow_tuning_evidence.json(criteria + market_horizon_summary)+ tuning_proposal 的 degraded 标记,只读。"""
+    ev = _runtime_load_json("data/latest/shadow_tuning_evidence.json") or {}
+    if not ev or not ev.get("market_horizon_summary"):
+        return ""
+    prop = _runtime_load_json("data/latest/strategy_tuning_proposal.json") or {}
+    crit = (ev.get("activation_decision") or {}).get("criteria") or {}
+    min_runs = int(crit.get("min_shadow_runs") or 10)
+    min_rev = int(crit.get("min_market_reviewed") or 60)
+    min_cov = float(crit.get("min_coverage_pct") or 80.0)
+    min_hit = float(crit.get("min_hit_rate") or 45.0)
+    runs = int(ev.get("shadow_run_count") or 0)
+    mh = {(m.get("market"), m.get("horizon")): m for m in (ev.get("market_horizon_summary") or [])}
+    degraded = {str(m.get("market")) for m in (prop.get("market_actions") or []) if str(m.get("status")) == "degraded"}
+
+    def _num(v):
+        return v if isinstance(v, (int, float)) else None
+
+    rows_html = []
+    for mk, label in (("US", "美股"), ("CN", "A股"), ("HK", "港股")):
+        d1 = mh.get((mk, "1d")) or {}
+        rev = int(d1.get("reviewed_shadow_buy_count") or 0)
+        cov = _num(d1.get("shadow_review_coverage_pct"))
+        alpha = _num(d1.get("shadow_avg_alpha_pct"))
+        hit = _num(d1.get("shadow_win_rate"))
+        if mk in degraded:
+            badge = '<span class="px-2 py-0.5 rounded-full text-[11px] bg-rose-100 text-rose-700">🔒 research-only · 冻结不进真钱</span>'
+            detail = "早期实测偏弱(见上方分市场提示);各自门禁 READY 前不进真钱组合。"
+        else:
+            meets_trial = (
+                runs >= min_runs and rev >= min_rev and (cov or 0) >= min_cov
+                and alpha is not None and alpha > 0 and (hit or 0) >= min_hit
+            )
+            badge = ('<span class="px-2 py-0.5 rounded-full text-[11px] bg-emerald-100 text-emerald-700">✅ 可小仓试探</span>'
+                     if meets_trial else
+                     '<span class="px-2 py-0.5 rounded-full text-[11px] bg-amber-100 text-amber-800">🧪 验证中</span>')
+            gaps = []
+            if runs < min_runs: gaps.append(f"影子轮 {runs}/{min_runs}")
+            if rev < min_rev: gaps.append(f"1D样本 {rev}/{min_rev}")
+            if (cov or 0) < min_cov: gaps.append(f"覆盖 {(cov or 0):.0f}%/{min_cov:.0f}%")
+            if alpha is None: gaps.append("alpha 待样本成熟")
+            elif alpha <= 0: gaps.append(f"alpha {alpha}%(需>0)")
+            if hit is not None and hit < min_hit: gaps.append(f"命中 {hit}%/{min_hit:.0f}%")
+            a_txt = f"{alpha}%" if alpha is not None else "—"
+            h_txt = f"{hit}%" if hit is not None else "—"
+            detail = (f"影子 {runs}/{min_runs} 轮 · 1D reviewed {rev}/{min_rev} · alpha {a_txt} · 命中 {h_txt}"
+                      + (f" · 距「可小仓试探」还差: {'、'.join(gaps)}" if gaps else " · 已达可小仓门槛"))
+        rows_html.append(
+            '<div class="flex items-start gap-2 py-1.5 border-t border-slate-100 first:border-0">'
+            f'<div class="w-12 shrink-0 text-sm font-bold text-slate-700">{label}</div>'
+            f'<div class="flex-1"><div>{badge}</div>'
+            f'<div class="text-[11px] text-slate-600 mt-0.5 leading-relaxed">{html_lib.escape(detail)}</div></div></div>'
+        )
+    return (
+        '<div class="mb-4 rounded-xl border border-slate-200 bg-white px-4 py-3">'
+        '<div class="text-sm font-bold text-slate-900">📊 策略验证进度(分市场)</div>'
+        f'<div class="text-[11px] text-slate-500 mb-1">US 单独走「验证中 → 可小仓试探 → 正式可用」;CN/HK 冻结研究、不进真钱组合。'
+        f'达「可小仓试探」门槛:影子≥{min_runs}轮 · 1D reviewed≥{min_rev} · 覆盖≥{min_cov:.0f}% · alpha&gt;0 · 命中≥{min_hit:.0f}%。</div>'
+        + "".join(rows_html)
+        + '<div class="text-[10px] text-slate-400 mt-1">reviewed = 前瞻成熟样本(从推荐日往后真实兑现);现在多为 0 = 最新几轮还没到期,属正常累积中。</div>'
+        '</div>'
+    )
+
+
 def runtime_status_panel_html() -> str:
     clean_v2 = _is_clean_v2_db()
     quality = _runtime_load_json("data/latest/recommendation_quality_gate.json")
@@ -16988,6 +17056,7 @@ def build():
     html = html.replace("{TODAY_DECISION_PANEL}", today_decision_panel_html())
     html = html.replace("{RUNTIME_STATUS_PANEL}", runtime_status_panel_html())
     html = html.replace("{STRATEGY_MARKET_ADVISORY}", strategy_market_advisory_html())
+    html = html.replace("{US_VALIDATION_PROGRESS}", us_validation_progress_html())
 
     if audit_snap_db:
         n_picks_db = audit_snap_db.get("picks_today_count", 0)
