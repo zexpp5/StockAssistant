@@ -9038,7 +9038,17 @@ async function renderRealHoldings() {
              ${x.dayChangeRmb >= 0 ? "+" : ""}${x.dayChangeRmb.toLocaleString(undefined, {maximumFractionDigits:0})} <span class="text-[10px] text-slate-400">RMB</span>
              <div class="text-[11px]">${x.dayChangePct >= 0 ? "+" : ""}${x.dayChangePct.toFixed(2)}%</div>
            </td>`
-        : `<td class="px-3 py-2 text-right font-mono whitespace-nowrap text-slate-300" title="${priorSession ? "盘前/未刷新,暂无本地今日行情" : "缺少前一日收盘价,无法算今日变化"}">—</td>`}
+        : (() => {
+            const basis = (reviewItem && reviewItem.day_change_basis) || "";
+            const reason = (reviewItem && reviewItem.price_is_prior_session) ? "未开盘/休市"
+              : basis.includes("unconfirmed") ? "行情待确认"
+              : "暂无今日行情";
+            const tip = (reviewItem && reviewItem.price_is_prior_session)
+              ? "该市场当前未开盘，用的是上一交易日收盘价；不拿昨收冒充今日涨跌。开盘后拉行情即显示。"
+              : basis.includes("unconfirmed") ? "拿到了盘中价但数据源未确认，保守起见不计当日涨跌。"
+              : "暂无可用的今日行情。";
+            return `<td class="px-3 py-2 text-right font-mono whitespace-nowrap text-slate-300" title="${tip}">—<div class="text-[9px] text-slate-400 font-sans">${reason}</div></td>`;
+          })()}
       <td class="px-3 py-2 text-right font-mono whitespace-nowrap ${pnlCls}">
         ${x.pnlRmb == null
           ? `<span title="新录入或体检未覆盖，暂不使用系统池行情计算累计盈亏">—</span><div class="text-[10px] text-slate-400">待体检</div>`
