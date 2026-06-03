@@ -2086,6 +2086,53 @@ def void_latest_real_holding_trade(
             conn.close()
 
 
+class LedgerNotLatest(LedgerError):
+    """P0 只允许撤销该标的当前轮次最近一笔 active trade。"""
+
+
+def fetch_real_holding_trade_by_id(trade_id: int, *, conn=None) -> dict | None:
+    own = conn is None
+    if own:
+        conn = get_db()
+    try:
+        row = conn.execute(
+            f"SELECT {','.join(REAL_HOLDING_TRADES_FULL_COLS)} FROM real_holding_trades WHERE trade_id = ?",
+            [int(trade_id)],
+        ).fetchone()
+        return _rowdict(REAL_HOLDING_TRADES_FULL_COLS, row) if row else None
+    finally:
+        if own:
+            conn.close()
+
+
+def void_real_holding_trade(trade_id: int, *, reason: str | None = None, conn=None) -> dict[str, Any]:
+    """按 trade_id 撤销，但仅当它是该标的当前最近一笔 active trade，否则抛 LedgerNotLatest(→409)。"""
+    own = conn is None
+    if own:
+        conn = get_db()
+    try:
+        t = fetch_real_holding_trade_by_id(trade_id, conn=conn)
+        if not t:
+            raise LedgerError(f"trade not found: {trade_id}")
+        if t.get("status") != "active":
+            raise LedgerError(f"trade {trade_id} is not active")
+        rows = conn.execute(
+            f"SELECT {','.join(REAL_HOLDING_TRADES_FULL_COLS)} FROM real_holding_trades "
+            "WHERE account = ? AND market = ? AND symbol = ? AND status = 'active'",
+            [t["account"], t["market"], t["symbol"]],
+        ).fetchall()
+        trades = [_rowdict(REAL_HOLDING_TRADES_FULL_COLS, r) for r in rows]
+        latest = sorted(trades, key=_trade_sort_key)[-1]
+        if int(latest["trade_id"]) != int(trade_id):
+            raise LedgerNotLatest("P0 仅支持撤销该标的当前轮次的最近一笔交易")
+        return void_latest_real_holding_trade(
+            t["account"], t["market"], t["symbol"], reason=reason, conn=conn,
+        )
+    finally:
+        if own:
+            conn.close()
+
+
 def _trade_sort_key(t: Mapping[str, Any]):
     """权威排序键：trade_date > executed_at > order_in_day > created_at > trade_id。"""
     td = _to_date(t.get("trade_date"))

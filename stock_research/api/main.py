@@ -1039,9 +1039,13 @@ _sys.exit(rc)
 
     # ────────── 真实持仓 / 模型模拟仓（V2 split · 不再混用 holdings.source） ──────────
     @app.get("/api/real-holdings")
-    def list_real_holdings() -> list[dict[str, Any]]:
+    def list_real_holdings(include_closed: bool = False) -> list[dict[str, Any]]:
         import stock_db
-        return _json_dates(stock_db.fetch_all_real_holdings())
+        rows = stock_db.fetch_all_real_holdings()
+        if not include_closed:
+            # 向后兼容：迁移前老行 close_status 为 NULL，仍要展示；只隐藏已清仓。
+            rows = [h for h in rows if (h.get("close_status") or "open") != "closed"]
+        return _json_dates(rows)
 
     @app.post("/api/real-holdings")
     def create_real_holding(item: dict[str, Any] = Body(...)) -> dict[str, Any]:
@@ -1136,6 +1140,132 @@ _sys.exit(rc)
             except Exception as e:
                 rerun_info = {"status": "error", "error": str(e)}
         return {"status": "ok", "synced": n, "rerun": rerun_info}
+
+    # ---- 账本 v2：交易流水（加仓 / 卖出 / 撤销 / 历史 / 收益摘要）----
+
+    @app.post("/api/real-holdings/buy")
+    def record_real_holding_buy(item: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        """记录买入成交（账本口径）：新标的开仓 / 已持仓自动按加仓处理，并同步自选股。
+
+        与旧 POST /api/real-holdings 的区别：这条走交易流水事实源（real_holding_trades），
+        是 P0 之后的标准建仓入口。迁移后所有持仓均为账本口径，此入口对新老标的一致。
+        """
+        import stock_db
+        symbol = item.get("code") or item.get("symbol")
+        if not symbol:
+            raise HTTPException(400, "code/symbol is required")
+        try:
+            res = stock_db.insert_real_holding_buy(item)
+        except stock_db.LedgerError as e:
+            raise HTTPException(400, str(e))
+        sync_info: dict[str, Any] = {"status": "skipped"}
+        if res.get("created"):
+            try:
+                stock_db.upsert_manual_watchlist([{
+                    "code": symbol, "symbol": symbol, "name": item.get("name"),
+                    "notes": "auto-sync from real_holdings",
+                }])
+                sync_info = _spawn_picks_rerun(trigger=f"watchlist:holding:{symbol}")
+                sync_info["watchlist_synced"] = True
+            except Exception as e:
+                sync_info = {"status": "error", "error": str(e), "watchlist_synced": False}
+        new_h = stock_db.fetch_real_holding_by_id(res["holding_id"]) if res.get("holding_id") else None
+        return _json_any({"status": "ok", "holding": new_h, "sync": sync_info, **res})
+
+    def _holding_key_or_404(holding_id: int):
+        import stock_db
+        h = stock_db.fetch_real_holding_by_id(holding_id)
+        if not h:
+            raise HTTPException(404, f"real holding id not found: {holding_id}")
+        return h
+
+    @app.post("/api/real-holdings/{holding_id}/add")
+    def add_to_real_holding(holding_id: int, item: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        """加仓：对已存在持仓追加一笔买入成交，rebuild 后返回更新后的聚合持仓。"""
+        import stock_db
+        h = _holding_key_or_404(holding_id)
+        payload = {**item, "account": h.get("account"), "market": h.get("market"),
+                   "symbol": h.get("symbol"), "name": item.get("name") or h.get("name")}
+        try:
+            res = stock_db.insert_real_holding_buy(payload)
+        except stock_db.LedgerError as e:
+            raise HTTPException(400, str(e))
+        new_h = stock_db.fetch_real_holding_by_id(res.get("holding_id") or holding_id)
+        return _json_any({"status": "ok", "holding": new_h, **res})
+
+    @app.post("/api/real-holdings/{holding_id}/close")
+    def close_real_holding(holding_id: int, item: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        """卖出 / 平仓：记录一笔卖出成交，rebuild 并返回已实现盈亏 + 剩余持仓。"""
+        import stock_db
+        h = _holding_key_or_404(holding_id)
+        payload = {**item, "account": h.get("account"), "market": h.get("market"),
+                   "symbol": h.get("symbol"), "name": item.get("name") or h.get("name")}
+        try:
+            res = stock_db.insert_real_holding_sell(payload)
+        except stock_db.LedgerConflict as e:
+            raise HTTPException(400, str(e))
+        except stock_db.LedgerError as e:
+            raise HTTPException(400, str(e))
+        new_h = stock_db.fetch_real_holding_by_id(res.get("holding_id") or holding_id)
+        return _json_any({"status": "ok", "holding": new_h, **res})
+
+    @app.get("/api/real-holdings/trade-history")
+    def real_holdings_trade_history() -> dict[str, Any]:
+        """已卖出 / 交易历史：全部 sell 成交，按卖出日期倒序。"""
+        import stock_db
+        return _json_any({"status": "ok", "sells": stock_db.fetch_real_holding_trade_history()})
+
+    @app.get("/api/real-holdings/pnl-summary")
+    def real_holdings_pnl_summary() -> dict[str, Any]:
+        """收益摘要：已实现（成交日锁定汇率）+ 未实现（复用每日体检盯市）+ 合计。"""
+        import stock_db
+        base = stock_db.fetch_pnl_summary()  # realized + realized_since（权威，来自 trades）
+        unrealized = None
+        try:
+            review = stock_db.fetch_latest_real_holding_review()
+            items = (review or {}).get("items") or []
+            open_pnls = [i.get("pnl_rmb") for i in items
+                         if (i.get("pnl_rmb") is not None) and (i.get("close_status") in (None, "open", "partial"))]
+            if items:
+                unrealized = float(sum(p for p in open_pnls if p is not None))
+        except Exception:
+            unrealized = None
+        realized = base.get("realized_pnl_rmb") or 0.0
+        total = (realized + unrealized) if unrealized is not None else None
+        return _json_any({"status": "ok", "realized_pnl_rmb": realized,
+                          "unrealized_pnl_rmb": unrealized, "total_pnl_rmb": total,
+                          "realized_since": base.get("realized_since")})
+
+    @app.get("/api/real-holdings/{holding_id}/records")
+    def real_holding_records(holding_id: int) -> dict[str, Any]:
+        """单只持仓完整买卖时间线（含被合并/清仓的历史轮次）。"""
+        import stock_db
+        _holding_key_or_404(holding_id)
+        recs = stock_db.fetch_real_holding_records(holding_id=holding_id, include_voided=True)
+        return _json_any({"status": "ok", "records": recs})
+
+    @app.post("/api/real-holdings/trades/{trade_id}/void")
+    def void_real_holding_trade_one(trade_id: int, item: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+        """纠错：撤销最近一笔 active trade（软删 + rebuild）。非最近一笔返回 409。"""
+        import stock_db
+        try:
+            res = stock_db.void_real_holding_trade(trade_id, reason=(item or {}).get("reason"))
+        except stock_db.LedgerNotLatest as e:
+            raise HTTPException(409, str(e))
+        except stock_db.LedgerError as e:
+            raise HTTPException(400, str(e))
+        return _json_any({"status": "ok", **res})
+
+    @app.post("/api/real-holdings/rebuild-from-trades")
+    def rebuild_real_holdings() -> dict[str, Any]:
+        """从交易流水重建聚合缓存（运维 / 迁移后校验用）。"""
+        import stock_db
+        conn = stock_db.get_db()
+        try:
+            remap = stock_db.rebuild_real_holdings_from_trades(conn=conn)
+            return _json_any({"status": "ok", "rebuilt_keys": len(remap)})
+        finally:
+            conn.close()
 
     @app.get("/api/real-holdings/discipline")
     def list_real_holding_discipline(status: str = "active") -> dict[str, Any]:
