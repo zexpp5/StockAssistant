@@ -770,9 +770,6 @@ def _build_item(
     day_change_basis = None
     if price_is_prior_session:
         day_change_basis = "prior_session"
-    elif large_move_unconfirmed:
-        # 价格异常暴跳(多半是 yfinance 抽风)才拒算，避免冒充当日涨跌
-        day_change_basis = "large_move_unconfirmed"
     elif use_entry_as_baseline and not missing_price:
         day_change_rmb = pnl_rmb
         day_change_pct = pnl_pct

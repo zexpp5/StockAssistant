@@ -117,8 +117,10 @@ class RealHoldingReviewTest(unittest.TestCase):
         self.assertIsNone(item["day_change_pct"])
         self.assertIn("prior_session_price", item["data_flags"])
 
-    def test_hk_yfinance_day_change_requires_native_confirmation(self):
-        """港股只有 yfinance 单源时,不展示当日盈亏,避免和本地行情冲突误导。"""
+    def test_hk_yfinance_day_change_shown_with_source_flag(self):
+        """2026-06-03 政策改：港股有今日确认价(非昨收)就计算当日盈亏，
+        但保留 hk_yfinance_unconfirmed 数据标记提示来源风险——不再一刀切隐藏，
+        否则用户拉到价仍看不到当日盈亏，误以为坏了。"""
         with patch("stock_research.jobs.real_holding_review._market_local_date", return_value=date(2026, 6, 2)):
             item = _build_item(
                 {"symbol": "9992.HK", "market": "HK", "entry_price": 176.5, "shares": 2000,
@@ -132,9 +134,9 @@ class RealHoldingReviewTest(unittest.TestCase):
                 target_weights={},
             )
         self.assertFalse(item["price_is_prior_session"])
-        self.assertEqual(item["day_change_basis"], "unconfirmed_hk_yfinance")
-        self.assertIsNone(item["day_change_rmb"])
-        self.assertIsNone(item["day_change_pct"])
+        self.assertEqual(item["day_change_basis"], "prev_close")   # 有今日价就算
+        self.assertIsNotNone(item["day_change_rmb"])
+        self.assertIn("hk_yfinance_unconfirmed", item["data_flags"])  # 但仍标注来源风险
         self.assertIn("hk_yfinance_unconfirmed", item["data_flags"])
 
     def test_day_change_missing_when_prev_close_absent(self):
