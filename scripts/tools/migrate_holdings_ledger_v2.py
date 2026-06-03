@@ -57,11 +57,17 @@ def _preflight(conn) -> dict:
 
 
 def _apply_holding_id_remap(conn, old_id: int, new_id: int) -> dict:
+    """只 remap 活引用（discipline plans/events）。
+
+    real_holding_review_items 故意**不**改写：它是历史体检快照，且 PK=(review_run_id,
+    holding_id)——同一次 run 里被合并的多个 lot 各有一行，强行改成同一 new_id 会撞主键。
+    历史 run 保留旧 holding_id 作快照；迁移后重跑 real_holding_review 即可让最新体检
+    引用合并后的新聚合 id（见 runbook）。
+    """
     if old_id == new_id:
         return {}
     counts = {}
     for table in (
-        "real_holding_review_items",
         "real_holding_discipline_plans",
         "real_holding_discipline_events",
     ):

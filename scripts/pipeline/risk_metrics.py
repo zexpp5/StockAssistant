@@ -81,8 +81,9 @@ def load_portfolio_from_holdings():
         if not code or shares <= 0 or ep <= 0:
             continue
         ccy = _ccy_from_ticker(code)
-        fx = FX_TO_RMB.get(ccy, 1.0)
-        cost_rmb = shares * ep * fx
+        # 优先用买入日锁定 RMB 成本，避免多笔不同汇率 lot 用静态汇率重算漂移。
+        locked = float(h.get("cost_rmb_locked") or h.get("remaining_cost_rmb") or 0)
+        cost_rmb = locked if locked > 0 else shares * ep * FX_TO_RMB.get(ccy, 1.0)
         if code not in agg:
             agg[code] = {"cost_rmb": 0.0, "ccy": ccy, "shares": 0.0}
         agg[code]["cost_rmb"] += cost_rmb

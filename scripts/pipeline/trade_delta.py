@@ -150,8 +150,10 @@ def load_current_from_holdings(total_capital: float, market: str | None = None) 
         shares = float(h.get("shares") or 0)
         ep = float(h.get("entry_price") or 0)
         cost_local = shares * ep
-        fx = _infer_fx_to_rmb(code)
-        cost_rmb = cost_local * fx
+        # 优先用买入日锁定的 RMB 成本（账本: remaining_cost_rmb / 旧: cost_rmb_locked），
+        # 避免对多笔不同汇率 lot 用单一静态汇率重算导致 FX 漂移。
+        locked = float(h.get("cost_rmb_locked") or h.get("remaining_cost_rmb") or 0)
+        cost_rmb = locked if locked > 0 else cost_local * _infer_fx_to_rmb(code)
         if code not in agg:
             agg[code] = {"shares": 0.0, "cost_rmb": 0.0, "cost_local": 0.0}
         agg[code]["shares"] += shares

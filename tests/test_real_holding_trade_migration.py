@@ -71,15 +71,17 @@ class LedgerMigrationTest(unittest.TestCase):
             self.assertAlmostEqual(h["avg_cost_local_per_share"], 110)
             self.assertAlmostEqual(h["avg_cost_rmb_per_share"], 100.20)
 
-            # id2 的引用全部 remap 到 id1
-            for table in ("real_holding_review_items", "real_holding_discipline_plans",
-                          "real_holding_discipline_events"):
+            # discipline 活引用 remap 到 id1
+            for table in ("real_holding_discipline_plans", "real_holding_discipline_events"):
                 left = conn.execute(
                     f"SELECT count(*) FROM {table} WHERE holding_id = ?", [id2]).fetchone()[0]
                 self.assertEqual(left, 0, f"{table} still points at merged-away id2")
                 moved = conn.execute(
                     f"SELECT count(*) FROM {table} WHERE holding_id = ?", [id1]).fetchone()[0]
                 self.assertEqual(moved, 1, f"{table} not remapped to id1")
+            # review_items 是历史快照，故意不改写：仍指向旧 id2，且不报错（PK 冲突已规避）
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM real_holding_review_items WHERE holding_id = ?", [id2]).fetchone()[0], 1)
 
             # 纪律计划快照刷新到合并后口径
             plan = conn.execute(
