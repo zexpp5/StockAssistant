@@ -1184,6 +1184,15 @@ _sys.exit(rc)
             raise HTTPException(404, f"real holding id not found: {holding_id}")
         return h
 
+    def _refresh_holding_review_safe():
+        """卖出/加仓/撤销后用缓存行情快速重跑持仓体检，让收益卡/曲线只含当前持仓，
+        不再因为卖光的股票残留在旧体检里导致总览与曲线对不上。fail-soft。"""
+        try:
+            from stock_research.jobs.real_holding_review import build_real_holding_review
+            build_real_holding_review(persist=True)
+        except Exception as e:
+            logger.warning("post-trade review refresh failed (non-fatal): %s", e)
+
     @app.post("/api/real-holdings/{holding_id}/add")
     def add_to_real_holding(holding_id: int, item: dict[str, Any] = Body(...)) -> dict[str, Any]:
         """加仓：对已存在持仓追加一笔买入成交，rebuild 后返回更新后的聚合持仓。"""
@@ -1197,6 +1206,7 @@ _sys.exit(rc)
             res = stock_db.insert_real_holding_buy(payload)
         except stock_db.LedgerError as e:
             raise HTTPException(400, str(e))
+        _refresh_holding_review_safe()
         new_h = stock_db.fetch_real_holding_by_id(res.get("holding_id") or holding_id)
         return _json_any({"status": "ok", "holding": new_h, **res})
 
@@ -1216,6 +1226,7 @@ _sys.exit(rc)
             raise HTTPException(400, f"卖出数量超过当前剩余股数（剩 {rem} 股），或与历史交易顺序冲突。")
         except stock_db.LedgerError as e:
             raise HTTPException(400, str(e))
+        _refresh_holding_review_safe()
         new_h = stock_db.fetch_real_holding_by_id(res.get("holding_id") or holding_id)
         return _json_any({"status": "ok", "holding": new_h, **res})
 
@@ -1264,6 +1275,7 @@ _sys.exit(rc)
             raise HTTPException(409, str(e))
         except stock_db.LedgerError as e:
             raise HTTPException(400, str(e))
+        _refresh_holding_review_safe()
         return _json_any({"status": "ok", **res})
 
     @app.post("/api/real-holdings/rebuild-from-trades")
