@@ -1458,6 +1458,7 @@ function switchDiscoveryView(view) {
             <th class="px-3 py-2 text-right whitespace-nowrap" title="买入均价为该持仓的加权平均成本（原币），不是某一笔单价">买入均价 → 卖出价</th>
             <th class="px-3 py-2 text-right whitespace-nowrap">卖出股数</th>
             <th class="px-3 py-2 text-left whitespace-nowrap">卖出日期</th>
+            <th class="px-3 py-2 text-right whitespace-nowrap" title="从该持仓首笔买入到这笔卖出的天数（加权平均口径，以本轮首买日为起点）">持有天数</th>
             <th class="px-3 py-2 text-right whitespace-nowrap" title="卖出回笼金额(RMB) / 这部分对应的成本基(RMB)">卖出额 / 成本基(¥)</th>
             <th class="px-3 py-2 text-right whitespace-nowrap">已实现盈亏(¥)</th>
             <th class="px-3 py-2 text-right whitespace-nowrap">收益率</th>
@@ -1466,7 +1467,7 @@ function switchDiscoveryView(view) {
           </tr>
         </thead>
         <tbody id="ledger-trade-history">
-          <tr><td colspan="9" class="text-center text-slate-400 py-6">暂无卖出记录。卖出是真实交易后的手动记账，不是系统自动生成的建议。</td></tr>
+          <tr><td colspan="10" class="text-center text-slate-400 py-6">暂无卖出记录。卖出是真实交易后的手动记账，不是系统自动生成的建议。</td></tr>
         </tbody>
       </table>
     </div>
@@ -8375,19 +8376,25 @@ async function _loadLedgerTradeHistory() {
     return;
   }
   const fmt0 = v => Number(v||0).toLocaleString(undefined,{maximumFractionDigits:0});
-  tb.innerHTML = sells.map((s, idx) => {
+  // 每只持仓的「最近一笔卖出」才给撤销入口（列表按卖出日倒序，故每个标的首次出现=其最近卖出）。
+  const seenKey = new Set();
+  tb.innerHTML = sells.map((s) => {
     const pnl = Number(s.realized_pnl_rmb || 0);
     const pnlCls = pnl > 0 ? "text-emerald-600" : pnl < 0 ? "text-rose-600" : "text-slate-700";
     const pct = s.realized_pnl_pct != null ? (s.realized_pnl_pct * 100) : null;
     const ccy = _esc(s.currency || "");
     // 买入均价(原币) = 本次卖出对应原币成本基 / 卖出股数（加权平均口径）
     const avgBuy = (s.cost_basis_local != null && s.quantity) ? (Number(s.cost_basis_local)/Number(s.quantity)) : null;
-    const undoBtn = idx === 0 ? `<button onclick="voidTrade(${s.trade_id})" class="text-[11px] text-slate-400 hover:text-rose-600" title="撤销最近一笔交易（软删，可重建）">撤销</button>` : "";
+    const hd = (s.holding_days != null) ? `${s.holding_days} 天` : "—";
+    const key = (s.account||"") + "|" + (s.market||"") + "|" + String(s.symbol||"").toUpperCase();
+    const isLatest = !seenKey.has(key); seenKey.add(key);
+    const undoBtn = isLatest ? `<button onclick="voidTrade(${s.trade_id})" class="text-[11px] text-slate-400 hover:text-rose-600" title="撤销这只股最近一笔交易（软删，可重建）">撤销</button>` : "";
     return `<tr class="border-t border-slate-100">
       <td class="px-3 py-2 whitespace-nowrap">${_esc(s.name || s.symbol)}</td>
       <td class="px-3 py-2 text-right font-mono whitespace-nowrap">${avgBuy!=null?avgBuy.toFixed(2):"—"} <span class="text-slate-400">→</span> ${Number(s.trade_price).toFixed(2)} <span class="text-[10px] text-slate-400">${ccy}</span></td>
       <td class="px-3 py-2 text-right font-mono">${Number(s.quantity)}</td>
       <td class="px-3 py-2 whitespace-nowrap">${_esc(String(s.trade_date).slice(0,10))}</td>
+      <td class="px-3 py-2 text-right font-mono text-slate-500">${hd}</td>
       <td class="px-3 py-2 text-right font-mono whitespace-nowrap">${s.gross_amount_rmb!=null?fmt0(s.gross_amount_rmb):"—"}<div class="text-[10px] text-slate-400">成本基 ¥${fmt0(s.cost_basis_rmb)}</div></td>
       <td class="px-3 py-2 text-right font-mono ${pnlCls}">${pnl >= 0 ? "+" : ""}${fmt0(pnl)}</td>
       <td class="px-3 py-2 text-right font-mono ${pnlCls}">${pct==null?"—":(pct>=0?"+":"")+pct.toFixed(1)+"%"}</td>

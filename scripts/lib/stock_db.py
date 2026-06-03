@@ -157,6 +157,7 @@ CREATE TABLE IF NOT EXISTS real_holding_trades (
     updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ALTER TABLE real_holding_trades ADD COLUMN IF NOT EXISTS cost_basis_local DOUBLE;
+ALTER TABLE real_holding_trades ADD COLUMN IF NOT EXISTS holding_days INTEGER;
 -- 幂等键唯一：同 account 下同一 client_request_id 只入账一次（NULL 视为彼此相异，允许多条）。
 CREATE UNIQUE INDEX IF NOT EXISTS idx_rht_client_request
     ON real_holding_trades(account, client_request_id);
@@ -1460,7 +1461,8 @@ REAL_HOLDING_TRADES_COLS = [
     "trade_date", "executed_at", "order_in_day", "currency", "fx_rate", "fx_as_of",
     "fx_source", "gross_amount_rmb", "fee_amount", "fee_currency", "fee_fx_rate",
     "fee_rmb", "client_request_id", "position_epoch", "status",
-    "realized_pnl_rmb", "realized_pnl_pct", "cost_basis_rmb", "cost_basis_local", "notes", "source",
+    "realized_pnl_rmb", "realized_pnl_pct", "cost_basis_rmb", "cost_basis_local",
+    "holding_days", "notes", "source",
 ]
 REAL_HOLDING_TRADES_FULL_COLS = (
     ["trade_id"] + REAL_HOLDING_TRADES_COLS + ["voided_at", "void_reason", "created_at", "updated_at"]
@@ -2037,6 +2039,7 @@ def _normalize_trade(item: Mapping[str, Any], side: str) -> dict[str, Any]:
         "realized_pnl_pct": None,
         "cost_basis_rmb": None,
         "cost_basis_local": None,
+        "holding_days": None,
         "notes": item.get("notes"),
         "source": item.get("source") or "manual",
     }
@@ -2278,7 +2281,7 @@ def rebuild_real_holdings_from_trades(
                 rem_local_basis += price * qty
                 rem_cost_rmb += price * qty * fx + fee_rmb
                 epoch_buy_shares += qty
-                updates.append((int(t["trade_id"]), epoch, None, None, None, None))
+                updates.append((int(t["trade_id"]), epoch, None, None, None, None, None))
             else:  # sell
                 if rem_shares <= _SHARE_EPS:
                     raise LedgerConflict(
@@ -2295,7 +2298,10 @@ def rebuild_real_holdings_from_trades(
                 income_rmb = price * qty * fx
                 realized = income_rmb - cost_basis_rmb - fee_rmb
                 pct = (realized / cost_basis_rmb) if cost_basis_rmb else None
-                updates.append((int(t["trade_id"]), epoch, cost_basis_rmb, realized, pct, cost_basis_local))
+                # 持有天数：本轮首买日 → 本次卖出日
+                _sd, _fd = _to_date(t["trade_date"]), _to_date(epoch_first_date)
+                hold_days = (_sd - _fd).days if (_sd and _fd) else None
+                updates.append((int(t["trade_id"]), epoch, cost_basis_rmb, realized, pct, cost_basis_local, hold_days))
                 rem_shares -= qty
                 rem_cost_rmb -= avg_rmb * qty
                 rem_local_basis -= avg_local * qty
@@ -2310,12 +2316,12 @@ def rebuild_real_holdings_from_trades(
             }
 
         # 回写每笔 trade 的 epoch + sell 派生快照
-        for tid, ep, cb, rl, pct, cb_local in updates:
+        for tid, ep, cb, rl, pct, cb_local, hold_days in updates:
             conn.execute(
                 "UPDATE real_holding_trades SET position_epoch=?, cost_basis_rmb=?, "
-                "realized_pnl_rmb=?, realized_pnl_pct=?, cost_basis_local=?, updated_at=CURRENT_TIMESTAMP "
-                "WHERE trade_id=?",
-                [ep, cb, rl, pct, cb_local, tid],
+                "realized_pnl_rmb=?, realized_pnl_pct=?, cost_basis_local=?, holding_days=?, "
+                "updated_at=CURRENT_TIMESTAMP WHERE trade_id=?",
+                [ep, cb, rl, pct, cb_local, hold_days, tid],
             )
 
         # 协调 real_holdings 聚合行
