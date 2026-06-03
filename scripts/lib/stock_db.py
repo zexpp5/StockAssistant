@@ -2598,6 +2598,8 @@ def fetch_cash_summary(*, account=None, conn=None) -> dict[str, Any]:
             f"WHERE side='sell' AND status='active' {tclause}", tparams,
         ).fetchone()[0] or 0)
         cash = deposits - withdrawals - buy_out + sell_in
+        if abs(cash) < 0.005:        # 抹掉浮点尾巴，避免显示成 -0
+            cash = 0.0
         return {
             "cash_rmb": cash,
             "deposits_rmb": deposits,
