@@ -8409,14 +8409,17 @@ async function toggleHoldingTrades(holdingId, ev) {
   if (ev) ev.stopPropagation();
   const row = document.getElementById("rhrow-" + holdingId);
   const caret = document.getElementById("rhcaret-" + holdingId);
+  const arrow = caret ? caret.querySelector(".rhcaret-arrow") : null;
   if (!row) return;
   const existing = document.querySelector("tr.rhsub-" + holdingId);
   if (existing) {                       // 已展开 → 收起
     document.querySelectorAll("tr.rhsub-" + holdingId).forEach(e => e.remove());
-    if (caret) caret.textContent = "▸";
+    if (arrow) arrow.textContent = "▾";
+    if (caret) caret.classList.remove("bg-violet-200");
     return;
   }
-  if (caret) caret.textContent = "▾";
+  if (arrow) arrow.textContent = "▴";
+  if (caret) caret.classList.add("bg-violet-200");
   const sub = document.createElement("tr");
   sub.className = "rhsub-" + holdingId + " bg-slate-50/70";
   sub.innerHTML = `<td colspan="15" class="px-9 py-2 text-[11px] text-slate-500">加载中…</td>`;
@@ -8896,7 +8899,7 @@ async function renderRealHoldings() {
   return `<tr id="rhrow-${x.h.id}" class="border-t border-slate-100 hover:bg-slate-50 group ${rowBg}">
       <td class="px-3 py-2 font-medium sticky left-0 ${stickyBg} group-hover:bg-slate-50 z-10 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.15)] w-[200px] min-w-[200px] max-w-[200px]">
         ${(Number(x.h && x.h.trade_count) > 1)
-          ? `<button id="rhcaret-${x.h.id}" onclick="toggleHoldingTrades(${x.h.id}, event)" class="text-slate-400 hover:text-violet-600 mr-1 text-xs leading-none align-middle" title="展开/收起这只股的买卖批次（${Number(x.h.trade_count)} 笔）">▸</button>`
+          ? `<button id="rhcaret-${x.h.id}" onclick="toggleHoldingTrades(${x.h.id}, event)" class="inline-flex items-center gap-0.5 px-1.5 py-0.5 mb-1 rounded-md bg-violet-50 hover:bg-violet-100 border border-violet-200 text-violet-700 text-[10px] font-medium align-middle cursor-pointer" title="点开看这只股的 ${Number(x.h.trade_count)} 笔买卖批次">📦 ${Number(x.h.trade_count)}笔 <span class="rhcaret-arrow">▾</span></button>`
           : ""}
         ${stockPill(x.code, {nameOverride: name})}
         ${_renderHoldingMetaLines(x.code, x.h && x.h.id, reviewItem)}
