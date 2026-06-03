@@ -1285,7 +1285,7 @@ function switchDiscoveryView(view) {
             </span>
             <div id="real-holding-advice-asof" class="text-[10px] font-normal text-slate-400 mt-0.5"></div>
           </th>
-          <th class="px-3 py-2 text-center whitespace-nowrap w-[105px]">操作</th>
+          <th class="px-3 py-2 text-center whitespace-nowrap w-[150px]">操作</th>
         </tr>
       </thead>
       <tbody id="real-holdings-table">
@@ -1440,6 +1440,102 @@ function switchDiscoveryView(view) {
         <div id="real-form-save-status" class="min-h-[18px] text-[11px] text-slate-500"></div>
       </div>
       <p class="text-[11px] text-slate-500 mt-3 leading-relaxed">真实持仓写入 DuckDB <span class="font-mono">real_holdings</span>。AI 跟踪仓写入 <span class="font-mono">model_sim_holdings</span>,两者不会混用。</p>
+    </div>
+  </div>
+
+  <!-- ===== 已卖出 / 交易历史 + 收益摘要（账本 v2）===== -->
+  <div id="ledger-history-block" class="mt-8">
+    <div class="flex items-center gap-2 mb-2 flex-wrap">
+      <h3 class="text-sm font-semibold text-slate-700">📒 已卖出 / 交易历史</h3>
+      <span class="text-[11px] text-slate-400">卖出是真实交易后的手动记账，不是系统自动生成的建议</span>
+    </div>
+    <div id="ledger-pnl-summary" class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3"></div>
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="bg-slate-50 text-slate-500 text-[11px]">
+          <tr>
+            <th class="px-3 py-2 text-left whitespace-nowrap">股票</th>
+            <th class="px-3 py-2 text-right whitespace-nowrap">买入均价 → 卖出价</th>
+            <th class="px-3 py-2 text-right whitespace-nowrap">卖出股数</th>
+            <th class="px-3 py-2 text-left whitespace-nowrap">卖出日期</th>
+            <th class="px-3 py-2 text-right whitespace-nowrap">已实现盈亏(¥)</th>
+            <th class="px-3 py-2 text-right whitespace-nowrap">收益率</th>
+            <th class="px-3 py-2 text-right whitespace-nowrap">手续费(¥)</th>
+            <th class="px-3 py-2 text-center whitespace-nowrap">操作</th>
+          </tr>
+        </thead>
+        <tbody id="ledger-trade-history">
+          <tr><td colspan="8" class="text-center text-slate-400 py-6">暂无卖出记录。卖出是真实交易后的手动记账，不是系统自动生成的建议。</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ===== 加仓 / 卖出 Modal（账本 v2）===== -->
+  <div id="trade-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-4"
+       onclick="if(event.target===this)closeTradeModal()">
+    <div class="bg-white rounded-xl shadow-2xl max-w-md w-full p-5 max-h-[90vh] overflow-y-auto">
+      <div class="flex items-center justify-between mb-3">
+        <h3 id="trade-modal-title" class="font-bold text-slate-900">记录卖出 / 平仓</h3>
+        <button onclick="closeTradeModal()" class="text-slate-400 hover:text-slate-700 text-2xl leading-none">×</button>
+      </div>
+      <p id="trade-modal-hint" class="text-[11px] text-slate-500 mb-3"></p>
+      <input id="trade-form-holding-id" type="hidden">
+      <input id="trade-form-mode" type="hidden">
+      <div class="space-y-3">
+        <div class="grid grid-cols-3 gap-3">
+          <div class="col-span-2">
+            <label class="text-xs font-medium text-slate-600"><span id="trade-price-label">卖出价</span> <span class="text-amber-600 font-normal">（按本币填）</span></label>
+            <input id="trade-form-price" type="number" step="0.01" class="w-full mt-1 px-3 py-2 border rounded text-sm">
+          </div>
+          <div>
+            <label class="text-xs font-medium text-slate-600">数量（股）</label>
+            <input id="trade-form-qty" type="number" step="1" class="w-full mt-1 px-3 py-2 border rounded text-sm">
+          </div>
+        </div>
+        <div id="trade-max-hint" class="text-[11px] text-slate-400"></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs font-medium text-slate-600"><span id="trade-date-label">卖出</span>日期</label>
+            <input id="trade-form-date" type="date" value="{TODAY_DATE}" class="w-full mt-1 px-3 py-2 border rounded text-sm">
+          </div>
+          <div>
+            <label class="text-xs font-medium text-slate-600">汇率 <span class="text-slate-400 font-normal">（留空自动）</span></label>
+            <input id="trade-form-fx" type="number" step="0.0001" placeholder="按成交日自动锁定" class="w-full mt-1 px-3 py-2 border rounded text-sm">
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs font-medium text-slate-600">手续费 <span class="text-slate-400 font-normal">（可选）</span></label>
+            <input id="trade-form-fee" type="number" step="0.01" placeholder="0" class="w-full mt-1 px-3 py-2 border rounded text-sm">
+          </div>
+          <div>
+            <label class="text-xs font-medium text-slate-600">手续费币种</label>
+            <input id="trade-form-fee-ccy" type="text" placeholder="默认同股票" class="w-full mt-1 px-3 py-2 border rounded text-sm uppercase">
+          </div>
+        </div>
+        <div>
+          <label class="text-xs font-medium text-slate-600">备注 <span class="text-slate-400 font-normal">（可选）</span></label>
+          <input id="trade-form-notes" type="text" placeholder="例：止盈一半 / 触发止损后手动卖出" class="w-full mt-1 px-3 py-2 border rounded text-sm" maxlength="80">
+        </div>
+        <div class="flex gap-2 pt-1">
+          <button onclick="closeTradeModal()" class="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 py-2 rounded font-medium">取消</button>
+          <button id="trade-form-save" onclick="saveTrade()" class="flex-1 bg-violet-600 hover:bg-violet-700 text-white py-2 rounded font-medium disabled:opacity-60">保存</button>
+        </div>
+        <div id="trade-form-status" class="min-h-[18px] text-[11px] text-slate-500"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 交易记录时间线 Modal ===== -->
+  <div id="trade-records-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-4"
+       onclick="if(event.target===this)this.classList.add('hidden')">
+    <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full p-5 max-h-[85vh] overflow-y-auto">
+      <div class="flex items-center justify-between mb-3">
+        <h3 id="trade-records-title" class="font-bold text-slate-900">交易记录</h3>
+        <button onclick="document.getElementById('trade-records-modal').classList.add('hidden')" class="text-slate-400 hover:text-slate-700 text-2xl leading-none">×</button>
+      </div>
+      <div id="trade-records-body" class="text-sm text-slate-700 space-y-1.5"></div>
     </div>
   </div>
 </section>
@@ -8042,7 +8138,8 @@ async function saveRealHolding() {
   _setRealHoldingSaveState(true, id ? "正在更新持仓…" : "正在保存持仓，别急着再点…");
   let saveData = null;
   try {
-    const url = WATCHLIST_API_BASE + "/api/real-holdings" + (id ? "/" + id : "");
+    // 新建走账本口径 /buy（写交易流水，可加仓/卖出）；编辑仍走 PUT 改聚合行。
+    const url = WATCHLIST_API_BASE + "/api/real-holdings" + (id ? "/" + id : "/buy");
     const r = await fetch(url, {
       method: id ? "PUT" : "POST",
       headers: {"Content-Type": "application/json"},
@@ -8152,12 +8249,159 @@ async function _loadRealFormChainFields(code) {
 }
 
 async function deleteRealHolding(id) {
-  if (!confirm("确定删除这条真实持仓？")) return;
+  if (!confirm("删除是抹掉录错的记录，会丢失这条持仓的历史。正常卖出请用「卖出」。确定删除？")) return;
   try {
     const r = await fetch(WATCHLIST_API_BASE + "/api/real-holdings/" + id, { method: "DELETE" });
     if (!r.ok) { alert("删除失败: HTTP " + r.status); return; }
   } catch (e) { alert("删除失败: " + e.message); return; }
   await refreshHoldingsAndRender();
+}
+
+// ============ 账本 v2：加仓 / 卖出 / 交易历史 / 收益摘要 / 撤销 ============
+let _tradeSaveInFlight = false;
+
+function openTradeModal(holdingId, mode) {
+  const h = (_realHoldingsCache || []).find(x => x.id === holdingId);
+  if (!h) { alert("找不到该持仓"); return; }
+  const isSell = mode === "sell";
+  const ccy = h.currency || _currencyForTicker(h.symbol || h.code);
+  const remaining = Number(h.remaining_shares != null ? h.remaining_shares : (h.shares || 0));
+  document.getElementById("trade-form-holding-id").value = holdingId;
+  document.getElementById("trade-form-mode").value = mode;
+  document.getElementById("trade-modal-title").textContent = isSell ? "记录卖出 / 平仓" : "加仓 / 再买入";
+  document.getElementById("trade-modal-hint").textContent = isSell
+    ? `${h.name || h.symbol || h.code}：当前剩 ${remaining} 股，平均成本 ${Number(h.avg_cost_local_per_share || h.entry_price || 0).toFixed(2)} ${ccy}。卖出是真实交易后的事后记账，不是系统建议。`
+    : `${h.name || h.symbol || h.code}：再买入会按加权平均成本并入当前这一行。`;
+  document.getElementById("trade-price-label").textContent = isSell ? "卖出价" : "买入价";
+  document.getElementById("trade-date-label").textContent = isSell ? "卖出" : "买入";
+  document.getElementById("trade-max-hint").textContent = isSell ? `最多可卖 ${remaining} 股` : "";
+  ["trade-form-price","trade-form-qty","trade-form-fx","trade-form-fee","trade-form-fee-ccy","trade-form-notes"]
+    .forEach(i => { const el = document.getElementById(i); if (el) el.value = ""; });
+  const dEl = document.getElementById("trade-form-date"); if (dEl && !dEl.value) dEl.value = new Date().toISOString().split("T")[0];
+  document.getElementById("trade-form-status").textContent = "";
+  const saveBtn = document.getElementById("trade-form-save");
+  saveBtn.className = "flex-1 text-white py-2 rounded font-medium disabled:opacity-60 " + (isSell ? "bg-rose-600 hover:bg-rose-700" : "bg-emerald-600 hover:bg-emerald-700");
+  const m = document.getElementById("trade-modal");
+  m.classList.remove("hidden"); m.classList.add("flex");
+}
+
+function closeTradeModal() {
+  const m = document.getElementById("trade-modal");
+  m.classList.add("hidden"); m.classList.remove("flex");
+}
+
+async function saveTrade() {
+  if (_tradeSaveInFlight) return;
+  const holdingId = document.getElementById("trade-form-holding-id").value;
+  const isSell = document.getElementById("trade-form-mode").value === "sell";
+  const price = parseFloat(document.getElementById("trade-form-price").value || "");
+  const qty = parseFloat(document.getElementById("trade-form-qty").value || "");
+  const date = document.getElementById("trade-form-date").value || new Date().toISOString().split("T")[0];
+  const fxRaw = (document.getElementById("trade-form-fx").value || "").trim();
+  const feeRaw = (document.getElementById("trade-form-fee").value || "").trim();
+  const feeCcy = (document.getElementById("trade-form-fee-ccy").value || "").trim().toUpperCase();
+  const notes = (document.getElementById("trade-form-notes").value || "").trim();
+  if (!(price > 0) || !(qty > 0)) { alert("请填写正的价格和数量"); return; }
+  const item = { trade_price: price, quantity: qty, trade_date: date, notes: notes || null };
+  if (fxRaw) { const f = parseFloat(fxRaw); if (!(f > 0)) { alert("汇率必须为正，或留空自动获取"); return; } item.fx_rate = f; }
+  if (feeRaw) { const fe = parseFloat(feeRaw); if (!(fe >= 0)) { alert("手续费不能为负"); return; } item.fee_amount = fe; if (feeCcy) item.fee_currency = feeCcy; }
+  _tradeSaveInFlight = true;
+  const statusEl = document.getElementById("trade-form-status");
+  statusEl.textContent = "正在保存…";
+  const saveBtn = document.getElementById("trade-form-save"); saveBtn.disabled = true;
+  try {
+    const url = WATCHLIST_API_BASE + "/api/real-holdings/" + holdingId + (isSell ? "/close" : "/add");
+    const r = await fetch(url, { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(item) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { statusEl.textContent = "失败：" + (d.detail || r.status); alert("保存失败：" + (d.detail || r.status)); return; }
+    _realHoldingReviewCache = null;
+    closeTradeModal();
+    await refreshHoldingsAndRender();
+    let msg = isSell ? "卖出已记录，已实现盈亏已入账。" : "加仓已记录，平均成本已重算。";
+    if (isSell && d.holding == null) msg = "已全部卖出，该持仓转入「已卖出 / 交易历史」。";
+    alert("✓ " + msg);
+  } catch (e) { statusEl.textContent = "失败：" + e.message; alert("保存失败：" + e.message); }
+  finally { _tradeSaveInFlight = false; saveBtn.disabled = false; }
+}
+
+async function _loadLedgerPnlSummary() {
+  const el = document.getElementById("ledger-pnl-summary");
+  if (!el) return;
+  try {
+    const d = await fetch(WATCHLIST_API_BASE + "/api/real-holdings/pnl-summary").then(r => r.ok ? r.json() : null);
+    if (!d) { el.innerHTML = ""; return; }
+    const fmt = v => v == null ? "—" : (v >= 0 ? "+" : "") + Number(v).toLocaleString(undefined, {maximumFractionDigits:0});
+    const cls = v => v == null ? "text-slate-400" : v > 0 ? "text-emerald-600" : v < 0 ? "text-rose-600" : "text-slate-700";
+    const since = d.realized_since ? `<div class="text-[10px] text-slate-400 mt-0.5">自 ${String(d.realized_since).slice(0,10)} 起统计</div>` : "";
+    el.innerHTML =
+      `<div class="rounded-lg bg-white border border-slate-200 p-3"><div class="text-xl font-bold ${cls(d.realized_pnl_rmb)}">${fmt(d.realized_pnl_rmb)}</div><div class="text-xs text-slate-500 mt-1">累计已实现盈亏 RMB</div>${since}</div>` +
+      `<div class="rounded-lg bg-white border border-slate-200 p-3"><div class="text-xl font-bold ${cls(d.unrealized_pnl_rmb)}">${d.unrealized_pnl_rmb==null?"—":fmt(d.unrealized_pnl_rmb)}</div><div class="text-xs text-slate-500 mt-1">当前浮动盈亏 RMB</div></div>` +
+      `<div class="rounded-lg bg-white border border-slate-200 p-3"><div class="text-xl font-bold ${cls(d.total_pnl_rmb)}">${d.total_pnl_rmb==null?"—":fmt(d.total_pnl_rmb)}</div><div class="text-xs text-slate-500 mt-1">累计收益 = 已实现 + 浮动</div></div>`;
+  } catch (e) { el.innerHTML = ""; }
+}
+
+async function _loadLedgerTradeHistory() {
+  const tb = document.getElementById("ledger-trade-history");
+  if (!tb) return;
+  let sells = [];
+  try { const d = await fetch(WATCHLIST_API_BASE + "/api/real-holdings/trade-history").then(r => r.ok ? r.json() : null); sells = (d && d.sells) || []; } catch (e) {}
+  if (!sells.length) {
+    tb.innerHTML = `<tr><td colspan="8" class="text-center text-slate-400 py-6">暂无卖出记录。卖出是真实交易后的手动记账，不是系统自动生成的建议。</td></tr>`;
+    return;
+  }
+  tb.innerHTML = sells.map((s, idx) => {
+    const pnl = Number(s.realized_pnl_rmb || 0);
+    const pnlCls = pnl > 0 ? "text-emerald-600" : pnl < 0 ? "text-rose-600" : "text-slate-700";
+    const pct = s.realized_pnl_pct != null ? (s.realized_pnl_pct * 100) : null;
+    const undoBtn = idx === 0 ? `<button onclick="voidTrade(${s.trade_id})" class="text-[11px] text-slate-400 hover:text-rose-600" title="撤销最近一笔交易（软删，可重建）">撤销</button>` : "";
+    return `<tr class="border-t border-slate-100">
+      <td class="px-3 py-2 whitespace-nowrap">${_esc(s.name || s.symbol)}</td>
+      <td class="px-3 py-2 text-right font-mono whitespace-nowrap">${Number(s.trade_price).toFixed(2)} <span class="text-[10px] text-slate-400">${_esc(s.currency || "")}</span></td>
+      <td class="px-3 py-2 text-right font-mono">${Number(s.quantity)}</td>
+      <td class="px-3 py-2 whitespace-nowrap">${_esc(String(s.trade_date).slice(0,10))}</td>
+      <td class="px-3 py-2 text-right font-mono ${pnlCls}">${pnl >= 0 ? "+" : ""}${pnl.toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+      <td class="px-3 py-2 text-right font-mono ${pnlCls}">${pct==null?"—":(pct>=0?"+":"")+pct.toFixed(1)+"%"}</td>
+      <td class="px-3 py-2 text-right font-mono text-slate-500">${Number(s.fee_rmb||0).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+      <td class="px-3 py-2 text-center">${undoBtn}</td>
+    </tr>`;
+  }).join("");
+}
+
+async function voidTrade(tradeId) {
+  if (!confirm("撤销这笔交易？只能撤销最近一笔（软删，可重建）。")) return;
+  try {
+    const r = await fetch(WATCHLIST_API_BASE + "/api/real-holdings/trades/" + tradeId + "/void",
+      { method: "POST", headers: {"Content-Type":"application/json"}, body: "{}" });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { alert(d.detail || ("撤销失败 HTTP " + r.status)); return; }
+    _realHoldingReviewCache = null;
+    await refreshHoldingsAndRender();
+    alert("✓ 已撤销，持仓与收益已重建。");
+  } catch (e) { alert("撤销失败：" + e.message); }
+}
+
+async function openTradeRecords(holdingId) {
+  const body = document.getElementById("trade-records-body");
+  const h = (_realHoldingsCache || []).find(x => x.id === holdingId);
+  document.getElementById("trade-records-title").textContent = "交易记录 · " + (h ? (h.name || h.symbol || h.code) : "");
+  body.innerHTML = "加载中…";
+  const m = document.getElementById("trade-records-modal");
+  m.classList.remove("hidden"); m.classList.add("flex");
+  try {
+    const d = await fetch(WATCHLIST_API_BASE + "/api/real-holdings/" + holdingId + "/records").then(r => r.ok ? r.json() : null);
+    const recs = (d && d.records) || [];
+    if (!recs.length) { body.innerHTML = "<div class='text-slate-400'>暂无交易记录</div>"; return; }
+    body.innerHTML = recs.map(t => {
+      const isBuy = t.side === "buy";
+      const voided = t.status === "voided";
+      const color = voided ? "text-slate-300 line-through" : isBuy ? "text-emerald-700" : "text-rose-700";
+      const extra = (!isBuy && t.realized_pnl_rmb != null)
+        ? ` · 已实现 ${t.realized_pnl_rmb>=0?"+":""}${Number(t.realized_pnl_rmb).toLocaleString(undefined,{maximumFractionDigits:0})}¥` : "";
+      return `<div class="flex justify-between items-center border-b border-slate-100 py-1 ${color}">
+        <span>${String(t.trade_date).slice(0,10)} · <b>${isBuy?"买入":"卖出"}</b> ${Number(t.quantity)}股 @ ${Number(t.trade_price).toFixed(2)}${voided?"（已撤销）":""}</span>
+        <span class="text-[11px]">${extra}</span></div>`;
+    }).join("");
+  } catch (e) { body.innerHTML = "<div class='text-rose-500'>加载失败：" + e.message + "</div>"; }
 }
 
 async function deleteHolding(id) {
@@ -8195,6 +8439,8 @@ async function renderRealHoldings() {
   try { if (hRes && hRes.ok) _realHoldingsCache = await hRes.json(); } catch (e) {}
   _renderVerdictAggregateCard();
   _refreshMergedHoldingsCache();
+  _loadLedgerPnlSummary();
+  _loadLedgerTradeHistory();
   const list = document.getElementById("real-form-code-list");
   if (list && !list.innerHTML) list.innerHTML = RECORDS.map(r => `<option value="${r.code}">${r.name}</option>`).join("");
   const dateInput = document.getElementById("real-form-date");
@@ -8619,8 +8865,25 @@ async function renderRealHoldings() {
       ${sizeCell}
       ${verdictCell}
       <td class="px-3 py-2 text-center whitespace-nowrap">
-        <button onclick="editRealHolding(${x.h.id})" class="text-violet-600 text-xs">编辑</button>
-        <button onclick="deleteRealHolding(${x.h.id})" class="text-rose-500 text-xs ml-2">删除</button>
+        ${(x.h.close_status)
+          ? `<div class="flex flex-col gap-1 items-stretch">
+               <div class="flex gap-1 justify-center">
+                 <button onclick="openTradeModal(${x.h.id},'add')" title="再买入这只股票（加仓）" class="text-emerald-700 text-xs px-1.5 py-0.5 rounded border border-emerald-200 hover:bg-emerald-50">加仓</button>
+                 <button onclick="openTradeModal(${x.h.id},'sell')" title="记录一笔卖出 / 平仓（事后记账，不是建议）" class="text-rose-700 text-xs px-1.5 py-0.5 rounded border border-rose-200 hover:bg-rose-50">卖出</button>
+               </div>
+               <div class="flex gap-2 justify-center text-[11px]">
+                 <button onclick="openTradeRecords(${x.h.id})" class="text-slate-500 hover:text-violet-600">记录</button>
+                 <button onclick="editRealHolding(${x.h.id})" class="text-violet-600">编辑</button>
+                 <button onclick="deleteRealHolding(${x.h.id})" class="text-rose-400" title="删除=抹掉录错的记录，会丢历史；正常卖出请用「卖出」">删除</button>
+               </div>
+             </div>`
+          : `<div class="flex flex-col gap-1 items-center">
+               <span class="text-[11px] text-slate-300" title="此持仓还是迁移前的旧记录；迁移到账本后才能加仓/卖出">卖出（迁移后可用）</span>
+               <div class="flex gap-2 justify-center text-[11px]">
+                 <button onclick="editRealHolding(${x.h.id})" class="text-violet-600">编辑</button>
+                 <button onclick="deleteRealHolding(${x.h.id})" class="text-rose-400">删除</button>
+               </div>
+             </div>`}
       </td>
     </tr>`;
   }
