@@ -975,6 +975,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
 <!-- ============ ① 🔍 AI 推荐 Tab (2026-05-27 独立子页, 无 banner — 侧栏已表达) ============ -->
 <section id="discovery" class="max-w-7xl mx-auto px-6 pt-6 pb-8 bg-gradient-to-br from-sky-50 to-indigo-50 rounded-2xl my-3" style="display:none">
+  <!-- 分市场研究观察 advisory：哪些市场被策略诊断判为 degraded/research_only(早期实测 alpha 偏弱)。
+       数据源: strategy_tuning_proposal.json market_actions(shadow 诊断,服务端渲染,只读)。 -->
+  {STRATEGY_MARKET_ADVISORY}
   <!-- 2026-05-26: 移除 discovery-meta + discovery-accuracy 两条系统信息行 (用户反馈无用); JS 仍可安全空操作 -->
 
   <!-- 2026-05-11 PM: 顶部 sub-tab 切换(今日候选 / 推荐历史) -->
@@ -14682,6 +14685,32 @@ def today_decision_panel_html() -> str:
 """
 
 
+def strategy_market_advisory_html() -> str:
+    """分市场研究观察 advisory —— 读 shadow 诊断的 market_actions,列出 degraded/research_only 的市场,
+    防止 CN/HK 早期实测偏弱的推荐被误读成可买。无 degraded 市场则返回空串(不渲染)。只读,服务端渲染。"""
+    proposal = _runtime_load_json("data/latest/strategy_tuning_proposal.json") or {}
+    actions = proposal.get("market_actions") or []
+    degraded = [m for m in actions if str(m.get("status")) == "degraded"]
+    if not degraded:
+        return ""
+    items = []
+    for m in degraded:
+        label = html_lib.escape(str(m.get("label") or m.get("market") or ""))
+        reason = html_lib.escape(str(m.get("reason") or ""))
+        items.append(
+            f'<li class="mt-0.5"><b>{label}</b>：{reason}'
+            '（当前研究观察，未通过 shadow 门禁前不作为买入依据）</li>'
+        )
+    return (
+        '<div class="mb-4 rounded-xl border-2 border-amber-300 bg-amber-50 px-4 py-3">'
+        '<div class="text-sm font-bold text-amber-900">⚠️ 分市场研究观察 —— 这些市场早期实测偏弱</div>'
+        f'<ul class="text-[12px] text-amber-800 mt-1 leading-relaxed list-disc pl-5">{"".join(items)}</ul>'
+        '<div class="text-[11px] text-amber-700 mt-1">来源：策略失败诊断（shadow 离线，只读）。'
+        '其余市场未列出 = 暂未判定 degraded。</div>'
+        '</div>'
+    )
+
+
 def runtime_status_panel_html() -> str:
     clean_v2 = _is_clean_v2_db()
     quality = _runtime_load_json("data/latest/recommendation_quality_gate.json")
@@ -16850,6 +16879,7 @@ def build():
     html = html.replace("{SOURCE_HEALTH_PANEL}", source_health_panel_html(source_health))
     html = html.replace("{TODAY_DECISION_PANEL}", today_decision_panel_html())
     html = html.replace("{RUNTIME_STATUS_PANEL}", runtime_status_panel_html())
+    html = html.replace("{STRATEGY_MARKET_ADVISORY}", strategy_market_advisory_html())
 
     if audit_snap_db:
         n_picks_db = audit_snap_db.get("picks_today_count", 0)
