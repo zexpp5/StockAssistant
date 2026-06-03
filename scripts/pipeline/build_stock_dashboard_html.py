@@ -14802,11 +14802,22 @@ def runtime_status_panel_html() -> str:
     pipeline_run = pipeline.get("started_at") or "尚未记录"
     research_status = str(research_pipeline.get("status") or "UNKNOWN")
     research_run = research_pipeline.get("started_at") or "尚未记录"
+    # shadow 调参验证进度 —— 让"新公式还在离线影子验证、门禁未过"对用户可见,
+    # 防止把生产 PASS 误读成"调好的策略已上线"。数据来自 acceptance summary.shadow_tuning。
+    shadow_tuning = acceptance_summary.get("shadow_tuning") or {}
+    shadow_gate = str(shadow_tuning.get("gate_status") or "—").upper()
+    _shadow_runs = shadow_tuning.get("shadow_run_count")
+    shadow_detail = (
+        f"影子调参 {_shadow_runs if _shadow_runs is not None else '—'}/10 轮 · 门禁 {shadow_gate}"
+        "（新公式仅离线验证，未达激活门槛、不会自动上线）"
+        if shadow_tuning else "shadow 调参证据未生成"
+    )
     cards = [
         ("总状态", overall, "质量闸门和生产验收综合结果"),
         ("质量闸门", quality_status, f"fail={quality_summary.get('fail', '—')} warn={quality_summary.get('warn', '—')} · 策略证据={strategy_evidence}"),
         ("生产验收", acceptance_status, f"fail={acceptance_summary.get('fail', '—')} warn={acceptance_summary.get('warn', '—')}"),
         ("AI 推荐", discovery_status, f"{discovery_n} 只候选 · evidence={evidence_grade}"),
+        ("策略验证", shadow_gate if shadow_tuning else "INFO", shadow_detail),
         ("生产跑批", pipeline_status, f"{str(pipeline_run)[:19]} · mode={pipeline.get('mode') or '—'}"),
         ("研究线", research_status if research_pipeline else "INFO", f"{str(research_run)[:19]} · mode={research_pipeline.get('mode') or '—'}"),
     ]
