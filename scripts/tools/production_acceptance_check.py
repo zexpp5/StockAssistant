@@ -88,6 +88,13 @@ EVENT_CALENDAR_JSON = (
     "data/event_calendar_us_form4.json",   # 美股 SEC Form 4 内部人交易（净买/卖聚合）
 )
 
+# shadow 调参证据链（非生产诊断，但若 nightly 停跑会让门禁永远攒不到样本、静默卡死）。
+# WARN 级：滞后只提示同事去查 nightly 23d4/23d5 步骤，不阻断生产推荐。
+SHADOW_LATEST_JSON = (
+    "data/latest/shadow_tuning_evidence.json",
+    "data/latest/shadow_tuning_run.json",
+)
+
 
 def _issue(level: str, code: str, message: str, details: Any = None) -> dict[str, Any]:
     item = {"level": level, "code": code, "message": message}
@@ -531,7 +538,22 @@ def _surface_artifact_checks(
     artifact_summary.update(_latest_json_checks(
         issues, EVENT_CALENDAR_JSON, max_age_days=max(max_age_days, 2), level="WARN"
     ))
+    # shadow 调参健康：若 nightly 停跑，shadow 产物滞后会让门禁永远攒不到样本而静默卡死，
+    # 这正是"等几周后才发现没攒样本"要防的。容忍 3 天(周末/跳过)，WARN 级不阻断生产。
+    artifact_summary.update(_latest_json_checks(
+        issues, SHADOW_LATEST_JSON, max_age_days=max(max_age_days, 3), level="WARN"
+    ))
     summary["artifacts"] = artifact_summary
+
+    # 把 shadow 门禁状态/轮数露进 summary —— 供 dashboard / morning_brief 显示进度，
+    # 让"门禁还 BLOCKED、攒了几轮"对用户可见，而不是只躺在 shadow JSON 里。
+    shadow_ev, _ = _json_load("data/latest/shadow_tuning_evidence.json")
+    if shadow_ev and "_error" not in shadow_ev:
+        summary["shadow_tuning"] = {
+            "gate_status": shadow_ev.get("status"),
+            "shadow_run_count": shadow_ev.get("shadow_run_count"),
+            "latest_source_run_id": shadow_ev.get("latest_source_run_id"),
+        }
 
     qgate, _ = _json_load("data/latest/recommendation_quality_gate.json")
     if qgate and "_error" not in qgate:
