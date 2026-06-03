@@ -8801,7 +8801,7 @@ async function renderRealHoldings() {
       <div class="mt-3 pt-3 border-t border-slate-100">
         <div class="flex items-center justify-between mb-1.5">
           <h4 class="text-[11px] font-semibold text-slate-600">⚠️ 真实账户风控线</h4>
-          <span class="text-[10px] text-slate-400">基于本金 <span data-cfg="total_capital">50 万</span></span>
+          <span class="text-[10px] text-slate-400">基于本金 <span data-cfg="total_capital">50 万</span> · <a href="#portfolio-config" class="text-violet-600 hover:underline">⚙️ 设置本金/止损</a></span>
         </div>
         <div id="real-alert-line"></div>
       </div>
