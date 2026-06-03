@@ -1206,8 +1206,9 @@ _sys.exit(rc)
                    "currency": item.get("currency") or h.get("currency")}
         try:
             res = stock_db.insert_real_holding_sell(payload)
-        except stock_db.LedgerConflict as e:
-            raise HTTPException(400, str(e))
+        except stock_db.LedgerConflict:
+            rem = h.get("remaining_shares")
+            raise HTTPException(400, f"卖出数量超过当前剩余股数（剩 {rem} 股），或与历史交易顺序冲突。")
         except stock_db.LedgerError as e:
             raise HTTPException(400, str(e))
         new_h = stock_db.fetch_real_holding_by_id(res.get("holding_id") or holding_id)

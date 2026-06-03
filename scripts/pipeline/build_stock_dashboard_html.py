@@ -8302,6 +8302,14 @@ async function saveTrade() {
   const feeCcy = (document.getElementById("trade-form-fee-ccy").value || "").trim().toUpperCase();
   const notes = (document.getElementById("trade-form-notes").value || "").trim();
   if (!(price > 0) || !(qty > 0)) { alert("请填写正的价格和数量"); return; }
+  if (isSell) {
+    const h = (_realHoldingsCache || []).find(x => String(x.id) === String(holdingId));
+    const remaining = h ? Number(h.remaining_shares != null ? h.remaining_shares : (h.shares || 0)) : null;
+    if (remaining != null && qty > remaining + 1e-9) {
+      alert(`卖出数量超了：当前只剩 ${remaining} 股，你填了 ${qty} 股。`);
+      return;
+    }
+  }
   const item = { trade_price: price, quantity: qty, trade_date: date, notes: notes || null };
   if (fxRaw) { const f = parseFloat(fxRaw); if (!(f > 0)) { alert("汇率必须为正，或留空自动获取"); return; } item.fx_rate = f; }
   if (feeRaw) { const fe = parseFloat(feeRaw); if (!(fe >= 0)) { alert("手续费不能为负"); return; } item.fee_amount = fe; if (feeCcy) item.fee_currency = feeCcy; }
