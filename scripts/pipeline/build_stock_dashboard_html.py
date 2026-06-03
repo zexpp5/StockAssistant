@@ -1450,7 +1450,6 @@ function switchDiscoveryView(view) {
   <div id="ledger-history-block" class="mt-8">
     <div class="flex items-center gap-2 mb-2 flex-wrap">
       <h3 class="text-sm font-semibold text-slate-700">📒 已卖出 / 交易历史</h3>
-      <span class="text-[11px] text-slate-400">卖出是真实交易后的手动记账，不是系统自动生成的建议</span>
     </div>
     <div id="ledger-pnl-summary" class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3"></div>
     <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
@@ -7913,24 +7912,24 @@ function _renderAccountRiskLine(containerId, portfolioValue, emptyText, accountL
       </div>
       <span>距止损 <strong class="${lossClr}">${distToStop >= 0 ? "+" : ""}${distToStop.toLocaleString(undefined, {maximumFractionDigits:0})}</strong> · 距止盈 <strong class="${targetClr}">${distToTarget >= 0 ? "" : "+"}${Math.abs(distToTarget).toLocaleString(undefined, {maximumFractionDigits:0})}</strong></span>
     </div>
-    <div class="relative h-6">
-      <!-- 底色轨道 -->
-      <div class="absolute left-0 right-0 top-2.5 h-1 rounded-full bg-slate-100"></div>
-      <!-- 安全区 (本金 → 止盈) 浅绿 -->
-      <div class="absolute top-2.5 h-1 bg-emerald-100" style="left:${capitalPos}%;right:${(100 - parseFloat(targetPos)).toFixed(1)}%"></div>
-      <!-- 预警区 (止损 → 本金) 浅琥珀 -->
-      <div class="absolute top-2.5 h-1 bg-amber-50" style="left:${stopPos}%;width:${(parseFloat(capitalPos) - parseFloat(stopPos)).toFixed(1)}%"></div>
-      <!-- 止损刻度线 -->
-      <div class="absolute top-1 h-4 w-0.5 bg-rose-400" style="left:${stopPos}%"></div>
-      <!-- 本金刻度线 -->
-      <div class="absolute top-1 h-4 w-px bg-slate-400" style="left:${capitalPos}%"></div>
-      <!-- 止盈刻度线 -->
-      <div class="absolute top-1 h-4 w-0.5 bg-violet-400" style="left:${targetPos}%"></div>
-      <!-- 当前位置 pill + 三角指向 -->
-      <div class="absolute top-0 z-10" style="${pillAlign}">
+    <div class="relative" style="height:32px">
+      <!-- 当前值 pill + 朝下三角，三角尖正好落在轨道上 -->
+      <div class="absolute z-10" style="${pillAlign};top:0">
         <div class="rounded bg-slate-900 text-white text-[10px] font-semibold px-1.5 py-0.5 shadow whitespace-nowrap">${portfolioValue.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
-        <div class="w-0 h-0 mx-auto" style="border-left:4px solid transparent;border-right:4px solid transparent;border-top:4px solid #0f172a"></div>
+        <div class="w-0 h-0 mx-auto" style="border-left:5px solid transparent;border-right:5px solid transparent;border-top:6px solid #0f172a"></div>
       </div>
+      <!-- 底色轨道 -->
+      <div class="absolute left-0 right-0 rounded-full bg-slate-100" style="top:22px;height:6px"></div>
+      <!-- 安全区 (本金 → 止盈) 浅绿 -->
+      <div class="absolute bg-emerald-200" style="top:22px;height:6px;left:${capitalPos}%;right:${(100 - parseFloat(targetPos)).toFixed(1)}%"></div>
+      <!-- 预警区 (止损 → 本金) 浅琥珀 -->
+      <div class="absolute bg-amber-100" style="top:22px;height:6px;left:${stopPos}%;width:${(parseFloat(capitalPos) - parseFloat(stopPos)).toFixed(1)}%"></div>
+      <!-- 止损刻度线 -->
+      <div class="absolute w-0.5 bg-rose-400" style="top:19px;height:12px;left:${stopPos}%"></div>
+      <!-- 本金刻度线 -->
+      <div class="absolute w-px bg-slate-400" style="top:19px;height:12px;left:${capitalPos}%"></div>
+      <!-- 止盈刻度线 -->
+      <div class="absolute w-0.5 bg-violet-400" style="top:19px;height:12px;left:${targetPos}%"></div>
     </div>
     <div class="relative h-4 mt-0.5 text-[10px]">
       <span class="absolute text-rose-500 whitespace-nowrap" style="${labelAlign(stopPos)}">${Math.round(STOPLOSS_LINE / 10000)}万止损</span>
@@ -8555,7 +8554,7 @@ async function renderRealHoldings() {
         <div class="mt-3 pt-3 border-t border-slate-100">
           <div class="flex items-center justify-between mb-1.5">
             <h4 class="text-[11px] font-semibold text-slate-600">⚠️ 真实账户风控线</h4>
-            <span class="text-[10px] text-slate-400">基于本金 <span data-cfg="total_capital">50 万</span></span>
+            <span class="text-[10px] text-slate-400">基于本金 ${(TOTAL_CAPITAL/10000).toLocaleString(undefined,{maximumFractionDigits:1})} 万</span>
           </div>
           <div id="real-alert-line"></div>
         </div>
@@ -8801,7 +8800,10 @@ async function renderRealHoldings() {
       <div class="mt-3 pt-3 border-t border-slate-100">
         <div class="flex items-center justify-between mb-1.5">
           <h4 class="text-[11px] font-semibold text-slate-600">⚠️ 真实账户风控线</h4>
-          <span class="text-[10px] text-slate-400">基于本金 <span data-cfg="total_capital">50 万</span> · <a href="#portfolio-config" class="text-violet-600 hover:underline">⚙️ 设置本金/止损</a></span>
+          <div class="flex items-center gap-2">
+            <span class="text-[11px] text-slate-400">基于本金 ${(TOTAL_CAPITAL/10000).toLocaleString(undefined,{maximumFractionDigits:1})} 万</span>
+            <a href="#portfolio-config" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-violet-50 hover:bg-violet-100 border border-violet-200 text-violet-700 text-xs font-medium" title="设置进场本金和止损红线">⚙️ 设置本金 / 止损</a>
+          </div>
         </div>
         <div id="real-alert-line"></div>
       </div>
@@ -8851,7 +8853,7 @@ async function renderRealHoldings() {
     const meta = _assetMeta(asset);
     const subHeader = `<tr class="bg-slate-50 border-t-2 border-slate-200">
       <td colspan="15" class="px-3 py-2 text-[13px] font-semibold text-slate-800">
-        ${meta.emoji} ${meta.text} · <span class="text-slate-500 font-normal">${items.length} 只 · ${meta.hint}</span>
+        ${meta.emoji} ${meta.text} · <span class="text-slate-500 font-normal">${items.length} 只</span>
       </td>
     </tr>`;
     return [subHeader, ...items.map(x => _renderHoldingRow(x, x._verdict, x._cls, CLASS_META[x._cls], x._reviewItem || _lookupReviewItem(x.code)))];
