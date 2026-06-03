@@ -1045,6 +1045,11 @@ _sys.exit(rc)
         if not include_closed:
             # 向后兼容：迁移前老行 close_status 为 NULL，仍要展示；只隐藏已清仓。
             rows = [h for h in rows if (h.get("close_status") or "open") != "closed"]
+        # 附带活跃交易笔数：前端据此决定是否显示「展开批次」三角。
+        counts = stock_db.fetch_active_trade_counts()
+        for h in rows:
+            h["trade_count"] = counts.get(
+                (h.get("account"), h.get("market"), (h.get("symbol") or "").upper()), 0)
         return _json_dates(rows)
 
     @app.post("/api/real-holdings")
@@ -1336,11 +1341,19 @@ _sys.exit(rc)
         h = stock_db.fetch_real_holding_by_id(holding_id)
         if not h:
             raise HTTPException(404, f"real holding id not found: {holding_id}")
-        # 账本持仓：数量/成本由交易流水决定，编辑只改名称/备注，避免与 remaining_shares 打架。
+        # 账本持仓：数量/成本由交易流水决定。可改 名称/备注；改 ticker 则连交易流水一起 rename。
         if h.get("close_status"):
+            renamed = None
+            new_sym = (item.get("symbol") or item.get("code") or "").strip().upper()
+            if new_sym and new_sym != (h.get("symbol") or "").upper():
+                try:
+                    renamed = stock_db.rename_real_holding_symbol(holding_id, new_sym)
+                except stock_db.LedgerError as e:
+                    raise HTTPException(409, str(e))
             n = stock_db.update_real_holding_meta(holding_id, name=item.get("name"), notes=item.get("notes"))
             return {"status": "ok", "id": holding_id, "rows_affected": n, "ledger_managed": True,
-                    "note": "账本持仓的数量与成本由交易流水决定，已只更新名称/备注；改数量请用「加仓 / 卖出」。"}
+                    "renamed": renamed,
+                    "note": "账本持仓的数量/成本由交易流水决定（改数量请用「加仓 / 卖出」）；代码与名称可改。"}
         n = stock_db.update_real_holding(holding_id, item)
         return {"status": "ok", "id": holding_id, "rows_affected": n}
 

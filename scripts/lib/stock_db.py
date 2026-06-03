@@ -1808,6 +1808,45 @@ def update_real_holding(holding_id: int, item: Mapping[str, Any], *, conn: duckd
     return n
 
 
+def rename_real_holding_symbol(holding_id: int, new_symbol: str, *, conn=None) -> dict[str, Any]:
+    """改 ticker（typo 修正）：把该持仓的 symbol 连同它的交易流水一起改名，再 rebuild。
+
+    拒绝改成同 account+market 下已存在的另一只持仓的代码（避免意外合并）。
+    """
+    own = conn is None
+    if own:
+        conn = get_db()
+    try:
+        h = fetch_real_holding_by_id(holding_id, conn=conn)
+        if not h:
+            raise LedgerError(f"holding not found: {holding_id}")
+        account, market = h.get("account") or "default", h.get("market")
+        old_sym = (h.get("symbol") or "")
+        new_sym = (new_symbol or "").strip().upper()
+        if not new_sym or new_sym == old_sym.upper():
+            return {"renamed": False}
+        clash = conn.execute(
+            "SELECT 1 FROM real_holdings WHERE account=? AND market=? AND UPPER(symbol)=? AND id<>? LIMIT 1",
+            [account, market, new_sym, int(holding_id)],
+        ).fetchone()
+        if clash:
+            raise LedgerError(f"已存在 {market}:{new_sym} 持仓，不能改成同代码（避免意外合并）")
+        conn.execute(
+            "UPDATE real_holding_trades SET symbol=?, updated_at=CURRENT_TIMESTAMP "
+            "WHERE account=? AND market=? AND UPPER(symbol)=UPPER(?)",
+            [new_sym, account, market, old_sym],
+        )
+        conn.execute(
+            "UPDATE real_holdings SET symbol=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            [new_sym, int(holding_id)],
+        )
+        rebuild_real_holdings_from_trades(conn=conn, account=account, market=market, symbol=new_sym)
+        return {"renamed": True, "from": old_sym, "to": new_sym}
+    finally:
+        if own:
+            conn.close()
+
+
 def update_real_holding_meta(holding_id: int, *, name=None, notes=None, conn=None) -> int:
     """只更新账本持仓的名称/备注；数量与成本由交易流水决定，不在此处改。"""
     own = conn is None
@@ -2383,6 +2422,22 @@ def fetch_real_holding_trade_history(*, include_voided=False, conn=None) -> list
             conn.close()
 
 
+def fetch_active_trade_counts(*, conn=None) -> dict[tuple, int]:
+    """{(account, market, UPPER(symbol)): 活跃交易笔数}，给前端决定是否显示展开三角。"""
+    own = conn is None
+    if own:
+        conn = get_db(read_only=True)
+    try:
+        rows = conn.execute(
+            "SELECT account, market, UPPER(symbol), COUNT(*) FROM real_holding_trades "
+            "WHERE status = 'active' GROUP BY account, market, UPPER(symbol)"
+        ).fetchall()
+        return {(r[0], r[1], r[2]): int(r[3]) for r in rows}
+    finally:
+        if own:
+            conn.close()
+
+
 def fetch_pnl_summary(*, price_lookup=None, as_of=None, conn=None) -> dict[str, Any]:
     """收益摘要：已实现（成交日锁定汇率）+ 未实现（当前价/当前汇率盯市）+ 合计。
 
@@ -2767,6 +2822,40 @@ def evaluate_real_holding_discipline_plan(
         }
 
     triggers = list(plan.get("triggers") or [])
+    ordered_next = sorted(
+        triggers,
+        key=lambda t: (
+            _discipline_trigger_distance(t, price),
+            int(t.get("priority") or 99),
+            str(t.get("trigger_id") or ""),
+        ),
+    )
+    all_triggers = [
+        {
+            "trigger_id": t.get("trigger_id"),
+            "trigger_type": t.get("trigger_type"),
+            "threshold_text": _trigger_threshold_text(t),
+            "action_label": t.get("action_label"),
+            "suggested_size_text": t.get("suggested_size_text"),
+            "severity": t.get("severity"),
+            "priority": int(t.get("priority") or 99),
+            "distance": _discipline_trigger_distance(t, price),
+        }
+        for t in triggers
+    ]
+    next_triggers = [
+        {
+            "trigger_id": t.get("trigger_id"),
+            "trigger_type": t.get("trigger_type"),
+            "threshold_text": _trigger_threshold_text(t),
+            "action_label": t.get("action_label"),
+            "suggested_size_text": t.get("suggested_size_text"),
+            "severity": t.get("severity"),
+            "priority": int(t.get("priority") or 99),
+        }
+        for t in ordered_next[:4]
+    ]
+
     matches = [t for t in triggers if _discipline_trigger_matches(t, price)]
     matches.sort(key=lambda t: (int(t.get("priority") or 99), str(t.get("trigger_id") or "")))
     if matches:
@@ -2790,39 +2879,10 @@ def evaluate_real_holding_discipline_plan(
             "suggested_size_text": t.get("suggested_size_text"),
             "rationale": t.get("rationale"),
             "message": msg,
+            "next_triggers": next_triggers,
+            "all_triggers": all_triggers,
         }
 
-    ordered_next = sorted(
-        triggers,
-        key=lambda t: (
-            _discipline_trigger_distance(t, price),
-            int(t.get("priority") or 99),
-            str(t.get("trigger_id") or ""),
-        ),
-    )
-    all_triggers = [
-        {
-            "trigger_id": t.get("trigger_id"),
-            "trigger_type": t.get("trigger_type"),
-            "threshold_text": _trigger_threshold_text(t),
-            "action_label": t.get("action_label"),
-            "severity": t.get("severity"),
-            "priority": int(t.get("priority") or 99),
-            "distance": _discipline_trigger_distance(t, price),
-        }
-        for t in triggers
-    ]
-    next_triggers = [
-        {
-            "trigger_id": t.get("trigger_id"),
-            "trigger_type": t.get("trigger_type"),
-            "threshold_text": _trigger_threshold_text(t),
-            "action_label": t.get("action_label"),
-            "severity": t.get("severity"),
-            "priority": int(t.get("priority") or 99),
-        }
-        for t in ordered_next[:4]
-    ]
     return {
         **base,
         "status": "watching",

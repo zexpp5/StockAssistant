@@ -7512,7 +7512,8 @@ function _disciplineCell(item) {
   const splitTrigger = (trigger) => {
     const range = cleanRange(trigger && trigger.threshold_text);
     const action = String((trigger && trigger.action_label) || "").replace("观察不加仓", "观察，不加仓").replace("持有不加仓", "持有，不加仓");
-    return {range, action};
+    const size = String((trigger && trigger.suggested_size_text) || "");
+    return {range, action: size ? `${action} · ${size}` : action};
   };
   const allTriggers = d.all_triggers || d.next_triggers || [];
   const findTrigger = (predicate) => allTriggers
@@ -8237,7 +8238,7 @@ function editRealHolding(id) {
   });
   const modeHint = document.getElementById("real-form-mode-hint");
   if (modeHint) modeHint.innerHTML = isLedger
-    ? "📒 账本持仓：<strong>数量和成本由买入/卖出交易决定</strong>，这里只改名称和补充信息。要改数量请用持仓行的「加仓 / 卖出」。"
+    ? "📒 账本持仓：可改<strong>代码（改 ticker 会连交易记录一起改名）</strong>和名称/补充信息；<strong>数量和成本由买入/卖出交易决定</strong>，要改数量请用持仓行的「加仓 / 卖出」。"
     : "填股票、成本价、数量、买入日期；点保存后写入真实持仓表。";
   _renderRealFormLookupHint(h.code || h.symbol);
 
@@ -8401,6 +8402,47 @@ async function voidTrade(tradeId) {
     await refreshHoldingsAndRender();
     alert("✓ 已撤销，持仓与收益已重建。");
   } catch (e) { alert("撤销失败：" + e.message); }
+}
+
+// 行内展开：在持仓行正下方就地显示该股的买卖批次（不弹窗）
+async function toggleHoldingTrades(holdingId, ev) {
+  if (ev) ev.stopPropagation();
+  const row = document.getElementById("rhrow-" + holdingId);
+  const caret = document.getElementById("rhcaret-" + holdingId);
+  if (!row) return;
+  const existing = document.querySelector("tr.rhsub-" + holdingId);
+  if (existing) {                       // 已展开 → 收起
+    document.querySelectorAll("tr.rhsub-" + holdingId).forEach(e => e.remove());
+    if (caret) caret.textContent = "▸";
+    return;
+  }
+  if (caret) caret.textContent = "▾";
+  const sub = document.createElement("tr");
+  sub.className = "rhsub-" + holdingId + " bg-slate-50/70";
+  sub.innerHTML = `<td colspan="15" class="px-9 py-2 text-[11px] text-slate-500">加载中…</td>`;
+  row.after(sub);
+  try {
+    const d = await fetch(WATCHLIST_API_BASE + "/api/real-holdings/" + holdingId + "/records").then(r => r.ok ? r.json() : null);
+    const recs = (d && d.records) || [];
+    const MAX = 12;
+    const shown = recs.slice(0, MAX);
+    const lines = shown.map(t => {
+      const isBuy = t.side === "buy";
+      const voided = t.status === "voided";
+      const cls = voided ? "text-slate-300 line-through" : isBuy ? "text-emerald-700" : "text-rose-700";
+      const ccy = t.currency || "";
+      const tail = isBuy
+        ? `成本 ¥${Number(t.gross_amount_rmb || 0).toLocaleString(undefined,{maximumFractionDigits:0})}`
+        : (t.realized_pnl_rmb != null ? `已实现 ${t.realized_pnl_rmb>=0?"+":""}¥${Number(t.realized_pnl_rmb).toLocaleString(undefined,{maximumFractionDigits:0})}` : "");
+      return `<div class="${cls}">└ ${String(t.trade_date).slice(0,10)} · ${isBuy?"买入":"卖出"} ${Number(t.quantity)} 股 @ ${Number(t.trade_price).toFixed(2)} <span class="text-slate-400">${_esc(ccy)}</span> · ${tail}${voided?"（已撤销）":""}</div>`;
+    }).join("");
+    const more = recs.length > MAX
+      ? `<div class="text-slate-400 mt-1">… 还有 ${recs.length - MAX} 笔，点「记录」看全部 <button onclick="openTradeRecords(${holdingId})" class="text-violet-600 underline">查看全部</button></div>`
+      : "";
+    sub.innerHTML = `<td colspan="15" class="px-9 py-2 text-[11px] space-y-0.5">${lines || "<span class='text-slate-400'>暂无交易记录</span>"}${more}</td>`;
+  } catch (e) {
+    sub.innerHTML = `<td colspan="15" class="px-9 py-2 text-[11px] text-rose-500">加载失败：${e.message}</td>`;
+  }
 }
 
 async function openTradeRecords(holdingId) {
@@ -8851,8 +8893,11 @@ async function renderRealHoldings() {
     : `<span class="text-slate-400">无行情</span>
        <div class="text-[11px] text-amber-700">待持仓行情刷新</div>
        <div class="text-[10px] text-slate-400">暂按成本计入总览</div>`;
-  return `<tr class="border-t border-slate-100 hover:bg-slate-50 group ${rowBg}">
+  return `<tr id="rhrow-${x.h.id}" class="border-t border-slate-100 hover:bg-slate-50 group ${rowBg}">
       <td class="px-3 py-2 font-medium sticky left-0 ${stickyBg} group-hover:bg-slate-50 z-10 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.15)] w-[200px] min-w-[200px] max-w-[200px]">
+        ${(Number(x.h && x.h.trade_count) > 1)
+          ? `<button id="rhcaret-${x.h.id}" onclick="toggleHoldingTrades(${x.h.id}, event)" class="text-slate-400 hover:text-violet-600 mr-1 text-xs leading-none align-middle" title="展开/收起这只股的买卖批次（${Number(x.h.trade_count)} 笔）">▸</button>`
+          : ""}
         ${stockPill(x.code, {nameOverride: name})}
         ${_renderHoldingMetaLines(x.code, x.h && x.h.id, reviewItem)}
       </td>

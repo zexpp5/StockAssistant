@@ -143,6 +143,19 @@ class LedgerApiTest(unittest.TestCase):
         self.assertEqual(h["remaining_shares"], 10)   # 数量没被编辑改掉
         self.assertEqual(h["name"], "改个名")          # 名称改了
 
+    def test_rename_ledger_ticker_propagates_to_trades(self):
+        hid = self._buy(symbol="GOOGLE", trade_price=300, quantity=10, trade_date="2026-06-01").json()["holding"]["id"]
+        # 改 ticker GOOGLE → GOOGL，应连交易流水一起改名
+        r = self.client.put(f"/api/real-holdings/{hid}", json={"code": "GOOGL", "name": "谷歌"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertTrue((r.json().get("renamed") or {}).get("renamed"))
+        rows = self.client.get("/api/real-holdings").json()
+        g = [h for h in rows if h["symbol"] == "GOOGL"]
+        self.assertEqual(len(g), 1)
+        self.assertEqual(g[0]["trade_count"], 1)        # 流水跟着改名了，不再 0
+        self.assertEqual(g[0]["name"], "谷歌")
+        self.assertEqual([h for h in rows if h["symbol"] == "GOOGLE"], [])  # 旧代码没残留
+
     def test_idempotent_buy_via_api(self):
         a = self._buy(symbol="MCD", trade_price=10, quantity=100, trade_date="2026-06-01",
                       client_request_id="req-1").json()
