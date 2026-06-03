@@ -83,6 +83,14 @@ def _write_latest_plan(result: dict) -> None:
     字段形状，但 payload 明确标注 method=risk_aware_optimize，避免生产继续吃旧
     裸 Markowitz 结果。
     """
+    # 给每个持仓行打上「真实」market（按 ticker 后缀推断，不是盲标 US）——
+    # 让"真钱组合全 US"能被硬校验：非 US ticker 会被如实标成 CN/HK，验收即可逮到混入。
+    for _key in ("plan", "plan_v5", "plan_v6"):
+        for _row in (result.get(_key) or []):
+            if isinstance(_row, dict) and not _row.get("market"):
+                _tkr = _row.get("ticker") or _row.get("symbol")
+                if _tkr:
+                    _row["market"] = _infer_market(_tkr)
     latest_dir = _REPO_ROOT / "data" / "latest"
     latest_dir.mkdir(parents=True, exist_ok=True)
     for name in ("plan_a_v5.json", "plan_v6.json"):

@@ -596,6 +596,34 @@ def _surface_artifact_checks(
         if _extract_tickers(plan_a) != _extract_tickers(plan_v6):
             issues.append(_issue("FAIL", "plan_a_v5_plan_v6_diverge", "plan_a_v5.json 与 plan_v6.json 标的集合不一致"))
 
+    # US-only 组合硬锁：scope=US 时,每个持仓行必须显式 market=US。
+    # 缺失或非 US 一律 FAIL —— 防止 CN/HK(当前 research-only)混进真钱组合,
+    # 也不许靠 scope 字段口说无凭("market=?" 不算 US)。
+    if plan_a and "_error" not in plan_a:
+        plan_scope = str(
+            (plan_a.get("constraints") or {}).get("market_scope")
+            or (plan_a.get("candidate_universe") or {}).get("market_scope") or ""
+        ).upper()
+        if plan_scope == "US":
+            plan_rows = plan_a.get("plan_v6") or plan_a.get("plan_v5") or plan_a.get("plan") or []
+            bad_market = [
+                {"ticker": r.get("ticker") or r.get("symbol"), "market": r.get("market")}
+                for r in plan_rows
+                if isinstance(r, dict) and str(r.get("market") or "").upper() != "US"
+            ]
+            summary["us_only_plan_market_check"] = {
+                "scope": plan_scope,
+                "rows": len(plan_rows),
+                "non_us_or_missing": len(bad_market),
+            }
+            if bad_market:
+                issues.append(_issue(
+                    "FAIL",
+                    "us_plan_has_non_us_or_missing_market",
+                    "US-only 组合存在非 US 或缺失 market 的持仓行；不允许声称真钱组合全 US",
+                    bad_market[:30],
+                ))
+
     _check_portfolio_plan_alignment(issues=issues, summary=summary, plan_payload=plan_a)
 
     if plan_a and "_error" not in plan_a:
