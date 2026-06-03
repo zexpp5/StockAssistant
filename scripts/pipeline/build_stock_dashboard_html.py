@@ -8808,6 +8808,10 @@ async function renderRealHoldings() {
   const realCash = _hasCashLedger ? Number(_cashSum.cash_rmb) : Math.max(0, TOTAL_CAPITAL - totalCost);
   const cashLabel = _hasCashLedger ? "现金 RMB" : "估算现金 RMB";
   const realAccountValue = totalValue + realCash;
+  // 累计投入（净）= 入金 − 出金；没记现金账本时用持仓成本兜底。
+  const netInvested = _hasCashLedger ? (Number(_cashSum.deposits_rmb) - Number(_cashSum.withdrawals_rmb)) : totalCost;
+  const investGain = realAccountValue - netInvested;        // 总资产 − 投入 = 总收益
+  const investGainPct = netInvested > 0 ? investGain / netInvested * 100 : 0;
   const assetBuckets = {};
   for (const x of enrichedWithGap) {
     const v = verdictMap[x.code];
@@ -8840,11 +8844,17 @@ async function renderRealHoldings() {
         </div>
         <span class="text-[11px] text-slate-500">${aiCoverageLabel}${coveredByAi.length ? " " + totalDiffText : ""}</span>
       </div>
-      <div class="grid grid-cols-2 lg:grid-cols-7 gap-2 items-stretch">
-        <!-- 背景信息: 总资产/持仓市值/现金 弱化压缩到 1 列宽 -->
-        <div class="lg:col-span-1 rounded-lg bg-slate-50 px-2.5 py-1.5 border border-slate-100">
+      <div class="grid grid-cols-2 lg:grid-cols-8 gap-2 items-stretch">
+        <!-- 累计投入(净入金) -->
+        <div class="lg:col-span-1 rounded-lg bg-slate-50 px-2.5 py-1.5 border border-slate-100" title="你一共往账户净投入的钱 = 累计入金 − 累计出金（卖出再投入的不重复计）">
+          <div class="text-sm font-semibold text-slate-700 leading-tight">${netInvested.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
+          <div class="text-[10px] text-slate-400 mt-0.5">累计投入 RMB</div>
+        </div>
+        <!-- 总资产 + 相对投入的总收益 -->
+        <div class="lg:col-span-1 rounded-lg bg-slate-50 px-2.5 py-1.5 border border-slate-100" title="总资产 = 持仓市值 + 现金；下行为相对累计投入的总收益">
           <div class="text-sm font-semibold text-slate-700 leading-tight">${realAccountValue.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
           <div class="text-[10px] text-slate-400 mt-0.5">总资产 RMB</div>
+          <div class="text-[10px] ${investGain >= 0 ? "text-emerald-600" : "text-rose-600"} mt-0.5">${investGain >= 0 ? "+" : ""}${investGain.toLocaleString(undefined, {maximumFractionDigits:0})} · ${investGainPct >= 0 ? "+" : ""}${investGainPct.toFixed(2)}%</div>
         </div>
         <div class="lg:col-span-1 rounded-lg bg-sky-50 px-2.5 py-1.5 border border-sky-200">
           <div class="text-sm font-semibold text-sky-900 leading-tight">${totalValue.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
