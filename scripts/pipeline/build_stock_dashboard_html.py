@@ -1542,6 +1542,30 @@ function switchDiscoveryView(view) {
       <div id="trade-records-body" class="text-sm text-slate-700 space-y-1.5"></div>
     </div>
   </div>
+
+  <!-- ===== 入金 / 出金 Modal（现金账本）===== -->
+  <div id="cash-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-4"
+       onclick="if(event.target===this)closeCashModal()">
+    <div class="bg-white rounded-xl shadow-2xl max-w-md w-full p-5 max-h-[90vh] overflow-y-auto">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="font-bold text-slate-900">💰 入金 / 出金</h3>
+        <button onclick="closeCashModal()" class="text-slate-400 hover:text-slate-700 text-2xl leading-none">×</button>
+      </div>
+      <p class="text-[11px] text-slate-500 mb-3">记录你往账户<strong>转入/转出</strong>的钱。买入占用、卖出回笼的现金系统会从交易自动算，这里只记入金/出金。现金余额 = 入金 − 出金 − 买入 + 卖出。</p>
+      <div id="cash-balance-line" class="text-sm mb-3 px-3 py-2 bg-slate-50 rounded"></div>
+      <div class="grid grid-cols-3 gap-2 mb-2">
+        <select id="cash-form-type" class="px-2 py-2 border rounded text-sm">
+          <option value="deposit">入金 (+)</option>
+          <option value="withdraw">出金 (−)</option>
+        </select>
+        <input id="cash-form-amount" type="number" step="0.01" placeholder="金额 RMB" class="px-3 py-2 border rounded text-sm">
+        <input id="cash-form-date" type="date" value="{TODAY_DATE}" class="px-2 py-2 border rounded text-sm">
+      </div>
+      <input id="cash-form-notes" type="text" placeholder="备注（可选）" class="w-full px-3 py-2 border rounded text-sm mb-2" maxlength="60">
+      <button onclick="saveCashFlow()" class="w-full bg-violet-600 hover:bg-violet-700 text-white py-2 rounded font-medium mb-3">+ 记一笔</button>
+      <div id="cash-flow-list" class="text-xs space-y-1"></div>
+    </div>
+  </div>
 </section>
 
 <!-- ============ ③ 🧪 AI 跟踪 Tab (原 AI 跟踪) ============ -->
@@ -8463,6 +8487,61 @@ async function toggleHoldingTrades(holdingId, ev) {
   }
 }
 
+// ===== 入金 / 出金（现金账本）=====
+function openCashModal() {
+  const m = document.getElementById("cash-modal");
+  m.classList.remove("hidden"); m.classList.add("flex");
+  const dEl = document.getElementById("cash-form-date"); if (dEl && !dEl.value) dEl.value = new Date().toISOString().split("T")[0];
+  loadCashFlows();
+}
+function closeCashModal() {
+  const m = document.getElementById("cash-modal");
+  m.classList.add("hidden"); m.classList.remove("flex");
+}
+async function loadCashFlows() {
+  const bal = document.getElementById("cash-balance-line");
+  const list = document.getElementById("cash-flow-list");
+  let d = null;
+  try { d = await fetch(WATCHLIST_API_BASE + "/api/real-holdings/cash-flows").then(r => r.ok ? r.json() : null); } catch (e) {}
+  if (!d) { if (bal) bal.textContent = "（接口离线）"; return; }
+  const s = d.summary || {};
+  const f0 = v => Number(v || 0).toLocaleString(undefined, {maximumFractionDigits:0});
+  if (bal) bal.innerHTML = `现金余额 <strong class="text-slate-900">¥${f0(s.cash_rmb)}</strong>`
+    + `<div class="text-[10px] text-slate-400 mt-0.5">入金 ${f0(s.deposits_rmb)} − 出金 ${f0(s.withdrawals_rmb)} − 买入 ${f0(s.buy_outflow_rmb)} + 卖出 ${f0(s.sell_inflow_rmb)}</div>`;
+  const flows = d.flows || [];
+  if (list) list.innerHTML = flows.length
+    ? flows.map(f => `<div class="flex justify-between items-center border-b border-slate-100 py-1">
+        <span class="${f.flow_type==='deposit'?'text-emerald-700':'text-rose-700'}">${String(f.flow_date||'').slice(0,10)} · ${f.flow_type==='deposit'?'入金 +':'出金 −'}¥${Number(f.amount_rmb).toLocaleString()}${f.notes?` · <span class="text-slate-400">${_esc(f.notes)}</span>`:''}</span>
+        <button onclick="deleteCashFlow(${f.flow_id})" class="text-slate-300 hover:text-rose-600 ml-2">删除</button></div>`).join("")
+    : "<div class='text-slate-400'>还没有入金/出金记录。先记一笔入金，卖出回笼的钱才会计入现金/总资产。</div>";
+}
+async function saveCashFlow() {
+  const type = document.getElementById("cash-form-type").value;
+  const amount = parseFloat(document.getElementById("cash-form-amount").value || "");
+  const date = document.getElementById("cash-form-date").value || new Date().toISOString().split("T")[0];
+  const notes = (document.getElementById("cash-form-notes").value || "").trim();
+  if (!(amount > 0)) { alert("请输入正的金额"); return; }
+  try {
+    const r = await fetch(WATCHLIST_API_BASE + "/api/real-holdings/cash-flows", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({flow_type: type, amount_rmb: amount, flow_date: date, notes: notes || null})});
+    if (!r.ok) { const e = await r.json().catch(() => ({})); alert("失败：" + (e.detail || r.status)); return; }
+  } catch (e) { alert("失败：" + e.message); return; }
+  document.getElementById("cash-form-amount").value = "";
+  document.getElementById("cash-form-notes").value = "";
+  await loadCashFlows();
+  await refreshHoldingsAndRender();
+}
+async function deleteCashFlow(id) {
+  if (!confirm("删除这笔现金流水？")) return;
+  try {
+    const r = await fetch(WATCHLIST_API_BASE + "/api/real-holdings/cash-flows/" + id, {method: "DELETE"});
+    if (!r.ok) { alert("删除失败 HTTP " + r.status); return; }
+  } catch (e) { alert("删除失败：" + e.message); return; }
+  await loadCashFlows();
+  await refreshHoldingsAndRender();
+}
+
 async function openTradeRecords(holdingId) {
   const body = document.getElementById("trade-records-body");
   const h = (_realHoldingsCache || []).find(x => x.id === holdingId);
@@ -8524,6 +8603,9 @@ async function renderRealHoldings() {
   _refreshMergedHoldingsCache();
   _loadLedgerPnlSummary();
   _loadLedgerTradeHistory();
+  // 现金账本：拉真实现金余额（入金/出金 + 买卖自动进出）。没记入金时回退到「本金−成本」估算。
+  let _cashSum = null;
+  try { _cashSum = await fetch(WATCHLIST_API_BASE + "/api/real-holdings/cash-flows").then(r => r.ok ? r.json() : null); _cashSum = _cashSum && _cashSum.summary; } catch (e) {}
   const list = document.getElementById("real-form-code-list");
   if (list && !list.innerHTML) list.innerHTML = RECORDS.map(r => `<option value="${r.code}">${r.name}</option>`).join("");
   const dateInput = document.getElementById("real-form-date");
@@ -8721,7 +8803,10 @@ async function renderRealHoldings() {
   const totalDiffText = coveredByAi.length ? `${totalDiff >= 0 ? "+" : ""}${(totalDiff * 100).toFixed(1)}pt` : "—";
   const diffColor = totalDiff > 0 ? "text-amber-700" : (totalDiff < 0 ? "text-sky-700" : "text-slate-900");
   const aiCoverageLabel = coveredByAi.length ? `有模型建议仓位的 ${coveredByAi.length}/${holdings.length} 只 · 合计差距` : "没有美股组合建议仓位";
-  const realCash = Math.max(0, TOTAL_CAPITAL - totalCost);
+  // 有记入金/出金 → 用真实现金账本；否则回退「本金−成本」估算(并提示去记入金)。
+  const _hasCashLedger = !!(_cashSum && _cashSum.has_deposits);
+  const realCash = _hasCashLedger ? Number(_cashSum.cash_rmb) : Math.max(0, TOTAL_CAPITAL - totalCost);
+  const cashLabel = _hasCashLedger ? "现金 RMB" : "估算现金 RMB";
   const realAccountValue = totalValue + realCash;
   const assetBuckets = {};
   for (const x of enrichedWithGap) {
@@ -8767,7 +8852,8 @@ async function renderRealHoldings() {
         </div>
         <div class="lg:col-span-1 rounded-lg bg-slate-50 px-2.5 py-1.5 border border-slate-100">
           <div class="text-sm font-semibold text-slate-700 leading-tight">${realCash.toLocaleString(undefined, {maximumFractionDigits:0})}</div>
-          <div class="text-[10px] text-slate-400 mt-0.5">估算现金 RMB</div>
+          <div class="text-[10px] text-slate-400 mt-0.5">${cashLabel} · <a href="javascript:void(0)" onclick="openCashModal()" class="text-violet-600 hover:underline">入金/出金</a></div>
+          ${_hasCashLedger ? "" : `<div class="text-[9px] text-amber-600 mt-0.5">记入金后含卖出回笼</div>`}
         </div>
         <!-- 重点 1: 最新收盘变动 占 2 列宽 + 大字；日期按市场拆开，避免跨市场误读 -->
         <div class="lg:col-span-2 rounded-lg ${hasDayChange ? (totalDayChange >= 0 ? "bg-emerald-50 border-emerald-200" : "bg-rose-50 border-rose-200") : "bg-slate-50 border-slate-100"} px-4 py-3 border" title="${dayPnlTooltip}">
