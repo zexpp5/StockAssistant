@@ -156,6 +156,25 @@ class LedgerApiTest(unittest.TestCase):
         self.assertEqual(g[0]["name"], "谷歌")
         self.assertEqual([h for h in rows if h["symbol"] == "GOOGLE"], [])  # 旧代码没残留
 
+    def test_cash_flow_and_account_summary(self):
+        # 入金 10 万
+        r = self.client.post("/api/real-holdings/cash-flows",
+                             json={"flow_type": "deposit", "amount_rmb": 100000, "flow_date": "2026-06-01"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertAlmostEqual(r.json()["summary"]["cash_rmb"], 100000)
+        # 买入 100@$10 fx7 = 7000 → 现金 93000
+        self._buy(symbol="MCD", trade_price=10, quantity=100, trade_date="2026-06-02")
+        # 卖出 40@$16 fx7 = 4480 回笼 → 现金 97480
+        hid = [h for h in self.client.get("/api/real-holdings").json() if h["symbol"] == "MCD"][0]["id"]
+        self.client.post(f"/api/real-holdings/{hid}/close",
+                        json={"trade_price": 16, "quantity": 40, "trade_date": "2026-06-03", "fx_rate": 7.0})
+        summ = self.client.get("/api/real-holdings/account-summary").json()
+        self.assertAlmostEqual(summ["cash_rmb"], 97480)               # 现金含卖出回笼
+        self.assertAlmostEqual(summ["total_asset_rmb"], summ["holdings_value_rmb"] + 97480)
+        # 出金校验
+        bad = self.client.post("/api/real-holdings/cash-flows", json={"flow_type": "deposit", "amount_rmb": -1})
+        self.assertEqual(bad.status_code, 400)
+
     def test_idempotent_buy_via_api(self):
         a = self._buy(symbol="MCD", trade_price=10, quantity=100, trade_date="2026-06-01",
                       client_request_id="req-1").json()

@@ -1257,6 +1257,55 @@ _sys.exit(rc)
                           "unrealized_pnl_rmb": unrealized, "total_pnl_rmb": total,
                           "realized_since": base.get("realized_since")})
 
+    # ---- 现金账本：入金/出金 + 账户总览(持仓市值+现金=总资产) ----
+
+    def _holdings_market_value_rmb() -> float:
+        """当前持仓市值(RMB)：复用每日体检的盯市值，只算 open/partial。"""
+        import stock_db
+        try:
+            review = stock_db.fetch_latest_real_holding_review()
+            items = (review or {}).get("items") or []
+            return float(sum(float(i.get("current_value_rmb") or 0) for i in items
+                             if i.get("close_status") in (None, "open", "partial")))
+        except Exception:
+            return 0.0
+
+    @app.get("/api/real-holdings/account-summary")
+    def real_holdings_account_summary() -> dict[str, Any]:
+        """账户总览：总资产 = 持仓市值 + 现金；现金来自现金账本(含买卖自动进出)。"""
+        import stock_db
+        cash = stock_db.fetch_cash_summary()
+        mv = _holdings_market_value_rmb()
+        return _json_any({"status": "ok",
+                          "holdings_value_rmb": mv,
+                          "cash_rmb": cash["cash_rmb"],
+                          "total_asset_rmb": mv + cash["cash_rmb"],
+                          **cash})
+
+    @app.get("/api/real-holdings/cash-flows")
+    def list_cash_flows() -> dict[str, Any]:
+        import stock_db
+        return _json_any({"status": "ok", "flows": stock_db.fetch_cash_flows(),
+                          "summary": stock_db.fetch_cash_summary()})
+
+    @app.post("/api/real-holdings/cash-flows")
+    def create_cash_flow(item: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        """记一笔入金/出金。flow_type=deposit|withdraw, amount_rmb>0。"""
+        import stock_db
+        try:
+            fid = stock_db.insert_cash_flow(item)
+        except stock_db.LedgerError as e:
+            raise HTTPException(400, str(e))
+        return _json_any({"status": "ok", "flow_id": fid, "summary": stock_db.fetch_cash_summary()})
+
+    @app.delete("/api/real-holdings/cash-flows/{flow_id}")
+    def delete_cash_flow_one(flow_id: int) -> dict[str, Any]:
+        import stock_db
+        n = stock_db.delete_cash_flow(flow_id)
+        if n == 0:
+            raise HTTPException(404, f"cash flow not found: {flow_id}")
+        return _json_any({"status": "ok", "summary": stock_db.fetch_cash_summary()})
+
     @app.get("/api/real-holdings/{holding_id}/records")
     def real_holding_records(holding_id: int) -> dict[str, Any]:
         """单只持仓完整买卖时间线（含被合并/清仓的历史轮次）。"""
