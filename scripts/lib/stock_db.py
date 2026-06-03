@@ -164,6 +164,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_rht_client_request
 CREATE INDEX IF NOT EXISTS idx_rht_key
     ON real_holding_trades(account, market, symbol, status);
 
+-- 现金流水：入金/出金。买入/卖出占用/回笼的现金从 real_holding_trades 自动算，
+-- 这里只记用户手动的入金、出金。现金余额 = 入金 - 出金 - 买入(含费) + 卖出(扣费)。
+CREATE SEQUENCE IF NOT EXISTS real_holding_cash_flows_id_seq;
+CREATE TABLE IF NOT EXISTS real_holding_cash_flows (
+    flow_id     INTEGER PRIMARY KEY DEFAULT nextval('real_holding_cash_flows_id_seq'),
+    account     VARCHAR DEFAULT 'default',
+    flow_type   VARCHAR NOT NULL,        -- deposit 入金 | withdraw 出金
+    amount_rmb  DOUBLE  NOT NULL,        -- 恒正，方向由 flow_type 决定
+    flow_date   DATE,
+    notes       VARCHAR,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- 模型模拟仓：只承载 AI 组合方案推演，不代表真实成交。
 CREATE SEQUENCE IF NOT EXISTS model_sim_holdings_id_seq;
 CREATE TABLE IF NOT EXISTS model_sim_holdings (
@@ -2486,6 +2499,112 @@ def fetch_pnl_summary(*, price_lookup=None, as_of=None, conn=None) -> dict[str, 
             "total_pnl_rmb": (realized + unrealized) if unrealized is not None else None,
             "as_of": as_of,
             "realized_since": realized_since,
+        }
+    finally:
+        if own:
+            conn.close()
+
+
+# ---------------------------------------------------------------------------
+# 现金账本：入金/出金 + 由交易流水自动算的买卖现金进出
+# ---------------------------------------------------------------------------
+
+REAL_HOLDING_CASH_FLOW_COLS = ["account", "flow_type", "amount_rmb", "flow_date", "notes"]
+REAL_HOLDING_CASH_FLOW_FULL_COLS = ["flow_id"] + REAL_HOLDING_CASH_FLOW_COLS + ["created_at"]
+
+
+def insert_cash_flow(item: Mapping[str, Any], *, conn=None) -> int:
+    """记一笔入金/出金。flow_type=deposit|withdraw，amount_rmb 恒正。"""
+    own = conn is None
+    if own:
+        conn = get_db()
+    try:
+        ftype = (item.get("flow_type") or "").strip().lower()
+        if ftype not in ("deposit", "withdraw"):
+            raise LedgerError("flow_type must be deposit|withdraw")
+        amt = float(item.get("amount_rmb") or 0)
+        if amt <= 0:
+            raise LedgerError("amount_rmb must be > 0")
+        conn.execute(
+            f"INSERT INTO real_holding_cash_flows ({','.join(REAL_HOLDING_CASH_FLOW_COLS)}) "
+            f"VALUES ({','.join(['?'] * len(REAL_HOLDING_CASH_FLOW_COLS))})",
+            [item.get("account") or "default", ftype, amt,
+             _to_date(item.get("flow_date") or item.get("date")), item.get("notes")],
+        )
+        return int(conn.execute("SELECT currval('real_holding_cash_flows_id_seq')").fetchone()[0])
+    finally:
+        if own:
+            conn.close()
+
+
+def fetch_cash_flows(*, account=None, conn=None) -> list[dict]:
+    own = conn is None
+    if own:
+        conn = get_db()
+    try:
+        where, params = [], []
+        if account:
+            where.append("account = ?"); params.append(account)
+        sql = f"SELECT {','.join(REAL_HOLDING_CASH_FLOW_FULL_COLS)} FROM real_holding_cash_flows"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY flow_date DESC NULLS LAST, flow_id DESC"
+        return [_rowdict(REAL_HOLDING_CASH_FLOW_FULL_COLS, r) for r in conn.execute(sql, params).fetchall()]
+    finally:
+        if own:
+            conn.close()
+
+
+def delete_cash_flow(flow_id: int, *, conn=None) -> int:
+    own = conn is None
+    if own:
+        conn = get_db()
+    try:
+        exists = conn.execute("SELECT 1 FROM real_holding_cash_flows WHERE flow_id=?", [int(flow_id)]).fetchone()
+        if exists:
+            conn.execute("DELETE FROM real_holding_cash_flows WHERE flow_id=?", [int(flow_id)])
+            return 1
+        return 0
+    finally:
+        if own:
+            conn.close()
+
+
+def fetch_cash_summary(*, account=None, conn=None) -> dict[str, Any]:
+    """现金余额 = 累计入金 − 累计出金 − 买入(含费) + 卖出(扣费)。
+
+    买卖现金进出从 active 交易流水自动算，用户只需记入金/出金。
+    """
+    own = conn is None
+    if own:
+        conn = get_db()
+    try:
+        acct_clause = "WHERE account = ?" if account else ""
+        params = [account] if account else []
+        dep = conn.execute(
+            f"SELECT COALESCE(SUM(CASE WHEN flow_type='deposit' THEN amount_rmb ELSE 0 END),0), "
+            f"COALESCE(SUM(CASE WHEN flow_type='withdraw' THEN amount_rmb ELSE 0 END),0) "
+            f"FROM real_holding_cash_flows {acct_clause}", params,
+        ).fetchone()
+        deposits, withdrawals = float(dep[0] or 0), float(dep[1] or 0)
+        tparams = [account] if account else []
+        tclause = "AND account = ?" if account else ""
+        buy_out = float(conn.execute(
+            f"SELECT COALESCE(SUM(COALESCE(gross_amount_rmb,0)+COALESCE(fee_rmb,0)),0) FROM real_holding_trades "
+            f"WHERE side='buy' AND status='active' {tclause}", tparams,
+        ).fetchone()[0] or 0)
+        sell_in = float(conn.execute(
+            f"SELECT COALESCE(SUM(COALESCE(gross_amount_rmb,0)-COALESCE(fee_rmb,0)),0) FROM real_holding_trades "
+            f"WHERE side='sell' AND status='active' {tclause}", tparams,
+        ).fetchone()[0] or 0)
+        cash = deposits - withdrawals - buy_out + sell_in
+        return {
+            "cash_rmb": cash,
+            "deposits_rmb": deposits,
+            "withdrawals_rmb": withdrawals,
+            "buy_outflow_rmb": buy_out,
+            "sell_inflow_rmb": sell_in,
+            "has_deposits": (deposits > 0 or withdrawals > 0),
         }
     finally:
         if own:
