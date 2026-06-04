@@ -76,6 +76,25 @@ def _step_seed_sources() -> dict:
             "by_status": stats,
             "subprocess_returncode": r.returncode,
         }
+    except subprocess.TimeoutExpired as e:
+        try:
+            rows = _query_all("SELECT last_check_status, COUNT(*) FROM ai_theme_evidence_sources GROUP BY last_check_status")
+            stats = dict(rows)
+            n_total = sum(stats.values())
+            n_ok = stats.get("ok", 0)
+            ok_pct = round(n_ok / max(n_total, 1) * 100, 1)
+        except Exception:
+            stats, n_total, n_ok, ok_pct = {}, 0, 0, 0.0
+        return {
+            "step": "sources_health_check",
+            "status": "degraded",
+            "reason": "timeout",
+            "error": str(e),
+            "n_total": n_total,
+            "n_ok": n_ok,
+            "ok_pct": ok_pct,
+            "by_status": stats,
+        }
     except Exception as e:
         return {"step": "sources_health_check", "status": "error", "error": str(e)}
 
@@ -292,12 +311,15 @@ def main() -> int:
 
     wl_after = _watchlist_count()
 
+    n_errors = sum(1 for r in results if r["status"] == "error")
+    n_degraded = sum(1 for r in results if r["status"] == "degraded")
     summary = {
         "started_at": started_at.isoformat(),
         "finished_at": datetime.now().isoformat(),
         "args": {"scan_sec": args.scan_sec, "refresh_etf": args.refresh_etf},
         "steps": results,
-        "n_errors": sum(1 for r in results if r["status"] not in ("ok",)),
+        "n_errors": n_errors,
+        "n_degraded": n_degraded,
         "watchlist_invariant": {
             "before": wl_before,
             "after": wl_after,
@@ -309,7 +331,7 @@ def main() -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
     print(f"\n✅ 刷新摘要写入: {out}")
-    print(f"  steps ok={sum(1 for r in results if r['status']=='ok')}/{len(results)}")
+    print(f"  steps ok={sum(1 for r in results if r['status']=='ok')}/{len(results)} · degraded={n_degraded} · error={n_errors}")
     print(f"  watchlist 不变: {summary['watchlist_invariant']['ok']}")
 
     return 0 if summary["n_errors"] == 0 and summary["watchlist_invariant"]["ok"] else 1

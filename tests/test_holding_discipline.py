@@ -142,6 +142,11 @@ class HoldingDisciplineTest(unittest.TestCase):
         profit = stock_db.evaluate_real_holding_discipline_plan(plan, current_price=305, price_trade_date="2026-06-03")
         self.assertEqual(profit["status"], "triggered")
         self.assertEqual(profit["action_label"], "止盈复查")
+        self.assertTrue(any(t["action_label"] == "风险复查" for t in profit["all_triggers"]))
+        self.assertTrue(any(
+            t["action_label"] == "持有不加仓" and t["suggested_size_text"] == "持有，不加仓"
+            for t in profit["all_triggers"]
+        ))
 
         risk = stock_db.evaluate_real_holding_discipline_plan(plan, current_price=249, price_trade_date="2026-06-03")
         self.assertEqual(risk["action_label"], "风险复查")

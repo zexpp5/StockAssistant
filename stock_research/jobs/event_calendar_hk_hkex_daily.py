@@ -396,32 +396,48 @@ def _classify(long_text: str) -> str | None:
     return None
 
 
-def _stock_id(session, raw_code: str) -> int | None:
-    """raw_code 形如 '0992' / '00992' → HKEX 内部 stockId (int)。"""
+def _stock_id(session, raw_code: str) -> tuple[int | None, str]:
+    """raw_code 形如 '0992' / '00992' → HKEX 内部 stockId (int) + status."""
     import requests
-    # 补到 5 位（HKEX 习惯）
-    padded = raw_code.zfill(5)
-    try:
-        r = session.get(
-            PARTIAL_URL,
-            params={"callback": "callback", "lang": "ZH", "type": "A", "name": padded, "market": "SEHK"},
-            headers=HEADERS,
-            timeout=10,
-        )
-        # JSONP: callback({...});
-        m = re.search(r"callback\((\{.*\})\);?", r.text, re.S)
-        if not m:
-            return None
-        data = json.loads(m.group(1))
-        for item in (data.get("stockInfo") or []):
-            if str(item.get("code", "")).lstrip("0") == raw_code.lstrip("0"):
-                return int(item.get("stockId"))
-        # 兜底：取第一条
-        info = (data.get("stockInfo") or [])
-        return int(info[0].get("stockId")) if info else None
-    except Exception as e:
-        logger.warning("partial.do fail %s: %s", raw_code, e)
-        return None
+
+    digits = "".join(ch for ch in str(raw_code) if ch.isdigit())
+    variants = []
+    for value in (digits.zfill(5), digits.zfill(4), digits.lstrip("0") or digits):
+        if value and value not in variants:
+            variants.append(value)
+
+    last_status = "not_found"
+    for name in variants:
+        try:
+            r = session.get(
+                PARTIAL_URL,
+                params={"callback": "callback", "lang": "ZH", "type": "A", "name": name, "market": "SEHK"},
+                headers=HEADERS,
+                timeout=10,
+            )
+            if r.status_code != 200:
+                last_status = f"http_{r.status_code}"
+                continue
+            if not (r.text or "").strip():
+                last_status = "empty_response"
+                continue
+            # JSONP: callback({...});
+            m = re.search(r"callback\((\{.*\})\);?", r.text, re.S)
+            if not m:
+                last_status = "invalid_jsonp"
+                continue
+            data = json.loads(m.group(1))
+            info = data.get("stockInfo") or []
+            for item in info:
+                if str(item.get("code", "")).lstrip("0") == digits.lstrip("0"):
+                    return int(item.get("stockId")), "ok"
+            if info:
+                return int(info[0].get("stockId")), "fallback_first"
+            last_status = "no_stock_info"
+        except Exception as e:
+            last_status = f"{type(e).__name__}: {e}"
+            logger.warning("partial.do fail %s/%s: %s", raw_code, name, e)
+    return None, last_status
 
 
 def _fetch_announcements(session, stock_id: int, from_dt: date, to_dt: date) -> list[dict]:
@@ -497,12 +513,17 @@ def main() -> int:
     pdf_cache = _pdf_cache_db()  # 持久化 PDF 摘要，避免每天重拉
     events: list[dict] = []
     hit, miss, errored = 0, [], []
+    stock_id_failures: dict[str, str] = {}
 
     for ticker, name in sorted(universe.items()):
         raw_code = ticker.replace(".HK", "")
-        sid = _stock_id(session, raw_code)
+        sid, sid_status = _stock_id(session, raw_code)
         if not sid:
-            errored.append(ticker)
+            stock_id_failures[ticker] = sid_status
+            if sid_status in {"no_stock_info", "not_found"}:
+                miss.append(ticker)
+            else:
+                errored.append(ticker)
             continue
         anns = _fetch_announcements(session, sid, from_dt, today)
         if not anns:
@@ -573,10 +594,21 @@ def main() -> int:
     from collections import Counter
     type_counts = Counter(e["event_type"] for e in events)
 
+    source_status = "ok" if hit > 0 else ("degraded" if errored else "empty")
     payload = {
         "generated_at": datetime.now().isoformat(),
+        "status": source_status,
         "n_tickers": len(universe),
         "n_announcements": len(events),
+        "source_health": {
+            "status": source_status,
+            "reason": (
+                "hkex_source_unavailable_or_blocked" if errored and hit == 0
+                else "no_matching_announcements" if hit == 0
+                else "ok"
+            ),
+            "stock_id_failures": stock_id_failures,
+        },
         "coverage": {
             "hit": hit, "miss": len(miss), "errored": len(errored),
             "miss_tickers": miss[:20], "errored_tickers": errored[:20],
@@ -592,6 +624,8 @@ def main() -> int:
     print(f"✅ HKEX 公告日历已写入 {out}")
     print(f"   tickers: {len(universe)} (hit {hit} / miss {len(miss)} / err {len(errored)})")
     print(f"   announcements: {len(events)}")
+    if source_status != "ok":
+        print(f"   source status: {source_status} ({payload['source_health']['reason']})")
     for t, n in type_counts.most_common():
         print(f"   {t:24s} {n}")
     if pdf_cache:
@@ -601,7 +635,7 @@ def main() -> int:
             pdf_cache.close()
         except Exception:
             pass
-    return 0 if hit > 0 else 2
+    return 0
 
 
 if __name__ == "__main__":

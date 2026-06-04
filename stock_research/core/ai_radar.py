@@ -1247,6 +1247,14 @@ def _render_ai_radar_focus(payload: dict[str, Any],
     # 缺口 5: 分市场 F-Score 覆盖（2026-06-01 评审 #3）
     # 从 production_acceptance_check.json 的 v2_f_score_coverage.by_market 抽
     if production_panel:
+        prod_status = _status_text(production_panel)
+        if prod_status == "WARN":
+            warn_reasons = _production_warn_reasons(production_panel)
+            gap_lines.append(("text-amber-700", "生产验收 WARN"))
+            for reason in warn_reasons[:4]:
+                gap_lines.append(("text-amber-700", reason))
+        elif prod_status == "FAIL":
+            gap_lines.append(("text-rose-700", "生产验收 FAIL（本页只能观察）"))
         f_cov = ((production_panel.get("summary") or {})
                  .get("v2_f_score_coverage") or {}).get("by_market") or {}
         for mkt, info in f_cov.items():
@@ -1308,6 +1316,46 @@ def _status_text(panel: dict[str, Any] | None) -> str | None:
     return str(status).upper() if status else None
 
 
+def _production_warn_reasons(panel: dict[str, Any] | None) -> list[str]:
+    """Translate production WARN details into short reader-facing reasons."""
+    if not isinstance(panel, dict):
+        return []
+
+    reasons: list[str] = []
+    issue_reason_map = {
+        "ai_theme_degraded": "AI 主题源健康检查降级",
+        "hkex_calendar_degraded": "HKEX 公告源降级",
+        "a_share_event_calendar_error": "A 股事件源降级",
+    }
+    for issue in panel.get("issues") or []:
+        if not isinstance(issue, dict):
+            continue
+        if str(issue.get("level") or "").upper() != "WARN":
+            continue
+        code = str(issue.get("code") or "")
+        if code == "pipeline_status_fail_only_resolved_or_degraded":
+            reasons.append("上一轮流水线状态仍保留 FAIL 记录")
+        details = issue.get("details")
+        if not isinstance(details, list):
+            continue
+        for step in details:
+            if not isinstance(step, dict):
+                continue
+            resolution = step.get("resolution") if isinstance(step.get("resolution"), dict) else {}
+            reason = str(resolution.get("reason") or "")
+            mapped = issue_reason_map.get(reason)
+            if mapped:
+                reasons.append(mapped)
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in reasons:
+        if item and item not in seen:
+            out.append(item)
+            seen.add(item)
+    return out
+
+
 def _render_ai_radar_trust_gate(payload: dict[str, Any],
                                 freshness_panel: dict[str, Any] | None,
                                 theme_panel: dict[str, Any] | None,
@@ -1335,6 +1383,9 @@ def _render_ai_radar_trust_gate(payload: dict[str, Any],
         fail_reasons.append("推荐质量闸门 FAIL")
     if prod_status == "FAIL":
         observe_reasons.append("生产验收 FAIL")
+    elif prod_status == "WARN":
+        observe_reasons.append("生产验收 WARN")
+        observe_reasons.extend(_production_warn_reasons(production_panel))
     if data_age is None:
         observe_reasons.append("推荐分时间未知")
     elif data_age > 1:
@@ -1423,6 +1474,7 @@ def _render_ai_radar_reader_guide(payload: dict[str, Any],
     n_confirmed = int(phase.get("phase_1_n_confirmed") or 0)
     themes_done = int(phase.get("phase_1_themes_with_confirmed") or 0)
     themes_total = int(phase.get("phase_1_themes_total") or 5)
+    production_warn_reasons = _production_warn_reasons(production_panel)
 
     read_rows = [
         ("先看结论灯", "黄灯表示只能观察主线，不能拿来交易；红灯表示先别用。"),
@@ -1445,6 +1497,18 @@ def _render_ai_radar_reader_guide(payload: dict[str, Any],
             "生产验收失败",
             "今天的推荐链路还没完全跑顺，本页只能当行业观察。",
             "先修运行状态里的失败步骤，再跑 production_acceptance_check.py。"
+        ))
+    elif prod_status == "WARN":
+        fix_rows.append((
+            "生产验收有告警",
+            "主推荐没有 hard fail，但部分辅助源处于降级或上一轮状态文件仍有失败记录。",
+            "看今日决策台/运行状态里的 WARN 明细；下一轮 daily_refresh 会刷新 raw pipeline 状态。"
+        ))
+    if "AI 主题源健康检查降级" in production_warn_reasons:
+        fix_rows.append((
+            "AI 主题源健康检查降级",
+            "主题雷达可继续作为行业观察，但数据源 ok 率和外部链接检查不应被当成全绿。",
+            "保持 seed_ai_theme_sources 超时可降级；后续再优化并发/超时参数以提升速度。"
         ))
     if quality_status == "FAIL":
         fix_rows.append((

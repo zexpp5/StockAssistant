@@ -33,6 +33,10 @@ US_AI_TECH_UNIVERSE: list[dict] = [
     {"ticker": "SMCI", "name": "Super Micro Computer", "sector": "AI servers", "source": "us_ai_hardware"},
     {"ticker": "DELL", "name": "Dell Technologies", "sector": "AI servers", "source": "us_ai_hardware"},
     {"ticker": "HPE", "name": "Hewlett Packard Enterprise", "sector": "AI servers", "source": "us_ai_hardware"},
+    {"ticker": "CRWV", "name": "CoreWeave", "sector": "AI cloud", "source": "us_emerging_ai_cloud"},
+    {"ticker": "NBIS", "name": "Nebius Group", "sector": "AI cloud", "source": "us_emerging_ai_cloud"},
+    {"ticker": "IREN", "name": "IREN", "sector": "AI data centers", "source": "us_emerging_ai_infrastructure"},
+    {"ticker": "APLD", "name": "Applied Digital", "sector": "AI data centers", "source": "us_emerging_ai_infrastructure"},
 
     # Platforms / hyperscalers
     {"ticker": "MSFT", "name": "Microsoft", "sector": "cloud / AI platform", "source": "us_hyperscaler"},
@@ -75,6 +79,8 @@ US_AI_TECH_UNIVERSE: list[dict] = [
     {"ticker": "BWXT", "name": "BWX Technologies", "sector": "nuclear equipment", "source": "us_ai_power"},
     {"ticker": "LEU", "name": "Centrus Energy", "sector": "nuclear fuel", "source": "us_ai_power"},
     {"ticker": "MP", "name": "MP Materials", "sector": "rare earths", "source": "us_ai_resources"},
+    {"ticker": "OKLO", "name": "Oklo", "sector": "advanced nuclear", "source": "us_emerging_ai_power"},
+    {"ticker": "SMR", "name": "NuScale Power", "sector": "advanced nuclear", "source": "us_emerging_ai_power"},
 
     # Physical AI / healthcare AI
     {"ticker": "ISRG", "name": "Intuitive Surgical", "sector": "robotics", "source": "us_physical_ai"},
@@ -84,6 +90,10 @@ US_AI_TECH_UNIVERSE: list[dict] = [
     {"ticker": "VEEV", "name": "Veeva Systems", "sector": "life sciences software", "source": "us_ai_healthcare"},
     {"ticker": "TEM", "name": "Tempus AI", "sector": "AI healthcare", "source": "us_ai_healthcare"},
     {"ticker": "RXRX", "name": "Recursion Pharmaceuticals", "sector": "AI drug discovery", "source": "us_ai_healthcare"},
+    {"ticker": "RKLB", "name": "Rocket Lab", "sector": "space infrastructure", "source": "us_emerging_hard_tech"},
+    {"ticker": "ASTS", "name": "AST SpaceMobile", "sector": "satellite communications", "source": "us_emerging_hard_tech"},
+    {"ticker": "IONQ", "name": "IonQ", "sector": "quantum computing", "source": "us_emerging_hard_tech"},
+    {"ticker": "SOUN", "name": "SoundHound AI", "sector": "voice AI", "source": "us_emerging_ai_software"},
 ]
 
 

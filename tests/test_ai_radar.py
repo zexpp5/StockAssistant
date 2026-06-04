@@ -342,5 +342,85 @@ class TestPhase1Confirmed(unittest.TestCase):
             "evidence 行数应来自 evidence 表（这部分口径没变）")
 
 
+class TestRadarProductionWarnSurface(unittest.TestCase):
+    """生产 WARN / 降级源必须在 AI 主题雷达显式露出，不能伪装成全绿."""
+
+    def _base_payload(self):
+        return {
+            "n_picks_total": 1,
+            "n_picks_with_chain": 1,
+            "n_picks_with_any_chain": 1,
+            "data_generated_at": datetime.now().isoformat(timespec="seconds"),
+            "data_universe": "system_tech_universe",
+            "chains": [],
+            "filtered_non_ai_chains": [],
+            "coverage_audit": {"n_uncovered": 0, "threshold_score": 70, "items": []},
+        }
+
+    def _fresh_theme_panel(self):
+        return {
+            "themes": [],
+            "phase_status": {
+                "phase_1_level": "done",
+                "phase_1_n_confirmed": 5,
+                "phase_1_themes_with_confirmed": 5,
+                "phase_1_themes_total": 5,
+            },
+        }
+
+    def test_warn_acceptance_not_rendered_as_pass(self):
+        from stock_research.core.ai_radar import render_ai_radar_section
+
+        html = render_ai_radar_section(
+            self._base_payload(),
+            theme_panel=self._fresh_theme_panel(),
+            freshness_panel={"items": [], "n_stale": 0},
+            production_panel={
+                "status": "WARN",
+                "issues": [{
+                    "level": "WARN",
+                    "code": "pipeline_status_fail_only_resolved_or_degraded",
+                    "message": "旧流水线状态已解释为降级",
+                }],
+            },
+            quality_panel={"status": "PASS"},
+        )
+
+        self.assertIn("仅观察", html)
+        self.assertIn("生产验收 WARN", html)
+        self.assertIn("生产验收有告警", html)
+        self.assertNotIn("生产验收 PASS", html)
+        self.assertNotIn("暂无关键缺口", html)
+
+    def test_ai_theme_degraded_reason_surfaces(self):
+        from stock_research.core.ai_radar import render_ai_radar_section
+
+        html = render_ai_radar_section(
+            self._base_payload(),
+            theme_panel=self._fresh_theme_panel(),
+            freshness_panel={"items": [], "n_stale": 0},
+            production_panel={
+                "status": "WARN",
+                "issues": [{
+                    "level": "WARN",
+                    "code": "pipeline_failed_steps_resolved_or_degraded",
+                    "message": "旧失败步骤已转降级",
+                    "details": [{
+                        "label": "24c/25 AI 主题雷达证据刷新（每日轻量）",
+                        "resolution": {
+                            "reason": "ai_theme_degraded",
+                            "message": "AI 主题雷达没有 hard error；degraded 源只影响主题证据新鲜度。",
+                        },
+                    }],
+                }],
+            },
+            quality_panel={"status": "PASS"},
+        )
+
+        self.assertIn("AI 主题源健康检查降级", html)
+        self.assertNotIn("生产验收 PASS", html)
+        self.assertNotIn("暂无关键缺口", html)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

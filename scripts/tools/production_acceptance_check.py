@@ -85,6 +85,11 @@ EVENT_CALENDAR_JSON = (
     "data/event_calendar_us.json",         # 美股 yfinance 财报 + EPS 超预期
     "data/event_calendar_hk_hkex.json",    # 港股 HKEX 披露易公告（盈警/停牌/股东/回购/并购）
     "data/event_calendar_us_sec.json",     # 美股 SEC EDGAR（8-K/13G/13D/DEF 14A）
+)
+
+# Form 4 在 daily_refresh.sh 中明确为每周一刷新；按日更检查会在周中误报 stale。
+WEEKLY_EVENT_CALENDAR_MAX_AGE_DAYS = 7
+WEEKLY_EVENT_CALENDAR_JSON = (
     "data/event_calendar_us_form4.json",   # 美股 SEC Form 4 内部人交易（净买/卖聚合）
 )
 
@@ -168,6 +173,89 @@ def _load_production_pipeline_status() -> tuple[dict[str, Any] | None, Path | No
     return payload, path, rel
 
 
+def _pipeline_failed_step_resolution(step: dict[str, Any]) -> dict[str, Any] | None:
+    """Classify known auxiliary failures that have a current degraded artifact.
+
+    The production status file is a run ledger.  If an auxiliary source failed
+    during that run but the current artifact now explicitly says "empty" or
+    "degraded", the acceptance check should surface it as a warning instead of
+    permanently self-locking the whole pipeline in FAIL.
+    """
+    label = str(step.get("label") or "")
+    script = str(step.get("script") or "")
+
+    if "生产闭环验收" in label and "production_acceptance_check.py" in script:
+        return {
+            "level": "INFO",
+            "reason": "previous_acceptance_self_reference",
+            "message": "上一轮验收自引用失败；本轮重新计算，不作为独立阻断项。",
+        }
+
+    def _json_status(rel: str) -> tuple[dict[str, Any] | None, str, str]:
+        payload, _path = _json_load(rel)
+        if not payload or "_error" in payload:
+            return None, "missing_or_invalid", "missing_or_invalid"
+        status = str(payload.get("status") or "").lower()
+        health = payload.get("source_health") if isinstance(payload.get("source_health"), dict) else {}
+        health_status = str(health.get("status") or "").lower()
+        return payload, status, health_status
+
+    if "19/25 事件日历" in label:
+        payload, status, health_status = _json_status("data/event_calendar.json")
+        if payload and (status in {"ok", "empty", "degraded"} or "n_events" in payload):
+            level = "WARN" if health_status in {"error", "degraded"} else "INFO"
+            return {
+                "level": level,
+                "reason": f"a_share_event_calendar_{health_status or status or 'available'}",
+                "message": "A 股事件日历已生成当前产物；空事件/源降级不阻断主推荐。",
+                "artifact": {
+                    "rel": "data/event_calendar.json",
+                    "status": status or "unknown",
+                    "source_health": health_status or "unknown",
+                    "n_events": payload.get("n_events"),
+                    "generated_at": payload.get("generated_at"),
+                },
+            }
+
+    if "19d/25 港股 HKEX" in label:
+        payload, status, health_status = _json_status("data/event_calendar_hk_hkex.json")
+        if payload and status in {"ok", "empty", "degraded"}:
+            level = "WARN" if status == "degraded" or health_status in {"error", "degraded"} else "INFO"
+            return {
+                "level": level,
+                "reason": f"hkex_calendar_{health_status or status}",
+                "message": "HKEX 公告日历已生成当前产物；源不可达时以 degraded 告警，不阻断 US 主推荐。",
+                "artifact": {
+                    "rel": "data/event_calendar_hk_hkex.json",
+                    "status": status,
+                    "source_health": health_status or "unknown",
+                    "n_announcements": payload.get("n_announcements"),
+                    "coverage": payload.get("coverage"),
+                    "generated_at": payload.get("generated_at"),
+                },
+            }
+
+    if "24c/25 AI 主题雷达" in label:
+        payload, _path = _json_load("data/latest/ai_theme_evidence_summary.json")
+        if payload and "_error" not in payload:
+            n_errors = int(payload.get("n_errors") or 0)
+            n_degraded = int(payload.get("n_degraded") or 0)
+            if n_errors == 0:
+                return {
+                    "level": "WARN" if n_degraded else "INFO",
+                    "reason": "ai_theme_degraded" if n_degraded else "ai_theme_ok",
+                    "message": "AI 主题雷达没有 hard error；degraded 源只影响主题证据新鲜度。",
+                    "artifact": {
+                        "rel": "data/latest/ai_theme_evidence_summary.json",
+                        "n_errors": n_errors,
+                        "n_degraded": n_degraded,
+                        "finished_at": payload.get("finished_at"),
+                    },
+                }
+
+    return None
+
+
 def _check_pipeline_status(
     *,
     issues: list[dict[str, Any]],
@@ -197,22 +285,51 @@ def _check_pipeline_status(
         "completed_at": pipeline_status.get("completed_at"),
         "failed_steps": len(pipeline_status.get("failed_steps") or []),
     }
-    if pipeline_status.get("failed_steps"):
+    failed_steps = [x for x in (pipeline_status.get("failed_steps") or []) if isinstance(x, dict)]
+    blocking_failed_steps: list[dict[str, Any]] = []
+    resolved_failed_steps: list[dict[str, Any]] = []
+    for step in failed_steps:
+        resolution = _pipeline_failed_step_resolution(step)
+        if resolution:
+            row = dict(step)
+            row["resolution"] = resolution
+            resolved_failed_steps.append(row)
+        else:
+            blocking_failed_steps.append(step)
+    summary["pipeline_status"]["blocking_failed_steps"] = len(blocking_failed_steps)
+    summary["pipeline_status"]["resolved_or_degraded_failed_steps"] = len(resolved_failed_steps)
+
+    if blocking_failed_steps:
         issues.append(_issue(
             "FAIL",
             "pipeline_failed_steps_present",
             f"{source_rel} 存在失败步骤，不能只看最终 JSON 产物",
-            (pipeline_status.get("failed_steps") or [])[:10],
+            blocking_failed_steps[:10],
+        ))
+    if resolved_failed_steps:
+        issues.append(_issue(
+            "WARN",
+            "pipeline_failed_steps_resolved_or_degraded",
+            f"{source_rel} 有历史失败步骤，但当前产物已转为可用/降级告警",
+            resolved_failed_steps[:10],
         ))
     updated = _parse_dt(pipeline_status.get("updated_at"))
     if pstatus in {"FAIL", "FAILED", "ERROR"}:
         age = (now - updated) if updated else None
-        issues.append(_issue(
-            "FAIL",
-            "pipeline_not_completed",
-            f"{source_rel} 当前为 {pstatus}，报告可能混用半成品/跨轮次产物",
-            {"updated_at": pipeline_status.get("updated_at"), "age_minutes": int(age.total_seconds() / 60) if age else None},
-        ))
+        if blocking_failed_steps:
+            issues.append(_issue(
+                "FAIL",
+                "pipeline_not_completed",
+                f"{source_rel} 当前为 {pstatus}，报告可能混用半成品/跨轮次产物",
+                {"updated_at": pipeline_status.get("updated_at"), "age_minutes": int(age.total_seconds() / 60) if age else None},
+            ))
+        else:
+            issues.append(_issue(
+                "WARN",
+                "pipeline_status_fail_only_resolved_or_degraded",
+                f"{source_rel} 状态仍是 {pstatus}，但失败项已被当前降级产物解释；建议下轮 daily_refresh 刷新状态文件",
+                {"updated_at": pipeline_status.get("updated_at"), "age_minutes": int(age.total_seconds() / 60) if age else None},
+            ))
     elif pstatus == "RUNNING":
         # daily_refresh 内部 step 跑 acceptance 时 pipeline 必然 RUNNING；只在 updated_at 长时间未推进时报 WARN（疑似卡死）。
         age = (now - updated) if updated else None
@@ -347,6 +464,25 @@ def _latest_json_checks(
             issues.append(_issue("WARN", "artifact_missing_timestamp", f"{rel} 无 generated_at/as_of/date"))
         elif age_days is not None and age_days > max_age_days:
             issues.append(_issue(level, "stale_latest_artifact", f"{rel} 已滞后 {age_days} 天"))
+    return summary
+
+
+def _event_calendar_latest_json_checks(
+    issues: list[dict[str, Any]],
+    *,
+    max_age_days: int,
+) -> dict[str, Any]:
+    """Check daily event sources separately from weekly Form 4 cadence."""
+    summary: dict[str, Any] = {}
+    summary.update(_latest_json_checks(
+        issues, EVENT_CALENDAR_JSON, max_age_days=max(max_age_days, 2), level="WARN"
+    ))
+    summary.update(_latest_json_checks(
+        issues,
+        WEEKLY_EVENT_CALENDAR_JSON,
+        max_age_days=max(max_age_days, WEEKLY_EVENT_CALENDAR_MAX_AGE_DAYS),
+        level="WARN",
+    ))
     return summary
 
 
@@ -534,10 +670,8 @@ def _surface_artifact_checks(
     artifact_summary.update(_latest_json_checks(
         issues, IPO_LATEST_JSON, max_age_days=max(max_age_days, 2), level="WARN"
     ))
-    # 事件日历同样 WARN + 2 天 buffer（事件源滞后只影响 📰 解释,不阻断主推荐）
-    artifact_summary.update(_latest_json_checks(
-        issues, EVENT_CALENDAR_JSON, max_age_days=max(max_age_days, 2), level="WARN"
-    ))
+    # 事件日历 WARN：日更源给 2 天 buffer；Form 4 按 weekly cadence 单独检查。
+    artifact_summary.update(_event_calendar_latest_json_checks(issues, max_age_days=max_age_days))
     # shadow 调参健康：若 nightly 停跑，shadow 产物滞后会让门禁永远攒不到样本而静默卡死，
     # 这正是"等几周后才发现没攒样本"要防的。容忍 3 天(周末/跳过)，WARN 级不阻断生产。
     artifact_summary.update(_latest_json_checks(
@@ -1299,9 +1433,7 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
     artifact_summary.update(_latest_json_checks(
         issues, IPO_LATEST_JSON, max_age_days=max(max_age_days, 2), level="WARN"
     ))
-    artifact_summary.update(_latest_json_checks(
-        issues, EVENT_CALENDAR_JSON, max_age_days=max(max_age_days, 2), level="WARN"
-    ))
+    artifact_summary.update(_event_calendar_latest_json_checks(issues, max_age_days=max_age_days))
     if watchlist_markets["hk"]:
         artifact_summary.update(_latest_json_checks(issues, HK_LATEST_JSON, max_age_days=max_age_days))
     if _a_share_ready(now) and (a_weights_ok or not allow_a_share_disabled):

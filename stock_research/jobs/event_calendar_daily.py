@@ -32,7 +32,9 @@ def main() -> int:
 
     payload = {
         "generated_at": cal.fetched_at.isoformat(),
+        "status": "ok" if cal.events else "empty",
         "n_events": len(cal.events),
+        "source_health": cal.source_health,
         "events": [e.to_dict() for e in cal.events],
     }
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str),
@@ -45,7 +47,9 @@ def main() -> int:
     print(f"   总事件数: {len(cal.events)}")
     for t, c in sorted(by_type.items(), key=lambda x: -x[1]):
         print(f"   {t:<20} {c}")
-    return 0 if cal.events else 2
+    if not cal.events:
+        print("   今日窗口内没有可用事件；这是合法空结果，不阻断生产验收。")
+    return 0
 
 
 if __name__ == "__main__":

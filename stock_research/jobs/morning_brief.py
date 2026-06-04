@@ -1313,6 +1313,27 @@ def section_holdings_stoploss(history: dict | None = None,
     return "\n".join(lines) + "\n"
 
 
+def _regime_advice_text(severity: str, defense_sev: str, qgate_status: str, accept_status: str) -> str:
+    if severity == "NONE":
+        return "👉 **今天可以正常调仓**（三道闸门都没亮灯）"
+    if severity == "LOW":
+        return "👉 **留意别加仓**，单笔不超 5% 仓位；先看升档理由"
+    if severity == "CRITICAL":
+        return "👉 **清仓 sit out** — 崩盘期历史 alpha = -9.77%，等灯转回 LOW 再回来"
+    if severity == "HIGH":
+        fail_parts = []
+        if qgate_status == "FAIL":
+            fail_parts.append("质量闸门")
+        if accept_status == "FAIL":
+            fail_parts.append("生产验收")
+        if fail_parts:
+            return f"👉 **只读不交易 / 减仓 30-50%**，先修复{'、'.join(fail_parts)}里的 FAIL 项"
+        if str(defense_sev).upper() == "HIGH":
+            return "👉 **只读不交易 / 风险复查优先**，原因是防御 HIGH；生产验收已通过，不是流水线问题"
+        return "👉 **只读观察**，先看升档理由"
+    return "👉 保守按已有计划执行"
+
+
 def section_regime(defense: dict | None,
                    qgate: dict | None = None,
                    acceptance: dict | None = None) -> str:
@@ -1344,12 +1365,7 @@ def section_regime(defense: dict | None,
     def _badge(status: str) -> str:
         return {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌"}.get(status, "·") + " " + status
 
-    advice = {
-        "NONE": "👉 **今天可以正常调仓**（三道闸门都没亮灯）。",
-        "LOW": "👉 **留意别加仓**，单笔不超 5% 仓位；先看升档理由。",
-        "HIGH": "👉 **只读不交易 / 减仓 30-50%**，先修验收或闸门里的 FAIL 项。",
-        "CRITICAL": "👉 **清仓 sit out** — 崩盘期历史 alpha = -9.77%，等灯转回 LOW 再回来。",
-    }.get(severity, "👉 保守按已有计划执行。")
+    advice = _regime_advice_text(severity, defense_sev, qgate_status, accept_status) + "。"
 
     lines = [
         "#### 1. 今天能不能动手？（防御 + 质量闸门 + 生产验收 · 取最严）",
@@ -2811,12 +2827,7 @@ def _build_card_payload() -> dict:
         blocks.append({"tag": "hr"})
 
     # ─── Section 1: regime（白底；三道闸门真实状态 + 升档理由）───
-    advice = {
-        "NONE": "👉 **今天可以正常调仓**（三道闸门都没亮灯）",
-        "LOW": "👉 **留意别加仓**，单笔不超 5% 仓位；先看升档理由",
-        "HIGH": "👉 **只读不交易 / 减仓 30-50%**，先修验收或闸门里的 FAIL 项",
-        "CRITICAL": "👉 **清仓 sit out** — 崩盘期 alpha = -9.77%，等灯转回 LOW 再回来",
-    }.get(severity, "👉 保守按已有计划执行")
+    advice = _regime_advice_text(severity, defense_sev, qgate_status, accept_status)
     sec1_lines = [
         f"{severity_icon} **regime = {severity}** — {advice}",
         "",

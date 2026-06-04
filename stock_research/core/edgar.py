@@ -13,6 +13,7 @@
 from __future__ import annotations
 import time
 import logging
+import re
 import requests
 from datetime import datetime
 from typing import Any
@@ -256,7 +257,8 @@ def resolve_ticker(cusip: str, issuer: str) -> str | None:
         return config.CUSIP_TO_TICKER[cusip]
     issuer_lc = (issuer or "").lower()
     for kw, tk in config.ISSUER_TO_TICKER_KEYWORDS:
-        if kw in issuer_lc:
+        pattern = rf"(?<![a-z0-9]){re.escape(kw.lower())}(?![a-z0-9])"
+        if re.search(pattern, issuer_lc):
             return tk
     return None
 

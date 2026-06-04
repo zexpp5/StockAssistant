@@ -59,6 +59,7 @@ class EventCalendar:
     """事件日历容器。"""
     events: list[StockEvent] = field(default_factory=list)
     fetched_at: datetime = field(default_factory=datetime.now)
+    source_health: dict[str, Any] = field(default_factory=dict)
 
     def by_code(self, code: str) -> list[StockEvent]:
         c6 = _norm6(code)
@@ -132,6 +133,14 @@ class EventCalendar:
 
 # ───────────── 数据抓取 ─────────────
 
+_FETCH_HEALTH: dict[str, dict[str, Any]] = {}
+
+
+def _mark_source(source: str, status: str, **extra: Any) -> None:
+    row = {"status": status, "updated_at": datetime.now().isoformat(timespec="seconds")}
+    row.update(extra)
+    _FETCH_HEALTH[source] = row
+
 def _import_ak():
     try:
         import akshare as ak
@@ -145,14 +154,17 @@ def fetch_unlock_events(start: date, end: date) -> list[StockEvent]:
     """限售股解禁队列（解禁市值/解禁日）。"""
     ak = _import_ak()
     if ak is None:
+        _mark_source("akshare/stock_restricted_release_queue_em", "error", error="akshare_not_installed")
         return []
     out: list[StockEvent] = []
     try:
         df = ak.stock_restricted_release_queue_em()
     except Exception as e:
         logger.warning("akshare stock_restricted_release_queue_em failed: %s", e)
+        _mark_source("akshare/stock_restricted_release_queue_em", "error", error=str(e))
         return out
     if df is None or df.empty:
+        _mark_source("akshare/stock_restricted_release_queue_em", "empty", rows=0, parsed_events=0)
         return out
 
     code_col = _pick_col(df, ["代码", "股票代码", "证券代码"])
@@ -162,6 +174,12 @@ def fetch_unlock_events(start: date, end: date) -> list[StockEvent]:
 
     if not code_col or not date_col:
         logger.warning("unlock data missing required columns: %s", df.columns.tolist())
+        _mark_source(
+            "akshare/stock_restricted_release_queue_em",
+            "error",
+            error="missing_required_columns",
+            columns=[str(c) for c in df.columns],
+        )
         return out
 
     for _, r in df.iterrows():
@@ -179,6 +197,12 @@ def fetch_unlock_events(start: date, end: date) -> list[StockEvent]:
             description=f"{name} 解禁，市值 ¥{(v or 0)/1e8:.2f}亿",
             source="akshare/stock_restricted_release_queue_em",
         ))
+    _mark_source(
+        "akshare/stock_restricted_release_queue_em",
+        "ok" if out else "empty",
+        rows=int(len(df)),
+        parsed_events=len(out),
+    )
     return out
 
 
@@ -186,14 +210,17 @@ def fetch_insider_change_events(start: date, end: date) -> list[StockEvent]:
     """高管/大股东持股变动（增持 / 减持）。"""
     ak = _import_ak()
     if ak is None:
+        _mark_source("akshare/stock_ggcg_em", "error", error="akshare_not_installed")
         return []
     out: list[StockEvent] = []
     try:
         df = ak.stock_ggcg_em()
     except Exception as e:
         logger.warning("akshare stock_ggcg_em failed: %s", e)
+        _mark_source("akshare/stock_ggcg_em", "error", error=str(e))
         return out
     if df is None or df.empty:
+        _mark_source("akshare/stock_ggcg_em", "empty", rows=0, parsed_events=0)
         return out
 
     code_col = _pick_col(df, ["代码", "股票代码", "证券代码"])
@@ -205,6 +232,12 @@ def fetch_insider_change_events(start: date, end: date) -> list[StockEvent]:
 
     if not code_col or not date_col:
         logger.warning("insider data missing required columns: %s", df.columns.tolist())
+        _mark_source(
+            "akshare/stock_ggcg_em",
+            "error",
+            error="missing_required_columns",
+            columns=[str(c) for c in df.columns],
+        )
         return out
 
     for _, r in df.iterrows():
@@ -229,6 +262,12 @@ def fetch_insider_change_events(start: date, end: date) -> list[StockEvent]:
             description=f"{name} {'减持' if is_reduce else '增持'} {qty or 0:.0f}股",
             source="akshare/stock_ggcg_em",
         ))
+    _mark_source(
+        "akshare/stock_ggcg_em",
+        "ok" if out else "empty",
+        rows=int(len(df)),
+        parsed_events=len(out),
+    )
     return out
 
 
@@ -239,17 +278,21 @@ def fetch_earnings_events(year: int, quarter: int) -> list[StockEvent]:
       Q1 → 0331, Q2 → 0630, Q3 → 0930, Q4 → 1231
     """
     ak = _import_ak()
-    if ak is None:
-        return []
-    out: list[StockEvent] = []
     qend = {1: "0331", 2: "0630", 3: "0930", 4: "1231"}[quarter]
     period = f"{year}{qend}"
+    source_key = f"akshare/stock_yjbb_em@{period}"
+    if ak is None:
+        _mark_source(source_key, "error", error="akshare_not_installed")
+        return []
+    out: list[StockEvent] = []
     try:
         df = ak.stock_yjbb_em(date=period)
     except Exception as e:
         logger.warning("akshare stock_yjbb_em(%s) failed: %s", period, e)
+        _mark_source(source_key, "error", error=str(e))
         return out
     if df is None or df.empty:
+        _mark_source(source_key, "empty", rows=0, parsed_events=0)
         return out
 
     code_col = _pick_col(df, ["股票代码", "代码"])
@@ -260,6 +303,12 @@ def fetch_earnings_events(year: int, quarter: int) -> list[StockEvent]:
 
     if not code_col or not notice_col:
         logger.warning("earnings data missing required columns: %s", df.columns.tolist())
+        _mark_source(
+            source_key,
+            "error",
+            error="missing_required_columns",
+            columns=[str(c) for c in df.columns],
+        )
         return out
 
     for _, r in df.iterrows():
@@ -280,6 +329,7 @@ def fetch_earnings_events(year: int, quarter: int) -> list[StockEvent]:
             description=f"{name} {year}Q{quarter} 财报，营收同比 {rev_yoy or 0:+.1f}% / 利润同比 {eps_yoy or 0:+.1f}%",
             source=f"akshare/stock_yjbb_em@{period}",
         ))
+    _mark_source(source_key, "ok" if out else "empty", rows=int(len(df)), parsed_events=len(out))
     return out
 
 
@@ -306,6 +356,7 @@ def build_calendar(*,
     """
     today = date.today()
     events: list[StockEvent] = []
+    _FETCH_HEALTH.clear()
 
     # 1. 解禁
     unlock = fetch_unlock_events(today, today + timedelta(days=horizon_unlock_days))
@@ -329,7 +380,14 @@ def build_calendar(*,
             events.extend(er)
             logger.info("财报事件 %d 条 (Q%dY%d)", len(er), q, y)
 
-    return EventCalendar(events=events)
+    statuses = [row.get("status") for row in _FETCH_HEALTH.values()]
+    source_health = {
+        "status": "error" if statuses and all(s == "error" for s in statuses) else (
+            "degraded" if any(s == "error" for s in statuses) else "ok"
+        ),
+        "sources": dict(_FETCH_HEALTH),
+    }
+    return EventCalendar(events=events, source_health=source_health)
 
 
 def _recent_quarters(n: int, today: date | None = None) -> list[tuple[int, int]]:

@@ -25,16 +25,49 @@ def main():
                 snaps.append(s)
     print(f"Loaded {len(snaps)} SEC 13F snapshots from {len(list(config.SEC_13F_DIR.iterdir()))} CIK dirs")
 
+    latest_report_date = None
+    if snaps:
+        latest_report_date = max(
+            (s.get("latest_filing", {}) or {}).get("report_date") or ""
+            for s in snaps
+        )
+        stale_snaps = [
+            s for s in snaps
+            if (s.get("latest_filing", {}) or {}).get("report_date") != latest_report_date
+        ]
+        snaps = [
+            s for s in snaps
+            if (s.get("latest_filing", {}) or {}).get("report_date") == latest_report_date
+        ]
+    else:
+        stale_snaps = []
+
+    if stale_snaps:
+        skipped = ", ".join(
+            f"{s.get('investor')}@{(s.get('latest_filing', {}) or {}).get('report_date')}"
+            for s in stale_snaps
+        )
+        print(f"Skipped {len(stale_snaps)} stale 13F snapshots: {skipped}")
+    print(f"Using {len(snaps)} snapshots for report quarter {latest_report_date}")
+
     # 2. 按 ticker 聚合所有信号
     by_ticker = edgar.aggregate_signals_by_ticker(snaps)
     print(f"{len(by_ticker)} tickers have institutional signals")
 
     # 3. 转成 dashboard 期望的 schema
     output = {
-        "generated_at": snaps[0]["fetched_at"] if snaps else None,
+        "generated_at": max((s.get("fetched_at") or "" for s in snaps), default=None),
         "data_source": "SEC EDGAR 13F-HR (真实季度持仓变动)",
-        "report_quarter": snaps[0].get("latest_filing", {}).get("report_date") if snaps else None,
+        "report_quarter": latest_report_date,
         "investors_tracked": [s["investor"] for s in snaps],
+        "stale_investors_skipped": [
+            {
+                "investor": s.get("investor"),
+                "report_date": (s.get("latest_filing", {}) or {}).get("report_date"),
+                "filing_date": (s.get("latest_filing", {}) or {}).get("filing_date"),
+            }
+            for s in stale_snaps
+        ],
         "tickers": {},
     }
     for ticker, signals in by_ticker.items():

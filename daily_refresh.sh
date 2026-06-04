@@ -177,6 +177,7 @@ pipeline_sink_for_label() {
         *"IPO"*) echo "data/ipo_calendar.json + data/reports/ipo_daily_*.md" ;;
         *"事件日历"*) echo "data/event_calendar.json" ;;
         *"次新股+解禁雷达"*) echo "data/latest/junior_stock_radar.json" ;;
+        *"早发现雷达"*) echo "data/latest/early_growth_radar.json + data/reports/early_growth_radar.md" ;;
         *"政策"*) echo "data/policy_events.json" ;;
         *"全池 AI 推荐"*) echo "data/discovery_candidates.json + DuckDB.recommendation_runs/picks" ;;
         *"推荐准确度"*) echo "DuckDB.pick_outcomes" ;;
@@ -185,6 +186,9 @@ pipeline_sink_for_label() {
         *"策略调权建议"*) echo "data/latest/strategy_tuning_proposal.json + data/reports/strategy_tuning_proposal.md" ;;
         *"shadow 调权模拟"*) echo "data/latest/shadow_tuning_run.json + data/reports/shadow_tuning_run.md" ;;
         *"shadow 生产门禁"*) echo "data/latest/shadow_tuning_evidence.json + data/reports/shadow_tuning_evidence.md" ;;
+        *"US shadow 预检"*) echo "data/latest/us_shadow_preflight_check.json + data/reports/us_shadow_preflight_check.md" ;;
+        *"US-only 生产验收"*) echo "data/latest/us_production_acceptance_check.json + data/reports/us_production_acceptance_check.md" ;;
+        *"推荐规则快速体检"*) echo "data/latest/recommendation_readiness_check.json + data/reports/recommendation_readiness_check.md" ;;
         *"DuckDB pipeline"*) echo "DuckDB.snapshots(category='pipeline')" ;;
         *"产业链分级"*) echo "DuckDB.system_universe(theme/industry → chain 推断)" ;;
         *"重建 HTML"*) echo "stock_dashboard.html" ;;
@@ -567,9 +571,13 @@ run_step "23d2/25 策略失败诊断（只读归因）" "scripts/tools/strategy_
 run_step "23d3/25 策略调权建议（只读灰度）" "scripts/tools/strategy_tuning_proposal.py --horizon 1d"
 run_step "23d4/25 shadow 调权模拟（只读对照）" "scripts/tools/build_shadow_tuning_run.py --horizon 1d"
 run_step "23d5/25 shadow 生产门禁（只读证据）" "scripts/tools/evaluate_shadow_tuning_run.py"
+run_step "23d6/25 US shadow 预检（唯一 source run · 只读）" "scripts/tools/us_shadow_preflight_check.py"
+run_step "23d7/25 US-only 生产验收（先上线美股 · 只读）" "scripts/tools/us_production_acceptance_check.py"
+run_step "23d8/25 推荐规则快速体检（US 优先 · 只读）" "scripts/tools/recommendation_readiness_check.py"
 # 2026-05-21 V2 cutover 补洞：替代被删的 V1 audit_picks，喂 dashboard「买前审查」tab
 run_step "23e/25 picks 反向审查（V2 · Risk Parity + 估值 + Markowitz）" "-m stock_research.jobs.audit_picks_v2 --fast"
 run_step "23f/25 真实持仓每日体检（评分/建议/说明）" "-m stock_research.jobs.real_holding_review"
+run_step "23g/25 早发现雷达（未过热 + 赛道/催化/13F 补盲）" "-m stock_research.jobs.early_growth_radar"
 
 # M — DuckDB pipeline 同步 + HTML 重建 + brief + 验收
 # （这几步在 morning 必跑，research mode 不重做避免覆盖 morning 已落地的 dashboard）
