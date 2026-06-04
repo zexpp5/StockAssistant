@@ -14829,27 +14829,33 @@ def today_decision_panel_html() -> str:
 
 
 def strategy_market_advisory_html() -> str:
-    """分市场研究观察 advisory —— 读 shadow 诊断的 market_actions,列出 degraded/research_only 的市场,
-    防止 CN/HK 早期实测偏弱的推荐被误读成可买。无 degraded 市场则返回空串(不渲染)。只读,服务端渲染。"""
-    proposal = _runtime_load_json("data/latest/strategy_tuning_proposal.json") or {}
-    actions = proposal.get("market_actions") or []
-    degraded = [m for m in actions if str(m.get("status")) == "degraded"]
-    if not degraded:
-        return ""
+    """分市场研究观察 advisory —— 按「只有 US 在验证轨道」策略,列出冻结的非 US 市场(CN/HK)
+    及其真实实测 alpha/命中,防止被误读成可买。数据源 shadow_tuning_evidence.json(只读)。
+    不再依赖 alpha 阈值 degraded —— 否则 HK alpha 升过 -1 就会从这里消失、显得像可用了。"""
+    ev = _runtime_load_json("data/latest/shadow_tuning_evidence.json") or {}
+    mh = {(m.get("market"), m.get("horizon")): m for m in (ev.get("market_horizon_summary") or [])}
     items = []
-    for m in degraded:
-        label = html_lib.escape(str(m.get("label") or m.get("market") or ""))
-        reason = html_lib.escape(str(m.get("reason") or ""))
+    for mk, label in (("CN", "A股"), ("HK", "港股")):  # 非 US = 策略冻结
+        d1 = mh.get((mk, "1d")) or {}
+        a = d1.get("original_avg_alpha_pct")
+        h = d1.get("original_win_rate")
+        n = d1.get("reviewed_original_buy_count")
+        if not isinstance(a, (int, float)) and not isinstance(h, (int, float)):
+            continue
+        a_txt = f"{a}%" if isinstance(a, (int, float)) else "—"
+        h_txt = f"{h}%" if isinstance(h, (int, float)) else "—"
         items.append(
-            f'<li class="mt-0.5"><b>{label}</b>：{reason}'
-            '（当前研究观察，未通过 shadow 门禁前不作为买入依据）</li>'
+            f'<li class="mt-0.5"><b>{html_lib.escape(label)}</b>：{n or 0} 个样本 alpha {a_txt} · 命中 {h_txt}'
+            '（research-only 冻结，该市场单独达标前不作为买入依据）</li>'
         )
+    if not items:
+        return ""
     return (
         '<div class="mb-4 rounded-xl border-2 border-amber-300 bg-amber-50 px-4 py-3">'
-        '<div class="text-sm font-bold text-amber-900">⚠️ 分市场研究观察 —— 这些市场早期实测偏弱</div>'
+        '<div class="text-sm font-bold text-amber-900">⚠️ 分市场研究观察 —— CN/HK 当前冻结(只看不买)</div>'
         f'<ul class="text-[12px] text-amber-800 mt-1 leading-relaxed list-disc pl-5">{"".join(items)}</ul>'
-        '<div class="text-[11px] text-amber-700 mt-1">来源：策略失败诊断（shadow 离线，只读）。'
-        '其余市场未列出 = 暂未判定 degraded。</div>'
+        '<div class="text-[11px] text-amber-700 mt-1">策略口径：只有 US 在验证轨道；CN/HK 一律冻结研究，'
+        '与当时 alpha 高低无关，直到各自单独走完验证。</div>'
         '</div>'
     )
 
@@ -14868,7 +14874,9 @@ def us_validation_progress_html() -> str:
     min_hit = float(crit.get("min_hit_rate") or 45.0)
     runs = int(ev.get("shadow_run_count") or 0)
     mh = {(m.get("market"), m.get("horizon")): m for m in (ev.get("market_horizon_summary") or [])}
-    degraded = {str(m.get("market")) for m in (prop.get("market_actions") or []) if str(m.get("status")) == "degraded"}
+    # 显式策略:只有 US 在验证轨道;CN/HK 一律 research-only 冻结,与当时 alpha 无关。
+    # (不再绑 degraded 阈值——否则 HK 的 alpha 升到 > -1 就会被误显示成「验证中」, 不符合「先 US」意图。)
+    allowed = {"US"}
 
     def _num(v):
         return v if isinstance(v, (int, float)) else None
@@ -14880,9 +14888,14 @@ def us_validation_progress_html() -> str:
         cov = _num(d1.get("shadow_review_coverage_pct"))
         alpha = _num(d1.get("shadow_avg_alpha_pct"))
         hit = _num(d1.get("shadow_win_rate"))
-        if mk in degraded:
+        if mk not in allowed:
+            # CN/HK 按策略冻结(与 alpha 无关);展示真实实测 alpha/命中作为现状,而不是含糊"偏弱"
+            real_a = _num(d1.get("original_avg_alpha_pct"))
+            real_h = _num(d1.get("original_win_rate"))
+            ra = f"{real_a}%" if real_a is not None else "—"
+            rh = f"{real_h}%" if real_h is not None else "—"
             badge = '<span class="px-2 py-0.5 rounded-full text-[11px] bg-rose-100 text-rose-700">🔒 research-only · 冻结不进真钱</span>'
-            detail = "早期实测偏弱(见上方分市场提示);各自门禁 READY 前不进真钱组合。"
+            detail = f"当前实测 alpha {ra} · 命中 {rh}(策略冻结:只看不买,该市场单独达标前不进真钱组合)"
         else:
             meets_trial = (
                 runs >= min_runs and rev >= min_rev and (cov or 0) >= min_cov
