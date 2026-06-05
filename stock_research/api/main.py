@@ -1429,6 +1429,26 @@ _sys.exit(rc)
             raise HTTPException(404, f"real holding id not found: {holding_id}")
         return {"status": "ok", "id": holding_id, "rows_deleted": n}
 
+    @app.get("/api/premarket-gate")
+    def premarket_gate_latest() -> dict[str, Any]:
+        """美股盘前风险闸门最新结论 — 今日决策台 / 持仓页顶部横幅读这个单一源。
+
+        由 stock_research.jobs.premarket_gate 在美股开盘前(北京 20:10/20:45/21:15)
+        写入 data/latest/premarket_gate.json。前端只渲染颜色 + can_buy + 持仓影响,
+        不重算业务规则(feedback_single_source_no_double_engine)。
+        缺文件 / 解析失败 → available=False,前端渲染空态(不报错)。
+        """
+        p = _REPO_ROOT / "data" / "latest" / "premarket_gate.json"
+        if not p.exists():
+            return {"available": False, "color": "NONE",
+                    "reason": "盘前闸门今日尚未生成(美股开盘前才跑)"}
+        try:
+            doc = json.loads(p.read_text(encoding="utf-8"))
+            doc["available"] = True
+            return doc
+        except Exception as e:
+            return {"available": False, "color": "NONE", "reason": f"读取失败: {e}"}
+
     @app.get("/api/real-holdings/daily-verdict")
     def real_holdings_daily_verdict() -> dict[str, Any]:
         """真实持仓 7 档判断单一源 — 复用 morning_brief.compute_holdings_verdict 纯函数。
