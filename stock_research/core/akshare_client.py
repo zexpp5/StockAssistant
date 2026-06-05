@@ -67,7 +67,18 @@ def hk_pad(code: str) -> str:
 # ────────────────────────────────────────────────────────
 
 def fetch_a_stock_quote(code: str) -> dict[str, Any] | None:
-    """A 股实时快照（akshare 东财源）。"""
+    """A 股快照。2026-06-05 起 Tushare Pro 为主源（按 ts_code 精确拉、无 IP 限流、
+    当日盘后即可得），本函数降级为 akshare 东财兜底：仅 Tushare 不可用时回退。
+    返回字段对齐：Tushare 版含 akshare 全部字段 + ts_code/industry/date。"""
+    # Tushare Pro 主源（单一来源优先）
+    try:
+        from stock_research.core import tushare_client
+        t = tushare_client.fetch_a_stock_quote(code)
+        if t and t.get("price") is not None:
+            return t
+    except Exception:
+        pass
+    # akshare 东财兜底
     ak = _import_ak()
     if not ak:
         return None

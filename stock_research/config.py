@@ -43,6 +43,11 @@ FINNHUB_BASE = "https://finnhub.io/api/v1"
 FMP_API_KEY = os.environ.get("FMP_API_KEY")
 FMP_BASE = "https://financialmodelingprep.com/api/v3"
 
+# Tushare Pro — A 股付费主源（行情 + 财报三表 + 财务指标 + 龙虎榜 + 指数成分）
+# 2026-06-05 接入：替代 akshare/baostock 的 A 股行情与财报取数（二者按 IP 限流）。
+# 港股 / 次新股 / 事件日历 / 财经新闻 Tushare 不提供，仍走 akshare。
+TUSHARE_TOKEN = os.environ.get("TUSHARE_TOKEN")
+
 # ─────────── 生产市场开关 ───────────
 # A 股当前需要市场内 IC 校准权重才允许生产推荐。
 # 默认 auto：只要 data/calibrated_factor_weights.json 有效，就自动启用；
