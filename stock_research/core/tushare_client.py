@@ -142,6 +142,59 @@ def fetch_index_cons(index_code: str) -> list[str]:
 
 
 # ────────────────────────────────────────────────────────
+# 龙虎榜机构席位
+# ────────────────────────────────────────────────────────
+
+def fetch_lhb_inst_window(start_date: str, end_date: str):
+    """龙虎榜机构席位窗口聚合，返回 akshare stock_lhb_jgmmtj_em 兼容 DataFrame。
+
+    start_date/end_date 为 YYYYMMDD。逐交易日拉 top_inst，筛 exalter 含「机构专用」
+    的席位，按 ts_code 聚合 buy/sell/net。列：代码 / 机构买入总额 / 机构卖出总额 /
+    机构净买额 / 上榜日期（每行 = 个股 × 日期的机构席位汇总）。无数据返回 None。
+    """
+    pro = _get_pro()
+    if not pro:
+        return None
+    import pandas as pd
+
+    try:
+        d0 = datetime.strptime(start_date, "%Y%m%d")
+        d1 = datetime.strptime(end_date, "%Y%m%d")
+    except (TypeError, ValueError):
+        return None
+
+    rows: list[dict] = []
+    cur = d0
+    while cur <= d1:
+        ds = cur.strftime("%Y%m%d")
+        cur += timedelta(days=1)
+        try:
+            df = pro.top_inst(trade_date=ds)
+        except Exception:  # noqa: BLE001
+            continue
+        if df is None or df.empty or "exalter" not in df.columns:
+            continue
+        inst = df[df["exalter"].astype(str).str.contains("机构专用", na=False)]
+        if inst.empty:
+            continue
+        g = inst.groupby("ts_code").agg(
+            buy=("buy", "sum"), sell=("sell", "sum"), net=("net_buy", "sum"),
+        ).reset_index()
+        for _, r in g.iterrows():
+            rows.append({
+                # 6 位代码对齐 akshare jgmmtj 契约（下游 compute 按 6 位匹配）
+                "代码": str(r["ts_code"]).split(".")[0],
+                "机构买入总额": _safe_float(r["buy"]),
+                "机构卖出总额": _safe_float(r["sell"]),
+                "机构净买额": _safe_float(r["net"]),
+                "上榜日期": ds,
+            })
+    if not rows:
+        return None
+    return pd.DataFrame(rows)
+
+
+# ────────────────────────────────────────────────────────
 # A 股行情
 # ────────────────────────────────────────────────────────
 

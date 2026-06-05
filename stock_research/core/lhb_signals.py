@@ -12,9 +12,10 @@
     独有的"准大宗实时披露"机制（每日收盘后公布前 5 大买卖席位）
   - 散户主导的市场里，机构席位的择时比因子模型更有 alpha
 
-数据源：akshare
-  - ak.stock_lhb_detail_em(start_date, end_date)：龙虎榜详细数据
-  - ak.stock_lhb_jgmmtj_em(start_date, end_date)：机构买卖统计
+数据源（2026-06-05 升级）：
+  - 机构买卖统计：Tushare Pro top_inst（筛 exalter「机构专用」按个股聚合，主源、
+    无 IP 限流）→ akshare stock_lhb_jgmmtj_em 兜底
+  - 龙虎榜详细：akshare stock_lhb_detail_em（compute_lhb_factors 未用，保留）
 
 输出因子：
   inst_net_buy_yuan        最近 N 日机构席位净买入金额（元）
@@ -99,7 +100,21 @@ def fetch_lhb_window(start_date: str, end_date: str) -> Any:
 
 
 def fetch_lhb_inst_window(start_date: str, end_date: str) -> Any:
-    """机构买卖统计（按股票代码聚合，机构专用席位净买入）。"""
+    """机构买卖统计（按股票代码聚合，机构专用席位净买入）。
+
+    2026-06-05 起 Tushare Pro top_inst 为主源（官方龙虎榜机构席位、无 IP 限流）；
+    返 None 时回退 akshare stock_lhb_jgmmtj_em。两者列名兼容（代码/机构买入总额/
+    机构卖出总额/机构净买额/上榜日期），下游 compute_lhb_factors 逻辑不变。
+    """
+    # Tushare Pro 主源
+    try:
+        from stock_research.core.tushare_client import fetch_lhb_inst_window as _ts_lhb
+        df = _ts_lhb(start_date, end_date)
+        if df is not None and not df.empty:
+            return df
+    except Exception:
+        pass
+    # akshare 兜底
     ak = _import_ak()
     if ak is None:
         return None
