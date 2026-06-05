@@ -1,10 +1,12 @@
 """
-A 股 Piotroski F-Score（akshare 数据源）
+A 股 Piotroski F-Score / 动量 / 质量因子
 ─────────────────────────────────────────
 解决问题 #1：yfinance 对 A 股没财报，所以北方稀土/中际/海光等无法进 v5 因子模型
 
-数据源：akshare（开源免费）
-  - A 股：stock_financial_report_sina（新浪财经）
+数据源（2026-06-05 升级）：
+  - 主源 Tushare Pro：三表年报 income/balancesheet/cashflow + 前复权日线 pro_bar
+    （官方季报、无 IP 限流；经 tushare_client 适配为 akshare 兼容宽表，计算逻辑不变）
+  - 兜底 akshare 新浪：stock_financial_report_sina + stock_zh_a_daily
 
 Piotroski 9 项与美股版完全一致（论文标准 Stanford 2000）
 """
@@ -45,6 +47,34 @@ def _get_period(df, period_str):
     return rows.iloc[0]
 
 
+def _get_report(code, symbol):
+    """三表年报：Tushare Pro 主源（官方季报、无 IP 限流）→ akshare 新浪兜底。
+    返回 akshare 兼容宽表（列含「报告日」+ 中文科目），计算逻辑无需改动。"""
+    try:
+        from stock_research.core.tushare_client import fetch_a_share_report
+        df = fetch_a_share_report(code, symbol)
+        if df is not None and len(df):
+            return df
+    except Exception:
+        pass
+    ak_code = _normalize_a_share_code(code)
+    return ak.stock_financial_report_sina(stock=ak_code, symbol=symbol)
+
+
+def _get_daily_qfq(code, start_yyyymmdd, end_yyyymmdd):
+    """前复权日线：Tushare Pro 主源 → akshare 新浪兜底。返回含 date/close 的 DataFrame。"""
+    try:
+        from stock_research.core.tushare_client import fetch_a_share_daily_qfq
+        df = fetch_a_share_daily_qfq(code, start_yyyymmdd, end_yyyymmdd)
+        if df is not None and len(df):
+            return df
+    except Exception:
+        pass
+    sina_code = _normalize_a_share_code(code)
+    return ak.stock_zh_a_daily(symbol=sina_code, start_date=start_yyyymmdd,
+                               end_date=end_yyyymmdd, adjust="qfq")
+
+
 def piotroski_a_share(code, as_of=None, retries=2):
     """A 股 Piotroski F-Score（akshare 数据源）。
 
@@ -54,11 +84,9 @@ def piotroski_a_share(code, as_of=None, retries=2):
     """
     for attempt in range(retries + 1):
         try:
-            ak_code = _normalize_a_share_code(code)
-            bs = ak.stock_financial_report_sina(stock=ak_code, symbol="资产负债表")
-            inc = ak.stock_financial_report_sina(stock=ak_code, symbol="利润表")
-            time.sleep(1.0)
-            cf = ak.stock_financial_report_sina(stock=ak_code, symbol="现金流量表")
+            bs = _get_report(code, "资产负债表")
+            inc = _get_report(code, "利润表")
+            cf = _get_report(code, "现金流量表")
 
             if bs is None or inc is None or cf is None:
                 return {"f_score": None, "data_quality": "fail", "error": "missing reports"}
@@ -160,7 +188,7 @@ def piotroski_a_share(code, as_of=None, retries=2):
                 "details": details,
                 "data_quality": "full",
                 "year_used": cur_y,
-                "data_source": "akshare/sina",
+                "data_source": "tushare/pro" if (getattr(bs, "attrs", {}) or {}).get("source") == "tushare" else "akshare/sina",
             }
         except Exception as e:
             if attempt < retries:
@@ -179,14 +207,12 @@ def momentum_a_share(code, as_of=None, retries=2):
     """
     for attempt in range(retries + 1):
         try:
-            sina_code = _normalize_a_share_code(code)
             target = pd.to_datetime(as_of) if as_of else pd.Timestamp.now()
             start = target - pd.Timedelta(days=400)
             end = target + pd.Timedelta(days=2)
-            df = ak.stock_zh_a_daily(symbol=sina_code,
-                                    start_date=start.strftime("%Y%m%d"),
-                                    end_date=end.strftime("%Y%m%d"),
-                                    adjust="qfq")    # 前复权 — 见 docstring
+            df = _get_daily_qfq(code,
+                                start.strftime("%Y%m%d"),
+                                end.strftime("%Y%m%d"))    # 前复权 — 见 docstring
             if df is None or len(df) < 252:
                 return {"momentum_12_1": None, "reversal_1m": None, "error": "insufficient history"}
 
@@ -227,11 +253,9 @@ def quality_a_share(code, as_of=None, retries=2):
     import pandas as _pd
     for attempt in range(retries + 1):
         try:
-            ak_code = _normalize_a_share_code(code)
-            bs = ak.stock_financial_report_sina(stock=ak_code, symbol="资产负债表")
-            inc = ak.stock_financial_report_sina(stock=ak_code, symbol="利润表")
-            time.sleep(0.5)
-            cf = ak.stock_financial_report_sina(stock=ak_code, symbol="现金流量表")
+            bs = _get_report(code, "资产负债表")
+            inc = _get_report(code, "利润表")
+            cf = _get_report(code, "现金流量表")
             if bs is None or inc is None or cf is None:
                 return {"roic": None, "fcfy": None, "accruals": None,
                         "error": "missing reports"}
@@ -302,7 +326,7 @@ def quality_a_share(code, as_of=None, retries=2):
                 "accruals": round(accruals, 4) if accruals is not None else None,
                 "fiscal_year": cur_y_yyyy,
                 "as_of": as_of,
-                "source": "akshare + yfinance marketCap",
+                "source": ("tushare/pro" if (getattr(bs, "attrs", {}) or {}).get("source") == "tushare" else "akshare/sina") + " + yfinance marketCap",
             }
         except Exception as e:
             if attempt < retries:

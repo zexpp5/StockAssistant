@@ -279,6 +279,114 @@ def fetch_a_share_p5_inputs(code: str) -> dict[str, Any] | None:
 
 
 # ────────────────────────────────────────────────────────
+# A 股三表 + 日线 — akshare 兼容适配层
+# （factor_model_china 的 piotroski/quality/momentum 计算逻辑不变，仅换源）
+# ────────────────────────────────────────────────────────
+
+# Tushare 英文字段 → akshare 新浪三表中文科目（供 factor_model_china 直接消费）
+_INCOME_MAP = {
+    "end_date": "报告日",
+    "n_income": "净利润",
+    "total_revenue": "营业总收入",
+    "revenue": "营业收入",
+    "oper_cost": "营业成本",
+    "operate_profit": "营业利润",
+}
+_BALANCE_MAP = {
+    "end_date": "报告日",
+    "total_assets": "资产总计",
+    "total_cur_assets": "流动资产合计",
+    "total_cur_liab": "流动负债合计",
+    "lt_borr": "长期借款",
+    "total_share": "实收资本(或股本)",
+}
+_CASHFLOW_MAP = {
+    "end_date": "报告日",
+    "n_cashflow_act": "经营活动产生的现金流量净额",
+    "c_pay_acq_const_fiolta": "购建固定资产、无形资产和其他长期资产支付的现金",
+}
+_STATEMENT_DISPATCH = {
+    "资产负债表": "balancesheet",
+    "利润表": "income",
+    "现金流量表": "cashflow",
+}
+
+
+def fetch_a_share_report(code: str, statement: str):
+    """三表年报取数，返回 akshare stock_financial_report_sina 兼容的宽表 DataFrame。
+
+    statement ∈ {"资产负债表", "利润表", "现金流量表"}。
+    列含「报告日」(YYYYMMDD) + 各中文科目，行=报告期；失败返回 None。
+    report_type==1 合并报表、按 end_date 去重保留最新公告版。
+    """
+    pro = _get_pro()
+    if not pro:
+        return None
+    ts_code = to_ts_code(code)
+    if not ts_code:
+        return None
+    api = _STATEMENT_DISPATCH.get(statement)
+    if not api:
+        return None
+    mapping = {
+        "balancesheet": _BALANCE_MAP,
+        "income": _INCOME_MAP,
+        "cashflow": _CASHFLOW_MAP,
+    }[api]
+    try:
+        start = (datetime.now() - timedelta(days=365 * 6)).strftime("%Y%m%d")
+        end = datetime.now().strftime("%Y%m%d")
+        fn = getattr(pro, api)
+        df = fn(
+            ts_code=ts_code, start_date=start, end_date=end,
+            fields="report_type," + ",".join(mapping.keys()),
+        )
+        if df is None or df.empty:
+            return None
+        if "report_type" in df.columns:
+            df = df[df["report_type"].astype(str) == "1"]
+        df = df.drop_duplicates(subset=["end_date"], keep="first")
+        df = df.rename(columns=mapping)
+        df["报告日"] = df["报告日"].astype(str)
+        keep = [c for c in mapping.values() if c in df.columns]
+        out = df[keep].reset_index(drop=True)
+        out.attrs["source"] = "tushare"
+        return out
+    except Exception as e:  # noqa: BLE001
+        logger.warning("tushare report %s failed for %s: %s", statement, code, e)
+        return None
+
+
+def fetch_a_share_daily_qfq(code: str, start_date: str, end_date: str):
+    """前复权日线，返回 akshare stock_zh_a_daily(adjust='qfq') 兼容 DataFrame。
+
+    start_date/end_date 为 YYYYMMDD。列含 date(YYYYMMDD 字符串)+ open/high/low/close/volume。
+    失败返回 None。供 factor_model_china.momentum_a_share 直接消费（其只读 date/close）。
+    """
+    if not _get_pro():  # 确保 token 已 set（pro_bar 依赖全局 token）
+        return None
+    ts_code = to_ts_code(code)
+    if not ts_code:
+        return None
+    try:
+        import tushare as ts
+        df = ts.pro_bar(
+            ts_code=ts_code, adj="qfq",
+            start_date=start_date, end_date=end_date,
+        )
+        if df is None or df.empty:
+            return None
+        df = df.rename(columns={
+            "trade_date": "date", "vol": "volume", "amount": "amount",
+        })
+        df["date"] = df["date"].astype(str)
+        return df.reset_index(drop=True)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("tushare daily qfq failed for %s: %s", code, e)
+        return None
+
+
+# ────────────────────────────────────────────────────────
 # 工具
 # ────────────────────────────────────────────────────────
 
