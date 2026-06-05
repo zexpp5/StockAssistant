@@ -115,36 +115,35 @@ def _is_valid_window(now: datetime) -> tuple[bool, str]:
 # ──────────────────────────────────────────────────
 
 def _build_card(res: pg.GateResult, scan_label: str) -> dict:
+    """白话版卡片：给完全新手看，每条先说是什么、再说所以呢。"""
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-    head_line = (
-        f"{res.icon} **{res.color}** · 综合压力 {res.composite:.2f}/3\n\n"
-        f"**今晚能不能买**：{res.can_buy}"
-    )
+
+    # 1) 一句话结论（大字）
+    head_line = f"### {res.headline_plain}\n\n**该怎么做**：{res.can_buy}"
     elements: list[dict] = [{"tag": "div", "text": {"tag": "lark_md", "content": head_line}}]
 
-    if res.pressure_sources:
-        elements.append({"tag": "div", "text": {"tag": "lark_md",
-                        "content": "**压力源**：" + "、".join(res.pressure_sources)}})
-
-    if res.reasons:
-        lines = "\n".join(f"• {r}" for r in res.reasons[:7])
+    # 2) 为什么这么判断（人话 bullets）
+    if res.reasons_plain:
+        lines = "\n".join(f"• {r}" for r in res.reasons_plain[:7])
         elements.append({"tag": "hr"})
-        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "**触发明细**\n" + lines}})
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "**为什么这么判断**\n" + lines}})
 
+    # 3) 对你持仓的影响
     if res.holdings_impact:
         hl = "\n".join(f"• **{h['symbol']}**：{h['reason']}" for h in res.holdings_impact[:8])
         elements.append({"tag": "hr"})
         elements.append({"tag": "div", "text": {"tag": "lark_md",
-                        "content": "**你的持仓影响**（advisory · 不是交易指令）\n" + hl}})
+                        "content": "**对你持仓的影响**（只是提醒，不是叫你一定买卖）\n" + hl}})
 
     if res.notes:
         elements.append({"tag": "div", "text": {"tag": "lark_md",
-                        "content": "**备注**：" + "；".join(res.notes)}})
+                        "content": "ℹ️ " + "；".join(res.notes)}})
 
+    # 4) 脚注：用大白话解释这张卡是什么 + 风险打分
     elements.append({"tag": "note", "elements": [{"tag": "plain_text", "content": (
-        f"📖 美股盘前风险闸门（{scan_label}）· 开盘前扫期货/利率/VIX/巨头盘前/板块/海外/宏观，"
-        "回答今晚适不适合开新仓 · 🟢正常 🟡试探 🟠不开新仓 🔴只处理纪律线 · "
-        f"覆盖率 {res.coverage:.0%} · ⚠️ advisory，不构成投资建议"
+        f"📖 这是「美股开盘前的看天气」：在美股开盘前帮你看一眼今晚适不适合买。"
+        f"🟢正常买 🟡小仓试 🟠先别开新仓 🔴别买只看好已有 · "
+        f"风险打分 {res.composite:.1f}/3（越高越危险）· ⚠️ 仅供参考，不是投资建议"
     )}]})
 
     return {
@@ -152,8 +151,8 @@ def _build_card(res: pg.GateResult, scan_label: str) -> dict:
         "card": {
             "config": {"wide_screen_mode": True},
             "header": {
-                "title": {"tag": "plain_text", "content": f"🚦 美股盘前闸门 · {now_str}"},
-                "subtitle": {"tag": "plain_text", "content": f"{res.color} · {scan_label}"},
+                "title": {"tag": "plain_text", "content": f"🚦 美股开盘前 · 今晚能不能买 · {now_str}"},
+                "subtitle": {"tag": "plain_text", "content": f"{scan_label}"},
                 "template": pg.TEMPLATE.get(res.color, "grey"),
             },
             "elements": elements,

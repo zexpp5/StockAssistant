@@ -71,6 +71,10 @@ UNIVERSE: dict[str, list[str]] = {
 
 MEGA7 = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA"]
 _PREMARKET_KEYS = set(MEGA7)  # 这些用股票盘前报价口径
+CN_NAME = {  # 给新手看的中文名
+    "AAPL": "苹果", "MSFT": "微软", "NVDA": "英伟达", "GOOGL": "谷歌",
+    "AMZN": "亚马逊", "META": "Meta", "TSLA": "特斯拉",
+}
 
 # 持仓敏感度分类（绑持仓用）
 AI_HARDWARE = {
@@ -90,6 +94,14 @@ CAN_BUY = {
     "LOW": "少量试探可以，但不要追涨；单笔新开仓控制小一点。",
     "HIGH": "不建议开新仓；想买也等开盘 30-60 分钟企稳再看。",
     "CRITICAL": "原则上今晚不开新仓，只处理已有持仓的纪律线（止损/减仓）。",
+}
+
+# 颜色 → 一句话人话标题（给新手）
+HEADLINE_PLAIN = {
+    "NONE": "🟢 今晚环境正常，可以按计划研究/操作",
+    "LOW": "🟡 今晚略偏谨慎：可以小仓试探，但别追高",
+    "HIGH": "🟠 今晚环境偏差：先别开新仓",
+    "CRITICAL": "🔴 今晚环境很差：原则上别买，只管好手里已有的",
 }
 
 # 信号族权重（期货最直接，权重最高）
@@ -113,7 +125,8 @@ class FamilySignal:
     key: str
     label: str
     stress: float = 0.0           # 0-3 压力分
-    headline: str = ""            # 一句话结论
+    headline: str = ""            # 一句话结论（技术口径，带数字）
+    plain: str = ""               # 人话解释（给新手看的飞书卡/横幅）
     tags: list[str] = field(default_factory=list)  # 如 ai_hardware / event_pending / rates_spike
     data: dict[str, Any] = field(default_factory=dict)
     available: bool = True        # 数据是否拿到
@@ -129,7 +142,9 @@ class GateResult:
     color: str = "NONE"           # NONE/LOW/HIGH/CRITICAL
     composite: float = 0.0        # 0-3 加权综合压力
     can_buy: str = ""
-    reasons: list[str] = field(default_factory=list)       # 触发原因（人读）
+    headline_plain: str = ""      # 颜色→一句话人话标题
+    reasons: list[str] = field(default_factory=list)       # 触发原因（技术口径，带数字）
+    reasons_plain: list[str] = field(default_factory=list)  # 触发原因（人话，给新手卡片/横幅）
     families: list[dict] = field(default_factory=list)     # 各族明细
     holdings_impact: list[dict] = field(default_factory=list)  # [{symbol, reason}]
     pressure_sources: list[str] = field(default_factory=list)
@@ -266,6 +281,11 @@ def _sig_futures(quotes: dict) -> FamilySignal:
     sig.headline = f"NQ {nq:+.2f}% · ES {es:+.2f}%" if nq is not None and es is not None else f"期货主读数 {head:+.2f}%"
     if head <= -1.5:
         sig.tags.append("futures_deep")
+    if head <= -0.3:
+        sig.plain = (f"美股还没开盘，但「盘前预演价」已经在跌——科技股那档预计低开约 {abs(head):.1f}%。"
+                     "（期货=开盘前的预测价，跌得多通常预示开盘不好）")
+    else:
+        sig.plain = f"美股盘前的「预演价」还算稳（科技股那档 {head:+.1f}%）。"
     return sig
 
 
@@ -309,6 +329,15 @@ def _sig_rates(quotes: dict) -> FamilySignal:
     if dxy_pct is not None:
         parts.append(f"DXY {dxy_pct:+.2f}%")
     sig.headline = " · ".join(parts) if parts else "—"
+    if bps is not None and bps >= 4:
+        sig.plain = (f"美国国债利率在往上走（10 年期到 {last10:.2f}%）。利率一涨，估值高的科技股最吃亏——"
+                     "因为钱放银行/买债的收益变高了，大家就不愿再给科技股付高价。")
+        if dxy_pct is not None and dxy_pct >= 0.4:
+            sig.plain += "同时美元也在走强，对成长股是双重压力。"
+    elif dxy_pct is not None and dxy_pct >= 0.4:
+        sig.plain = f"美元在走强（{dxy_pct:+.1f}%），通常对高估值科技股不利。"
+    else:
+        sig.plain = "利率和美元都还平稳，对估值没额外压力。"
     return sig
 
 
@@ -352,6 +381,15 @@ def _sig_vol(quotes: dict) -> FamilySignal:
                 sig.headline += f" · PCR {pcr:.2f}"
     except Exception as e:
         logger.debug("PCR 跳过: %s", str(e)[:60])
+    chg_txt = f"，一天跳了 {chg:.0f}%" if chg is not None and chg >= 15 else ""
+    if vix >= 30:
+        sig.plain = f"市场「恐慌指数」VIX 冲到 {vix:.0f}（很高）{chg_txt}，说明投资者在恐慌抛售。"
+    elif vix >= 20:
+        sig.plain = f"市场「恐慌指数」VIX 到 {vix:.0f}{chg_txt}，情绪偏紧张。"
+    elif chg is not None and chg >= 15:
+        sig.plain = f"市场「恐慌指数」VIX 虽不高（{vix:.0f}）但{chg_txt[1:]}，紧张在升温。"
+    else:
+        sig.plain = f"市场情绪平稳（恐慌指数 VIX {vix:.0f}，不高）。"
     return sig
 
 
@@ -383,6 +421,12 @@ def _sig_megacap(quotes: dict) -> FamilySignal:
     sig.headline = f"{n}/{len(have)} 只盘前跌超 1%（均 {avg:+.2f}%）"
     if down1:
         sig.headline += "：" + " ".join(down1[:5])
+    if n >= 1:
+        names = "、".join(CN_NAME.get(k, k) for k in down1[:5])
+        sig.plain = (f"美股 7 大科技巨头里有 {n} 个开盘前就在跌（{names}）。"
+                     "这几只权重特别大，它们跌，整个指数就难看。")
+    else:
+        sig.plain = "7 大科技巨头盘前没明显下跌，权重股暂时稳。"
     return sig
 
 
@@ -426,6 +470,15 @@ def _sig_sector(quotes: dict) -> FamilySignal:
         sig.headline += f" · 防御均 {d_avg:+.2f}%"
     if semis:
         sig.headline += f" · 半导体 {sum(semis)/len(semis):+.2f}%"
+    semi_txt = f"（其中芯片股最惨，约 {sum(semis)/len(semis):.0f}%）" if semis and sum(semis)/len(semis) < 0 else ""
+    if g_avg <= -0.5:
+        if d_avg is not None and d_avg > 0:
+            sig.plain = (f"科技/成长类全线跌{semi_txt}，而平时抗跌的「防御类」（水电、日用必需品）反而在涨——"
+                         "典型的「资金从激进股票往保守股票躲」，整体在避险。")
+        else:
+            sig.plain = f"科技/成长类普遍下跌{semi_txt}。"
+    else:
+        sig.plain = "各板块没出现明显的避险轮动。"
     return sig
 
 
@@ -456,6 +509,14 @@ def _sig_overseas(quotes: dict) -> FamilySignal:
         sig.tags.append("ai_hardware")
         sig.tags.append("asia_semis_lead")
     sig.headline = " · ".join(f"{k} {v:+.1f}%" for k, v in have.items())
+    _cn = {"KOSPI": "韩国", "NIKKEI": "日本", "TWSE": "台湾", "HSI": "香港"}
+    if avg <= -0.5:
+        parts_cn = "、".join(f"{_cn[k]} {v:+.1f}%" for k, v in have.items())
+        sig.plain = (f"比美股更早开盘的亚洲市场已经收盘，普遍在跌（{parts_cn}）。")
+        if "asia_semis_lead" in sig.tags:
+            sig.plain += "韩国和台湾的芯片股特别多，它们先跌，往往是美国芯片股的「预告片」。"
+    else:
+        sig.plain = "亚洲市场今天没明显下跌，没给美股递坏消息。"
     return sig
 
 
@@ -492,6 +553,7 @@ def _sig_macro(as_of: date, now: datetime | None = None) -> FamilySignal:
     if not events:
         sig.stress = 0.0
         sig.headline = "今晚无重磅宏观数据"
+        sig.plain = "今晚没有重磅经济数据公布，少一个突发变量。"
         return sig
     labels = "/".join(e["label"] for e in events)
     # 发布前（北京 20:30 前，夏令时）不确定性更高；发布后市场已在定价，靠其它族体现
@@ -502,10 +564,13 @@ def _sig_macro(as_of: date, now: datetime | None = None) -> FamilySignal:
         sig.stress = 1.0
         sig.tags.append("event_pending")
         sig.headline = f"⚠️ 今晚有 {labels}（发布前，结果出来前别重仓押方向）"
+        sig.plain = (f"今晚有重磅经济数据要公布（{labels}）。数据出来前谁也不知道好坏，"
+                     "这种时候重仓押一个方向风险大，最好等数据落地再说。")
     else:
         sig.stress = 0.5
         sig.tags.append("event_released")
         sig.headline = f"今晚 {labels} 已/将发布，关注数据 vs 预期"
+        sig.plain = f"今晚的经济数据（{labels}）已经/即将公布，市场正在消化结果。"
     return sig
 
 
@@ -547,14 +612,14 @@ def _holdings_overlay(families: list[FamilySignal], holdings: list[dict] | None)
         reasons = []
         if base in AI_HARDWARE or sym in AI_HARDWARE:
             if ai_hardware_hot:
-                reasons.append("AI 硬件链承压（半导体/海外半导体先跌），按纪律线不主动加仓")
+                reasons.append("你这只是芯片/AI 硬件股，今晚芯片是重灾区，别加仓，盯好你的止损线")
             elif futures_hot:
-                reasons.append("科技期货走弱，注意开盘波动")
+                reasons.append("科技股盘前走弱，今晚开盘波动可能大，先观望")
         if base in MEGA_PLATFORM:
             if megacap_hot:
-                reasons.append("Nasdaq 权重股盘前普跌，今晚不追")
+                reasons.append("大科技股今晚被普遍抛售，别追高")
             elif rates_hot:
-                reasons.append("利率上行压高估值成长，留意")
+                reasons.append("利率上涨会压高估值科技股，今晚留意")
         # 注：不做"利率高就给所有持仓贴标签"的兜底——防御/低估值票（如 KO）
         # 反而相对受益，乱贴反而误导。只对能明确分类的持仓归因。
         if reasons:
@@ -618,9 +683,12 @@ def compute_gate(
     # 触发原因 & 压力源
     pressure_sources = [f.label for f in families if f.available and f.stress >= 2.0]
     reasons = []
+    reasons_plain = []
     for f in sorted(families, key=lambda x: -x.stress):
         if f.available and f.stress >= 1.0:
             reasons.append(f"{f.label}：{f.headline}")
+            if f.plain:
+                reasons_plain.append(f.plain)
 
     holdings_impact = _holdings_overlay(families, holdings)
 
@@ -630,7 +698,9 @@ def compute_gate(
         color=color,
         composite=round(composite, 3),
         can_buy=CAN_BUY.get(color, ""),
+        headline_plain=HEADLINE_PLAIN.get(color, ""),
         reasons=reasons,
+        reasons_plain=reasons_plain,
         families=[f.to_dict() for f in families],
         holdings_impact=holdings_impact,
         pressure_sources=pressure_sources,
