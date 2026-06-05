@@ -10,6 +10,10 @@
   受益路径         ← chain_metadata.chain_role + layman_intro
   证据置信度       ← chain_metadata.source
   AI 关联强度      ← 本模块按 chain 反推（强/中/弱/无）
+
+辅助解释字段：
+  瓶颈强度         ← chain / chain_role 反推，回答"是不是 AI 扩张绕不开的环节"
+  预期拥挤度       ← 系统分 / ETF 共识 / 链趋势反推，回答"好消息是否可能已较充分反映"
 """
 from __future__ import annotations
 
@@ -31,6 +35,7 @@ AI_STRENGTH_BY_CHAIN: dict[str, str] = {
     "机器人/自动化": "强",
     "互联网/云": "中",
     "核能 / 铀": "中",
+    "稀缺资源": "中",
     "量子计算": "弱",
     "光伏储能": "弱",
     "创新药": "无",
@@ -134,6 +139,126 @@ def derive_ai_strength(chain: str | None) -> str | None:
     if not chain:
         return None
     return AI_STRENGTH_BY_CHAIN.get(chain, "无")
+
+
+# ─────────────── AI 投资解释字段：瓶颈强度 / 预期拥挤度 ───────────────
+# 这两个字段只用于帮助用户决定"先研究谁"，不进入推荐算法，不写库。
+HIGH_BOTTLENECK_CHAINS = {"数据中心电力", "核能 / 铀", "稀缺资源"}
+MID_BOTTLENECK_CHAINS = {"AI 算力", "互联网/云", "机器人/自动化"}
+LOW_BOTTLENECK_CHAINS = {"量子计算", "光伏储能"}
+
+HIGH_BOTTLENECK_KEYWORDS = (
+    "hbm", "内存", "memory",
+    "光模块", "cpo", "光通信", "optical",
+    "ai 芯片", "ai芯片", "gpu", "asic", "xpu",
+    "晶圆", "代工", "foundry", "半导体设备", "先进封装", "封装",
+    "液冷", "水冷", "散热", "cooling", "thermal",
+    "电力", "电网", "供电", "变压器", "ups", "grid", "power",
+    "核", "铀", "smr", "反应堆", "nuclear", "uranium",
+    "稀土", "rare earth",
+)
+
+
+def _norm_signal_text(*parts: str | None) -> str:
+    return " ".join(str(p or "").lower() for p in parts)
+
+
+def derive_bottleneck_signal(
+    chain: str | None,
+    chain_role: str | None = None,
+    layman_intro: str | None = None,
+    delta_7d: float | None = None,
+) -> dict[str, Any]:
+    """解释这只票是否处在 AI 扩张的瓶颈环节。
+
+    返回"高/中/低/未知"和一句可展示理由。它是分类解释，不是买入信号。
+    """
+    if not chain:
+        return {"level": "未知", "score": 0, "reason": "缺 chain 标签，无法判断瓶颈位置"}
+
+    hay = _norm_signal_text(chain, chain_role, layman_intro)
+    keyword_hit = next((kw for kw in HIGH_BOTTLENECK_KEYWORDS if kw in hay), None)
+
+    if chain in HIGH_BOTTLENECK_CHAINS or keyword_hit:
+        level, score = "高", 3
+        if chain == "数据中心电力":
+            reason = "AI 数据中心继续扩张会先卡在电力、并网、散热和交付能力"
+        elif chain == "核能 / 铀":
+            reason = "AI 数据中心需要稳定电力，核电/铀是中长期供给约束"
+        elif chain == "稀缺资源":
+            reason = "AI 硬件、机器人和电气化供应链会放大关键材料约束"
+        elif keyword_hit:
+            reason = f"角色命中「{keyword_hit}」，属于 AI 工厂扩张的关键供给环节"
+        else:
+            reason = "处在 AI 扩张较难绕开的供给环节"
+    elif chain in MID_BOTTLENECK_CHAINS:
+        level, score = "中", 2
+        reason = "和 AI 扩张相关，但需要看订单兑现、客户渗透或平台竞争"
+    elif chain in LOW_BOTTLENECK_CHAINS:
+        level, score = "低", 1
+        reason = "更偏远期主题或间接受益，短期不一定是扩张瓶颈"
+    else:
+        level, score = "中", 2
+        reason = "AI 相关性存在，但瓶颈属性需要进一步人工核实"
+
+    if delta_7d is not None and delta_7d >= MAINLINE_RISE_DELTA:
+        reason += "；近 7 天链条热度在升温"
+    elif delta_7d is not None and delta_7d <= MAINLINE_FALL_DELTA:
+        reason += "；近 7 天链条热度在降温"
+
+    return {"level": level, "score": score, "reason": reason}
+
+
+def derive_expectation_crowding(
+    system_score: float | None = None,
+    etf_count: int = 0,
+    etf_weight_sum: float = 0.0,
+    chain_delta_7d: float | None = None,
+    research_score: float | None = None,
+) -> dict[str, Any]:
+    """估算市场预期是否拥挤。
+
+    这是"热度代理"：系统分、ETF 共识和链趋势越集中，越说明好消息可能已经被市场关注。
+    它不能替代估值和财务反证。
+    """
+    points = 0
+    reasons: list[str] = []
+
+    if system_score is not None:
+        if system_score >= 85:
+            points += 2
+            reasons.append("系统分很高")
+        elif system_score >= 75:
+            points += 1
+            reasons.append("系统分偏高")
+
+    if etf_count >= 3 or etf_weight_sum >= 20:
+        points += 2
+        reasons.append("ETF 共识集中")
+    elif etf_count >= 1 or etf_weight_sum >= 8:
+        points += 1
+        reasons.append("已有 ETF 共识")
+
+    if chain_delta_7d is not None and chain_delta_7d >= MAINLINE_RISE_DELTA:
+        points += 1
+        reasons.append("链趋势升温")
+
+    if research_score is not None and research_score >= 80:
+        points += 1
+        reasons.append("研究优先级很高")
+
+    if points >= 4:
+        level, score = "高", 3
+        tail = "先看估值、回撤和买前反证，避免把好公司买成高预期交易"
+    elif points >= 2:
+        level, score = "中", 2
+        tail = "需要确认订单和估值是否还能支撑"
+    else:
+        level, score = "低", 1
+        tail = "公开热度暂不集中，但仍需看基本面和流动性"
+
+    reason = " + ".join(reasons) if reasons else "缺少明显热度信号"
+    return {"level": level, "score": score, "reason": f"{reason}；{tail}"}
 
 
 # ─────────────── 覆盖率审计阈值 ───────────────
@@ -502,6 +627,16 @@ def build_research_shortlist(con, top_n: int = 5) -> dict[str, Any]:
             trend_pts = 5; trend_label = "持稳"
 
         total = round(sys_pts + etf_pts + evi_pts + strength_pts + trend_pts, 1)
+        bottleneck_signal = derive_bottleneck_signal(
+            info["chain"], info.get("chain_role"), info.get("layman_intro"), delta
+        )
+        crowding_signal = derive_expectation_crowding(
+            system_score=sys_score,
+            etf_count=n_etfs,
+            etf_weight_sum=etf_weight,
+            chain_delta_7d=delta,
+            research_score=total,
+        )
 
         # why_now 多源理由
         why_chips = []
@@ -536,6 +671,8 @@ def build_research_shortlist(con, top_n: int = 5) -> dict[str, Any]:
             "chain_delta_7d": round(delta, 2),
             "trend_label": trend_label,
             "raw_system_score": round(sys_score, 1),
+            "bottleneck_strength": bottleneck_signal,
+            "expectation_crowding": crowding_signal,
             "why_chips": why_chips,
         })
 
@@ -915,6 +1052,7 @@ def build_ai_radar_payload(con) -> dict[str, Any]:
             if derive_ai_strength(p["chain"]) == "强"
         )
         delta = chain_delta.get(chain)
+        bottleneck_signal = derive_bottleneck_signal(chain, delta_7d=delta)
         chains.append({
             "chain": chain,
             "n_stocks": len(items),
@@ -923,6 +1061,7 @@ def build_ai_radar_payload(con) -> dict[str, Any]:
             "ai_strength": ai_strength,
             "delta_7d": round(delta, 2) if delta is not None else None,
             "mainline_status": classify_mainline(delta),
+            "bottleneck_strength": bottleneck_signal,
             "top_picks": [
                 _format_pick(p, watchlist_symbols)
                 for p in sorted(items, key=lambda x: -x["total_score"])[:5]
@@ -992,11 +1131,18 @@ def _format_pick(p: dict, watchlist_symbols: set) -> dict[str, Any]:
         "symbol": p["symbol"],
         "name": p["name"],
         "score": round(p["total_score"], 1),
+        "chain": p["chain"],
         "chain_tier": p["chain_tier"],
         "chain_role": p["chain_role"],
         "layman_intro": p["layman_intro"],
         "chain_source": p["chain_source"],
         "ai_strength": derive_ai_strength(p["chain"]),
+        "bottleneck_strength": derive_bottleneck_signal(
+            p["chain"], p.get("chain_role"), p.get("layman_intro")
+        ),
+        "expectation_crowding": derive_expectation_crowding(
+            system_score=float(p["total_score"]) if p.get("total_score") is not None else None
+        ),
         "in_watchlist": p["symbol"] in watchlist_symbols,
     }
 
@@ -1048,6 +1194,24 @@ def _source_badge(source: str | None) -> str:
     return f'<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-slate-50 text-slate-500 ring-1 ring-slate-200">{label}</span>'
 
 
+def _signal_badge(signal: dict[str, Any] | None, prefix: str) -> str:
+    """渲染"瓶颈强度 / 预期拥挤度"解释 badge。"""
+    sig = signal or {"level": "未知", "reason": "缺少数据"}
+    level = sig.get("level") or "未知"
+    reason = sig.get("reason") or ""
+    color = {
+        "高": "bg-rose-50 text-rose-700 ring-rose-200",
+        "中": "bg-amber-50 text-amber-700 ring-amber-200",
+        "低": "bg-emerald-50 text-emerald-700 ring-emerald-200",
+        "未知": "bg-slate-50 text-slate-500 ring-slate-200",
+    }.get(level, "bg-slate-50 text-slate-500 ring-slate-200")
+    return (
+        f'<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] '
+        f'font-medium ring-1 {color}" title="{_esc(reason)}">'
+        f'{_esc(prefix)}{_esc(level)}</span>'
+    )
+
+
 def _market_label(m: str) -> str:
     return {"US": "🇺🇸", "HK": "🇭🇰", "CN": "🇨🇳"}.get(m, m)
 
@@ -1072,6 +1236,8 @@ def _render_research_shortlist(sl: dict[str, Any]) -> str:
         evidence = it.get("evidence_status") or "待补公司证据"
         evidence_color = "text-emerald-700" if evidence == "confirmed" else "text-slate-500"
         chips = " · ".join(it.get("why_chips") or [])
+        bottleneck = it.get("bottleneck_strength")
+        crowding = it.get("expectation_crowding")
         # 低置信度市场（如 A 股 F-Score 缺）加 ⚠️ badge
         warn = pick_confidence_warning(it.get("market"))
         warn_badge = (
@@ -1089,6 +1255,14 @@ def _render_research_shortlist(sl: dict[str, Any]) -> str:
   <td class="py-2 pr-2 align-top">
     <div class="text-[12px] text-slate-800">{_esc(it["chain"])} · {_esc(it["chain_role"] or "")}</div>
     <div class="text-[11px] text-slate-500 truncate max-w-[360px] md:max-w-[520px]">{_esc(chips)}</div>
+  </td>
+  <td class="py-2 pr-2 align-top text-[12px] whitespace-nowrap">
+    {_signal_badge(bottleneck, "")}
+    <div class="text-[10px] text-slate-400 mt-0.5 max-w-[120px] truncate">{_esc((bottleneck or {}).get("reason", ""))}</div>
+  </td>
+  <td class="py-2 pr-2 align-top text-[12px] whitespace-nowrap">
+    {_signal_badge(crowding, "")}
+    <div class="text-[10px] text-slate-400 mt-0.5 max-w-[120px] truncate">{_esc((crowding or {}).get("reason", ""))}</div>
   </td>
   <td class="py-2 pr-2 align-top text-[12px] whitespace-nowrap">{_strength_badge(it["ai_strength"])}</td>
   <td class="py-2 pr-2 align-top text-[12px] whitespace-nowrap"><span class="{trend_color}">{_esc(trend_label)}</span></td>
@@ -1111,12 +1285,14 @@ def _render_research_shortlist(sl: dict[str, Any]) -> str:
     <span class="text-[11px] text-slate-500">候选池 {n_cand} 只 · 取 top {len(sl["items"])}</span>
   </div>
   <div class="overflow-x-auto">
-    <table class="w-full min-w-[760px]">
+    <table class="w-full min-w-[980px]">
       <thead>
         <tr class="text-[10px] text-slate-400 uppercase tracking-wide">
           <th class="py-1 pr-2 text-left font-normal">序号</th>
           <th class="py-1 pr-2 text-left font-normal">标的</th>
           <th class="py-1 pr-2 text-left font-normal">为什么现在看</th>
+          <th class="py-1 pr-2 text-left font-normal">瓶颈强度</th>
+          <th class="py-1 pr-2 text-left font-normal">预期拥挤度</th>
           <th class="py-1 pr-2 text-left font-normal">AI 关联</th>
           <th class="py-1 pr-2 text-left font-normal">链趋势</th>
           <th class="py-1 pr-2 text-left font-normal">公司证据</th>
@@ -1129,6 +1305,7 @@ def _render_research_shortlist(sl: dict[str, Any]) -> str:
   <div class="text-[10px] text-slate-500 mt-2 leading-relaxed">
     研究优先级 = 系统打分 30 + ETF 共识 25 + 公司证据 20 + AI 关联强度 15 + 趋势 10。下一步仍需到
     <a href="#buy-research" class="text-violet-700 hover:underline">买前研究</a> 做估值、财务和风险反证。
+    瓶颈强度回答"是不是 AI 扩张绕不开的环节"；预期拥挤度是热度代理，回答"好消息是否可能已被市场关注"，不替代估值结论。
   </div>
 </div>
 """
@@ -2270,11 +2447,20 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
                 f'bg-rose-50 text-rose-700 ring-1 ring-rose-200 ml-1" title="{_esc(p_warn)}">⚠️ 低置信</span>'
                 if p_warn else ""
             )
+            p_bottleneck = p.get("bottleneck_strength") or derive_bottleneck_signal(
+                p.get("chain"), p.get("chain_role"), p.get("layman_intro")
+            )
+            p_crowding = derive_expectation_crowding(
+                system_score=p.get("score"),
+                chain_delta_7d=c.get("delta_7d"),
+            )
             rows.append(f"""
 <tr class="border-t border-slate-100">
   <td class="py-1.5 pr-2 align-top text-[12px] whitespace-nowrap">{_market_label(p["market"])} <span class="font-mono">{_esc(p["symbol"])}</span>{warn_badge}</td>
   <td class="py-1.5 pr-2 align-top text-[12px]">{_esc(p["name"] or "")}</td>
   <td class="py-1.5 pr-2 align-top text-[12px] font-semibold text-slate-800 text-right whitespace-nowrap">{p["score"]:.1f}</td>
+  <td class="py-1.5 pr-2 align-top text-[11px] whitespace-nowrap">{_signal_badge(p_bottleneck, "")}</td>
+  <td class="py-1.5 pr-2 align-top text-[11px] whitespace-nowrap">{_signal_badge(p_crowding, "")}</td>
   <td class="py-1.5 pr-2 align-top text-[11px] text-slate-600">{_esc(role)} {tier_badge}<div class="text-[10px] text-slate-400 mt-0.5">{_esc(intro)}</div></td>
   <td class="py-1.5 pr-2 align-top text-[11px] whitespace-nowrap">{_strength_badge(p["ai_strength"])} {_source_badge(p["chain_source"])}</td>
   <td class="py-1.5 pl-2 align-top text-[11px] whitespace-nowrap">{_watchlist_badge(p["in_watchlist"])}</td>
@@ -2285,6 +2471,7 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
         delta_color = "text-emerald-700" if (delta or 0) >= MAINLINE_RISE_DELTA else \
                       "text-rose-700" if (delta or 0) <= MAINLINE_FALL_DELTA else "text-slate-500"
         delta_txt = f'{delta:+.1f}' if delta is not None else 'N/A'
+        chain_bottleneck = c.get("bottleneck_strength") or derive_bottleneck_signal(c.get("chain"), delta_7d=delta)
 
         # 该 chain 对应哪些前瞻主题
         # 设计选择：chain 卡只挂"对应主题"小徽章，不嵌入主题宏观证据。
@@ -2329,6 +2516,7 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
       <div class="flex items-center gap-2 flex-wrap">
         <span class="text-base font-bold text-slate-900">{_esc(c["chain"])}</span>
         {_strength_badge(c["ai_strength"])}
+        {_signal_badge(chain_bottleneck, "瓶颈")}
         <span class="text-[12px] text-slate-500">· {c["n_stocks"]} 只 · 均分 {c["avg_score"]:.1f}</span>
       </div>
       {themes_header_html}
@@ -2340,19 +2528,23 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
     </div>
   </div>
   {theme_evidence_html}
-  <table class="w-full text-[12px]">
-    <thead>
-      <tr class="text-[10px] text-slate-400 uppercase tracking-wide">
-        <th class="py-1 pr-2 text-left font-normal">市场/代码</th>
-        <th class="py-1 pr-2 text-left font-normal">名称</th>
-        <th class="py-1 pr-2 text-right font-normal">系统分</th>
-        <th class="py-1 pr-2 text-left font-normal">受益路径</th>
-        <th class="py-1 pr-2 text-left font-normal">AI 关联 · 证据</th>
-        <th class="py-1 pl-2 text-left font-normal">状态</th>
-      </tr>
-    </thead>
-    <tbody>{"".join(rows)}</tbody>
-  </table>
+  <div class="overflow-x-auto">
+    <table class="w-full text-[12px] min-w-[900px]">
+      <thead>
+        <tr class="text-[10px] text-slate-400 uppercase tracking-wide">
+          <th class="py-1 pr-2 text-left font-normal">市场/代码</th>
+          <th class="py-1 pr-2 text-left font-normal">名称</th>
+          <th class="py-1 pr-2 text-right font-normal">系统分</th>
+          <th class="py-1 pr-2 text-left font-normal">瓶颈强度</th>
+          <th class="py-1 pr-2 text-left font-normal">预期拥挤度</th>
+          <th class="py-1 pr-2 text-left font-normal">受益路径</th>
+          <th class="py-1 pr-2 text-left font-normal">AI 关联 · 证据</th>
+          <th class="py-1 pl-2 text-left font-normal">状态</th>
+        </tr>
+      </thead>
+      <tbody>{"".join(rows)}</tbody>
+    </table>
+  </div>
 </div>
 """)
 

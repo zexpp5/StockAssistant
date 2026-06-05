@@ -192,6 +192,99 @@ class TestNonAIFilteredOut(unittest.TestCase):
 
 
 # ──────────────────────────────────────────────────────────────
+# T2b: AI 雷达辅助解释字段
+# ──────────────────────────────────────────────────────────────
+class TestRadarDecisionFields(unittest.TestCase):
+    """瓶颈强度 / 预期拥挤度只能作为解释字段，不能变推荐信号."""
+
+    def test_bottleneck_signal_by_chain_and_role(self):
+        from stock_research.core.ai_radar import derive_bottleneck_signal
+
+        self.assertEqual(
+            derive_bottleneck_signal("数据中心电力", "电力供给/电网")["level"],
+            "高",
+        )
+        self.assertEqual(
+            derive_bottleneck_signal("AI 算力", "HBM 内存")["level"],
+            "高",
+        )
+        self.assertEqual(
+            derive_bottleneck_signal("互联网/云", "云/SaaS")["level"],
+            "中",
+        )
+        self.assertEqual(
+            derive_bottleneck_signal("量子计算", "量子硬件")["level"],
+            "低",
+        )
+
+    def test_expectation_crowding_is_heat_proxy(self):
+        from stock_research.core.ai_radar import derive_expectation_crowding
+
+        hot = derive_expectation_crowding(
+            system_score=88,
+            etf_count=3,
+            etf_weight_sum=22,
+            chain_delta_7d=3,
+            research_score=82,
+        )
+        quiet = derive_expectation_crowding(
+            system_score=62,
+            etf_count=0,
+            etf_weight_sum=0,
+            chain_delta_7d=None,
+            research_score=40,
+        )
+
+        self.assertEqual(hot["level"], "高")
+        self.assertIn("估值", hot["reason"], "高拥挤只提示看估值，不应变成买卖信号")
+        self.assertEqual(quiet["level"], "低")
+
+    def test_render_shows_decision_field_headers(self):
+        from stock_research.core.ai_radar import render_ai_radar_section
+
+        html = render_ai_radar_section({
+            "n_picks_total": 1,
+            "n_picks_with_chain": 1,
+            "n_picks_with_any_chain": 1,
+            "data_generated_at": "2026-06-02T10:00:00",
+            "data_universe": "system_tech_universe",
+            "chains": [{
+                "chain": "数据中心电力",
+                "n_stocks": 1,
+                "avg_score": 82.0,
+                "strong_count": 1,
+                "ai_strength": "强",
+                "delta_7d": 3.0,
+                "mainline_status": "📈 主线发酵中",
+                "mapped_themes": [],
+                "top_picks": [{
+                    "market": "US",
+                    "symbol": "VST",
+                    "name": "Vistra",
+                    "score": 82.0,
+                    "chain": "数据中心电力",
+                    "chain_tier": "下游",
+                    "chain_role": "电力供给/电网",
+                    "layman_intro": "AI 数据中心电力需求带动电网和发电资产",
+                    "chain_source": "rule_classify",
+                    "ai_strength": "强",
+                    "in_watchlist": False,
+                }],
+            }],
+            "filtered_non_ai_chains": [],
+            "coverage_audit": {
+                "n_uncovered": 0,
+                "threshold_score": 70,
+                "items": [],
+            },
+        })
+
+        self.assertIn("瓶颈强度", html)
+        self.assertIn("预期拥挤度", html)
+        self.assertIn("瓶颈高", html)
+
+
+# ──────────────────────────────────────────────────────────────
 # T3: candidate 不当 confirmed
 # ──────────────────────────────────────────────────────────────
 class TestConfirmedRule(unittest.TestCase):
