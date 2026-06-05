@@ -9,14 +9,15 @@
   5. 杠杆同比下降      (leverage_down) Total Debt / Total Equity 下降
 
 每项 1 分，0-5 总分；写入 factor_metadata.f_score 时映射到 0-9 量级（×1.8）以与完整版兼容。
-source 字段标 "yfinance_p5_lite" / "baostock_p5_lite_a_share" / "akshare_p5_lite_a_share"，
-明示是简化版与数据源。
+source 字段标 "yfinance_p5_lite" / "tushare_p5_lite_a_share" / "baostock_p5_lite_a_share"
+  / "akshare_p5_lite_a_share"，明示是简化版与数据源。
 
 数据源：
   - 美/港股：yfinance.Ticker.financials/balance_sheet/cashflow（最近 2 年）
-  - A 股：baostock 交易所官方季报（主源，无 IP 限流）；返 None 时回退 akshare。
-          2026-06-02 切换：akshare.stock_financial_abstract 按 IP 限流，220 只批量
-          连打成功率仅 ~20%，故主源改 baostock_client.fetch_a_share_p5_inputs。
+  - A 股：Tushare Pro 官方季报（2026-06-05 起主源，付费、fina_indicator 直给 ROA/
+          负债率、无 IP 限流）→ baostock（免费官方季报）→ akshare（东财聚合）三级兜底。
+          沿革：akshare.stock_financial_abstract 按 IP 限流 220 只成功率仅 ~20%，
+          2026-06-02 切 baostock；2026-06-05 升 Tushare Pro 为主源，baostock 退二线。
 
 用法：
   python3 scripts/tools/compute_piotroski_v2.py --markets US,HK            # 算 US+HK
@@ -349,6 +350,30 @@ def compute_p5_lite_baostock(symbol_with_suffix: str) -> dict | None:
     return result
 
 
+def compute_p5_lite_tushare(symbol_with_suffix: str) -> dict | None:
+    """A 股 P5-Lite —— Tushare Pro 季报取数（2026-06-05 起主源）。
+
+    打分逻辑与 baostock/akshare 版完全一致；Tushare fina_indicator 直接给
+    ROA / 资产负债率，官方季报无 IP 限流。返 None 时调用方回退 baostock → akshare。
+    """
+    try:
+        from stock_research.core.tushare_client import fetch_a_share_p5_inputs  # type: ignore
+    except ImportError:
+        return None
+    inp = fetch_a_share_p5_inputs(symbol_with_suffix)
+    if not inp:
+        return None
+    result = _score_p5_lite(
+        inp.get("ni_y0"), inp.get("cfo_y0"),
+        inp.get("roa_y0"), inp.get("roa_y4"),
+        inp.get("lev_y0"), inp.get("lev_y4"),
+        source="tushare_p5_lite_a_share",
+    )
+    if result is not None:
+        result["report_periods"] = inp.get("report_periods")
+    return result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--markets", default="US,HK", help="逗号分隔市场代码")
@@ -401,8 +426,11 @@ def main() -> int:
     by_market = {}
     for market, symbol in targets:
         if market == "CN":
-            # baostock 主源（交易所官方季报，无 IP 限流）；返 None 时回退 akshare
-            result = compute_p5_lite_baostock(symbol)
+            # Tushare Pro 主源（付费、官方季报、fina_indicator 直给 ROA/负债率）
+            # → baostock（免费官方季报）→ akshare（东财聚合）三级兜底
+            result = compute_p5_lite_tushare(symbol)
+            if result is None:
+                result = compute_p5_lite_baostock(symbol)
             if result is None:
                 result = compute_p5_lite_akshare(symbol)
         else:

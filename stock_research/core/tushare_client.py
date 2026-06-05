@@ -196,6 +196,89 @@ def fetch_a_share_quote(code: str) -> dict[str, Any]:
 
 
 # ────────────────────────────────────────────────────────
+# A 股财报 — P5-Lite F-Score 输入
+# ────────────────────────────────────────────────────────
+
+def fetch_a_share_p5_inputs(code: str) -> dict[str, Any] | None:
+    """A 股 P5-Lite F-Score 的 5 项原始输入（最新季 y0 + 去年同季 y4）。
+
+    契约镜像 baostock_client.fetch_a_share_p5_inputs，作为其升级主源：
+      - Tushare fina_indicator 直接给 roa / debt_to_assets，免去 baostock 的派生
+        （baostock 只给比率，需 ROA=roe/a2e、杠杆=1-1/a2e 自行推导）；
+      - 官方季报、无 IP 限流。
+    口径：income/cashflow/fina_indicator 均为季度累计（YTD），y0 与 y4 取相同季度同比。
+    返回 ni_y0/cfo_y0/roa_y0/roa_y4/lev_y0/lev_y4/report_periods/cfo_to_np。
+    下游 _score_p5_lite 全为同比/符号比较，roa/lev 单位（%）不影响打分。
+    """
+    pro = _get_pro()
+    if not pro:
+        return None
+    ts_code = to_ts_code(code)
+    if not ts_code:
+        return None
+    try:
+        start = (datetime.now() - timedelta(days=365 * 3)).strftime("%Y%m%d")
+        end = datetime.now().strftime("%Y%m%d")
+        fi = pro.fina_indicator(
+            ts_code=ts_code, start_date=start, end_date=end,
+            fields="end_date,roa,debt_to_assets",
+        )
+        inc = pro.income(
+            ts_code=ts_code, start_date=start, end_date=end,
+            fields="end_date,report_type,n_income",
+        )
+        cf = pro.cashflow(
+            ts_code=ts_code, start_date=start, end_date=end,
+            fields="end_date,report_type,n_cashflow_act",
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("tushare p5 fetch failed for %s: %s", code, e)
+        return None
+
+    def _index(df, val_col: str, only_consolidated: bool = False) -> dict[str, float | None]:
+        """end_date → 数值；去重（Tushare 同报告期返多行）保留首个=最新公告版。"""
+        out: dict[str, float | None] = {}
+        if df is None or getattr(df, "empty", True):
+            return out
+        if only_consolidated and "report_type" in df.columns:
+            df = df[df["report_type"].astype(str) == "1"]
+        for _, r in df.iterrows():
+            ed = str(r.get("end_date") or "")
+            if not ed or ed in out:
+                continue
+            out[ed] = _safe_float(r.get(val_col))
+        return out
+
+    roa_map = _index(fi, "roa")
+    lev_map = _index(fi, "debt_to_assets")
+    ni_map = _index(inc, "n_income", only_consolidated=True)
+    cfo_map = _index(cf, "n_cashflow_act", only_consolidated=True)
+
+    # y0 = 有净利润的最近报告期；y4 = 去年同季（同月日，年-1）
+    periods = sorted([d for d in ni_map if ni_map[d] is not None], reverse=True)
+    if not periods:
+        return None
+    y0 = periods[0]
+    y4 = f"{int(y0[:4]) - 1}{y0[4:]}"
+
+    ni_y0 = ni_map.get(y0)
+    cfo_y0 = cfo_map.get(y0)
+    cfo_to_np = (cfo_y0 / ni_y0) if (cfo_y0 is not None and ni_y0) else None
+    y4_present = any(y4 in m for m in (roa_map, lev_map, ni_map))
+    return {
+        "ni_y0": ni_y0,
+        "cfo_y0": cfo_y0,
+        "roa_y0": roa_map.get(y0),
+        "roa_y4": roa_map.get(y4),
+        "lev_y0": lev_map.get(y0),
+        "lev_y4": lev_map.get(y4),
+        "report_periods": {"y0": y0, "y4": y4 if y4_present else None},
+        "cfo_to_np": cfo_to_np,
+        "source": "tushare",
+    }
+
+
+# ────────────────────────────────────────────────────────
 # 工具
 # ────────────────────────────────────────────────────────
 
