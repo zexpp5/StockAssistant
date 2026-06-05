@@ -7,11 +7,11 @@
   - 创业板指 = 深圳创业板成长股龙头
   三者合并后 ~200 只，AI 主题密度高，命中率好
 
-数据源：
-  - 沪深 300：baostock query_hs300_stocks（官方接口）
-  - 沪深 300 行业映射：baostock query_stock_industry（用于过滤科技子集）
-  - 科创 50：akshare index_stock_cons_csindex(symbol='000688')
-  - 创业板指：akshare index_stock_cons_sina(symbol='399006')
+数据源（2026-06-05 升级）：
+  - 指数成分名单：Tushare index_weight（沪深300 000300.SH / 科创50 000688.SH /
+    创业板指 399006.SZ）—— 替代 baostock query_hs300 + akshare index_stock_cons_*
+  - 行业映射：baostock query_stock_industry（国标分类，仅用于 _is_tech 过滤；
+    保留以保持科技子集口径不变，不随成分源切换而改变 universe 构成）
 
 输出：yfinance 格式 ticker（XXXXXX.SS / XXXXXX.SZ）+ 元数据
 """
@@ -43,6 +43,14 @@ def _is_tech(industry: str) -> bool:
     return any(kw in industry for kw in TECH_INDUSTRY_KEYWORDS)
 
 
+def _con_to_bs(con_code: str) -> str:
+    """Tushare con_code '600519.SH' → baostock 风格 'sh.600519'（查行业表用）。"""
+    code, _, ex = str(con_code).partition(".")
+    if not (code.isdigit() and len(code) == 6) or ex not in ("SH", "SZ"):
+        return ""
+    return f"{ex.lower()}.{code}"
+
+
 def fetch_a_share_tech_universe(date: str | None = None) -> list[dict]:
     """方案 B：hs300 科技子集 + 科创 50 + 创业板指。
 
@@ -60,7 +68,7 @@ def fetch_a_share_tech_universe(date: str | None = None) -> list[dict]:
         source:       "hs300_tech" / "kechuang50" / "chuangyeban"  (追溯哪条路进的)
       }
     """
-    from . import baostock_client
+    from . import baostock_client, tushare_client
     if not date:
         date = datetime.now().strftime("%Y-%m-%d")
 
@@ -71,67 +79,57 @@ def fetch_a_share_tech_universe(date: str | None = None) -> list[dict]:
     if baostock_client._ensure_login():
         industry_map = baostock_client._industry_table()
 
-    # ── 1. baostock 沪深 300 → 按行业过滤科技子集
-    if baostock_client._ensure_login():
-        try:
-            import baostock as bs
-            rs = bs.query_hs300_stocks(date=date)
-            while rs.error_code == "0" and rs.next():
-                r = rs.get_row_data()  # [updateDate, code, code_name]
-                bs_code = r[1]
-                info = industry_map.get(bs_code, {})
-                industry = info.get("industry") or ""
-                if _is_tech(industry):
-                    seen[bs_code] = {
-                        "bs_code": bs_code,
-                        "name": r[2],
-                        "industry": industry,
-                        "source": "hs300_tech",
-                    }
-        except Exception as e:
-            logger.warning("hs300 拉取失败: %s", e)
-
-    # ── 2. akshare 科创 50（中证指数官方）
+    # ── 1. 沪深 300（Tushare index_weight）→ 按 baostock 国标行业过滤科技子集
+    #    成分名单走 Tushare（去 baostock query_hs300）；行业分类仍用 baostock 国标，
+    #    以保持 _is_tech 过滤口径不变（Tushare 行业是另一套体系，换源会改 universe 构成）。
     try:
-        import akshare as ak
-        df = ak.index_stock_cons_csindex(symbol="000688")
-        for _, row in df.iterrows():
-            code = str(row.get("成分券代码") or "").strip()
-            if not (code.isdigit() and len(code) == 6):
+        for con in tushare_client.fetch_index_cons("000300.SH"):
+            bs_code = _con_to_bs(con)
+            if not bs_code:
                 continue
-            bs_code = "sh." + code  # 科创板都在沪市
-            if bs_code in seen:
+            info = industry_map.get(bs_code, {})
+            industry = info.get("industry") or ""
+            if _is_tech(industry):
+                seen[bs_code] = {
+                    "bs_code": bs_code,
+                    "name": info.get("name") or "",
+                    "industry": industry,
+                    "source": "hs300_tech",
+                }
+    except Exception as e:
+        logger.warning("hs300(Tushare) 拉取失败: %s", e)
+
+    # ── 2. 科创 50（Tushare index_weight 000688.SH，全纳入）
+    try:
+        for con in tushare_client.fetch_index_cons("000688.SH"):
+            bs_code = _con_to_bs(con)
+            if not bs_code or bs_code in seen:
                 continue
             info = industry_map.get(bs_code, {})
             seen[bs_code] = {
                 "bs_code": bs_code,
-                "name": row.get("成分券名称") or "",
+                "name": info.get("name") or "",
                 "industry": info.get("industry") or "科创板",
                 "source": "kechuang50",
             }
     except Exception as e:
-        logger.warning("科创 50 拉取失败: %s", e)
+        logger.warning("科创 50(Tushare) 拉取失败: %s", e)
 
-    # ── 3. akshare 创业板指（新浪源）
+    # ── 3. 创业板指（Tushare index_weight 399006.SZ，全纳入）
     try:
-        import akshare as ak
-        df = ak.index_stock_cons_sina(symbol="399006")
-        for _, row in df.iterrows():
-            code = str(row.get("code") or "").strip()
-            if not (code.isdigit() and len(code) == 6):
-                continue
-            bs_code = "sz." + code  # 创业板都在深市
-            if bs_code in seen:
+        for con in tushare_client.fetch_index_cons("399006.SZ"):
+            bs_code = _con_to_bs(con)
+            if not bs_code or bs_code in seen:
                 continue
             info = industry_map.get(bs_code, {})
             seen[bs_code] = {
                 "bs_code": bs_code,
-                "name": row.get("name") or "",
+                "name": info.get("name") or "",
                 "industry": info.get("industry") or "创业板",
                 "source": "chuangyeban",
             }
     except Exception as e:
-        logger.warning("创业板指拉取失败: %s", e)
+        logger.warning("创业板指(Tushare) 拉取失败: %s", e)
 
     # 转 yfinance 格式
     out = []

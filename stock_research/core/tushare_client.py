@@ -116,6 +116,32 @@ def _basic_table() -> dict[str, dict[str, Any]]:
 
 
 # ────────────────────────────────────────────────────────
+# 指数成分
+# ────────────────────────────────────────────────────────
+
+def fetch_index_cons(index_code: str) -> list[str]:
+    """指数最新成分股 ts_code 列表（取返回数据里最新 trade_date）。
+
+    index_code 例：沪深300 000300.SH / 科创50 000688.SH / 创业板指 399006.SZ。
+    index_weight 月度更新，取最近 ~45 天窗口里最新一期成分；失败返回 []。
+    """
+    pro = _get_pro()
+    if not pro:
+        return []
+    try:
+        end = datetime.now().strftime("%Y%m%d")
+        start = (datetime.now() - timedelta(days=45)).strftime("%Y%m%d")
+        df = pro.index_weight(index_code=index_code, start_date=start, end_date=end)
+        if df is None or df.empty:
+            return []
+        latest = df["trade_date"].max()
+        return df[df["trade_date"] == latest]["con_code"].astype(str).tolist()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("tushare index_weight %s failed: %s", index_code, e)
+        return []
+
+
+# ────────────────────────────────────────────────────────
 # A 股行情
 # ────────────────────────────────────────────────────────
 
