@@ -48,6 +48,7 @@ CORE_LATEST_JSON = (
     "data/latest/risk_metrics.json",
     "data/discovery_candidates.json",
 )
+FACTOR_SCORES_TODAY_JSON = "data/latest/factor_scores_today.json"
 
 PRODUCTION_PIPELINE_STATUS_JSON = (
     "data/latest/pipeline_status_production.json",
@@ -665,7 +666,26 @@ def _surface_artifact_checks(
 ) -> None:
     """Checks that final user-visible artifacts are fresh and internally labeled."""
     artifact_summary: dict[str, Any] = {}
-    artifact_summary.update(_latest_json_checks(issues, CORE_LATEST_JSON, max_age_days=max_age_days))
+    core_latest_json = CORE_LATEST_JSON
+    factor_artifact_level = "FAIL"
+    f_score_coverage = None
+    if isinstance(summary.get("v2_f_score_coverage"), dict):
+        f_score_coverage = summary["v2_f_score_coverage"].get("coverage_pct")
+    try:
+        f_score_coverage_num = float(f_score_coverage)
+    except Exception:
+        f_score_coverage_num = None
+    if summary.get("schema_mode") == "v2" and f_score_coverage_num is not None and f_score_coverage_num >= 80.0:
+        core_latest_json = tuple(rel for rel in CORE_LATEST_JSON if rel != FACTOR_SCORES_TODAY_JSON)
+        factor_artifact_level = "INFO"
+    artifact_summary.update(_latest_json_checks(issues, core_latest_json, max_age_days=max_age_days))
+    if FACTOR_SCORES_TODAY_JSON not in core_latest_json:
+        artifact_summary.update(_latest_json_checks(
+            issues,
+            (FACTOR_SCORES_TODAY_JSON,),
+            max_age_days=max_age_days,
+            level=factor_artifact_level,
+        ))
     # IPO tab 数据源放宽到 2 天 + WARN：早班加跑后通常 <24h，给周末/失败一点 buffer
     artifact_summary.update(_latest_json_checks(
         issues, IPO_LATEST_JSON, max_age_days=max(max_age_days, 2), level="WARN"
@@ -1345,6 +1365,31 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
                         "markets": source_health.get("markets") or {},
                     },
                 ))
+        try:
+            from stock_research.core import tushare_client
+            tushare_health = tushare_client.source_health_snapshot(pipeline="production_acceptance")
+            tushare_source = (tushare_health.get("sources") or {}).get("tushare") or {}
+            tushare_status = str(tushare_source.get("status") or "unknown").lower()
+            summary["tushare_source_health"] = {
+                "status": tushare_status,
+                "reason": tushare_source.get("reason"),
+                "successes": tushare_source.get("successes") or {},
+                "last_event": tushare_source.get("last_event"),
+            }
+            if tushare_status not in {"ok", "healthy"}:
+                issues.append(_issue(
+                    "WARN",
+                    "tushare_source_degraded",
+                    "Tushare 付费源当前未处于 ok；A 股会回退到 akshare/baostock，页面和验收需显式标明降级",
+                    summary["tushare_source_health"],
+                ))
+        except Exception as e:
+            issues.append(_issue(
+                "WARN",
+                "tushare_source_health_unchecked",
+                "无法读取 Tushare 付费源健康状态",
+                str(e),
+            ))
 
         summary["latest_signal_counts"] = signal_counts
         if conn is not None:

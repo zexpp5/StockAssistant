@@ -15,7 +15,9 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -23,47 +25,132 @@ logger = logging.getLogger(__name__)
 _pro: Any = None
 _pro_init_failed = False
 _basic_cache: dict[str, dict[str, Any]] | None = None
+_TUSHARE_DISABLED_REASON: str | None = None
+_TUSHARE_EVENTS: list[dict[str, Any]] = []
+_TUSHARE_SUCCESSES: dict[str, str] = {}
 
 
 # ────────────────────────────────────────────────────────
 # 连接（进程内单例）
 # ────────────────────────────────────────────────────────
 
-def _get_pro() -> Any:
-    """惰性初始化 tushare pro_api 单例；token/库缺失时返回 None（不抛）。"""
-    global _pro, _pro_init_failed
-    if _pro is not None:
-        return _pro
-    if _pro_init_failed:
-        return None
+def _record_event(level: str, reason: str, endpoint: str, detail: str | None = None) -> None:
+    _TUSHARE_EVENTS.append({
+        "ts": datetime.now().isoformat(timespec="seconds"),
+        "level": level,
+        "reason": reason,
+        "endpoint": endpoint,
+        "detail": str(detail or "")[:300],
+    })
 
+
+def _record_success(endpoint: str) -> None:
+    _TUSHARE_SUCCESSES[endpoint] = datetime.now().isoformat(timespec="seconds")
+
+
+def _get_token() -> str | None:
     token = None
     try:
         from stock_research import config
         token = getattr(config, "TUSHARE_TOKEN", None)
     except Exception:
         token = None
-    if not token:
-        import os
-        token = os.environ.get("TUSHARE_TOKEN")
+    token = token or os.environ.get("TUSHARE_TOKEN")
+    if token:
+        return token
+    env_path = Path(__file__).resolve().parents[2] / ".env"
+    try:
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            raw = line.strip()
+            if not raw or raw.startswith("#") or "=" not in raw:
+                continue
+            key, value = raw.split("=", 1)
+            if key.strip() == "TUSHARE_TOKEN":
+                return value.strip().strip("'\"") or None
+    except Exception:
+        return None
+    return None
+
+
+def _get_pro() -> Any:
+    """惰性初始化 tushare pro_api 单例；token/库缺失时返回 None（不抛）。"""
+    global _pro, _pro_init_failed, _TUSHARE_DISABLED_REASON
+    if _pro is not None:
+        return _pro
+    if _pro_init_failed:
+        return None
+
+    token = _get_token()
     if not token:
         logger.warning("TUSHARE_TOKEN 未配置，Tushare A 股源不可用")
+        _TUSHARE_DISABLED_REASON = "missing_token"
+        _record_event("WARN", "missing_token", "pro_api")
         _pro_init_failed = True
         return None
 
     try:
         import tushare as ts
-        ts.set_token(token)
-        _pro = ts.pro_api()
+        _pro = ts.pro_api(token=token)
+        _record_success("pro_api")
         return _pro
     except ImportError:
         logger.warning("tushare 未安装；pip install tushare")
+        _TUSHARE_DISABLED_REASON = "package_missing"
+        _record_event("WARN", "package_missing", "pro_api")
         _pro_init_failed = True
         return None
     except Exception as e:  # noqa: BLE001
         logger.warning("tushare init failed: %s", e)
+        _TUSHARE_DISABLED_REASON = "init_failed"
+        _record_event("WARN", "init_failed", "pro_api", str(e))
         _pro_init_failed = True
         return None
+
+
+def source_health_snapshot(*, pipeline: str = "v2_cn") -> dict[str, Any]:
+    """Return Tushare source health for dashboard/acceptance surfaces.
+
+    This is intentionally read-only: it reports whether the paid source is
+    configured and whether recent requests failed, without writing project data.
+    """
+    status = "ok"
+    reason = None
+    if _TUSHARE_DISABLED_REASON:
+        status = "degraded"
+        reason = _TUSHARE_DISABLED_REASON
+    elif not _get_token():
+        status = "degraded"
+        reason = "missing_token"
+    elif any(e.get("level") in {"ERROR", "WARN"} for e in _TUSHARE_EVENTS):
+        status = "degraded"
+        reason = "recent_request_errors"
+    return {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "pipeline": pipeline,
+        "sources": {
+            "tushare": {
+                "status": status,
+                "reason": reason,
+                "last_event": _TUSHARE_EVENTS[-1] if _TUSHARE_EVENTS else None,
+                "events": _TUSHARE_EVENTS[-20:],
+                "successes": dict(_TUSHARE_SUCCESSES),
+                "affected_fields": [
+                    "A 股行情",
+                    "A 股财报 / F-Score",
+                    "A 股龙虎榜机构席位",
+                    "A 股指数成分池",
+                ],
+                "unaffected_fields": [
+                    "美股行情 / FMP",
+                    "港股行情",
+                    "北向个股时序（仍走 akshare）",
+                    "主推荐公式",
+                ],
+                "impact": "Tushare 降级时，A 股会回退到 akshare/baostock；页面必须标明来源降级，不能默默当作付费源成功。",
+                "operator_action": "检查 TUSHARE_TOKEN、tushare 依赖和 Tushare 权限；修复后重跑 A 股 universe / 价格 / 因子步骤。",
+            }
+        },
+    }
 
 
 # ────────────────────────────────────────────────────────
@@ -109,8 +196,10 @@ def _basic_table() -> dict[str, dict[str, Any]]:
                 "industry": r.get("industry"),
             }
         _basic_cache = out
+        _record_success("stock_basic")
         return out
     except Exception as e:  # noqa: BLE001
+        _record_event("WARN", "request_exception", "stock_basic", str(e))
         logger.warning("tushare stock_basic failed: %s", e)
         return {}
 
@@ -135,8 +224,10 @@ def fetch_index_cons(index_code: str) -> list[str]:
         if df is None or df.empty:
             return []
         latest = df["trade_date"].max()
+        _record_success(f"index_weight:{index_code}")
         return df[df["trade_date"] == latest]["con_code"].astype(str).tolist()
     except Exception as e:  # noqa: BLE001
+        _record_event("WARN", "request_exception", f"index_weight:{index_code}", str(e))
         logger.warning("tushare index_weight %s failed: %s", index_code, e)
         return []
 
@@ -171,6 +262,7 @@ def fetch_lhb_inst_window(start_date: str, end_date: str):
         try:
             df = pro.top_inst(trade_date=ds)
         except Exception:  # noqa: BLE001
+            _record_event("WARN", "request_exception", "top_inst", ds)
             continue
         if df is None or df.empty or "exalter" not in df.columns:
             continue
@@ -191,6 +283,7 @@ def fetch_lhb_inst_window(start_date: str, end_date: str):
             })
     if not rows:
         return None
+    _record_success("top_inst")
     return pd.DataFrame(rows)
 
 
@@ -234,6 +327,7 @@ def fetch_a_stock_quote(code: str) -> dict[str, Any] | None:
             circ_mv = _safe_float(br.get("circ_mv"))
 
         meta = _basic_table().get(ts_code, {})
+        _record_success("daily+daily_basic")
         return {
             "code": code,
             "ts_code": ts_code,
@@ -250,6 +344,7 @@ def fetch_a_stock_quote(code: str) -> dict[str, Any] | None:
             "source": "tushare/daily+daily_basic",
         }
     except Exception as e:  # noqa: BLE001
+        _record_event("WARN", "request_exception", "daily+daily_basic", str(e))
         logger.warning("tushare A quote failed for %s: %s", code, e)
         return None
 
@@ -311,6 +406,7 @@ def fetch_a_share_p5_inputs(code: str) -> dict[str, Any] | None:
             fields="end_date,report_type,n_cashflow_act",
         )
     except Exception as e:  # noqa: BLE001
+        _record_event("WARN", "request_exception", "p5_inputs", str(e))
         logger.warning("tushare p5 fetch failed for %s: %s", code, e)
         return None
 
@@ -344,6 +440,7 @@ def fetch_a_share_p5_inputs(code: str) -> dict[str, Any] | None:
     cfo_y0 = cfo_map.get(y0)
     cfo_to_np = (cfo_y0 / ni_y0) if (cfo_y0 is not None and ni_y0) else None
     y4_present = any(y4 in m for m in (roa_map, lev_map, ni_map))
+    _record_success("fina_indicator+income+cashflow")
     return {
         "ni_y0": ni_y0,
         "cfo_y0": cfo_y0,
@@ -430,8 +527,10 @@ def fetch_a_share_report(code: str, statement: str):
         keep = [c for c in mapping.values() if c in df.columns]
         out = df[keep].reset_index(drop=True)
         out.attrs["source"] = "tushare"
+        _record_success(api)
         return out
     except Exception as e:  # noqa: BLE001
+        _record_event("WARN", "request_exception", api, str(e))
         logger.warning("tushare report %s failed for %s: %s", statement, code, e)
         return None
 
@@ -442,7 +541,8 @@ def fetch_a_share_daily_qfq(code: str, start_date: str, end_date: str):
     start_date/end_date 为 YYYYMMDD。列含 date(YYYYMMDD 字符串)+ open/high/low/close/volume。
     失败返回 None。供 factor_model_china.momentum_a_share 直接消费（其只读 date/close）。
     """
-    if not _get_pro():  # 确保 token 已 set（pro_bar 依赖全局 token）
+    pro = _get_pro()
+    if not pro:
         return None
     ts_code = to_ts_code(code)
     if not ts_code:
@@ -450,6 +550,7 @@ def fetch_a_share_daily_qfq(code: str, start_date: str, end_date: str):
     try:
         import tushare as ts
         df = ts.pro_bar(
+            api=pro,
             ts_code=ts_code, adj="qfq",
             start_date=start_date, end_date=end_date,
         )
@@ -459,8 +560,10 @@ def fetch_a_share_daily_qfq(code: str, start_date: str, end_date: str):
             "trade_date": "date", "vol": "volume", "amount": "amount",
         })
         df["date"] = df["date"].astype(str)
+        _record_success("pro_bar:qfq")
         return df.reset_index(drop=True)
     except Exception as e:  # noqa: BLE001
+        _record_event("WARN", "request_exception", "pro_bar:qfq", str(e))
         logger.warning("tushare daily qfq failed for %s: %s", code, e)
         return None
 

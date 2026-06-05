@@ -730,16 +730,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           </thead>
           <tbody class="divide-y divide-slate-100">
             <tr><td class="py-2 pr-4 font-medium">yfinance</td><td class="py-2 pr-4 text-slate-700">美股 K 线 / 市值 / PE / SPY 期权链 PCR</td><td class="py-2 text-slate-500 text-xs">无</td></tr>
-            <tr><td class="py-2 pr-4 font-medium">akshare</td><td class="py-2 pr-4 text-slate-700">A 股财报 / 北向 / 龙虎榜 / IPO / 政策事件</td><td class="py-2 text-slate-500 text-xs">无</td></tr>
-            <tr><td class="py-2 pr-4 font-medium">baostock</td><td class="py-2 pr-4 text-slate-700">A 股二源校验（akshare 失败时顶上）</td><td class="py-2 text-slate-500 text-xs">无</td></tr>
+            <tr><td class="py-2 pr-4 font-medium">Tushare Pro</td><td class="py-2 pr-4 text-slate-700">A 股行情 / 财报 / 龙虎榜 / 指数成分主源</td><td class="py-2 text-slate-500 text-xs">TUSHARE_TOKEN</td></tr>
+            <tr><td class="py-2 pr-4 font-medium">akshare</td><td class="py-2 pr-4 text-slate-700">A 股北向时序 / 港股 / IPO / 政策事件兜底</td><td class="py-2 text-slate-500 text-xs">无</td></tr>
+            <tr><td class="py-2 pr-4 font-medium">baostock</td><td class="py-2 pr-4 text-slate-700">A 股二源校验（Tushare/akshare 失败时顶上）</td><td class="py-2 text-slate-500 text-xs">无</td></tr>
             <tr><td class="py-2 pr-4 font-medium">SEC EDGAR</td><td class="py-2 pr-4 text-slate-700">13F 大佬持仓（11 家机构季度）</td><td class="py-2 text-slate-500 text-xs">User-Agent</td></tr>
-            <tr><td class="py-2 pr-4 font-medium">FMP（免费档）</td><td class="py-2 pr-4 text-slate-700">财报 / DCF / 分析师预期</td><td class="py-2 text-slate-500 text-xs">FMP_API_KEY，250/天</td></tr>
+            <tr><td class="py-2 pr-4 font-medium">FMP Starter</td><td class="py-2 pr-4 text-slate-700">美股财报 / DCF / key metrics / 分析师预期</td><td class="py-2 text-slate-500 text-xs">FMP_API_KEY</td></tr>
             <tr><td class="py-2 pr-4 font-medium">Finnhub（免费档）</td><td class="py-2 pr-4 text-slate-700">美股新闻 / 内部人交易 / 评级</td><td class="py-2 text-slate-500 text-xs">FINNHUB_API_KEY</td></tr>
             <tr><td class="py-2 pr-4 font-medium">Google Trends</td><td class="py-2 pr-4 text-slate-700">搜索热度（情绪面）</td><td class="py-2 text-slate-500 text-xs">无（限流）</td></tr>
           </tbody>
         </table>
       </div>
-      <p class="text-xs text-slate-500 mt-2"><strong>已退役</strong>：OpenBB（2026-05-11 拆，源码只是 yfinance 包装层）。<strong>待充值激活</strong>：Tushare / Anthropic / FMP Starter。</p>
+      <p class="text-xs text-slate-500 mt-2"><strong>已退役</strong>：OpenBB（2026-05-11 拆，源码只是 yfinance 包装层）。<strong>已接入付费源</strong>：Tushare Pro / FMP Starter；Anthropic 仍按 API key 状态降级。</p>
     </div>
 
     <!-- 5.3 分析维度 -->
@@ -2783,11 +2784,11 @@ function switchDiscoveryView(view) {
         </div>
         <div class="bg-white rounded-lg p-3 border border-emerald-200">
           <p class="font-bold text-slate-800 mb-1">7. 执行层（2026-05-10 新增）</p>
-          <p class="text-xs text-slate-600">A 股 V2 lite 4 因子（估值/动量/数据质量/覆盖度）+ 实战约束 / IPO 打新日历 / 解禁减持事件 / 产业政策扫描 / 实盘防御 / OpenBB 综合情报 / DuckDB 持久化 · <span class="text-amber-700">F-Score/龙虎榜/北向/PEAD 待接入</span></p>
+          <p class="text-xs text-slate-600">A 股 V2 因子 + 实战约束 / IPO 打新日历 / 解禁减持事件 / 产业政策扫描 / 实盘防御 / DuckDB 持久化 · <span class="text-emerald-700">Tushare Pro 已接入 F-Score / 龙虎榜 / 指数成分；北向个股时序按监管披露限制保留 akshare</span></p>
         </div>
         <div class="bg-white rounded-lg p-3 border border-emerald-200">
           <p class="font-bold text-slate-800 mb-1">8. 个股深度研究（B 路线 Phase 1）</p>
-          <p class="text-xs text-slate-600">fundamental_deep / peer_compare / sec_filings / fmp_cache —— FMP 免费层可用，Phase 2-4 待付费源激活</p>
+          <p class="text-xs text-slate-600">fundamental_deep / peer_compare / sec_filings / fmp_cache —— FMP Starter 已接入 key metrics / DCF / 分析师预期；transcript 按套餐权限降级</p>
         </div>
         <div class="bg-white rounded-lg p-3 border border-emerald-200">
           <p class="font-bold text-slate-800 mb-1">9. 跨源 CONFLICT 比例闸门（2026-05-11 新增）</p>
@@ -2806,7 +2807,7 @@ function switchDiscoveryView(view) {
       <ul class="space-y-2 text-sm">
         <li class="bg-white rounded p-3 border border-amber-200"><strong>因子 IC 验证</strong> — 框架就位，需累积 30+ 天历史才有意义</li>
         <li class="bg-white rounded p-3 border border-amber-200"><strong>自选股·AI 优选 hit rate 真实回测</strong> — picks 已积累 3 天 (2026-05-09 / 05-10 / 05-11 多次 snapshot)，仍需 1 个月数据才能可信验证</li>
-        <li class="bg-white rounded p-3 border border-amber-200"><strong>B 路线 Phase 2-4</strong> — quarterly_trends / earnings_call / dcf_scenarios / forward_valuation 代码就绪，等付费数据源（FMP Starter / Tushare Pro）激活</li>
+        <li class="bg-white rounded p-3 border border-amber-200"><strong>B 路线 Phase 2-4</strong> — quarterly_trends / dcf_scenarios / forward_valuation 已随 FMP Starter / Tushare Pro 激活；earnings_call 按 FMP transcript 权限降级</li>
       </ul>
     </div>
 
@@ -2820,9 +2821,8 @@ function switchDiscoveryView(view) {
           <th class="px-2">怎么补</th>
         </tr></thead>
         <tbody>
-          <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-rose-500 text-white px-2 py-0.5 rounded text-xs">🔴 真痛点</span></td><td class="px-2 font-medium">A 股龙虎榜 + 北向资金明细</td><td class="px-2 text-emerald-700">Tushare Pro ¥200/年</td></tr>
-          <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-rose-500 text-white px-2 py-0.5 rounded text-xs">🔴 真痛点</span></td><td class="px-2 font-medium">中港股财务深度（akshare 残缺）</td><td class="px-2 text-emerald-700">Tushare Pro 同上</td></tr>
-          <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-rose-500 text-white px-2 py-0.5 rounded text-xs">🔴 真痛点</span></td><td class="px-2 font-medium">美股小盘 (RDDT/CCJ/BWXT) 财务深度</td><td class="px-2 text-emerald-700">FMP Starter $14/月</td></tr>
+          <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-emerald-500 text-white px-2 py-0.5 rounded text-xs">✅ 已接</span></td><td class="px-2 font-medium">A 股行情 / 财报 / 龙虎榜 / 指数成分</td><td class="px-2 text-emerald-700">Tushare Pro 主源；北向个股时序仍按监管限制走 akshare</td></tr>
+          <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-emerald-500 text-white px-2 py-0.5 rounded text-xs">✅ 已接</span></td><td class="px-2 font-medium">美股小盘财务深度 / key metrics</td><td class="px-2 text-emerald-700">FMP Starter 主源</td></tr>
           <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-emerald-500 text-white px-2 py-0.5 rounded text-xs">✅ 已建</span></td><td class="px-2 font-medium line-through text-slate-500">数据缓存层（重复请求多）</td><td class="px-2 text-emerald-700">已实现 adapters/fmp_cache.py（2026-05-10）</td></tr>
           <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-emerald-500 text-white px-2 py-0.5 rounded text-xs">✅ 已建</span></td><td class="px-2 font-medium line-through text-slate-500">告警系统（只有 macOS notify）</td><td class="px-2 text-emerald-700">defense_watcher.py 15 min 巡检 + 飞书 webhook 升档推送（2026-05-11）</td></tr>
           <tr class="border-b border-rose-100"><td class="py-2 px-2"><span class="bg-amber-500 text-white px-2 py-0.5 rounded text-xs">🟡 体验</span></td><td class="px-2 font-medium">移动端适配</td><td class="px-2 text-slate-600">HTML 表格 responsive</td></tr>
@@ -2863,9 +2863,9 @@ function switchDiscoveryView(view) {
       <h4 class="text-lg font-bold text-indigo-900 mb-3">📅 我建议的下一步（按顺序，2026-05-11 更新）</h4>
       <ol class="space-y-2 text-sm">
         <li class="flex gap-3"><span class="bg-indigo-100 text-indigo-700 font-bold rounded-full w-7 h-7 flex items-center justify-center flex-shrink-0">1</span><div><strong>本周（无成本）</strong>：继续累积 picks 实盘数据，目标 30 天（当前 3/30，约还差 25 天）；监控 audit_gate CONFLICT 比例 + baostock 二源稳定性</div></li>
-        <li class="flex gap-3"><span class="bg-indigo-100 text-indigo-700 font-bold rounded-full w-7 h-7 flex items-center justify-center flex-shrink-0">2</span><div><strong>下月（P0 充值 ¥200/年）</strong>：注册 Tushare Pro，按 baostock 接入模板做 A 股三源 reconcile（解锁龙虎榜 / 北向明细 / 一致预期）</div></li>
+        <li class="flex gap-3"><span class="bg-indigo-100 text-indigo-700 font-bold rounded-full w-7 h-7 flex items-center justify-center flex-shrink-0">2</span><div><strong>已完成（P0）</strong>：Tushare Pro 接入 A 股行情 / 财报 / 龙虎榜 / 指数成分；下一步看 source health 是否持续 ok</div></li>
         <li class="flex gap-3"><span class="bg-indigo-100 text-indigo-700 font-bold rounded-full w-7 h-7 flex items-center justify-center flex-shrink-0">3</span><div><strong>30 天后（P1 充值，量计费 ¥100-300/月）</strong>：撤销旧泄漏 key 后充 Anthropic API，先在 claude_client.py 加 citation + 数字 anchor 强约束，再激活 B 路线 Phase 2-4（LLM 研报 / supply chain）</div></li>
-        <li class="flex gap-3"><span class="bg-indigo-100 text-indigo-700 font-bold rounded-full w-7 h-7 flex items-center justify-center flex-shrink-0">4</span><div><strong>同时 P1.5（$14/月）</strong>：FMP Starter 解锁电话会议 transcript + 同业排名 + 小盘股 DCF 字段</div></li>
+        <li class="flex gap-3"><span class="bg-indigo-100 text-indigo-700 font-bold rounded-full w-7 h-7 flex items-center justify-center flex-shrink-0">4</span><div><strong>已完成（P1.5）</strong>：FMP Starter 已解锁 key metrics / 小盘财务字段；transcript 按套餐接口权限显示降级</div></li>
         <li class="flex gap-3"><span class="bg-indigo-100 text-indigo-700 font-bold rounded-full w-7 h-7 flex items-center justify-center flex-shrink-0">5</span><div><strong>下季度</strong>：30 天 hit rate 出来后，根据回测决定是否深化（Polygon / 期权）—— 不做日内可不上</div></li>
       </ol>
     </div>
@@ -2889,12 +2889,12 @@ function switchDiscoveryView(view) {
         </tr>
       </thead>
       <tbody>
-        <tr class="border-b border-amber-100"><td class="py-2 font-medium">美股大盘股财报 / DCF</td><td>✅ FMP 免费层</td><td>已解决</td></tr>
+        <tr class="border-b border-amber-100"><td class="py-2 font-medium">美股财报 / DCF / key metrics</td><td>✅ FMP Starter</td><td>已解决</td></tr>
         <tr class="border-b border-amber-100"><td class="py-2 font-medium">美股新闻 / 内部人 / 分析师</td><td>✅ Finnhub 免费层</td><td>已解决</td></tr>
         <tr class="border-b border-amber-100"><td class="py-2 font-medium">13F 大佬持仓变动</td><td>✅ SEC EDGAR 直拉</td><td>已解决</td></tr>
-        <tr class="border-b border-amber-100"><td class="py-2 font-medium">A 股财报 / 龙虎榜 / 北向资金</td><td>⚠️ akshare 爬东财，常态化限流</td><td><span class="text-red-600 font-bold">🔴 大短板</span></td></tr>
+        <tr class="border-b border-amber-100"><td class="py-2 font-medium">A 股行情 / 财报 / 龙虎榜 / 指数成分</td><td>✅ Tushare Pro 主源</td><td>已解决</td></tr>
         <tr class="border-b border-amber-100"><td class="py-2 font-medium">中港股财务深度</td><td>⚠️ 残缺，财报字段不全</td><td><span class="text-red-600 font-bold">🔴 大短板</span></td></tr>
-        <tr class="border-b border-amber-100"><td class="py-2 font-medium">美股小盘 (RDDT/CCJ/BWXT/XYL) DCF</td><td>⚠️ FMP 免费层不覆盖</td><td><span class="text-amber-600 font-bold">🟡 中等</span></td></tr>
+        <tr class="border-b border-amber-100"><td class="py-2 font-medium">美股小盘 (RDDT/CCJ/BWXT/XYL) DCF</td><td>✅ FMP Starter 覆盖更完整</td><td>已改善</td></tr>
         <tr class="border-b border-amber-100"><td class="py-2 font-medium">日股 / 澳股 / 英股 ADR</td><td>⚠️ 完全没有</td><td><span class="text-amber-600 font-bold">🟡 中等</span></td></tr>
         <tr><td class="py-2 font-medium">期权 / 隐含波动率 / 短利</td><td>⚠️ 完全没有</td><td><span class="text-slate-500">🟢 不做日内不重要</span></td></tr>
       </tbody>
@@ -12994,6 +12994,29 @@ def _augment_source_health_with_catalyst(source_health: dict | None) -> None:
             }
 
 
+def _augment_source_health_with_paid_sources(source_health: dict | None) -> None:
+    """把付费源的运行状态并入 source_health，避免实际回退时页面看不见。"""
+    if not isinstance(source_health, dict):
+        return
+    sources = source_health.setdefault("sources", {})
+    try:
+        from stock_research.core import tushare_client
+        snapshot = tushare_client.source_health_snapshot(pipeline="dashboard")
+        tushare_info = (snapshot.get("sources") or {}).get("tushare")
+        if isinstance(tushare_info, dict):
+            sources["tushare"] = tushare_info
+    except Exception as e:
+        sources["tushare"] = {
+            "status": "degraded",
+            "reason": "health_unchecked",
+            "impact": "无法读取 Tushare 付费源健康状态；A 股数据源是否已回退不确定",
+            "affected_fields": ["A 股行情", "A 股财报 / F-Score", "龙虎榜机构席位"],
+            "unaffected_fields": ["美股", "港股", "主推荐公式"],
+            "operator_action": "检查 tushare 依赖与 TUSHARE_TOKEN，然后重跑 dashboard",
+            "last_event": {"ts": "", "detail": str(e)[:200]},
+        }
+
+
 # 把后端写进 JSON 的英文 reason / 供应商名翻译成大白话，
 # 让面板上一眼能看懂"今天是哪家挂了 + 为啥挂"。
 _SOURCE_REASON_CN = {
@@ -13009,6 +13032,10 @@ _SOURCE_REASON_CN = {
     "connection_error":      "网络连不通",
     "stale_data":            "拿到的数据太旧",
     "coverage_low":          "命中率太低（成功的太少）",
+    "missing_token":         "缺少 API token",
+    "package_missing":       "本机缺少 Python 依赖",
+    "init_failed":           "API 初始化失败",
+    "health_unchecked":      "健康状态读取失败",
     "unknown":               "原因不明",
 }
 
@@ -17535,6 +17562,7 @@ def build():
     discovery_json = _load_json("data/discovery_candidates.json")
     source_health = _load_json("data/latest/source_health.json")
     _augment_source_health_with_catalyst(source_health)
+    _augment_source_health_with_paid_sources(source_health)
     batch_meta_main = _runtime_v2_latest_batch_meta()
     v2_candidates_main = _runtime_v2_recommendations()
     if v2_candidates_main:

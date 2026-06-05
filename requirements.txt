@@ -5,6 +5,7 @@ yfinance>=1.3.0
 # 多源数据
 akshare>=1.18.0          # A 股 / 港股
 baostock>=0.9.0          # A 股二源 cross-check（免费、无 token）
+tushare>=1.4.0           # A 股付费主源（行情 / 财报 / 龙虎榜 / 指数成分）
 finnhub-python>=2.4.0    # 美股新闻 + 内部人 + 分析师
 pytrends>=4.9.0          # Google Trends 搜索热度
 
