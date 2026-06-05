@@ -15,6 +15,11 @@
   - ak.stock_hsgt_individual_em(stock="...")  个股北向持股时序
   - ak.stock_hsgt_hist_em(symbol="北向资金")   总量时序
 
+  ⚠️ 2026-06-05 数据源升级时确认保留 akshare（非疏漏）：
+  Tushare Pro 个股北向 hk_hold 实测全空——2024-08 起监管取消北向资金个股级
+  实时披露，付费源同样拿不到个股持股时序。整体北向（north_money）Tushare 有
+  moneyflow_hsgt，但本模块要的是个股级时序，故此处无付费替代，沿用 akshare。
+
 输出：
   NorthFlowSignal — 包含趋势、加仓天数、占比变化、是否强信号
 """
