@@ -3548,7 +3548,7 @@ async function loadWatchlistTable() {
     }
     tbody.innerHTML = filtered.map(r => `
       <tr class="hover:bg-slate-50">
-        <td class="px-3 py-2 font-mono text-xs font-bold text-slate-900 whitespace-nowrap">${_esc(r.code)}${_heldBadge(r.code)}</td>
+        <td class="px-3 py-2 font-mono text-xs font-bold text-slate-900 whitespace-nowrap">${_esc(r.code)}${_heldBadge(r.code)}${_watchlistSourceBadge(r)}</td>
         <td class="px-3 py-2 text-sm text-slate-800 whitespace-nowrap">${_esc(r.name)}</td>
         <td class="px-3 py-2">${_chainBadges(r.chain)}</td>
         <td class="px-3 py-2">${_tierBadge(r.chain_tier)}</td>
@@ -3568,6 +3568,20 @@ async function loadWatchlistTable() {
   }
 }
 async function forceReloadWatchlist() { _watchlistCache = []; await loadWatchlistTable(); }
+
+function _watchlistSourceBadge(row) {
+  const notes = String((row && row.notes) || "");
+  if (notes.includes("早期关注推荐")) {
+    return `<span class="ml-1 inline-flex px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-sans font-semibold align-middle" title="${_esc(notes)}">早期关注</span>`;
+  }
+  if (notes.includes("次新") || notes.includes("IPO")) {
+    return `<span class="ml-1 inline-flex px-1.5 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-200 text-[10px] font-sans font-semibold align-middle" title="${_esc(notes)}">次新来源</span>`;
+  }
+  if (notes.includes("AI 推荐")) {
+    return `<span class="ml-1 inline-flex px-1.5 py-0.5 rounded bg-violet-50 text-violet-700 border border-violet-200 text-[10px] font-sans font-semibold align-middle" title="${_esc(notes)}">AI推荐</span>`;
+  }
+  return "";
+}
 
 // ============ 2026-05-14: 自动评级状态轮询 ============
 async function _pollRatingStatusOnce() {
@@ -3935,7 +3949,7 @@ async function deleteWatchlistItem(code) {
 function _setDiscoveryBtnAdded(btn) {
   btn.textContent = "✓ 已关注";
   btn.disabled = true;
-  btn.classList.remove("bg-violet-600", "hover:bg-violet-700");
+  btn.classList.remove("bg-violet-600", "hover:bg-violet-700", "bg-emerald-600", "hover:bg-emerald-700", "text-white");
   btn.classList.add("bg-slate-300", "text-slate-600", "cursor-not-allowed");
 }
 
@@ -3955,8 +3969,33 @@ async function _markDiscoveryAddedButtons() {
   });
 }
 
-// source 默认 "ai_discovery" 保持旧调用兼容; 新调用方 (junior/ipo) 传自己的 source 做追溯
-async function addDiscoveryToWatchlist(ticker, btnEl, source) {
+function _watchlistSourceNote(source, meta) {
+  const src = source || "ai_discovery";
+  const labels = {
+    early_growth_radar: "来源：早期关注推荐",
+    junior_radar: "来源：次新/解禁雷达",
+    ipo_recent: "来源：IPO/次新雷达",
+    ai_discovery: "来源：AI 推荐",
+  };
+  const parts = [labels[src] || `来源：${src}`];
+  const m = meta || {};
+  if (m.label) parts.push(`判断：${m.label}`);
+  if (m.theme) parts.push(`主题：${m.theme}`);
+  if (m.action) parts.push(`建议：${m.action}`);
+  return parts.join("｜");
+}
+
+function addEarlyGrowthToWatchlist(btnEl) {
+  return addDiscoveryToWatchlist(btnEl.dataset.code || btnEl.dataset.ticker, btnEl, "early_growth_radar", {
+    name: btnEl.dataset.name || "",
+    label: btnEl.dataset.label || "",
+    theme: btnEl.dataset.theme || "",
+    action: btnEl.dataset.action || "",
+  });
+}
+
+// source 默认 "ai_discovery" 保持旧调用兼容; 新调用方 (junior/ipo/early) 传自己的 source 做追溯
+async function addDiscoveryToWatchlist(ticker, btnEl, source, meta) {
   const origText = btnEl.textContent;
   btnEl.disabled = true;
   btnEl.textContent = "⏳ 加入中…";
@@ -3978,9 +4017,11 @@ async function addDiscoveryToWatchlist(ticker, btnEl, source) {
       console.warn("auto-enrich failed, will save with code only:", e.message);
     }
     // 3. POST 入库 — source 留追溯 (默认 ai_discovery, junior/ipo 调用方覆盖)
+    const sourceNote = _watchlistSourceNote(source || "ai_discovery", meta);
+    const extraNotes = [sourceNote, enriched.notes].filter(Boolean).join("\n");
     const item = {
       code: ticker,
-      name: enriched.name || null,
+      name: enriched.name || (meta && meta.name) || null,
       market: enriched.market || null,
       industry: enriched.industry || null,
       business: enriched.business || null,
@@ -3993,6 +4034,7 @@ async function addDiscoveryToWatchlist(ticker, btnEl, source) {
       credibility: enriched.credibility || null,
       source: source || "ai_discovery",
       status: "待研究",
+      notes: extraNotes || null,
     };
     await _watchlistApiCall("POST", "/api/watchlist", item);
     _watchlistCache.push(item);
@@ -11336,45 +11378,96 @@ function _fmtCurrentRunAlpha(v, horizon, track) {
     title="当前批次暂未找到 tracking 记录；请检查 recommendation_picks / pick_outcomes。">待评估</span>`;
 }
 
-// 工具:聚合统计 — 用于准确度面板
-function _computeDiscoveryStats() {
-  const all = (DISCOVERY_HISTORY || []).filter(r =>
-    r.alpha_1d != null || r.alpha_5d != null || r.alpha_20d != null || r.alpha_60d != null
+function _finiteNumber(v) {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function _alphaValues(rows, key) {
+  return (rows || [])
+    .map(r => _finiteNumber(r && r[key]))
+    .filter(v => v !== null)
+    .sort((a, b) => a - b);
+}
+
+function _meanFinite(arr) {
+  return arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : null;
+}
+
+function _medianFinite(arr) {
+  if (!arr.length) return null;
+  return arr.length % 2
+    ? arr[(arr.length - 1) / 2]
+    : (arr[arr.length / 2 - 1] + arr[arr.length / 2]) / 2;
+}
+
+function _marketHistoryStats(rows) {
+  const all = (rows || []).filter(r =>
+    _finiteNumber(r.alpha_1d) !== null ||
+    _finiteNumber(r.alpha_5d) !== null ||
+    _finiteNumber(r.alpha_20d) !== null ||
+    _finiteNumber(r.alpha_60d) !== null
   );
-  if (!all.length) {
-    return { totalRecs: (DISCOVERY_HISTORY || []).length, evaluated: 0, panel: null };
-  }
-  const mean = arr => arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : null;
-  const a1 = all.map(r => r.alpha_1d).filter(v => v != null);
-  const a5 = all.map(r => r.alpha_5d).filter(v => v != null);
-  const a20 = all.map(r => r.alpha_20d).filter(v => v != null);
-  const a60 = all.map(r => r.alpha_60d).filter(v => v != null);
+  const a1 = _alphaValues(all, "alpha_1d");
+  const a5 = _alphaValues(all, "alpha_5d");
+  const a20 = _alphaValues(all, "alpha_20d");
+  const a60 = _alphaValues(all, "alpha_60d");
   const hit20 = a20.filter(v => v > 5).length;
   const hitRate = a20.length ? (hit20 / a20.length * 100) : null;
+
   // score 分位 vs alpha_20d 看相关性(简化 IC: 高分组 vs 低分组的 alpha 差异)
-  const zRanked = all.filter(r => r.composite_z != null && r.alpha_20d != null)
-    .sort((a, b) => b.composite_z - a.composite_z);
+  const zRanked = all
+    .map(r => ({ row: r, score: _finiteNumber(r.composite_z), alpha20: _finiteNumber(r.alpha_20d) }))
+    .filter(x => x.score !== null && x.alpha20 !== null)
+    .sort((a, b) => b.score - a.score);
   let topAlpha20 = null, botAlpha20 = null;
   if (zRanked.length >= 6) {
     const tier = Math.floor(zRanked.length / 3);
-    topAlpha20 = mean(zRanked.slice(0, tier).map(r => r.alpha_20d));
-    botAlpha20 = mean(zRanked.slice(-tier).map(r => r.alpha_20d));
+    topAlpha20 = _meanFinite(zRanked.slice(0, tier).map(x => x.alpha20));
+    botAlpha20 = _meanFinite(zRanked.slice(-tier).map(x => x.alpha20));
   }
+
   return {
-    totalRecs: (DISCOVERY_HISTORY || []).length,
+    totalRecs: (rows || []).length,
     evaluated: all.length,
     panel: {
-      alpha_1d: mean(a1),
-      alpha_5d: mean(a5),
-      alpha_20d: mean(a20),
-      alpha_60d: mean(a60),
+      alpha_1d: _meanFinite(a1),
+      alpha_5d: _meanFinite(a5),
+      alpha_20d: _meanFinite(a20),
+      alpha_60d: _meanFinite(a60),
+      alpha_1d_n: a1.length,
+      alpha_5d_n: a5.length,
+      alpha_20d_n: a20.length,
+      alpha_60d_n: a60.length,
       hitRate20d: hitRate,
       hitCount20d: hit20,
       hitTotal20d: a20.length,
       topAlpha20: topAlpha20,
       botAlpha20: botAlpha20,
-      ic_spread: (topAlpha20 != null && botAlpha20 != null) ? (topAlpha20 - botAlpha20) : null,
+      ic_spread: (topAlpha20 !== null && botAlpha20 !== null) ? (topAlpha20 - botAlpha20) : null,
     }
+  };
+}
+
+// 工具:聚合统计 — 用于准确度面板。主口径固定为 US；CN/HK 只做冻结观察。
+function _computeDiscoveryStats() {
+  const rows = Array.isArray(DISCOVERY_HISTORY) ? DISCOVERY_HISTORY : [];
+  const byMarket = { US: [], CN: [], HK: [] };
+  rows.forEach(r => {
+    const m = _candidateMarketCode(r);
+    (byMarket[m] = byMarket[m] || []).push(r);
+  });
+  const markets = {};
+  ["US", "CN", "HK"].forEach(m => { markets[m] = _marketHistoryStats(byMarket[m] || []); });
+  const all = _marketHistoryStats(rows);
+  return {
+    totalRecs: rows.length,
+    evaluated: all.evaluated,
+    primaryMarket: "US",
+    panel: markets.US.panel,
+    markets,
+    blended: all,
   };
 }
 
@@ -11811,15 +11904,16 @@ function _reasonSummaryHtml(row) {
       accuracyEl.innerHTML = `<div class="bg-sky-50 border border-sky-200 rounded-lg p-4 text-sm text-sky-800">
         <strong>📊 算法准确度</strong> · 已记录 ${stats.totalRecs} 条 V2 推荐,但**还没有 alpha 数据**(可能 evaluate_v2_picks 还没跑,或推荐才生成不久还没到评估窗口)。</div>`;
     } else {
-      const p = stats.panel;
+      const us = stats.markets.US || {totalRecs: 0, evaluated: 0, panel: {}};
+      const p = us.panel || {};
       const strategyText = DISCOVERY.history_strategy_version || DISCOVERY.strategy_version || "current";
-      const cell = (label, v, hint) => {
+      const cell = (label, v, hint, n) => {
         const fmt = (v == null) ? "—" : ((v >= 0 ? "+" : "") + v.toFixed(2) + "%");
         const cls = v == null ? "text-slate-400" : (v >= 0 ? "text-emerald-600" : "text-rose-600");
         return `<div class="bg-white rounded-lg p-3 border border-slate-200">
           <div class="text-xs text-slate-500">${label}</div>
           <div class="text-2xl font-bold ${cls} font-mono">${fmt}</div>
-          ${hint ? `<div class="text-[10px] text-slate-400 mt-0.5">${hint}</div>` : ""}
+          ${hint ? `<div class="text-[10px] text-slate-400 mt-0.5">${hint}${n != null ? ` · n=${n}` : ""}</div>` : ""}
         </div>`;
       };
       const hitCell = (p.hitRate20d == null) ? "" : `<div class="bg-white rounded-lg p-3 border border-slate-200">
@@ -11832,24 +11926,45 @@ function _reasonSummaryHtml(row) {
         <div class="text-xl font-bold font-mono ${p.ic_spread >= 0 ? 'text-emerald-600' : 'text-rose-600'}">${p.ic_spread >= 0 ? '+' : ''}${p.ic_spread.toFixed(2)}%</div>
         <div class="text-[10px] text-slate-400 mt-0.5">Top 1/3 vs Bot 1/3 平均 α 差</div>
       </div>`;
+      const marketObservation = ["CN", "HK"].map(m => {
+        const s = stats.markets[m] || {totalRecs: 0, evaluated: 0, panel: {}};
+        const mp = s.panel || {};
+        const a1 = mp.alpha_1d == null ? "—" : ((mp.alpha_1d >= 0 ? "+" : "") + mp.alpha_1d.toFixed(2) + "%");
+        const a5 = mp.alpha_5d == null ? "—" : ((mp.alpha_5d >= 0 ? "+" : "") + mp.alpha_5d.toFixed(2) + "%");
+        const cls1 = mp.alpha_1d == null ? "text-slate-400" : (mp.alpha_1d >= 0 ? "text-emerald-700" : "text-rose-700");
+        const cls5 = mp.alpha_5d == null ? "text-slate-400" : (mp.alpha_5d >= 0 ? "text-emerald-700" : "text-rose-700");
+        return `<div class="bg-white/70 border border-slate-200 rounded-lg px-3 py-2 text-xs">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="font-bold text-slate-700">${_marketLabel(m)}</span>
+            <span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">🔒 冻结观察</span>
+            <span class="text-slate-400 ml-auto">${s.evaluated}/${s.totalRecs} 已评估</span>
+          </div>
+          <div class="flex gap-3 font-mono">
+            <span>1d <b class="${cls1}">${a1}</b>${mp.alpha_1d_n ? ` <span class="text-slate-400">n=${mp.alpha_1d_n}</span>` : ""}</span>
+            <span>5d <b class="${cls5}">${a5}</b>${mp.alpha_5d_n ? ` <span class="text-slate-400">n=${mp.alpha_5d_n}</span>` : ""}</span>
+          </div>
+        </div>`;
+      }).join("");
 
       accuracyEl.innerHTML = `<div class="bg-gradient-to-br from-violet-50 to-sky-50 rounded-xl p-4 border border-violet-200">
-        <div class="flex items-center gap-2 mb-3">
+        <div class="flex items-center gap-2 mb-3 flex-wrap">
           <span class="text-xl">📊</span>
           <h3 class="text-lg font-bold text-slate-900">算法准确度</h3>
-          <span class="text-xs text-slate-500">基于当前策略 ${_esc(strategyText)} · ${stats.totalRecs} 条 V2 推荐 · ${stats.evaluated} 条已评估</span>
+          <span class="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 text-xs font-bold">US 主口径</span>
+          <span class="text-xs text-slate-500">基于当前策略 ${_esc(strategyText)} · 全市场 ${stats.totalRecs} 条 V2 推荐 · US ${us.evaluated}/${us.totalRecs} 条已评估</span>
         </div>
         <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-          ${cell("平均 1d α", p.alpha_1d, "1 个交易日 vs 各市场基准")}
-          ${cell("平均 5d α", p.alpha_5d, "5 个交易日 vs 各市场基准")}
-          ${cell("平均 20d α", p.alpha_20d, "20 个交易日 ≈ 1 个月")}
-          ${cell("平均 60d α", p.alpha_60d, "60 个交易日 ≈ 3 个月")}
+          ${cell("US 平均 1d α", p.alpha_1d, "1 个交易日 vs SPY", p.alpha_1d_n)}
+          ${cell("US 平均 5d α", p.alpha_5d, "5 个交易日 vs SPY", p.alpha_5d_n)}
+          ${cell("US 平均 20d α", p.alpha_20d, "20 个交易日 ≈ 1 个月", p.alpha_20d_n)}
+          ${cell("US 平均 60d α", p.alpha_60d, "60 个交易日 ≈ 3 个月", p.alpha_60d_n)}
           ${hitCell}
           ${icCell}
         </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mt-3">${marketObservation}</div>
         <p class="text-xs text-slate-500 mt-3">
-          📌 <strong>α (alpha)</strong> = 推荐后涨幅 - 同期市场基准涨幅。正值 = 跑赢基准,负值 = 跑输。
-          <strong>信号 IC</strong> 正值越大,说明高分组真的更准。
+          📌 <strong>α (alpha)</strong> = 推荐后涨幅 - 同期市场基准涨幅。US 是当前可用主口径；A股/港股已冻结为研究观察，不混进 US 判断。
+          统计已过滤 NaN / 非数字 alpha。
         </p>
       </div>`;
     }
@@ -12048,23 +12163,19 @@ function _reasonSummaryHtml(row) {
 
       historyEl.innerHTML = dates.map(d => {
         const recs = byDate[d];
-        recs.sort((a, b) => (a.rank || 0) - (b.rank || 0));
-        // 当日均 alpha + 分布
-        const a1s = recs.map(r => r.alpha_1d).filter(v => v != null).sort((a, b) => a - b);
-        const a5s = recs.map(r => r.alpha_5d).filter(v => v != null).sort((a, b) => a - b);
-        const a20s = recs.map(r => r.alpha_20d).filter(v => v != null).sort((a, b) => a - b);
-        const _mean = arr => arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : null;
-        const _median = arr => !arr.length ? null
-          : (arr.length % 2 ? arr[(arr.length - 1) / 2] : (arr[arr.length / 2 - 1] + arr[arr.length / 2]) / 2);
-        const meanA1 = _mean(a1s), medianA1 = _median(a1s);
-        const meanA5 = _mean(a5s);
-        const meanA20 = _mean(a20s);
-        const win1d = a1s.filter(v => v > 0).length;        // alpha > 0 = 跑赢基准
-        const drop1d = a1s.filter(v => v < -5).length;      // <-5% = 1d 内大跌掉队
-        const hit5 = a5s.filter(v => v > 5).length;         // >+5% = 5d 大涨命中
-        const miss5 = a5s.filter(v => v < -5).length;       // <-5% = 5d 大跌掉队
-        const winPct1d = a1s.length ? Math.round(win1d / a1s.length * 100) : null;
-        const marketBreakdown = _formatMarketCountsFromRows(recs);
+        const marketOrderRank = m => ({US: 0, CN: 1, HK: 2}[String(m || "").toUpperCase()] ?? 9);
+        recs.sort((a, b) => {
+          const ma = marketOrderRank(_candidateMarketCode(a));
+          const mb = marketOrderRank(_candidateMarketCode(b));
+          if (ma !== mb) return ma - mb;
+          return (a.rank || 0) - (b.rank || 0);
+        });
+        const byMarketRows = {};
+        ["US", "CN", "HK"].forEach(m => {
+          byMarketRows[m] = recs.filter(r => _candidateMarketCode(r) === m);
+        });
+        const marketStats = {};
+        ["US", "CN", "HK"].forEach(m => { marketStats[m] = _marketHistoryStats(byMarketRows[m]); });
 
         // 估算 5d/20d 成熟日期（5 交易日 ≈ 7 自然日；20 交易日 ≈ 28 自然日）
         const runDate = (recs[0] && recs[0].run_date) || null;
@@ -12080,29 +12191,51 @@ function _reasonSummaryHtml(row) {
         }
 
         const _fmtA = v => v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(2) + "%";
-        const a1Tip = a1s.length
-          ? `中位 ${_fmtA(medianA1)} · 最佳 ${_fmtA(a1s[a1s.length - 1])} · 最差 ${_fmtA(a1s[0])}`
+        const usA1s = _alphaValues(byMarketRows.US, "alpha_1d");
+        const usMedianA1 = _medianFinite(usA1s);
+        const usWin1d = usA1s.filter(v => v > 0).length;
+        const usDrop1d = usA1s.filter(v => v < -5).length;
+        const usWinPct1d = usA1s.length ? Math.round(usWin1d / usA1s.length * 100) : null;
+        const usP = marketStats.US.panel || {};
+        const a1Tip = usA1s.length
+          ? `美股中位 ${_fmtA(usMedianA1)} · 最佳 ${_fmtA(usA1s[usA1s.length - 1])} · 最差 ${_fmtA(usA1s[0])}`
           : "次日（T+1）alpha 还未成熟";
-        const oneDayBlock = a1s.length
-          ? `<span class="text-slate-700">1d α</span>: <strong>${_fmtA(meanA1)}</strong> · 跑赢基准 ${winPct1d}% (${win1d}/${a1s.length})${drop1d > 0 ? ` · <span class="text-rose-600">大跌 ${drop1d}</span>` : ""}`
-          : `<span class="text-slate-700">1d α</span>: <span class="text-slate-400">⏳ 等次日成熟</span>`;
-        const fiveDayBlock = a5s.length
-          ? `<span class="text-slate-700">5d α</span>: <strong>${_fmtA(meanA5)}</strong> · 大涨 ${hit5}${miss5 > 0 ? ` · 大跌 ${miss5}` : ""}`
-          : `<span class="text-slate-700">5d α</span>: <span class="text-slate-400">⏳ 等 ${due5d}</span>`;
-        const twentyDayBlock = a20s.length
-          ? `<span class="text-slate-700">20d α</span>: <strong>${_fmtA(meanA20)}</strong>`
-          : `<span class="text-slate-700">20d α</span>: <span class="text-slate-400">⏳ 等 ${due20d}</span>`;
+        const oneDayBlock = usA1s.length
+          ? `<span class="text-emerald-700 font-semibold">美股 1d α</span>: <strong>${_fmtA(usP.alpha_1d)}</strong> · 跑赢 ${usWinPct1d}% (${usWin1d}/${usA1s.length})${usDrop1d > 0 ? ` · <span class="text-rose-600">大跌 ${usDrop1d}</span>` : ""}`
+          : `<span class="text-emerald-700 font-semibold">美股 1d α</span>: <span class="text-slate-400">⏳ 等次日成熟</span>`;
+        const fiveDayBlock = usP.alpha_5d_n
+          ? `<span class="text-slate-700">美股 5d α</span>: <strong>${_fmtA(usP.alpha_5d)}</strong> · n=${usP.alpha_5d_n}`
+          : `<span class="text-slate-700">美股 5d α</span>: <span class="text-slate-400">⏳ 等 ${due5d}</span>`;
+        const twentyDayBlock = usP.alpha_20d_n
+          ? `<span class="text-slate-700">美股 20d α</span>: <strong>${_fmtA(usP.alpha_20d)}</strong> · n=${usP.alpha_20d_n}`
+          : `<span class="text-slate-700">美股 20d α</span>: <span class="text-slate-400">⏳ 等 ${due20d}</span>`;
+        const frozenBlocks = ["CN", "HK"].map(m => {
+          const s = marketStats[m] || {totalRecs: 0, evaluated: 0, panel: {}};
+          const mp = s.panel || {};
+          const a1 = mp.alpha_1d_n ? _fmtA(mp.alpha_1d) : "待T+1";
+          const cls = !mp.alpha_1d_n ? "text-slate-400" : (mp.alpha_1d >= 0 ? "text-emerald-700" : "text-rose-700");
+          return `<span class="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600" title="${_marketLabel(m)} 已冻结为研究观察，不混入 US 主口径。">🔒 ${_marketLabel(m)} 1d <b class="${cls}">${a1}</b>${mp.alpha_1d_n ? ` n=${mp.alpha_1d_n}` : ""}</span>`;
+        }).join("");
+        const usCount = byMarketRows.US.length;
+        const cnCount = byMarketRows.CN.length;
+        const hkCount = byMarketRows.HK.length;
+        const batchContext = `完整批次 ${recs.length} 只（美股${usCount} / A股${cnCount} / 港股${hkCount}）`;
 
         const summary = `<div class="flex items-center gap-3 text-sm flex-wrap">
           <span class="font-bold text-slate-900">${d}</span>
-          <span class="text-slate-500">完整批次 ${recs.length} 只${marketBreakdown ? `（${marketBreakdown}）` : ""}</span>
-          <span class="text-slate-400">·</span>
+          <span class="inline-flex items-center px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 font-semibold">美股 ${usCount} 只</span>
           <span class="text-xs text-slate-600" title="${a1Tip}">${oneDayBlock}</span>
           <span class="text-xs text-slate-600">${fiveDayBlock}</span>
           <span class="text-xs text-slate-600">${twentyDayBlock}</span>
+          <span class="text-slate-400">·</span>
+          <span class="text-slate-500">${batchContext}</span>
+          ${frozenBlocks}
         </div>`;
 
-        const _alphaBadge = v => (v == null) ? "" : (v > 5 ? "🚀 " : (v < -5 ? "⚠️ " : ""));
+        const _alphaBadge = v => {
+          const n = _finiteNumber(v);
+          return n === null ? "" : (n > 5 ? "🚀 " : (n < -5 ? "⚠️ " : ""));
+        };
         // 历史 row 缺的字段从 DISCOVERY.candidates lookup 兜底（市值/ETF）；找不到显示 "—"
         const _capLookup = (tk) => {
           const c = Array.isArray(DISCOVERY?.candidates)
@@ -12115,13 +12248,16 @@ function _reasonSummaryHtml(row) {
           return (c?.etfs || []).map(e => `<span class="inline-block px-1 py-0.5 mr-0.5 text-[10px] bg-indigo-100 text-indigo-700 rounded">${e}</span>`).join("") || "—";
         };
         const rows = recs.map(r => {
-          const a1 = _alphaBadge(r.alpha_1d) + _fmtAlpha(r.alpha_1d);
-          const a5 = _alphaBadge(r.alpha_5d) + _fmtAlpha(r.alpha_5d);
-          const a20 = _alphaBadge(r.alpha_20d) + _fmtAlpha(r.alpha_20d);
-          const a60 = _alphaBadge(r.alpha_60d) + _fmtAlpha(r.alpha_60d);
+          const a1 = _alphaBadge(r.alpha_1d) + _fmtAlpha(_finiteNumber(r.alpha_1d));
+          const a5 = _alphaBadge(r.alpha_5d) + _fmtAlpha(_finiteNumber(r.alpha_5d));
+          const a20 = _alphaBadge(r.alpha_20d) + _fmtAlpha(_finiteNumber(r.alpha_20d));
+          const a60 = _alphaBadge(r.alpha_60d) + _fmtAlpha(_finiteNumber(r.alpha_60d));
           const score = (r.score != null) ? Number(r.score).toFixed(1)
             : (r.composite_z != null ? Number(r.composite_z).toFixed(2) : "—");
-          const market = _marketLabel(_candidateMarketCode(r));
+          const marketCode = _candidateMarketCode(r);
+          const market = marketCode === "US"
+            ? _marketLabel(marketCode)
+            : `<span title="${_marketLabel(marketCode)} 已冻结为研究观察，不参与 US 主口径。">🔒 ${_marketLabel(marketCode)}</span>`;
           const newTag = _isFirstSeen(r, d)
             ? ` <span title="首次进入推荐：${d}" class="inline-flex px-1.5 py-0.5 rounded border border-violet-300 bg-violet-50 text-violet-700 text-[10px] font-bold align-middle">🆕</span>`
             : "";
@@ -13202,9 +13338,15 @@ def early_growth_radar_section_html(payload: dict | None = None) -> str:
               <div class="mt-1 text-[11px] text-slate-400">交易日 {esc(row.get("trade_date") or "")}</div>
             </td>
             <td class="py-2.5 align-top text-right">
-              <button class="px-2.5 py-1 rounded border border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 text-[11px] font-semibold whitespace-nowrap"
+              <div class="flex justify-end gap-1.5 whitespace-nowrap">
+                <button class="px-2.5 py-1 rounded border border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 text-[11px] font-semibold"
                       data-code="{symbol}" data-name="{name}"
                       onclick="openStockDetail(this.dataset.code, this.dataset.name)">买前研究</button>
+                <button class="discovery-add-btn px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold"
+                        data-ticker="{symbol}" data-code="{symbol}" data-name="{name}" data-label="{esc(label)}" data-theme="{theme}" data-action="{action}"
+                        title="加入自选股，并在备注里标记来源：早期关注推荐"
+                        onclick="addEarlyGrowthToWatchlist(this)">加关注</button>
+              </div>
             </td>
           </tr>
         """
@@ -13261,7 +13403,7 @@ def early_growth_radar_section_html(payload: dict | None = None) -> str:
     <div class="px-4 py-3 bg-emerald-50 border-b border-emerald-100 flex flex-wrap items-center gap-2">
       <div>
         <h3 class="text-base font-bold text-slate-900">早发现雷达</h3>
-        <p class="text-xs text-slate-600 mt-0.5">只做研究提醒，不自动买入，也不写自选股/真实持仓。</p>
+        <p class="text-xs text-slate-600 mt-0.5">只做研究提醒，不自动买入；点击“加关注”才写入自选股，并标记来源为早期关注推荐。</p>
       </div>
       <div class="ml-auto text-right text-[11px] text-slate-500">
         <div>{esc(generated)}</div>

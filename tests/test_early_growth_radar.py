@@ -243,6 +243,8 @@ class TestEarlyGrowthRadarPayload(unittest.TestCase):
 
         self.assertIn("早发现雷达", html)
         self.assertIn("只做研究提醒", html)
+        self.assertIn("加关注", html)
+        self.assertIn("早期关注推荐", html)
         self.assertIn("CRDO", html)
         self.assertIn("可研究", html)
         self.assertIn("走势", html)
