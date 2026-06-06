@@ -122,9 +122,13 @@ def _build_card(res: pg.GateResult, scan_label: str) -> dict:
     head_line = f"### {res.headline_plain}\n\n**该怎么做**：{res.can_buy}"
     elements: list[dict] = [{"tag": "div", "text": {"tag": "lark_md", "content": head_line}}]
 
-    # 2) 为什么这么判断（人话 bullets）
+    # 1.5) 🚨 最该注意（最严重信号置顶突出）
+    if res.top_alarm:
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"**{res.top_alarm}**"}})
+
+    # 2) 为什么这么判断（人话 bullets，已按🔴严重/🟠留意标好）
     if res.reasons_plain:
-        lines = "\n".join(f"• {r}" for r in res.reasons_plain[:7])
+        lines = "\n".join(f"{r}" for r in res.reasons_plain[:7])
         elements.append({"tag": "hr"})
         elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "**为什么这么判断**\n" + lines}})
 

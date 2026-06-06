@@ -143,8 +143,9 @@ class GateResult:
     composite: float = 0.0        # 0-3 加权综合压力
     can_buy: str = ""
     headline_plain: str = ""      # 颜色→一句话人话标题
+    top_alarm: str = ""           # 🚨 最该注意的一条（最严重信号，置顶突出）
     reasons: list[str] = field(default_factory=list)       # 触发原因（技术口径，带数字）
-    reasons_plain: list[str] = field(default_factory=list)  # 触发原因（人话，给新手卡片/横幅）
+    reasons_plain: list[str] = field(default_factory=list)  # 触发原因（人话，按严重度标🔴/🟠）
     families: list[dict] = field(default_factory=list)     # 各族明细
     holdings_impact: list[dict] = field(default_factory=list)  # [{symbol, reason}]
     pressure_sources: list[str] = field(default_factory=list)
@@ -512,9 +513,15 @@ def _sig_overseas(quotes: dict) -> FamilySignal:
     _cn = {"KOSPI": "韩国", "NIKKEI": "日本", "TWSE": "台湾", "HSI": "香港"}
     if avg <= -0.5:
         parts_cn = "、".join(f"{_cn[k]} {v:+.1f}%" for k, v in have.items())
-        sig.plain = (f"比美股更早开盘的亚洲市场已经收盘，普遍在跌（{parts_cn}）。")
+        # 单一市场明显异动（跌得比平均凶很多）→ 直接点名喊出来
+        worst_k = min(have, key=have.get)
+        worst_v = have[worst_k]
+        lead = ""
+        if worst_v <= -2.0 and worst_v <= avg - 1.0:
+            lead = f"**{_cn[worst_k]}股市明显异动、大跌 {abs(worst_v):.1f}%**——这是今晚亚洲最强的坏信号。"
+        sig.plain = lead + f"比美股更早开盘的亚洲市场已收盘，普遍在跌（{parts_cn}）。"
         if "asia_semis_lead" in sig.tags:
-            sig.plain += "韩国和台湾的芯片股特别多，它们先跌，往往是美国芯片股的「预告片」。"
+            sig.plain += "韩国和台湾芯片股扎堆，它们先跳水，往往是美国芯片股的「预告片」。"
     else:
         sig.plain = "亚洲市场今天没明显下跌，没给美股递坏消息。"
     return sig
@@ -680,15 +687,22 @@ def compute_gate(
     if coverage < 0.6:
         notes.append(f"⚠️ 数据覆盖率仅 {coverage:.0%}，结论置信度下降")
 
-    # 触发原因 & 压力源
+    # 触发原因 & 压力源（按严重度排序，🔴 严重 / 🟠 留意，让重点跳出来）
     pressure_sources = [f.label for f in families if f.available and f.stress >= 2.0]
+    ranked = sorted([f for f in families if f.available and f.stress >= 1.0],
+                    key=lambda x: -x.stress)
     reasons = []
     reasons_plain = []
-    for f in sorted(families, key=lambda x: -x.stress):
-        if f.available and f.stress >= 1.0:
-            reasons.append(f"{f.label}：{f.headline}")
-            if f.plain:
-                reasons_plain.append(f.plain)
+    for f in ranked:
+        reasons.append(f"{f.label}：{f.headline}")
+        if f.plain:
+            dot = "🔴" if f.stress >= 2.0 else "🟠"
+            reasons_plain.append(f"{dot} {f.plain}")
+
+    # 🚨 最该注意：最严重的那一条，单独拎出来置顶
+    top_alarm = ""
+    if ranked and ranked[0].stress >= 2.0:
+        top_alarm = "🚨 最该注意：" + ranked[0].plain
 
     holdings_impact = _holdings_overlay(families, holdings)
 
@@ -699,6 +713,7 @@ def compute_gate(
         composite=round(composite, 3),
         can_buy=CAN_BUY.get(color, ""),
         headline_plain=HEADLINE_PLAIN.get(color, ""),
+        top_alarm=top_alarm,
         reasons=reasons,
         reasons_plain=reasons_plain,
         families=[f.to_dict() for f in families],

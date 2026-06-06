@@ -1449,6 +1449,115 @@ _sys.exit(rc)
         except Exception as e:
             return {"available": False, "color": "NONE", "reason": f"读取失败: {e}"}
 
+    @app.get("/premarket")
+    def premarket_gate_page():
+        """美股盘前风险闸门 — 独立网页（白底干净，手机也能看）。
+
+        服务端直接读 data/latest/premarket_gate.json 渲染，5 分钟自动刷新。
+        独立页面是过渡方案:dashboard 主生成器正被并行会话改写,先用这个让界面
+        能看到;等那边落地再把横幅嵌进今日决策台顶部。
+        """
+        from fastapi.responses import HTMLResponse
+
+        p = _REPO_ROOT / "data" / "latest" / "premarket_gate.json"
+        doc: dict = {}
+        if p.exists():
+            try:
+                doc = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                doc = {}
+
+        THEME = {
+            "CRITICAL": ("#dc2626", "#fef2f2", "#fecaca"),
+            "HIGH":     ("#ea580c", "#fff7ed", "#fed7aa"),
+            "LOW":      ("#ca8a04", "#fefce8", "#fde68a"),
+            "NONE":     ("#16a34a", "#f0fdf4", "#bbf7d0"),
+        }
+
+        def esc(s: str) -> str:
+            return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+        if not doc or not doc.get("families"):
+            body = (
+                '<div class="card"><div class="muted" style="padding:40px 0;text-align:center">'
+                '盘前闸门今日尚未生成 —— 它在美股开盘前（北京约 20:10 / 20:45 / 21:15）才跑。'
+                '<br>周末 / 美股假日休市不跑。</div></div>'
+            )
+            color = "NONE"
+        else:
+            color = doc.get("color", "NONE")
+            accent, bg, border = THEME.get(color, THEME["NONE"])
+            head = esc(doc.get("headline_plain", ""))
+            can_buy = esc(doc.get("can_buy", ""))
+            top = doc.get("top_alarm", "")
+            top_html = (f'<div class="alarm">{esc(top)}</div>') if top else ""
+            reasons = doc.get("reasons_plain", [])
+            reasons_html = "".join(f'<li>{esc(r)}</li>' for r in reasons) or '<li class="muted">各项平稳</li>'
+            hold = doc.get("holdings_impact", [])
+            hold_html = ""
+            if hold:
+                items = "".join(
+                    f'<li><b>{esc(h.get("symbol",""))}</b>：{esc(h.get("reason",""))}</li>'
+                    for h in hold
+                )
+                hold_html = (
+                    '<div class="card"><h3>💼 对你持仓的影响 '
+                    '<span class="muted" style="font-weight:400;font-size:13px">'
+                    '（只是提醒，不是叫你一定买卖）</span></h3>'
+                    f'<ul>{items}</ul></div>'
+                )
+            srcs = "、".join(doc.get("pressure_sources", []))
+            srcs_html = f'<div class="srcs">压力源：{esc(srcs)}</div>' if srcs else ""
+            comp = doc.get("composite", 0)
+            gen = esc(doc.get("generated_at", ""))[:16].replace("T", " ")
+            scan = esc(doc.get("scan_label", ""))
+            cov = doc.get("coverage", 1)
+            body = f"""
+            <div class="hero" style="background:{bg};border-color:{border}">
+              <div class="verdict" style="color:{accent}">{head}</div>
+              <div class="cb"><b>该怎么做：</b>{can_buy}</div>
+              {srcs_html}
+            </div>
+            {top_html}
+            <div class="card"><h3>为什么这么判断</h3><ul class="reasons">{reasons_html}</ul></div>
+            {hold_html}
+            <div class="foot">📖 这是「美股开盘前的看天气」：开盘前帮你看一眼今晚适不适合买。
+            🟢正常买 🟡小仓试 🟠先别开新仓 🔴别买只看好已有 ·
+            风险打分 {comp:.1f}/3（越高越危险）· 覆盖率 {int(cov*100)}% ·
+            生成 {gen}（{scan}）· ⚠️ 仅供参考，不是投资建议</div>
+            """
+
+        html = f"""<!DOCTYPE html><html lang="zh"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="refresh" content="300">
+<title>美股盘前 · 今晚能不能买</title>
+<style>
+*{{box-sizing:border-box}}
+body{{margin:0;background:#f8fafc;color:#0f172a;
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+  line-height:1.6;padding:16px}}
+.wrap{{max-width:680px;margin:0 auto}}
+.title{{font-size:15px;color:#64748b;margin:0 0 12px;display:flex;justify-content:space-between;align-items:center}}
+.hero{{border:1px solid;border-radius:16px;padding:20px 22px;margin-bottom:14px}}
+.verdict{{font-size:22px;font-weight:800;letter-spacing:.3px}}
+.cb{{margin-top:10px;font-size:15px}}
+.srcs{{margin-top:8px;font-size:13px;color:#475569}}
+.alarm{{background:#fff;border:2px solid #dc2626;border-radius:14px;padding:14px 16px;
+  margin-bottom:14px;font-size:15.5px;font-weight:700;color:#b91c1c}}
+.card{{background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:16px 18px;margin-bottom:14px}}
+.card h3{{margin:0 0 10px;font-size:15px}}
+ul{{margin:0;padding-left:4px;list-style:none}}
+.reasons li,.card li{{padding:7px 0;border-bottom:1px solid #f1f5f9;font-size:14.5px}}
+.reasons li:last-child,.card li:last-child{{border-bottom:none}}
+.muted{{color:#94a3b8}}
+.foot{{font-size:12px;color:#94a3b8;padding:4px 4px 30px;line-height:1.7}}
+b{{font-weight:700}}
+</style></head><body><div class="wrap">
+<div class="title"><span>🚦 美股开盘前 · 今晚能不能买</span><span class="muted">每5分钟自动刷新</span></div>
+{body}
+</div></body></html>"""
+        return HTMLResponse(content=html)
+
     @app.get("/api/real-holdings/daily-verdict")
     def real_holdings_daily_verdict() -> dict[str, Any]:
         """真实持仓 7 档判断单一源 — 复用 morning_brief.compute_holdings_verdict 纯函数。
