@@ -65,6 +65,7 @@ logger = logging.getLogger(__name__)
 
 OUT_JSON = _REPO / "data" / "latest" / "premarket_gate.json"
 STATE_FILE = _REPO / "data" / "premarket_gate_state.json"
+HISTORY_FILE = _REPO / "data" / "premarket_gate_history.json"
 
 # 美股 2026 假日（NYSE 全天休市；待人工校准/逐年更新）
 US_HOLIDAYS_2026 = {
@@ -89,6 +90,51 @@ def _load_state() -> dict:
 def _save_state(state: dict) -> None:
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _update_history(res: pg.GateResult, now: datetime) -> None:
+    """历史台账：回填过去日期的真实结果 + upsert 今天的预警。
+
+    每天一行,取当天最严重档位。第二天用真实涨跌结算对错(score_outcome)。
+    """
+    records: list[dict] = []
+    if HISTORY_FILE.exists():
+        try:
+            records = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning("读 history 失败: %s", e)
+            records = []
+
+    today = now.date().isoformat()
+
+    # 1) 回填过去未结算的日期（用真实 SPY/QQQ 涨跌判对错）
+    for r in records:
+        if r.get("date", "") < today and not r.get("outcome"):
+            mv = pg.fetch_realized_move(r["date"])
+            if mv.get("spy_pct") is not None or mv.get("nq_pct") is not None:
+                r["actual"] = mv
+                r["outcome"] = pg.score_outcome(r.get("color", "NONE"),
+                                                mv.get("spy_pct"), mv.get("nq_pct"))
+                logger.info("结算 %s: %s → %s（SPY %s%% / NQ %s%%）", r["date"],
+                            r.get("color"), r["outcome"], mv.get("spy_pct"), mv.get("nq_pct"))
+
+    # 2) upsert 今天（取当天最严重档）
+    rec = next((r for r in records if r.get("date") == today), None)
+    if rec is None:
+        rec = {"date": today, "color": "NONE", "composite": 0.0, "scans": []}
+        records.append(rec)
+    if pg.SEVERITY_ORDER.get(res.color, 0) >= pg.SEVERITY_ORDER.get(rec.get("color", "NONE"), 0):
+        rec["color"] = res.color
+        rec["composite"] = res.composite
+        rec["pressure_sources"] = res.pressure_sources
+        rec["top_alarm"] = res.top_alarm
+        rec["can_buy"] = res.can_buy
+    rec.setdefault("scans", []).append(
+        {"at": now.strftime("%H:%M"), "color": res.color, "composite": res.composite})
+
+    records.sort(key=lambda r: r.get("date", ""))
+    HISTORY_FILE.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info("history 已更新（%d 天台账）", len(records))
 
 
 # ──────────────────────────────────────────────────
@@ -256,6 +302,12 @@ def main() -> int:
     payload["scan_label"] = scan
     OUT_JSON.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info("已写 %s", OUT_JSON.relative_to(_REPO))
+
+    # 历史台账（回填昨天之前的真实结果 + 记今天）
+    try:
+        _update_history(res, now)
+    except Exception as e:
+        logger.warning("history 更新失败: %s", e)
 
     # 分级推送 + 防重复
     state = _load_state()

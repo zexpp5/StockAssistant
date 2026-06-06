@@ -1449,6 +1449,29 @@ _sys.exit(rc)
         except Exception as e:
             return {"available": False, "color": "NONE", "reason": f"读取失败: {e}"}
 
+    @app.get("/api/premarket-gate/history")
+    def premarket_gate_history() -> dict[str, Any]:
+        """盘前闸门历史台账 + 战绩汇总 — 回溯"预警准不准"的自我分析。
+
+        每天一条(color/composite/原因),第二天用真实涨跌结算对错。
+        前端「战绩回溯」读这个,验证这套预警的命中率/漏报率。
+        """
+        from stock_research.core import premarket_gate as _pg
+
+        p = _REPO_ROOT / "data" / "premarket_gate_history.json"
+        records: list = []
+        if p.exists():
+            try:
+                records = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                records = []
+        records = sorted(records, key=lambda r: r.get("date", ""), reverse=True)
+        return {
+            "records": records,
+            "summary": _pg.summarize_history(records),
+            "outcome_cn": _pg.OUTCOME_CN,
+        }
+
     @app.get("/premarket")
     def premarket_gate_page():
         """美股盘前风险闸门 — 独立网页（白底干净，手机也能看）。
@@ -1458,6 +1481,7 @@ _sys.exit(rc)
         能看到;等那边落地再把横幅嵌进今日决策台顶部。
         """
         from fastapi.responses import HTMLResponse
+        from stock_research.core import premarket_gate as _pg
 
         p = _REPO_ROOT / "data" / "latest" / "premarket_gate.json"
         doc: dict = {}
@@ -1466,6 +1490,17 @@ _sys.exit(rc)
                 doc = json.loads(p.read_text(encoding="utf-8"))
             except Exception:
                 doc = {}
+
+        # 历史台账 + 战绩
+        hp = _REPO_ROOT / "data" / "premarket_gate_history.json"
+        hist: list = []
+        if hp.exists():
+            try:
+                hist = json.loads(hp.read_text(encoding="utf-8"))
+            except Exception:
+                hist = []
+        hist_sorted = sorted(hist, key=lambda r: r.get("date", ""), reverse=True)
+        summ = _pg.summarize_history(hist)
 
         THEME = {
             "CRITICAL": ("#dc2626", "#fef2f2", "#fecaca"),
@@ -1484,6 +1519,8 @@ _sys.exit(rc)
                 '<br>周末 / 美股假日休市不跑。</div></div>'
             )
             color = "NONE"
+            foot_html = ('<div class="foot">📖 这是「美股开盘前的看天气」：开盘前帮你看今晚适不适合买。'
+                         '🟢正常买 🟡小仓试 🟠先别开新仓 🔴别买只看好已有 · ⚠️ 仅供参考，不是投资建议</div>')
         else:
             color = doc.get("color", "NONE")
             accent, bg, border = THEME.get(color, THEME["NONE"])
@@ -1521,11 +1558,53 @@ _sys.exit(rc)
             {top_html}
             <div class="card"><h3>为什么这么判断</h3><ul class="reasons">{reasons_html}</ul></div>
             {hold_html}
-            <div class="foot">📖 这是「美股开盘前的看天气」：开盘前帮你看一眼今晚适不适合买。
-            🟢正常买 🟡小仓试 🟠先别开新仓 🔴别买只看好已有 ·
-            风险打分 {comp:.1f}/3（越高越危险）· 覆盖率 {int(cov*100)}% ·
-            生成 {gen}（{scan}）· ⚠️ 仅供参考，不是投资建议</div>
             """
+            foot_html = (
+                '<div class="foot">📖 这是「美股开盘前的看天气」：开盘前帮你看一眼今晚适不适合买。'
+                '🟢正常买 🟡小仓试 🟠先别开新仓 🔴别买只看好已有 · '
+                f'风险打分 {comp:.1f}/3（越高越危险）· 覆盖率 {int(cov*100)}% · '
+                f'生成 {gen}（{scan}）· ⚠️ 仅供参考，不是投资建议</div>'
+            )
+
+        # ── 战绩回溯板块（验证预警准不准）──
+        _OC = {"TRUE_POSITIVE": ("✅", "真预警"), "FALSE_ALARM": ("🟡", "虚惊"),
+               "MISS": ("❌", "漏报"), "TRUE_NEGATIVE": ("·", "正常")}
+        _DOT = {"CRITICAL": "🔴", "HIGH": "🟠", "LOW": "🟡", "NONE": "🟢"}
+        if summ.get("settled_days", 0) > 0:
+            sp = summ.get("precision_pct")
+            rc = summ.get("recall_pct")
+            stat = (
+                f'<div class="stat"><b>{summ["settled_days"]}</b><span>已结算</span></div>'
+                f'<div class="stat"><b>{summ["warnings_issued"]}</b><span>发过警报</span></div>'
+                f'<div class="stat"><b>{sp if sp is not None else "—"}%</b><span>警报命中</span></div>'
+                f'<div class="stat"><b style="color:#dc2626">{summ["miss"]}</b><span>漏报</span></div>'
+            )
+        else:
+            stat = ('<div class="muted" style="font-size:13px">还没有可结算的历史——从今天起每天记一笔，'
+                    '第二天用真实涨跌打分，攒几天就能看命中率了。</div>')
+        rows = ""
+        for r in hist_sorted[:14]:
+            d = esc(r.get("date", ""))
+            dot = _DOT.get(r.get("color", "NONE"), "")
+            oc = r.get("outcome")
+            if oc:
+                ic, name = _OC.get(oc, ("", oc))
+                act = r.get("actual", {})
+                spv = act.get("spy_pct")
+                act_txt = f'标普 {spv:+.1f}%' if spv is not None else ''
+                res_cell = f'{ic} {name} <span class="muted">{act_txt}</span>'
+            else:
+                res_cell = '<span class="muted">待结算</span>'
+            rows += (f'<tr><td>{d}</td><td>{dot} {esc(r.get("color",""))}</td>'
+                     f'<td>{res_cell}</td></tr>')
+        history_html = (
+            '<div class="card"><h3>📊 战绩回溯 '
+            '<span class="muted" style="font-weight:400;font-size:13px">— 这套预警事后到底准不准</span></h3>'
+            f'<div class="stats">{stat}</div>'
+            + (f'<table class="hist"><thead><tr><th>日期</th><th>当晚预警</th><th>事后结果</th></tr></thead>'
+               f'<tbody>{rows}</tbody></table>' if rows else '')
+            + '</div>'
+        )
 
         html = f"""<!DOCTYPE html><html lang="zh"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -1552,9 +1631,18 @@ ul{{margin:0;padding-left:4px;list-style:none}}
 .muted{{color:#94a3b8}}
 .foot{{font-size:12px;color:#94a3b8;padding:4px 4px 30px;line-height:1.7}}
 b{{font-weight:700}}
+.stats{{display:flex;gap:10px;margin-bottom:12px}}
+.stat{{flex:1;background:#f8fafc;border-radius:10px;padding:10px 6px;text-align:center}}
+.stat b{{display:block;font-size:20px;color:#0f172a}}
+.stat span{{font-size:11px;color:#94a3b8}}
+table.hist{{width:100%;border-collapse:collapse;font-size:13.5px}}
+table.hist th{{text-align:left;color:#94a3b8;font-weight:500;padding:6px 4px;border-bottom:1px solid #e2e8f0}}
+table.hist td{{padding:7px 4px;border-bottom:1px solid #f1f5f9}}
 </style></head><body><div class="wrap">
 <div class="title"><span>🚦 美股开盘前 · 今晚能不能买</span><span class="muted">每5分钟自动刷新</span></div>
 {body}
+{history_html}
+{foot_html}
 </div></body></html>"""
         return HTMLResponse(content=html)
 

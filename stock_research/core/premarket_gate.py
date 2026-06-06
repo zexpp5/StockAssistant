@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field, asdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -722,6 +722,107 @@ def compute_gate(
         coverage=coverage,
         notes=notes,
     )
+
+
+# ──────────────────────────────────────────────────
+# 历史回溯 / 战绩（预警准不准的自我分析）
+# ──────────────────────────────────────────────────
+#
+# 逻辑：每天盘前记一笔预警(color/composite/原因)，第二天美股收盘后用【真实涨跌】
+# 回填，自动判定这次预警是"真预警/虚惊/漏报/正常"，从而算命中率。
+# 这让闸门对自己的判断负责——不是发完就忘。
+#
+#   预警了(🟠/🔴) + 当天真跌 → TRUE_POSITIVE  真预警(好)
+#   预警了(🟠/🔴) + 当天没跌 → FALSE_ALARM    虚惊一场(警报太松)
+#   没预警(🟢/🟡) + 当天真跌 → MISS           漏报(最糟，要复盘)
+#   没预警(🟢/🟡) + 当天没跌 → TRUE_NEGATIVE  正常(对)
+
+OUTCOME_CN = {
+    "TRUE_POSITIVE": "✅ 真预警(警了，事后真跌)",
+    "FALSE_ALARM": "🟡 虚惊(警了，但没跌)",
+    "MISS": "❌ 漏报(没警，结果跌了)",
+    "TRUE_NEGATIVE": "✅ 正常(没警，也没跌)",
+}
+
+# "真跌"的门槛：标普 ≤ -0.8% 或 纳指 ≤ -1.2%（盘中级别的明显下跌）
+_BAD_SPY = -0.8
+_BAD_NQ = -1.2
+
+
+def fetch_realized_move(date_iso: str) -> dict[str, Any]:
+    """某交易日美股【真实】涨跌：标普(SPY) / 纳指(QQQ) 当日收盘 vs 前一交易日。
+
+    用于回填历史预警的"事后结果"。该日非交易日 / 数据未出 → 返回 None。
+    """
+    out: dict[str, Any] = {"spy_pct": None, "nq_pct": None, "settled_at": None}
+    try:
+        import yfinance as yf
+    except Exception:
+        return out
+    try:
+        target = date.fromisoformat(date_iso)
+    except Exception:
+        return out
+    start = (target - timedelta(days=8)).isoformat()
+    end = (target + timedelta(days=3)).isoformat()
+    for key, sym in (("spy_pct", "SPY"), ("nq_pct", "QQQ")):
+        try:
+            h = yf.Ticker(sym).history(start=start, end=end)
+            if h is None or len(h) < 2:
+                continue
+            rows = [(idx.date(), float(c)) for idx, c in zip(h.index, h["Close"]) if c == c]
+            # 找到 target 当天及其前一交易日
+            for i in range(1, len(rows)):
+                if rows[i][0] == target:
+                    prev = rows[i - 1][1]
+                    if prev > 0:
+                        out[key] = round((rows[i][1] / prev - 1.0) * 100.0, 2)
+                    break
+        except Exception as e:
+            logger.debug("realized %s 失败: %s", sym, str(e)[:60])
+    if out["spy_pct"] is not None or out["nq_pct"] is not None:
+        out["settled_at"] = datetime.now().isoformat(timespec="seconds")
+    return out
+
+
+def score_outcome(color: str, spy_pct: float | None, nq_pct: float | None) -> str | None:
+    """对照预警 vs 真实涨跌，判定这次预警的对错。数据缺 → None（未结算）。"""
+    if spy_pct is None and nq_pct is None:
+        return None
+    warned = SEVERITY_ORDER.get(color, 0) >= SEVERITY_ORDER["HIGH"]
+    spy = spy_pct if spy_pct is not None else 0.0
+    nq = nq_pct if nq_pct is not None else 0.0
+    bad_day = (spy <= _BAD_SPY) or (nq <= _BAD_NQ)
+    if warned and bad_day:
+        return "TRUE_POSITIVE"
+    if warned and not bad_day:
+        return "FALSE_ALARM"
+    if not warned and bad_day:
+        return "MISS"
+    return "TRUE_NEGATIVE"
+
+
+def summarize_history(records: list[dict]) -> dict[str, Any]:
+    """战绩汇总：命中率 / 漏报数 / 虚惊数。"""
+    settled = [r for r in records if r.get("outcome")]
+    n = len(settled)
+    c = {k: 0 for k in OUTCOME_CN}
+    for r in settled:
+        c[r["outcome"]] = c.get(r["outcome"], 0) + 1
+    tp, fa, miss, tn = c["TRUE_POSITIVE"], c["FALSE_ALARM"], c["MISS"], c["TRUE_NEGATIVE"]
+    warn_total = tp + fa            # 一共发了多少次橙/红警报
+    bad_total = tp + miss           # 一共有多少个真跌的日子
+    precision = round(tp / warn_total * 100) if warn_total else None  # 警报里真跌占比
+    recall = round(tp / bad_total * 100) if bad_total else None       # 真跌被抓到的比例
+    accuracy = round((tp + tn) / n * 100) if n else None
+    return {
+        "settled_days": n,
+        "warnings_issued": warn_total,
+        "true_positive": tp, "false_alarm": fa, "miss": miss, "true_negative": tn,
+        "precision_pct": precision,   # 发警报的准度
+        "recall_pct": recall,         # 抓真跌的能力
+        "accuracy_pct": accuracy,
+    }
 
 
 # ──────────────────────────────────────────────────

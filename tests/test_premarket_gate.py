@@ -180,5 +180,61 @@ def test_holdings_overlay_empty_when_no_holdings():
     assert res.holdings_impact == []
 
 
+# ──────────────────────────────────────────────────
+# 历史回溯 / 战绩评分
+# ──────────────────────────────────────────────────
+
+def test_score_outcome_true_positive():
+    """警了(红) + 当天真跌 → 真预警。"""
+    assert pg.score_outcome("CRITICAL", spy_pct=-1.6, nq_pct=-2.6) == "TRUE_POSITIVE"
+
+
+def test_score_outcome_false_alarm():
+    """警了(橙) + 当天没跌 → 虚惊。"""
+    assert pg.score_outcome("HIGH", spy_pct=0.3, nq_pct=0.1) == "FALSE_ALARM"
+
+
+def test_score_outcome_miss():
+    """没警(绿) + 当天真跌 → 漏报(最糟)。"""
+    assert pg.score_outcome("NONE", spy_pct=-1.2, nq_pct=-2.0) == "MISS"
+
+
+def test_score_outcome_true_negative():
+    """没警(黄) + 当天没跌 → 正常。"""
+    assert pg.score_outcome("LOW", spy_pct=0.2, nq_pct=0.4) == "TRUE_NEGATIVE"
+
+
+def test_score_outcome_unsettled_when_no_data():
+    assert pg.score_outcome("CRITICAL", None, None) is None
+
+
+def test_score_outcome_nq_threshold_alone_triggers_bad():
+    """只有纳指跌穿门槛(标普还好)也算真跌。"""
+    assert pg.score_outcome("HIGH", spy_pct=-0.3, nq_pct=-1.5) == "TRUE_POSITIVE"
+
+
+def test_summarize_history_counts_and_rates():
+    records = [
+        {"date": "2026-06-01", "color": "CRITICAL", "outcome": "TRUE_POSITIVE"},
+        {"date": "2026-06-02", "color": "HIGH", "outcome": "FALSE_ALARM"},
+        {"date": "2026-06-03", "color": "NONE", "outcome": "MISS"},
+        {"date": "2026-06-04", "color": "LOW", "outcome": "TRUE_NEGATIVE"},
+        {"date": "2026-06-05", "color": "CRITICAL"},  # 未结算，不计入
+    ]
+    s = pg.summarize_history(records)
+    assert s["settled_days"] == 4
+    assert s["warnings_issued"] == 2          # 2 次橙/红
+    assert s["true_positive"] == 1 and s["false_alarm"] == 1
+    assert s["miss"] == 1 and s["true_negative"] == 1
+    assert s["precision_pct"] == 50           # 警报里 1/2 真跌
+    assert s["recall_pct"] == 50              # 真跌 2 天抓到 1 天
+
+
+def test_summarize_empty():
+    s = pg.summarize_history([])
+    assert s["settled_days"] == 0
+    assert s["precision_pct"] is None
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
