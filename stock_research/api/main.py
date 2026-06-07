@@ -1582,27 +1582,42 @@ _sys.exit(rc)
         else:
             stat = ('<div class="muted" style="font-size:13px">还没有可结算的历史——从今天起每天记一笔，'
                     '第二天用真实涨跌打分，攒几天就能看命中率了。</div>')
-        rows = ""
-        for r in hist_sorted[:14]:
+        items = ""
+        for r in hist_sorted[:30]:
             d = esc(r.get("date", ""))
-            dot = _DOT.get(r.get("color", "NONE"), "")
+            color = r.get("color", "NONE")
+            dot = _DOT.get(color, "")
             oc = r.get("outcome")
+            act = r.get("actual", {}) or {}
+            spv, nqv = act.get("spy_pct"), act.get("nq_pct")
+            act_txt = " · ".join(
+                t for t in [f'标普 {spv:+.1f}%' if spv is not None else "",
+                            f'纳指 {nqv:+.1f}%' if nqv is not None else ""] if t)
             if oc:
                 ic, name = _OC.get(oc, ("", oc))
-                act = r.get("actual", {})
-                spv = act.get("spy_pct")
-                act_txt = f'标普 {spv:+.1f}%' if spv is not None else ''
-                res_cell = f'{ic} {name} <span class="muted">{act_txt}</span>'
+                res_badge = f'<span style="font-weight:600">{ic} {name}</span>'
             else:
-                res_cell = '<span class="muted">待结算</span>'
-            rows += (f'<tr><td>{d}</td><td>{dot} {esc(r.get("color",""))}</td>'
-                     f'<td>{res_cell}</td></tr>')
+                res_badge = '<span class="muted">待结算</span>'
+            said = esc(r.get("headline_plain") or r.get("can_buy", ""))
+            top = esc(r.get("top_alarm", ""))
+            reasons = r.get("reasons_plain") or []
+            reasons_li = "".join(f'<li>{esc(x)}</li>' for x in reasons)
+            detail = (f'<details><summary>当晚报了哪些理由（{len(reasons)} 条）</summary>'
+                      f'<ul class="rlist">{reasons_li}</ul></details>') if reasons else ''
+            items += (
+                f'<div class="hitem">'
+                f'<div class="hrow"><span>{dot} <b>{d}</b> · {esc(color)}</span>{res_badge}</div>'
+                f'<div class="hsaid">当晚结论：{said}</div>'
+                + (f'<div class="htop">{top}</div>' if top else '')
+                + (f'<div class="hact">事后真实：{act_txt}</div>' if act_txt else '')
+                + detail
+                + '</div>'
+            )
         history_html = (
             '<div class="card"><h3>📊 战绩回溯 '
-            '<span class="muted" style="font-weight:400;font-size:13px">— 这套预警事后到底准不准</span></h3>'
+            '<span class="muted" style="font-weight:400;font-size:13px">— 当晚报了啥 + 事后准不准，可逐条核对</span></h3>'
             f'<div class="stats">{stat}</div>'
-            + (f'<table class="hist"><thead><tr><th>日期</th><th>当晚预警</th><th>事后结果</th></tr></thead>'
-               f'<tbody>{rows}</tbody></table>' if rows else '')
+            + (items if items else '')
             + '</div>'
         )
 
@@ -1635,9 +1650,15 @@ b{{font-weight:700}}
 .stat{{flex:1;background:#f8fafc;border-radius:10px;padding:10px 6px;text-align:center}}
 .stat b{{display:block;font-size:20px;color:#0f172a}}
 .stat span{{font-size:11px;color:#94a3b8}}
-table.hist{{width:100%;border-collapse:collapse;font-size:13.5px}}
-table.hist th{{text-align:left;color:#94a3b8;font-weight:500;padding:6px 4px;border-bottom:1px solid #e2e8f0}}
-table.hist td{{padding:7px 4px;border-bottom:1px solid #f1f5f9}}
+.hitem{{border:1px solid #e8edf3;border-radius:10px;padding:10px 12px;margin-top:10px;background:#fff}}
+.hrow{{display:flex;justify-content:space-between;align-items:center;font-size:14px;margin-bottom:4px}}
+.hsaid{{font-size:13px;color:#334155}}
+.htop{{font-size:12.5px;color:#b91c1c;margin-top:3px}}
+.hact{{font-size:12.5px;color:#475569;margin-top:3px}}
+.hitem details{{margin-top:6px}}
+.hitem summary{{font-size:12.5px;color:#7c3aed;cursor:pointer}}
+.rlist{{margin:6px 0 2px;padding-left:2px}}
+.rlist li{{font-size:12.5px;color:#475569;padding:4px 0;border-bottom:1px solid #f5f7fa;list-style:none}}
 </style></head><body><div class="wrap">
 <div class="title"><span>🚦 美股开盘前 · 今晚能不能买</span><span class="muted">每5分钟自动刷新</span></div>
 {body}

@@ -129,6 +129,8 @@ def _update_history(res: pg.GateResult, now: datetime) -> None:
         rec["pressure_sources"] = res.pressure_sources
         rec["top_alarm"] = res.top_alarm
         rec["can_buy"] = res.can_buy
+        rec["headline_plain"] = res.headline_plain   # 当晚结论(人话)
+        rec["reasons_plain"] = res.reasons_plain      # 当晚报的全部理由(可回看验证)
     rec.setdefault("scans", []).append(
         {"at": now.strftime("%H:%M"), "color": res.color, "composite": res.composite})
 
