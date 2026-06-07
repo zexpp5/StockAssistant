@@ -1574,14 +1574,14 @@ _sys.exit(rc)
             sp = summ.get("precision_pct")
             rc = summ.get("recall_pct")
             stat = (
-                f'<div class="stat"><b>{summ["settled_days"]}</b><span>已结算</span></div>'
+                f'<div class="stat"><b>{summ["settled_days"]}</b><span>已验证</span></div>'
                 f'<div class="stat"><b>{summ["warnings_issued"]}</b><span>发过警报</span></div>'
                 f'<div class="stat"><b>{sp if sp is not None else "—"}%</b><span>警报命中</span></div>'
                 f'<div class="stat"><b style="color:#dc2626">{summ["miss"]}</b><span>漏报</span></div>'
             )
         else:
-            stat = ('<div class="muted" style="font-size:13px">还没有可结算的历史——从今天起每天记一笔，'
-                    '第二天用真实涨跌打分，攒几天就能看命中率了。</div>')
+            stat = ('<div class="muted" style="font-size:13px">还没有可验证的历史——从今天起每天记一笔，'
+                    '第二天用当天真实涨跌核对，攒几天就能看命中率了。</div>')
         items = ""
         for r in hist_sorted[:30]:
             d = esc(r.get("date", ""))
@@ -1597,7 +1597,7 @@ _sys.exit(rc)
                 ic, name = _OC.get(oc, ("", oc))
                 res_badge = f'<span style="font-weight:600">{ic} {name}</span>'
             else:
-                res_badge = '<span class="muted">待结算</span>'
+                res_badge = '<span class="muted">待验证（要等当天美股收盘）</span>'
             said = esc(r.get("headline_plain") or r.get("can_buy", ""))
             top = esc(r.get("top_alarm", ""))
             reasons = r.get("reasons_plain") or []
