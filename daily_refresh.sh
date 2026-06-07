@@ -574,6 +574,7 @@ run_step "23d5/25 shadow 生产门禁（只读证据）" "scripts/tools/evaluate
 run_step "23d6/25 US shadow 预检（唯一 source run · 只读）" "scripts/tools/us_shadow_preflight_check.py"
 run_step "23d7/25 US-only 生产验收（先上线美股 · 只读）" "scripts/tools/us_production_acceptance_check.py"
 run_step "23d8/25 推荐规则快速体检（US 优先 · 只读）" "scripts/tools/recommendation_readiness_check.py"
+run_step "23d9/25 US 严筛试运行（只读研究队列）" "scripts/tools/us_strict_trial.py"
 # 2026-05-21 V2 cutover 补洞：替代被删的 V1 audit_picks，喂 dashboard「买前审查」tab
 run_step "23e/25 picks 反向审查（V2 · Risk Parity + 估值 + Markowitz）" "-m stock_research.jobs.audit_picks_v2 --fast"
 run_step "23f/25 真实持仓每日体检（评分/建议/说明）" "-m stock_research.jobs.real_holding_review"

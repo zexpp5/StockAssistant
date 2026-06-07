@@ -982,8 +982,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <!-- 分市场策略验证进度: US 单独走 验证中→可小仓试探→正式可用; CN/HK 冻结 research-only。
        数据源: shadow_tuning_evidence.json(服务端派生,只读) -->
   {US_VALIDATION_PROGRESS}
-  <!-- 推荐规则快速体检: US 优先，聚合质量闸门/生产验收/US 样本/组合硬锁。 -->
+  <!-- 全量 US 推荐规则快速体检: 聚合质量闸门/生产验收/US 样本/组合硬锁。 -->
   {RECOMMENDATION_READINESS_PANEL}
+  <!-- US 严筛试运行: 只读 overlay，从正式推荐里筛出买前研究队列，不改公式/持仓。 -->
+  {US_STRICT_TRIAL_SECTION}
   <!-- 早发现雷达: 服务端静态渲染，避免浏览器缓存/JS 加载导致页面顶部看不见。只读研究提醒。 -->
   {EARLY_GROWTH_RADAR_SECTION}
   <!-- 2026-05-26: 移除 discovery-meta + discovery-accuracy 两条系统信息行 (用户反馈无用); JS 仍可安全空操作 -->
@@ -15436,7 +15438,7 @@ def recommendation_readiness_panel_html(*, compact: bool = False) -> str:
     if not payload:
         return """
   <div class="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-    <div class="font-bold">US 推荐规则体检未生成</div>
+    <div class="font-bold">全量 US 推荐规则体检未生成</div>
     <div class="text-xs mt-1">运行 <code class="bg-white px-1.5 py-0.5 rounded">python3 scripts/tools/recommendation_readiness_check.py</code> 后，页面会显示 US 能用到什么程度。</div>
   </div>
 """
@@ -15449,6 +15451,7 @@ def recommendation_readiness_panel_html(*, compact: bool = False) -> str:
     plan = payload.get("plan") or {}
     status = str(payload.get("status") or "WARN").upper()
     label = str(decision.get("label") or "US 体检")
+    display_label = "全量 US 研究队列" if label == "US 研究队列" else label
     allowed = str(decision.get("allowed_use") or "—")
     generated = str(payload.get("generated_at") or "")[:19]
 
@@ -15482,11 +15485,11 @@ def recommendation_readiness_panel_html(*, compact: bool = False) -> str:
     <div class="flex items-start justify-between gap-3 flex-wrap">
       <div>
         <div class="flex items-center gap-2">
-          <span class="text-sm font-bold text-slate-900">US 推荐规则体检</span>
+          <span class="text-sm font-bold text-slate-900">全量 US 推荐规则体检</span>
           {_runtime_badge(status)}
           <span class="text-xs text-slate-500">{_text(generated)}</span>
         </div>
-        <div class="text-sm text-slate-800 mt-1"><b>{_text(label)}</b> · {_text(allowed)}</div>
+        <div class="text-sm text-slate-800 mt-1"><b>{_text(display_label)}</b> · {_text(allowed)}</div>
         <div class="text-xs text-slate-600 mt-1">
           US 1D: 样本 {_text(formula.get('sample_size'))} · alpha {_pct(formula.get('alpha_pct'))} · 命中 {_pct(formula.get('hit_rate_pct'))}
           · shadow source {_text(us.get('shadow_runs'))}/{_text((us.get('criteria') or {}).get('min_shadow_runs'))}（raw {_text(us.get('raw_shadow_artifact_count'))}）
@@ -15520,11 +15523,11 @@ def recommendation_readiness_panel_html(*, compact: bool = False) -> str:
     <div class="flex items-start justify-between gap-3 flex-wrap mb-3">
       <div>
         <div class="flex items-center gap-2 mb-1">
-          <h3 class="text-sm font-bold text-slate-900">US 推荐规则快速体检</h3>
+          <h3 class="text-sm font-bold text-slate-900">全量 US 推荐规则快速体检</h3>
           {_runtime_badge(status)}
           <span class="text-[11px] text-slate-500">{_text(generated)}</span>
         </div>
-        <div class="text-sm text-slate-800"><b>{_text(label)}</b> · {_text(allowed)}</div>
+        <div class="text-sm text-slate-800"><b>{_text(display_label)}</b> · {_text(allowed)}</div>
         <div class="text-[11px] text-slate-600 mt-1">只读 advisory：不改公式、不写自选、不写真实持仓、不自动切策略版本。</div>
       </div>
       <div class="text-right text-[11px] text-slate-600">
@@ -15566,6 +15569,192 @@ def recommendation_readiness_panel_html(*, compact: bool = False) -> str:
       </div>
     </div>
   </div>
+"""
+
+
+def us_strict_trial_section_html(payload: dict | None = None) -> str:
+    """Render the US strict-trial research queue.
+
+    This is a read-only overlay fed by data/latest/us_strict_trial.json. It is
+    intentionally separate from the formal recommendation table and does not
+    change ranking, watchlist, real holdings, or portfolio plans.
+    """
+    payload = payload if isinstance(payload, dict) else _runtime_load_json("data/latest/us_strict_trial.json")
+    if not payload or payload.get("_error"):
+        return """
+  <div class="mb-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
+    <div class="text-sm font-bold text-slate-900">US 严筛试运行未生成</div>
+    <div class="text-xs text-slate-500 mt-1">运行 <code class="bg-slate-50 px-1.5 py-0.5 rounded">python3 scripts/tools/us_strict_trial.py</code> 后，这里会显示只读研究队列。</div>
+  </div>
+"""
+
+    def esc(value) -> str:
+        return html_lib.escape(str(value if value is not None and value != "" else "—"), quote=True)
+
+    def pct(value, digits: int = 2) -> str:
+        try:
+            n = float(value)
+        except (TypeError, ValueError):
+            return "—"
+        return f"{n:+.{digits}f}%"
+
+    def num(value, digits: int = 1) -> str:
+        try:
+            n = float(value)
+        except (TypeError, ValueError):
+            return "—"
+        return f"{n:.{digits}f}"
+
+    def finite(value):
+        try:
+            n = float(value)
+        except (TypeError, ValueError):
+            return None
+        return n if math.isfinite(n) else None
+
+    def evidence_chip(label: str, row: dict, tone: str = "slate") -> str:
+        palette = {
+            "green": "border-emerald-200 bg-emerald-50 text-emerald-800",
+            "red": "border-rose-200 bg-rose-50 text-rose-800",
+            "amber": "border-amber-200 bg-amber-50 text-amber-900",
+            "slate": "border-slate-200 bg-white text-slate-700",
+        }.get(tone, "border-slate-200 bg-white text-slate-700")
+        return (
+            f'<div class="rounded-lg border {palette} px-3 py-2">'
+            f'<div class="text-[11px] opacity-75">{esc(label)}</div>'
+            f'<div class="text-sm font-bold">alpha {pct(row.get("avg_alpha_pct"))}</div>'
+            f'<div class="text-[11px] opacity-80">n={esc(row.get("n"))} · 胜率 {pct(row.get("win_rate_pct"))}</div>'
+            f'</div>'
+        )
+
+    def risk_badges(item: dict) -> str:
+        codes = [str(x) for x in (item.get("risk_codes") or []) if x]
+        if not codes:
+            return '<span class="text-[11px] text-slate-400">无结构化红旗</span>'
+        return " ".join(
+            f'<span class="inline-flex px-1.5 py-0.5 rounded border border-amber-200 bg-amber-50 text-amber-800 text-[10px] font-mono">{esc(code)}</span>'
+            for code in codes[:3]
+        )
+
+    decision = payload.get("decision") or {}
+    trial_gate = decision.get("trial_review_gate") or {}
+    evidence = payload.get("evidence_summary") or {}
+    criteria = payload.get("criteria") or {}
+    latest = payload.get("latest_run") or {}
+    candidates = [r for r in (payload.get("current_candidates") or []) if isinstance(r, dict)]
+    rejected_top = [r for r in (payload.get("rejected_top") or []) if isinstance(r, dict)]
+    status = str(payload.get("status") or "WARN").upper()
+    generated = str(payload.get("generated_at") or "")[:19].replace("T", " ")
+    display_mode = str(decision.get("display_mode") or "active_research")
+
+    strict = evidence.get("strict_overlay") or {}
+    all_us = evidence.get("all_us_buy") or {}
+    overheat = evidence.get("overheated_1y") or {}
+    high_mom = evidence.get("momentum_gte_80") or {}
+    border = "border-rose-300 bg-rose-50" if display_mode == "withdraw" else "border-sky-200 bg-sky-50"
+
+    rows = []
+    if display_mode == "withdraw":
+        rows.append("""
+          <tr><td colspan="8" class="py-4 text-sm text-rose-700 font-semibold">严筛证据已转弱，本区自动撤下；今天不展示严筛候选。</td></tr>
+        """)
+    elif candidates:
+        for item in candidates:
+            symbol = esc(item.get("symbol"))
+            name = esc(item.get("name"))
+            note = esc(item.get("trial_note") or "严筛候选 · 仅买前研究")
+            note_cls = "text-amber-800" if "博反弹" in str(item.get("trial_note") or "") else "text-sky-800"
+            rows.append(f"""
+          <tr class="border-t border-slate-100">
+            <td class="py-2.5 pr-3 align-top">
+              <button class="font-mono text-sm font-bold text-slate-900 hover:text-violet-700"
+                      data-code="{symbol}" data-name="{name}"
+                      onclick="openStockDetail(this.dataset.code, this.dataset.name)">{symbol}</button>
+              <div class="text-[11px] text-slate-400 max-w-[160px] truncate">{name}</div>
+            </td>
+            <td class="py-2.5 pr-3 align-top text-xs text-slate-700">
+              <div>US #{esc(item.get('market_rank'))}</div>
+              <div class="text-[10px] text-slate-400">全局 #{esc(item.get('global_rank'))}</div>
+            </td>
+            <td class="py-2.5 pr-3 align-top text-right font-mono text-sm font-bold text-slate-900">{num(item.get('total_score'), 2)}</td>
+            <td class="py-2.5 pr-3 align-top text-right font-mono text-sm text-slate-700">{num(item.get('momentum'), 1)}</td>
+            <td class="py-2.5 pr-3 align-top text-xs">{risk_badges(item)}</td>
+            <td class="py-2.5 pr-3 align-top text-xs font-semibold {note_cls}">{note}</td>
+            <td class="py-2.5 align-top text-right">
+              <button class="px-2.5 py-1 rounded border border-violet-200 bg-white text-violet-700 hover:bg-violet-50 text-[11px] font-semibold"
+                      data-code="{symbol}" data-name="{name}"
+                      onclick="openStockDetail(this.dataset.code, this.dataset.name)">买前研究</button>
+            </td>
+          </tr>
+""")
+    else:
+        reason = "今日 US Top5 未同时满足 market_rank<=5、momentum<80、无过热红旗。"
+        if rejected_top:
+            reason += " 被拦截原因：" + "；".join(
+                f"{r.get('symbol')}({', '.join(r.get('reject_reasons') or [])})"
+                for r in rejected_top[:3]
+            )
+        rows.append(f'<tr><td colspan="8" class="py-4 text-sm text-slate-500">{esc(reason)}</td></tr>')
+
+    warning_items = [str(x) for x in (payload.get("warnings") or []) if x]
+    warning_html = ""
+    if warning_items:
+        warning_html = (
+            '<div class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">'
+            + "；".join(esc(x) for x in warning_items[:3])
+            + "</div>"
+        )
+
+    return f"""
+  <section class="mb-4 rounded-xl border-2 {border} overflow-hidden">
+    <div class="px-4 py-3 border-b border-sky-100 bg-white/80 flex items-start justify-between gap-3 flex-wrap">
+      <div>
+        <div class="flex items-center gap-2 flex-wrap">
+          <h3 class="text-base font-bold text-slate-900">US 严筛试运行</h3>
+          {_runtime_badge(status)}
+          <span class="text-xs text-slate-500">{esc(generated)}</span>
+        </div>
+        <div class="text-sm text-slate-700 mt-1">
+          {esc(decision.get('allowed_use'))}
+        </div>
+        <div class="text-[11px] text-slate-500 mt-1">
+          口径：US buy 内 market_rank≤{esc(criteria.get('max_market_rank'))} · momentum&lt;{esc(criteria.get('momentum_lt'))} · 剔除 OVERHEATED_1Y；与正式主榜分开，不重算分数。
+        </div>
+        <div class="text-[11px] text-slate-500 mt-1">
+          可小仓试探评审门槛：上线后 reviewed≥20 · alpha&gt;0 · 命中≥45% · 最近两轮确认；当前 {esc(trial_gate.get('status_label') or '未生成门禁')}.
+        </div>
+      </div>
+      <div class="text-right text-[11px] text-slate-500">
+        <div>run <span class="font-mono">{esc(latest.get('run_id'))}</span></div>
+        <div>strategy <span class="font-mono">{esc(payload.get('strategy_version'))}</span></div>
+      </div>
+    </div>
+    <div class="px-4 py-3">
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-2 mb-3">
+        {evidence_chip("全部 US buy", all_us, "red" if (finite(all_us.get('avg_alpha_pct')) or 0) < 0 else "green")}
+        {evidence_chip("严筛口径", strict, "green" if (finite(strict.get('avg_alpha_pct')) or 0) > 0 else "amber")}
+        {evidence_chip("过热红旗", overheat, "red")}
+        {evidence_chip("momentum≥80", high_mom, "red" if (finite(high_mom.get('avg_alpha_pct')) or 0) < 0 else "slate")}
+      </div>
+      <div class="overflow-x-auto bg-white rounded-lg border border-slate-200">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 text-[10px] text-slate-500 uppercase tracking-wide">
+            <tr>
+              <th class="py-2 pl-3 pr-3 text-left">股票</th>
+              <th class="py-2 pr-3 text-left">排名</th>
+              <th class="py-2 pr-3 text-right">综合分</th>
+              <th class="py-2 pr-3 text-right">momentum</th>
+              <th class="py-2 pr-3 text-left">红旗</th>
+              <th class="py-2 pr-3 text-left">状态</th>
+              <th class="py-2 pr-3 text-right">动作</th>
+            </tr>
+          </thead>
+          <tbody>{''.join(rows)}</tbody>
+        </table>
+      </div>
+      {warning_html}
+    </div>
+  </section>
 """
 
 
@@ -17756,7 +17945,8 @@ def build():
     html = html.replace("{RUNTIME_STATUS_PANEL}", runtime_status_panel_html())
     html = html.replace("{STRATEGY_MARKET_ADVISORY}", strategy_market_advisory_html())
     html = html.replace("{US_VALIDATION_PROGRESS}", us_validation_progress_html())
-    html = html.replace("{RECOMMENDATION_READINESS_PANEL}", recommendation_readiness_panel_html(compact=False))
+    html = html.replace("{RECOMMENDATION_READINESS_PANEL}", recommendation_readiness_panel_html(compact=True))
+    html = html.replace("{US_STRICT_TRIAL_SECTION}", us_strict_trial_section_html())
     early_growth_radar = _runtime_load_json("data/latest/early_growth_radar.json") or {}
     html = html.replace("{EARLY_GROWTH_RADAR_SECTION}", early_growth_radar_section_html(early_growth_radar))
 
