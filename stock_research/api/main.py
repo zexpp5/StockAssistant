@@ -181,7 +181,7 @@ def _pm_history_list_html(records: list) -> str:
         rows += (
             '<details class="hl"><summary class="hl-row">'
             f'<span>{_PM_DOT.get(color, "")} <b>{d}</b> <span class="htime">{tm}</span></span>'
-            f'<span>{_pm_esc(color)}</span><span>{res}</span><span class="hl-move">{move}</span>'
+            f'<span>{_pm_esc(_PM_CN_COLOR.get(color, color))}</span><span>{res}</span><span class="hl-move">{move}</span>'
             '</summary>'
             f'<div class="hl-detail">{detail}</div></details>'
         )
