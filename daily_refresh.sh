@@ -333,8 +333,9 @@ if os.path.exists(steps_path):
                 steps.append(json.loads(line))
 
 counts = Counter(step.get("status") for step in steps)
-# CRITICAL 失败才算 failed(阻断口径);ENHANCE 失败/超时落 DEGRADED,不阻断交付
-failed = [step for step in steps if step.get("status") == "FAIL"]
+# CRITICAL 失败才算 failed(阻断口径);ENHANCE 失败/超时落 DEGRADED,不阻断交付。
+# 这里必须看 critical 标记，避免历史/增强类失败污染生产验收。
+failed = [step for step in steps if step.get("status") == "FAIL" and step.get("critical", True)]
 degraded = [step for step in steps if step.get("status") in ("DEGRADED", "TIMEOUT")]
 slowest = sorted(steps, key=lambda s: s.get("duration_seconds") or 0, reverse=True)[:8]
 
@@ -799,6 +800,20 @@ if [ ${#FAILED_STEPS[@]} -eq 0 ]; then
     write_pipeline_status "OK" "$DONE_TS"
     if is_morning_step; then
         echo ""
+        echo "[27b 状态回填重建 HTML] production_acceptance + pipeline_status 已刷新，回填运行状态页..."
+        if ! $PYTHON scripts/pipeline/build_stock_dashboard_html.py; then
+            echo "❌ 状态回填重建 HTML 失败 → pipeline 改写 FAIL"
+            FAILED_STEPS+=("27b 状态回填重建 HTML/scripts/pipeline/build_stock_dashboard_html.py")
+            write_pipeline_status "FAIL" "$DONE_TS"
+        else
+            echo "  → runtime-status 已回填最新生产验收和 pipeline=OK"
+        fi
+    fi
+fi
+
+if [ ${#FAILED_STEPS[@]} -eq 0 ]; then
+    if is_morning_step; then
+        echo ""
         echo "[28 早安简报推送] pipeline_status=OK 后重新生成并推送..."
         if ! $PYTHON -m stock_research.jobs.morning_brief; then
             echo "⚠️  早安简报最终推送失败（pipeline 已 OK，本地数据不回滚）"
@@ -808,10 +823,14 @@ if [ ${#FAILED_STEPS[@]} -eq 0 ]; then
         #   主线不等它、立即收尾退出(释放 .daily_refresh.pid)。增强用独立 .enhancement_refresh.pid。
         if [ "$MODE" = "morning" ]; then
             echo ""
-            echo "[29 早班异步增强] fork enhancement_refresh.sh（后台,主线不等）..."
-            nohup "$DIR/enhancement_refresh.sh" > "$DIR/logs/enhancement_$(date +%Y%m%d_%H%M).log" 2>&1 &
-            disown $! 2>/dev/null
-            echo "  → 增强子进程 PID $! ；日志 logs/enhancement_*.log"
+            ENH_LOG="$DIR/logs/enhancement_$(date +%Y%m%d_%H%M).log"
+            ENH_LABEL="com.linearview.stockassistant.enhancement.$(date +%Y%m%d%H%M%S)"
+            echo "[29 早班异步增强] submit enhancement_refresh.sh（launchd 后台,主线不等）..."
+            if launchctl submit -l "$ENH_LABEL" -o "$ENH_LOG" -e "$ENH_LOG" -- "$DIR/enhancement_refresh.sh"; then
+                echo "  → 增强任务已交给 launchd：$ENH_LABEL；日志 ${ENH_LOG#$DIR/}"
+            else
+                echo "⚠️  增强任务提交失败（不影响早班主线 PASS；运行状态页会显示上次增强新鲜度）"
+            fi
         fi
     fi
 else
