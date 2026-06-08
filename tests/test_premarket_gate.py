@@ -218,6 +218,45 @@ def test_macro_pending_before_release():
     assert sig.stress >= 1.0
 
 
+# ── 真实经济日历（Finnhub）+ 惊喜判断 ──
+
+def test_econ_surprise_direction():
+    assert pg._econ_surprise({"actual": 172, "estimate": 160, "hawkish_if_high": True}) == "hawkish"
+    assert pg._econ_surprise({"actual": 4.3, "estimate": 4.1, "hawkish_if_high": False}) == "dovish"
+    assert pg._econ_surprise({"actual": 160, "estimate": 160, "hawkish_if_high": True}) is None
+    assert pg._econ_surprise({"actual": None, "estimate": 160, "hawkish_if_high": True}) is None
+
+
+def test_macro_real_calendar_hawkish_surprise():
+    """真实日历：数据已出且超预期(偏鹰) → stress≥1.5 + hawkish_surprise。"""
+    cal = [{"type": "NFP", "label": "非农就业", "hawkish_if_high": True,
+            "estimate": 160, "actual": 172, "prev": 150}]
+    res = pg.compute_gate(quotes=_scenario_calm(), as_of=date(2026, 6, 5),
+                          now=datetime(2026, 6, 5, 21, 0), econ_calendar=cal)
+    macro = next(f for f in res.families if f["key"] == "macro")
+    assert "hawkish_surprise" in macro["tags"]
+    assert macro["stress"] >= 1.5
+
+
+def test_macro_real_calendar_pending():
+    """真实日历：数据还没出(actual=None) → event_pending。"""
+    cal = [{"type": "CPI", "label": "CPI通胀", "hawkish_if_high": True,
+            "estimate": 2.9, "actual": None}]
+    res = pg.compute_gate(quotes=_scenario_calm(), as_of=date(2026, 6, 5),
+                          now=datetime(2026, 6, 5, 20, 10), econ_calendar=cal)
+    macro = next(f for f in res.families if f["key"] == "macro")
+    assert "event_pending" in macro["tags"]
+
+
+def test_macro_real_calendar_overrides_heuristic():
+    """真实日历(空)优先于启发式：6-05 是首周五,但真实日历说没事 → 不误报 NFP。"""
+    res = pg.compute_gate(quotes=_scenario_calm(), as_of=date(2026, 6, 5),
+                          now=datetime(2026, 6, 5, 20, 30), econ_calendar=[])
+    macro = next(f for f in res.families if f["key"] == "macro")
+    assert macro["stress"] == 0.0
+    assert macro["data"]["source"] == "finnhub"
+
+
 # ──────────────────────────────────────────────────
 # 持仓绑定
 # ──────────────────────────────────────────────────

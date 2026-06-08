@@ -44,9 +44,11 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field, asdict
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+_REPO_ROOT_PG = Path(__file__).resolve().parents[2]  # 经济日历缓存用
 
 # ──────────────────────────────────────────────────
 # 行情口径与符号表
@@ -543,8 +545,115 @@ FOMC_2026 = {
 }
 
 
+# 关键经济事件分类（关键词 → 类型/中文名/“高于预期是否偏鹰”）。
+# hawkish_if_high: True=高于预期偏鹰(利率压力,利空成长股) / False=高于预期偏鸽 / None=无明确方向
+_ECON_EVENTS = [
+    ("non-farm payrolls", "NFP", "非农就业", True),
+    ("nonfarm payrolls", "NFP", "非农就业", True),
+    ("unemployment rate", "UNEMP", "失业率", False),
+    ("core inflation rate", "CORE_CPI", "核心CPI", True),
+    ("inflation rate", "CPI", "CPI通胀", True),
+    ("core pce", "PCE", "核心PCE", True),
+    ("pce price", "PCE", "PCE物价", True),
+    ("ppi", "PPI", "PPI生产者物价", True),
+    ("fed interest rate decision", "FOMC", "美联储利率决议", None),
+    ("interest rate decision", "FOMC", "美联储利率决议", None),
+    ("powell", "FEDSPEAK", "鲍威尔讲话", None),
+    ("retail sales", "RETAIL", "零售销售", True),
+    ("gdp growth", "GDP", "GDP", None),
+]
+
+
+def _classify_econ_event(name: str) -> dict | None:
+    n = (name or "").lower()
+    for kw, typ, label, hawk in _ECON_EVENTS:
+        if kw in n:
+            return {"type": typ, "label": label, "hawkish_if_high": hawk}
+    return None
+
+
+def fetch_us_econ_calendar(as_of: date) -> list[dict] | None:
+    """从 Finnhub 拉当天美国重磅经济事件（准日期 + 预期 + 实际）。
+
+    无 key / 失败 → 返回 None，上层自动退回启发式 _macro_events_for（不致命）。
+    25 分钟文件缓存：让 20:10/20:45/21:15 三次扫描既不狂拉、又能在数据发布后刷到 actual。
+    """
+    import os
+    key = os.environ.get("FINNHUB_API_KEY")
+    if not key:
+        return None
+    iso = as_of.isoformat()
+    cache_path = _REPO_ROOT_PG / "data" / "cache" / f"econ_calendar_{iso}.json"
+    try:
+        if cache_path.exists():
+            import json as _json
+            blob = _json.loads(cache_path.read_text(encoding="utf-8"))
+            ts = datetime.fromisoformat(blob.get("fetched_at", "1970-01-01T00:00:00"))
+            if (datetime.now() - ts).total_seconds() < 25 * 60:
+                return blob.get("events", [])
+    except Exception:
+        pass
+    try:
+        import requests
+        r = requests.get("https://finnhub.io/api/v1/calendar/economic",
+                         params={"token": key, "from": iso, "to": iso}, timeout=15)
+        if r.status_code != 200:
+            logger.warning("Finnhub econ calendar %s -> %d", iso, r.status_code)
+            return None
+        raw = r.json().get("economicCalendar", []) or []
+    except Exception as e:
+        logger.warning("Finnhub econ calendar 失败: %s", str(e)[:80])
+        return None
+
+    by_type: dict[str, dict] = {}
+    for x in raw:
+        if x.get("country") != "US":
+            continue
+        if x.get("impact") not in ("high", "medium"):
+            continue
+        cls = _classify_econ_event(x.get("event", ""))
+        if not cls:
+            continue
+        est, act = x.get("estimate"), x.get("actual")
+        ev = {**cls, "event_name": x.get("event"), "time_utc": x.get("time"),
+              "estimate": est, "actual": act, "prev": x.get("prev"), "impact": x.get("impact")}
+        # 同类型一天多个子项（CPI YoY/MoM…）→ 保留信息最全的一条（优先有 actual，其次有 estimate）
+        cur = by_type.get(cls["type"])
+        if cur is None or (ev["actual"] is not None and cur["actual"] is None) \
+                or (ev["estimate"] is not None and cur["estimate"] is None and cur["actual"] is None):
+            by_type[cls["type"]] = ev
+    events = list(by_type.values())
+
+    try:
+        import json as _json
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(_json.dumps(
+            {"fetched_at": datetime.now().isoformat(timespec="seconds"), "events": events},
+            ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+    return events
+
+
+def _econ_surprise(ev: dict) -> str | None:
+    """已发布事件的“实际 vs 预期”惊喜方向：hawkish(偏鹰/利空成长) / dovish / None。"""
+    act, est, hawk = ev.get("actual"), ev.get("estimate"), ev.get("hawkish_if_high")
+    if act is None or est is None or hawk is None:
+        return None
+    try:
+        a, e = float(act), float(est)
+    except (TypeError, ValueError):
+        return None
+    if a == e:
+        return None
+    higher = a > e
+    # hawk_if_high=True：高于预期=鹰；False（如失业率）：低于预期=鹰
+    is_hawkish = (higher == bool(hawk))
+    return "hawkish" if is_hawkish else "dovish"
+
+
 def _macro_events_for(d: date) -> list[dict]:
-    """给定日期的美国宏观事件。NFP=每月第一个周五（启发式），CPI≈每月 10-15 号（启发式），FOMC=编排表。"""
+    """启发式兜底：NFP=每月第一个周五，CPI≈每月 10-15 号，FOMC=编排表（Finnhub 不可用时才用）。"""
     events: list[dict] = []
     iso = d.isoformat()
     # NFP：每月第一个周五
@@ -559,32 +668,52 @@ def _macro_events_for(d: date) -> list[dict]:
     return events
 
 
-def _sig_macro(as_of: date, now: datetime | None = None) -> FamilySignal:
-    """宏观日历：今晚有没有 NFP/CPI/FOMC。事件未发布 = 不确定性溢价（最低 1 分）。"""
+def _sig_macro(as_of: date, now: datetime | None = None,
+               calendar: list[dict] | None = None) -> FamilySignal:
+    """宏观日历：真实事件(Finnhub:准日期+预期+实际)优先；不可用退回启发式。"""
     sig = FamilySignal("macro", "宏观日历")
-    events = _macro_events_for(as_of)
-    sig.data = {"events": events, "date": as_of.isoformat()}
+    using_real = calendar is not None
+    events = calendar if using_real else _macro_events_for(as_of)
+    sig.data = {"events": events, "date": as_of.isoformat(),
+                "source": "finnhub" if using_real else "heuristic"}
     if not events:
         sig.stress = 0.0
         sig.headline = "今晚无重磅宏观数据"
         sig.plain = "今晚没有重磅经济数据公布，少一个突发变量。"
         return sig
-    labels = "/".join(e["label"] for e in events)
-    # 发布前（北京 20:30 前，夏令时）不确定性更高；发布后市场已在定价，靠其它族体现
-    pending = True
-    if now is not None:
-        pending = now.hour < 21  # 粗略：21 点前视为发布前/刚发布
-    if pending:
+    labels = "/".join(dict.fromkeys(e["label"] for e in events))  # 去重保序
+
+    # 真实日历：用 actual 是否存在判断"已发布"，并做"实际 vs 预期"惊喜判断
+    if using_real:
+        released = [e for e in events if e.get("actual") is not None]
+        pending_evts = [e for e in events if e.get("actual") is None]
+    else:
+        # 启发式兜底：没有 actual，用钟点粗判
+        pending_evts = events if (now is None or now.hour < 21) else []
+        released = [] if pending_evts else events
+
+    hawkish = [e for e in released if _econ_surprise(e) == "hawkish"]
+
+    if hawkish:
+        # 数据已出且偏鹰（超预期）→ 利率压力，给较高压力 + 点名
+        sig.stress = 1.5
+        sig.tags += ["event_released", "hawkish_surprise"]
+        parts = [f"{e['label']} 实际 {e.get('actual')} > 预期 {e.get('estimate')}" for e in hawkish[:3]]
+        sig.headline = "🔥 " + "；".join(parts) + "（数据偏强/偏鹰，利率承压）"
+        sig.plain = (f"今晚经济数据出来了、而且比预期强（{'、'.join(e['label'] for e in hawkish)}）。"
+                     "数据偏强 → 市场更担心利率难降，对高估值科技股是利空。")
+    elif pending_evts:
         sig.stress = 1.0
         sig.tags.append("event_pending")
-        sig.headline = f"⚠️ 今晚有 {labels}（发布前，结果出来前别重仓押方向）"
-        sig.plain = (f"今晚有重磅经济数据要公布（{labels}）。数据出来前谁也不知道好坏，"
+        plabels = "/".join(dict.fromkeys(e["label"] for e in pending_evts))
+        sig.headline = f"⚠️ 今晚有 {plabels}（发布前，结果出来前别重仓押方向）"
+        sig.plain = (f"今晚有重磅经济数据要公布（{plabels}）。数据出来前谁也不知道好坏，"
                      "这种时候重仓押一个方向风险大，最好等数据落地再说。")
     else:
         sig.stress = 0.5
         sig.tags.append("event_released")
-        sig.headline = f"今晚 {labels} 已/将发布，关注数据 vs 预期"
-        sig.plain = f"今晚的经济数据（{labels}）已经/即将公布，市场正在消化结果。"
+        sig.headline = f"今晚 {labels} 已发布，未见明显超预期"
+        sig.plain = f"今晚的经济数据（{labels}）已公布，没有明显超预期，市场正在消化。"
     return sig
 
 
@@ -691,12 +820,20 @@ def compute_gate(
     as_of: date | None = None,
     now: datetime | None = None,
     holdings: list[dict] | None = None,
+    econ_calendar: list[dict] | None = None,
 ) -> GateResult:
-    """主入口。quotes 不传则实时拉取（测试可注入复现历史场景）。"""
+    """主入口。quotes 不传则实时拉取（测试可注入复现历史场景）。
+
+    econ_calendar 不传且实盘(quotes 也不传)时，从 Finnhub 拉真实经济日历；
+    测试注入 quotes 时不联网，econ_calendar 为 None → 宏观族退回启发式。
+    """
+    live = quotes is None
     if as_of is None:
         as_of = (now or datetime.now()).date()
     if quotes is None:
         quotes = fetch_all_quotes()
+    if econ_calendar is None and live:
+        econ_calendar = fetch_us_econ_calendar(as_of)
 
     families = [
         _sig_futures(quotes),
@@ -705,7 +842,7 @@ def compute_gate(
         _sig_megacap(quotes),
         _sig_sector(quotes),
         _sig_overseas(quotes),
-        _sig_macro(as_of, now),
+        _sig_macro(as_of, now, econ_calendar),
     ]
 
     # 加权综合（只对拿到数据的族计权）
