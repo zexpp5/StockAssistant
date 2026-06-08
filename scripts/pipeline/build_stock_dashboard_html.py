@@ -21,6 +21,11 @@ import json
 import html as html_lib
 from datetime import datetime
 import fx_rates
+try:
+    from us_company_zh import get_us_company_zh
+except Exception:
+    def get_us_company_zh(en_name):  # type: ignore[no-redef]
+        return en_name
 
 # Hard-fail early if duckdb is missing。否则下面所有 DB 路径会被静默 except 吞掉,
 # 生成一个 degraded HTML（空 AI 推荐历史 / 空链条上下文 / "非 clean v2 DB" 误报）
@@ -42,6 +47,15 @@ except ImportError as _exc:
 # 旧版 records / picks 口径已退场；v2 页面摘要优先读 DuckDB(system_universe + price_daily + recommendation_picks)
 OUTPUT = os.path.join(_REPO, "stock_dashboard.html")
 PRODUCTION_METRICS_START_DATE = os.environ.get("STOCK_ASSISTANT_METRICS_START_DATE", "2026-05-25")
+
+
+def _display_stock_name(market: str | None, name: str | None) -> str:
+    """User-facing company name. Translate known US names, keep unknowns unchanged."""
+    if not name:
+        return ""
+    if str(market or "").upper() == "US":
+        return str(get_us_company_zh(name) or name)
+    return str(name)
 
 
 def _duckdb_path() -> str:
@@ -1071,13 +1085,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
      旧 hash (#discovery 已重映射到一级 tab / #ipo-junior / #db-explorer / #watchlist-edit) 由 getTabFromHash 跳转。
 -->
 <section id="watchlist-hub" class="max-w-7xl mx-auto px-6 pt-10 pb-2" style="display:none">
-  <div class="mb-4">
-    <div class="flex items-center gap-3 mb-1">
-      <span class="text-3xl">📊</span>
-      <h2 class="text-2xl font-bold text-slate-900">股票池</h2>
-    </div>
-    <p class="text-xs text-slate-500 mt-1">想看 AI 系统的横向推荐排名? → <a href="#discovery" class="text-violet-700 hover:underline font-medium">去「AI 工作台 → ① AI 推荐」</a></p>
-  </div>
   <!-- 二级 tab 栏 (纯文字、无图标) — 2 个 (AI 推荐已抽出) -->
   <div class="border-b border-slate-200 flex gap-1 flex-wrap">
     <button onclick="switchHubSub('self', true)" id="hub-sub-btn-self"
@@ -1099,7 +1106,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </button>
     <button onclick="switchHubAllChip('ipo')" id="hub-all-chip-ipo"
             class="hub-all-chip px-2.5 py-0.5 rounded-full border transition">
-      IPO
+      IPO（暂停）
     </button>
   </div>
 </section>
@@ -1144,11 +1151,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       /* 2026-05-27: 与"完整批次历史"对齐 — 默认换行，长字段（推荐依据/风险）显式限宽。
          撤掉了原全局 nowrap + sticky 首两列（视觉太撑、横向滚动碍事）。
          行内因子拆解的 pill 不换行；展开详情面板允许换行。 */
-      #discovery-table-wrap tbody tr.disc-detail-row td { white-space: normal; }
-      #discovery-table-wrap tbody tr:not(.disc-detail-row) .flex-wrap { flex-wrap: nowrap; }
+      #discovery-table-wrap tbody tr .flex-wrap { flex-wrap: nowrap; }
     </style>
     <div id="discovery-table-wrap" class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
-      <table class="w-full text-sm">
+      <table class="w-full min-w-[1760px] text-sm">
         <thead class="bg-slate-50 text-slate-500 text-[10px] uppercase tracking-wide">
           <tr>
             <th class="px-2 py-1 text-left">排名</th>
@@ -1167,9 +1173,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <th class="px-2 py-1 text-right" title="当前批次入选后 60 天涨幅 - 同期基准涨幅；未到窗口显示待T+60">60d α</th>
             <th class="px-2 py-1 text-left">推荐依据</th>
             <th class="px-2 py-1 text-left">风险</th>
-            <th class="px-2 py-1 text-left">来源</th>
             <th class="px-2 py-1 text-center" title="AI 系统跑这批推荐的实际时间 — 防止误以为是实时数据">推荐时间</th>
-            <th class="px-2 py-1 text-center">操作</th>
+            <th class="px-2 py-1 text-center min-w-[112px]">操作</th>
           </tr>
         </thead>
         <tbody id="discovery-table-body" class="divide-y divide-slate-100"></tbody>
@@ -1223,6 +1228,19 @@ function switchDiscoveryView(view) {
     btnH.classList.remove("border-violet-500", "text-violet-600");
     btnH.classList.add("border-transparent", "text-slate-600");
   }
+}
+
+function openDiscoveryHistoryFromRadar(event) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  location.hash = "discovery";
+  switchDiscoveryView("history");
+  setTimeout(() => {
+    const target = document.getElementById("disc-view-history") || document.getElementById("discovery");
+    if (target) target.scrollIntoView({behavior: "smooth", block: "start"});
+  }, 0);
 }
 </script>
 
@@ -2173,7 +2191,7 @@ function switchDiscoveryView(view) {
           <th class="px-3 py-2 text-right">总分</th>
           <th class="px-3 py-2 text-left" title="prices.fetched_at — 行情/估值数据抓取时间">抓取时间</th>
           <th class="px-3 py-2 text-left" title="watchlist.updated_at — AI 分析/元数据最近一次刷新时间">分析时间</th>
-          <th class="px-2 py-2 text-center" title="📊 看完整历史数据（prices/picks/reviews/discovery/earnings_history 全表）">📊 历史</th>
+          <th class="px-2 py-2 text-center" title="进入这只股票的完整详情页：价格、推荐、历史表现、财报和推荐池记录">详情</th>
           <th class="px-2 py-2 text-center" title="📈 Yahoo Finance 原始页面 (新窗口)">↗ Yahoo</th>
           <th class="px-2 py-2 text-center" title="✏️ 在自选股编辑器里改这只标的">✏️ 编辑</th>
         </tr>
@@ -2195,11 +2213,11 @@ function switchDiscoveryView(view) {
   </details>
 </section>
 
-<!-- ============ 🗂 个股全历史中介页（从已拉取股票池跳转过来）============ -->
+<!-- ============ 🗂 个股详情页（从股票池 / AI 推荐跳转过来）============ -->
 <section id="stock-detail" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
   <div class="mb-6 flex items-center gap-3">
     <button onclick="closeStockDetail()" id="stock-detail-back-btn" class="text-sm px-3 py-1.5 rounded border border-slate-300 text-slate-700 hover:bg-slate-50">← 返回</button>
-    <h2 class="text-2xl font-bold text-slate-900">🗂 个股全历史 · <span id="stock-detail-code" class="font-mono text-violet-700">—</span></h2>
+    <h2 class="text-2xl font-bold text-slate-900">🗂 个股详情 · <span id="stock-detail-code" class="font-mono text-violet-700">—</span></h2>
     <span id="stock-detail-name" class="text-base text-slate-600"></span>
     <span id="stock-detail-meta" class="ml-auto text-xs font-mono text-slate-500"></span>
   </div>
@@ -2313,14 +2331,19 @@ function switchDiscoveryView(view) {
 <!-- ============ 📡 AI 主题雷达（行业理解层 · 非推荐池 · docs/V2/AI主题雷达_产品定位.md） ============ -->
 {AI_RADAR_SECTION}
 
-<!-- ============ 📅 IPO & 次新股（数据来自 data/latest/junior_stock_radar.json） ============ -->
+<!-- ============ 📅 IPO & 次新股（暂停；保留历史缓存） ============ -->
 <section id="ipo-junior" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
+  <div class="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+    <strong>IPO / 次新股雷达已暂停。</strong>
+    这个模块暂时不自动拉取、不参与早班刷新；页面仅保留历史缓存供回看。
+  </div>
   <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
     <p id="ipo-junior-meta" class="text-xs text-slate-500 flex-1 min-w-0"></p>
-    <button onclick="refreshIpoData()" id="ipo-refresh-btn"
-            title="后端串行跑 ipo_daily + junior_stock_watcher，~15s 完成"
-            class="text-xs px-3 py-1 rounded border border-violet-300 bg-white text-violet-700 hover:bg-violet-50 transition whitespace-nowrap">
-      🔄 重新拉取
+    <button id="ipo-refresh-btn"
+            disabled
+            title="IPO / 次新股雷达已暂停；恢复后再允许手动拉取"
+            class="text-xs px-3 py-1 rounded border border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed whitespace-nowrap">
+      ⏸ 已暂停
     </button>
   </div>
 
@@ -2583,19 +2606,16 @@ function switchDiscoveryView(view) {
   </div>
 
   <!-- 主表格 -->
-  <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-    <table class="w-full text-sm">
+  <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
+    <table class="w-full min-w-[1100px] text-sm">
       <thead class="bg-slate-50 text-xs text-slate-600">
         <tr>
-          <th class="px-3 py-2 text-left">代码</th>
-          <th class="px-3 py-2 text-left">名称</th>
-          <th class="px-3 py-2 text-left">链条</th>
-          <th class="px-3 py-2 text-left">层级</th>
-          <th class="px-3 py-2 text-left">角色</th>
-          <th class="px-3 py-2 text-left">一句话解释(新手向)</th>
-          <th class="px-3 py-2 text-left">市场</th>
-          <th class="px-3 py-2 text-left" title="V2 学术因子综合评分：strong_buy ≥75 · buy 60-75 · watch 50-60 · avoid <50">AI 评级</th>
-          <th class="px-3 py-2 text-left" title="加入关注列表的时间（manual_watchlist.created_at）">加入时间</th>
+          <th class="px-3 py-2 text-left">股票</th>
+          <th class="px-3 py-2 text-left">今日动作</th>
+          <th class="px-3 py-2 text-left">关键数据</th>
+          <th class="px-3 py-2 text-left">为什么关注</th>
+          <th class="px-3 py-2 text-left">定位</th>
+          <th class="px-3 py-2 text-left">加入/来源</th>
           <th class="px-3 py-2 text-right">操作</th>
         </tr>
       </thead>
@@ -3252,6 +3272,75 @@ function chainThemeFor(code) {
   if (!code) return "";
   return _CHAIN_THEME_BY_CODE.get(String(code)) || "";
 }
+const THEME_LABELS_CN = {
+  "rare_earths": "稀土/锂资源",
+  "rare earths": "稀土/锂资源",
+  "smr": "SMR/核能",
+  "nuclear": "核能/铀",
+  "uranium": "铀资源",
+  "liquid_cooling": "液冷/散热",
+  "liquid cooling": "液冷/散热",
+  "ai_data": "AI 数据",
+  "ai data": "AI 数据",
+  "Information Technology": "信息技术",
+  "information technology": "信息技术",
+  "design software": "设计软件",
+  "cloud": "云计算",
+  "semiconductor": "半导体",
+};
+const SOURCE_LABELS_CN = {
+  "offline_discovery_snapshot": "离线发现样本",
+  "us_ai_software": "美股 AI 软件池",
+  "us_ai_compute": "美股 AI 算力池",
+  "us_ai_power": "美股 AI 电力池",
+  "us_ai_infrastructure": "美股 AI 基建池",
+  "us_hyperscaler": "云平台池",
+};
+function _humanThemeLabel(value) {
+  const raw = String(value || "").trim();
+  if (!raw || raw === "N/A" || raw === "null") return "";
+  if (THEME_LABELS_CN[raw]) return THEME_LABELS_CN[raw];
+  const lower = raw.toLowerCase();
+  if (THEME_LABELS_CN[lower]) return THEME_LABELS_CN[lower];
+  if (lower.startsWith("etf theme:")) return raw.replace(/^ETF theme:/i, "ETF 主题:");
+  return raw.replace(/_/g, " ").replace(/\bai\b/ig, "AI").replace(/\bsmr\b/ig, "SMR");
+}
+function _sourceLabel(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (SOURCE_LABELS_CN[raw]) return SOURCE_LABELS_CN[raw];
+  if (raw.startsWith("etf_theme:")) return `ETF 持仓 ${raw.replace("etf_theme:", "")}`;
+  if (raw.includes(";")) return raw.split(";").map(_sourceLabel).filter(Boolean).join(" / ");
+  return raw.replace(/_/g, " ");
+}
+function _candidateThemeText(c) {
+  if (!c) return "";
+  const chain = chainThemeFor(c.ticker) || c.chain;
+  if (chain) return _humanThemeLabel(chain);
+  const role = c.chain_role;
+  const theme = c.theme || c.sector || c.industry || (c.detail && c.detail.theme);
+  const label = _humanThemeLabel(role || theme);
+  if (label && label !== "科技/AI universe") return label;
+  return _sourceLabel(c.pool_source || c.source_origin || c.source || "");
+}
+function _candidateMiniTags(c) {
+  const tags = [];
+  const info = (typeof WATCHLIST_CHAIN_INFO !== "undefined" ? WATCHLIST_CHAIN_INFO : {})[c.ticker] || {};
+  const chain = chainThemeFor(c.ticker) || c.chain || info.chain;
+  const tier = c.chain_tier || info.chain_tier;
+  const role = c.chain_role || info.chain_role;
+  const theme = _candidateThemeText(c);
+  const source = _sourceLabel(c.pool_source || c.source);
+  [chain, tier, role, theme].forEach(v => {
+    const label = _humanThemeLabel(v);
+    if (label && !tags.includes(label) && label !== "科技/AI universe") tags.push(label);
+  });
+  if (source && !tags.includes(source) && tags.length < 3) tags.push(source);
+  if (!tags.length) tags.push("系统科技池");
+  return tags.slice(0, 3).map(t =>
+    `<span class="px-1.5 py-0 rounded text-[10px] bg-slate-100 text-slate-700">${_esc(t)}</span>`
+  ).join(" ");
+}
 const PICKS        = {PICKS_JSON};
 // 2026-05-12 加：各市场 picks JSON 的 generated_at — 让用户知道每条推荐是什么时候算的
 // {us: ISO 时间, hk: ISO 时间, cn: ISO 时间}；某市场没数据时为 null
@@ -3592,7 +3681,7 @@ function stockPill(code, opts) {
 
 function _populateWatchlistFilters() {
   const chains = new Set(), roles = new Set();
-  _watchlistCache.forEach(r => {
+  _dedupeWatchlistRows(_watchlistCache).forEach(r => {
     (r.chain || "").split(",").map(s => s.trim()).filter(Boolean).forEach(c => chains.add(c));
     if (r.chain_role) roles.add(r.chain_role);
   });
@@ -3614,6 +3703,295 @@ function _populateWatchlistFilters() {
   }
 }
 
+function _watchlistKey(row) {
+  return String((row && (row.code || row.symbol)) || "").trim().toUpperCase();
+}
+
+function _watchlistFieldScore(row) {
+  if (!row) return 0;
+  const fields = ["chain", "chain_tier", "chain_role", "layman_intro", "industry", "business", "name", "notes", "market"];
+  let score = 0;
+  fields.forEach(k => {
+    const v = String(row[k] || "").trim();
+    if (v && v !== "N/A") score += 1;
+  });
+  if (String(row.notes || "").includes("auto-sync from real_holdings")) score -= 0.25;
+  return score;
+}
+
+function _watchlistTs(row, key) {
+  const t = Date.parse((row && row[key]) || "");
+  return Number.isFinite(t) ? t : 0;
+}
+
+function _dedupeWatchlistRows(rows) {
+  const groups = new Map();
+  (rows || []).forEach(row => {
+    const key = _watchlistKey(row);
+    if (!key) return;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  });
+  const merged = [];
+  groups.forEach(group => {
+    if (group.length === 1) {
+      merged.push(group[0]);
+      return;
+    }
+    const sorted = [...group].sort((a, b) => {
+      const s = _watchlistFieldScore(b) - _watchlistFieldScore(a);
+      if (s) return s;
+      return _watchlistTs(b, "updated_at") - _watchlistTs(a, "updated_at");
+    });
+    const best = {...sorted[0]};
+    ["market", "name", "industry", "business", "notes", "chain", "chain_tier", "chain_role", "layman_intro"].forEach(k => {
+      if (String(best[k] || "").trim()) return;
+      const fill = sorted.find(r => String(r[k] || "").trim());
+      if (fill) best[k] = fill[k];
+    });
+    const created = group.map(r => _watchlistTs(r, "created_at")).filter(Boolean).sort((a, b) => a - b)[0];
+    const updated = group.map(r => _watchlistTs(r, "updated_at")).filter(Boolean).sort((a, b) => b - a)[0];
+    if (created) best.created_at = new Date(created).toISOString();
+    if (updated) best.updated_at = new Date(updated).toISOString();
+    best._duplicate_count = group.length;
+    best._duplicate_markets = [...new Set(group.map(r => String(r.market || "").trim()).filter(Boolean))];
+    merged.push(best);
+  });
+  return merged;
+}
+
+function _watchlistDuplicateBadge(row) {
+  const n = Number(row && row._duplicate_count || 0);
+  if (n <= 1) return "";
+  const markets = ((row && row._duplicate_markets) || []).join(" / ");
+  const title = `底层 manual_watchlist 有 ${n} 条同 ticker 记录，页面已合并展示；市场写法：${markets || "未知"}`;
+  return `<span class="ml-1 inline-flex px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-sans font-semibold align-middle" title="${_esc(title)}">合并${n}</span>`;
+}
+
+function _normWatchlistMarket(m) {
+  const s = String(m || "");
+  if (s.startsWith("A股") || s.includes("沪") || s.includes("深") || s.toLowerCase() === "cn") return "A股";
+  if (s.includes("美") || s.toLowerCase() === "us") return "美股";
+  if (s.includes("港") || s.toLowerCase() === "hk") return "港股";
+  return s || "—";
+}
+
+let _recordsByCodeCache = null;
+function _recordForCode(code) {
+  const key = String(code || "").toUpperCase();
+  if (!_recordsByCodeCache) {
+    _recordsByCodeCache = {};
+    (typeof RECORDS !== "undefined" ? RECORDS : []).forEach(r => {
+      const k = String(r.code || r.symbol || "").toUpperCase();
+      if (k && !_recordsByCodeCache[k]) _recordsByCodeCache[k] = r;
+    });
+  }
+  return _recordsByCodeCache[key] || null;
+}
+
+function _watchlistRatingInfo(code) {
+  const key = String(code || "").toUpperCase();
+  return WATCHLIST_RATINGS[key] || WATCHLIST_RATINGS[String(code || "")] || null;
+}
+
+function _reviewForWatchlistCode(code) {
+  const key = String(code || "").toUpperCase();
+  const items = (_realHoldingReviewCache && _realHoldingReviewCache.items) || [];
+  return items.find(x => String(x.code || x.symbol || "").toUpperCase() === key) || null;
+}
+
+function _watchlistMoney(v, currency) {
+  if (v == null || v === "") return "—";
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "—";
+  return `${n.toFixed(n >= 100 ? 2 : 2)} ${currency || ""}`.trim();
+}
+
+function _watchPct(v) {
+  if (v == null || v === "") return "—";
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "—";
+  return `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
+}
+
+function _shortWatchText(s, n) {
+  s = String(s || "").trim();
+  return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
+
+function _watchlistRiskTextFromRating(info) {
+  const r = String((info && info.rating) || "");
+  const parts = r.split(" · ");
+  return parts.length > 1 ? parts.slice(1).join(" · ") : "";
+}
+
+function _watchlistSourceLabel(row) {
+  const notes = String((row && row.notes) || "");
+  if (notes.includes("auto-sync from real_holdings")) return "持仓同步";
+  if (notes.includes("早期关注推荐")) return "早发现";
+  if (notes.includes("AI 推荐")) return "AI推荐";
+  if (notes.includes("IPO") || notes.includes("次新")) return "次新来源";
+  return "手动关注";
+}
+
+function _watchlistMetricsHtml(item) {
+  const r = item.record || {};
+  const review = item.review;
+  const rating = item.rating;
+  const price = review && review.current_price != null
+    ? _watchlistMoney(review.current_price, review.current_currency)
+    : _watchlistMoney(r.latest_price || r.price_close || r.price_price, r.price_currency || "");
+  const tradeDate = review ? review.price_trade_date : (r.price_date || r.price_trade_date || "");
+  const score = rating && rating.total_score != null
+    ? Number(rating.total_score).toFixed(1)
+    : (review && review.score != null ? Number(review.score).toFixed(1) : "—");
+  const ytd = r.ytd_pct != null ? _watchPct(r.ytd_pct) : (r.price_ytd_pct != null ? _watchPct(r.price_ytd_pct) : "—");
+  const oneMonth = r.one_month_pct != null ? _watchPct(r.one_month_pct) : (r.price_one_month_pct != null ? _watchPct(r.price_one_month_pct) : "—");
+  const pnl = review && review.pnl_pct != null ? `${Number(review.pnl_pct) >= 0 ? "+" : ""}${Number(review.pnl_pct).toFixed(2)}%` : "";
+  const weight = review && review.current_weight != null ? `${(Number(review.current_weight) * 100).toFixed(1)}%仓位` : "";
+  return `<div class="space-y-0.5 leading-tight">
+    <div class="font-mono text-xs text-slate-800">${_esc(price)}${tradeDate ? ` <span class="text-slate-400">${_esc(String(tradeDate).slice(5, 10))}</span>` : ""}</div>
+    <div class="text-[11px] text-slate-600">分 ${_esc(score)} · 1月 ${_esc(oneMonth)} · YTD ${_esc(ytd)}</div>
+    ${(pnl || weight) ? `<div class="text-[11px] ${pnl && pnl.startsWith("-") ? "text-rose-700" : "text-emerald-700"}">${_esc([pnl, weight].filter(Boolean).join(" · "))}</div>` : ""}
+  </div>`;
+}
+
+function _watchlistDailyItem(row) {
+  const code = _watchlistKey(row);
+  const rating = _watchlistRatingInfo(code);
+  const review = _reviewForWatchlistCode(code);
+  const record = _recordForCode(code);
+  const notes = String(row.notes || "");
+  const riskFromRating = _watchlistRiskTextFromRating(rating);
+  const reviewRisks = (review && Array.isArray(review.risk_flags)) ? review.risk_flags.filter(Boolean) : [];
+  const isHeld = !!review || (_holdingsCache || []).some(h => String(h.code || h.symbol || "").toUpperCase() === code && (h.source || "manual") === "manual");
+  const isPlan = (_holdingsCache || []).some(h => String(h.code || h.symbol || "").toUpperCase() === code && h.source === "ai_plan");
+  const score = rating && rating.total_score != null ? Number(rating.total_score) : (review && review.score != null ? Number(review.score) : null);
+  const missingPosition = !(row.chain || row.chain_tier || row.chain_role || row.layman_intro || row.industry);
+  let priority = 0;
+  let action = "观察";
+  let hint = "普通关注，暂不优先";
+  let tone = "slate";
+  const why = [];
+
+  if (isHeld) {
+    priority += 50;
+    action = "持仓复查";
+    tone = "blue";
+    hint = "真实持仓，先看纪律和仓位";
+    why.push("真实持仓");
+  }
+  if (review && review.discipline && review.discipline.triggered) {
+    priority += 45;
+    action = "先看纪律";
+    tone = "rose";
+    hint = review.discipline.action_label || "纪律线触发";
+    why.push(review.discipline.message || "纪律线触发");
+  } else if (review && review.discipline && review.discipline.next_triggers && review.discipline.next_triggers.length) {
+    const t = review.discipline.next_triggers[0];
+    priority += 15;
+    why.push(`下一线 ${t.threshold_text || ""} ${t.action_label || ""}`.trim());
+  }
+  if (reviewRisks.length || riskFromRating) {
+    priority += 30;
+    if (!isHeld) {
+      action = "先复查";
+      hint = "有风险红旗";
+      tone = "amber";
+    }
+    why.push(reviewRisks[0] || riskFromRating);
+  }
+  if (score != null && score >= 80) {
+    priority += 25;
+    if (!isHeld && tone !== "amber") {
+      action = "买前研究";
+      hint = "AI 分数高，先查估值/事件";
+      tone = "emerald";
+    }
+    why.push(`AI 分 ${score.toFixed(1)}`);
+  } else if (score != null && score >= 75) {
+    priority += 15;
+    if (!isHeld && action === "观察") {
+      action = "候补研究";
+      hint = "分数在强买区间";
+      tone = "emerald";
+    }
+    why.push(`AI 分 ${score.toFixed(1)}`);
+  }
+  if (notes.includes("早期关注推荐")) {
+    priority += 18;
+    if (!isHeld && action === "观察") {
+      action = "早发现跟踪";
+      hint = "等订单/财报/放量确认";
+      tone = "sky";
+    }
+    why.push("早发现池");
+  }
+  if (isPlan) {
+    priority += 8;
+    why.push("AI 方案跟踪");
+  }
+  const cov = WATCHLIST_COVERAGE[code];
+  if (!rating && cov === "in_universe") {
+    priority += 6;
+    why.push("今天未入选 Top20");
+  }
+  if (!rating && cov === "not_in_universe") {
+    why.push("非科技/模型不评");
+  }
+  if (missingPosition) {
+    priority += 3;
+    if (!isHeld && action === "观察") {
+      action = "补资料";
+      hint = "缺链条/一句话说明";
+      tone = "slate";
+    }
+    why.push("资料缺口");
+  }
+  if (!why.length) why.push(row.layman_intro || row.industry || "仅保留观察");
+
+  return {row, code, rating, review, record, action, hint, tone, priority, why: why.filter(Boolean), isHeld, isPlan, score};
+}
+
+function _watchActionBadge(item) {
+  const cls = {
+    rose: "bg-rose-50 text-rose-800 border-rose-200",
+    amber: "bg-amber-50 text-amber-800 border-amber-200",
+    emerald: "bg-emerald-50 text-emerald-800 border-emerald-200",
+    sky: "bg-sky-50 text-sky-800 border-sky-200",
+    blue: "bg-blue-50 text-blue-800 border-blue-200",
+    slate: "bg-slate-50 text-slate-700 border-slate-200",
+  }[item.tone || "slate"];
+  return `<div class="space-y-1">
+    <span class="inline-flex px-2 py-0.5 rounded-full border text-xs font-semibold ${cls}">${_esc(item.action)}</span>
+    <div class="text-[11px] text-slate-500 leading-tight">${_esc(item.hint)}</div>
+  </div>`;
+}
+
+function _watchlistLocationHtml(row) {
+  const bits = [];
+  const chain = _chainBadges(row.chain);
+  if (!chain.includes("text-slate-400")) bits.push(chain);
+  const tier = row.chain_tier && row.chain_tier !== "N/A" ? _tierBadge(row.chain_tier) : "";
+  if (tier) bits.push(tier);
+  const role = row.chain_role && row.chain_role !== "N/A" ? _roleBadge(row.chain_role) : "";
+  if (role) bits.push(role);
+  if (!bits.length) return '<span class="text-xs text-slate-400">待标注</span>';
+  return `<div class="flex flex-wrap gap-1">${bits.join("")}</div>`;
+}
+
+function _watchlistSourceHtml(row) {
+  const label = _watchlistSourceLabel(row);
+  const cls = label === "持仓同步" ? "bg-blue-50 text-blue-700 border-blue-200"
+    : label === "早发现" ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+    : label === "AI推荐" ? "bg-violet-50 text-violet-700 border-violet-200"
+    : "bg-slate-50 text-slate-600 border-slate-200";
+  return `<div class="space-y-1">
+    <span class="inline-flex px-2 py-0.5 rounded border text-[11px] font-semibold ${cls}" title="${_esc(row.notes || "")}">${_esc(label)}</span>
+    <div class="text-[11px] text-slate-500" title="${_esc(row.created_at || "")}">${_fmtAddedAt(row.created_at)}</div>
+  </div>`;
+}
+
 async function loadWatchlistTable() {
   const apiSt = await _checkApiStatus();
   const tbody = document.getElementById("watchlist-table-body");
@@ -3622,7 +4000,7 @@ async function loadWatchlistTable() {
     const msg = apiSt.reason === "db_busy"
       ? "API 已启动，DuckDB 正被 daily_refresh 等脚本占用，请几分钟后再点「刷新」。"
       : "无法连接本地 API；登录后应由 launchd 自动启动，或执行 launchctl kickstart -k gui/$(id -u)/com.linearview.stockassistant.api";
-    tbody.innerHTML = `<tr><td colspan="9" class="px-3 py-8 text-center text-amber-800 text-sm">⚠️ ${_esc(msg)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="px-3 py-8 text-center text-amber-800 text-sm">⚠️ ${_esc(msg)}</td></tr>`;
     countEl.textContent = "";
     return;
   }
@@ -3639,64 +4017,74 @@ async function loadWatchlistTable() {
     await _pollRatingStatusOnce();
     // 确保持仓 cache 已加载,这样 _heldBadge 能正确显示「💼 持」标记
     if (!_holdingsLoaded) await _ensureHoldingsLoaded();
+    await _loadRealHoldingReview();
     // 总是调用（line 2263 内部 guard 保证幂等）— 修复:cache 可能被其他 tab 先填(如 AI 推荐的"✓ 已在自选"标记)导致筛选项漏初始化
     _populateWatchlistFilters();
+    const displayRows = _dedupeWatchlistRows(_watchlistCache);
+    const duplicateN = _watchlistCache.length - displayRows.length;
+    const dailyItems = displayRows.map(_watchlistDailyItem);
+    const dailyByCode = new Map(dailyItems.map(x => [x.code, x]));
     const fMarket = document.getElementById("wl-filter-market")?.value || "";
     const fChain = document.getElementById("wl-filter-chain")?.value || "";
     const fTier  = document.getElementById("wl-filter-tier")?.value || "";
     const fRole  = document.getElementById("wl-filter-role")?.value || "";
     const fKw    = (document.getElementById("wl-filter-keyword")?.value || "").trim().toLowerCase();
-    // 市场字段在数据里有多种写法 (A股·沪交所/A股·深交所/美股/港股/cn/us/hk), 归一到三类做匹配
-    const _normMarket = (m) => {
-      const s = String(m || "");
-      if (s.startsWith("A股") || s.includes("沪") || s.includes("深") || s.toLowerCase() === "cn") return "A股";
-      if (s.includes("美") || s.toLowerCase() === "us") return "美股";
-      if (s.includes("港") || s.toLowerCase() === "hk") return "港股";
-      return s;
-    };
-    const filtered = _watchlistCache.filter(r => {
-      if (fMarket && _normMarket(r.market) !== fMarket) return false;
+    const filtered = displayRows.filter(r => {
+      if (fMarket && _normWatchlistMarket(r.market) !== fMarket) return false;
       if (fChain && !(r.chain || "").split(",").map(s => s.trim()).includes(fChain)) return false;
       if (fTier  && r.chain_tier !== fTier) return false;
       if (fRole  && r.chain_role !== fRole) return false;
       if (fKw) {
-        const hay = [r.code, r.name, r.layman_intro, r.industry].map(x => (x || "").toLowerCase()).join(" ");
+        const item = dailyByCode.get(_watchlistKey(r));
+        const hay = [r.code, r.name, r.layman_intro, r.industry, r.notes, ...(item ? item.why : [])].map(x => (x || "").toLowerCase()).join(" ");
         if (!hay.includes(fKw)) return false;
       }
       return true;
     });
     filtered.sort((a, b) => {
-      const ca = (a.chain || "zz").split(",")[0].trim();
-      const cb = (b.chain || "zz").split(",")[0].trim();
-      if (ca !== cb) return ca.localeCompare(cb);
-      const ta = (TIER_STYLE[a.chain_tier] || TIER_STYLE["N/A"]).order;
-      const tb = (TIER_STYLE[b.chain_tier] || TIER_STYLE["N/A"]).order;
-      return ta - tb;
+      const ac = _watchlistTs(a, "created_at") || _watchlistTs(a, "updated_at");
+      const bc = _watchlistTs(b, "created_at") || _watchlistTs(b, "updated_at");
+      if (bc !== ac) return bc - ac;
+      const au = _watchlistTs(a, "updated_at");
+      const bu = _watchlistTs(b, "updated_at");
+      if (bu !== au) return bu - au;
+      return _watchlistKey(a).localeCompare(_watchlistKey(b));
     });
-    countEl.textContent = `${filtered.length} / ${_watchlistCache.length} 条`;
+    countEl.textContent = duplicateN > 0
+      ? `${filtered.length} / ${displayRows.length} 只 · 已合并 ${duplicateN} 条重复`
+      : `${filtered.length} / ${displayRows.length} 只`;
     if (filtered.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="10" class="px-3 py-8 text-center text-slate-500 text-sm">没有匹配的记录</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="7" class="px-3 py-8 text-center text-slate-500 text-sm">没有匹配的记录</td></tr>`;
       return;
     }
-    tbody.innerHTML = filtered.map(r => `
-      <tr class="hover:bg-slate-50">
-        <td class="px-3 py-2 font-mono text-xs font-bold text-slate-900 whitespace-nowrap">${_esc(r.code)}${_heldBadge(r.code)}${_watchlistSourceBadge(r)}</td>
-        <td class="px-3 py-2 text-sm text-slate-800 whitespace-nowrap">${_esc(r.name)}</td>
-        <td class="px-3 py-2">${_chainBadges(r.chain)}</td>
-        <td class="px-3 py-2">${_tierBadge(r.chain_tier)}</td>
-        <td class="px-3 py-2">${_roleBadge(r.chain_role)}</td>
-        <td class="px-3 py-2 text-xs text-slate-700 max-w-md">${_esc(r.layman_intro) || '<span class="text-slate-400">—</span>'}</td>
-        <td class="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">${_esc(r.market)}</td>
-        <td class="px-3 py-2 whitespace-nowrap">${_wlRatingBadge(r.code)}</td>
-        <td class="px-3 py-2 text-xs text-slate-500 whitespace-nowrap" title="${_esc(r.created_at || '')}">${_fmtAddedAt(r.created_at)}</td>
-        <td class="px-3 py-2 text-right space-x-1 whitespace-nowrap">
-          <button onclick="openWatchlistEditor('${_esc(r.code)}')" class="text-xs px-2 py-1 bg-slate-100 hover:bg-violet-100 text-slate-700 rounded">✏️</button>
-          <button onclick="deleteWatchlistItem('${_esc(r.code)}')" class="text-xs px-2 py-1 bg-rose-100 hover:bg-rose-200 text-rose-700 rounded">🗑️</button>
+    tbody.innerHTML = filtered.map(r => {
+      const code = _watchlistKey(r);
+      const item = dailyByCode.get(code) || _watchlistDailyItem(r);
+      const why = item.why.map(w => _shortWatchText(w, 62)).slice(0, 3);
+      const intro = r.layman_intro || r.industry || r.business || "";
+      return `
+      <tr class="hover:bg-slate-50 align-top">
+        <td class="px-3 py-3 min-w-[180px]">
+          <div class="font-mono text-xs font-bold text-slate-900 whitespace-nowrap">${_esc(code || r.code)}${_heldBadge(code)}${_watchlistSourceBadge(r)}${_watchlistDuplicateBadge(r)}</div>
+          <div class="text-sm text-slate-800 mt-1">${_esc(r.name || "")}</div>
+          <div class="text-[11px] text-slate-400 mt-0.5" title="${_esc(r.market || '')}">${_esc(_normWatchlistMarket(r.market))}</div>
         </td>
-      </tr>
-    `).join("");
+        <td class="px-3 py-3 min-w-[125px]">${_watchActionBadge(item)}</td>
+        <td class="px-3 py-3 min-w-[170px]">${_watchlistMetricsHtml(item)}<div class="mt-1">${_wlRatingBadge(code)}</div></td>
+        <td class="px-3 py-3 text-xs text-slate-700 max-w-md leading-relaxed">
+          ${why.map(w => `<div>${_esc(w)}</div>`).join("") || '<span class="text-slate-400">—</span>'}
+          ${intro ? `<div class="text-[11px] text-slate-500 mt-1">${_esc(_shortWatchText(intro, 74))}</div>` : ""}
+        </td>
+        <td class="px-3 py-3 min-w-[150px]">${_watchlistLocationHtml(r)}</td>
+        <td class="px-3 py-3 min-w-[120px]">${_watchlistSourceHtml(r)}</td>
+        <td class="px-3 py-3 text-right space-x-1 whitespace-nowrap">
+          <button onclick="openWatchlistEditor('${_esc(code || r.code)}')" class="text-xs px-2 py-1 bg-slate-100 hover:bg-violet-100 text-slate-700 rounded" title="编辑自选股">✏️</button>
+          <button onclick="deleteWatchlistItem('${_esc(code || r.code)}')" class="text-xs px-2 py-1 bg-rose-100 hover:bg-rose-200 text-rose-700 rounded" title="从自选股删除">🗑️</button>
+        </td>
+      </tr>`;
+    }).join("");
   } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="10" class="px-3 py-8 text-center text-rose-700 text-sm">加载失败：${_esc(e.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="px-3 py-8 text-center text-rose-700 text-sm">加载失败：${_esc(e.message)}</td></tr>`;
   }
 }
 async function forceReloadWatchlist() { _watchlistCache = []; await loadWatchlistTable(); }
@@ -4485,9 +4873,10 @@ function renderDbExplorerTable() {
   if (emptyEl) emptyEl.classList.add("hidden");
 
   const html = filtered.map(r => {
-    const expanded = _dbExplorerExpanded.has(r.code);
-    const arrow = expanded ? "▼" : "▶";
     const ratingTxt = r.pick_rating || "—";
+    const rowNameTitle = r.name_en && r.name_en !== r.name
+      ? `${r.name} / ${r.name_en}`
+      : (r.name || "—");
     const ratingCls = ratingTxt.includes("⭐⭐⭐") ? "text-emerald-700 font-semibold"
                     : ratingTxt.includes("⭐⭐") ? "text-amber-700"
                     : ratingTxt.includes("⭐") ? "text-amber-600"
@@ -4496,11 +4885,15 @@ function renderDbExplorerTable() {
                  : String(r.ai_relevance || "").includes("强") ? "text-amber-700"
                  : "text-slate-500";
     const mainRow = `
-      <tr class="hover-row cursor-pointer" onclick="toggleDbExplorerRow('${_esc(r.code)}')">
-        <td class="sticky-code px-3 py-2 font-mono text-xs font-semibold text-slate-700">
-          <span class="inline-block text-slate-400 select-none mr-1 w-3">${arrow}</span>${_esc(r.code || "—")}${_originBadge(r._source_origin)}
+      <tr class="hover-row cursor-pointer" data-code="${_esc(r.code || "")}" data-name="${_esc(r.name || "")}"
+          onclick="openStockDetail(this.dataset.code, this.dataset.name)"
+          title="点击进入这只股票的完整详情页">
+        <td class="sticky-code px-3 py-2 font-mono text-xs font-semibold text-violet-700">
+          <span class="hover:underline">${_esc(r.code || "—")}</span>${_originBadge(r._source_origin)}
         </td>
-        <td class="sticky-name px-3 py-2 text-slate-800">${_esc(r.name || "—")}</td>
+        <td class="sticky-name px-3 py-2 text-slate-800" title="${_esc(rowNameTitle)}">
+          <span class="hover:text-violet-700 hover:underline">${_esc(r.name || "—")}</span>
+        </td>
         <td class="px-3 py-2 text-xs text-slate-500">${r.market ? _esc(r.market) : '<span class="text-amber-600" title="watchlist.market 字段为空，自选股编辑里补全 market">⚠️ 未分类</span>'}</td>
         <td class="px-3 py-2 text-xs text-slate-600 whitespace-nowrap">
           <span>${_esc(chainThemeFor(r.code) || r.industry || "—")}</span>
@@ -4518,10 +4911,10 @@ function renderDbExplorerTable() {
         <td class="px-3 py-2 text-[11px] font-mono text-slate-500" title="行情/估值数据抓取时间">${_esc(r.price_fetched_at || "—")}</td>
         <td class="px-3 py-2 text-[11px] font-mono text-slate-500" title="AI 元数据最近一次刷新时间">${_esc(r.updated_at || "—")}</td>
         <td class="px-2 py-2 text-center" onclick="event.stopPropagation()">
-          <button title="看完整历史数据"
+          <button title="进入完整详情页"
                   data-code="${_esc(r.code)}" data-name="${_esc(r.name || '')}"
                   onclick="openStockDetail(this.dataset.code, this.dataset.name)"
-                  class="px-2 py-1 rounded text-xs bg-violet-50 hover:bg-violet-200 text-violet-700 border border-violet-200">📊 历史</button>
+                  class="px-2 py-1 rounded text-xs bg-violet-50 hover:bg-violet-200 text-violet-700 border border-violet-200 font-semibold">详情</button>
         </td>
         <td class="px-2 py-2 text-center" onclick="event.stopPropagation()">
           <a title="Yahoo Finance 原始页面 (新窗口)"
@@ -4536,8 +4929,7 @@ function renderDbExplorerTable() {
         </td>
       </tr>
     `;
-    if (!expanded) return mainRow;
-    return mainRow + _dbExplorerDetailRow(r);
+    return mainRow;
   }).join("");
 
   tbody.innerHTML = html;
@@ -4782,17 +5174,19 @@ function _findDbRowForTicker(ticker) {
   return null;
 }
 
-// ============ 🗂 个股全历史中介页（从已拉取股票池跳过来）============
+// ============ 🗂 个股详情页（从股票池 / AI 推荐跳过来）============
 let _stockDetailReturnTab = "db-explorer";  // 关闭时回到哪个父 tab
 let _currentTab = "overview";  // 由 switchTab 维护,openStockDetail 用来记进入前所在 tab
 
 // 各 tab 对应的"返回"按钮文案
 const _STOCK_DETAIL_BACK_LABEL = {
   "db-explorer": "← 返回 已拉取股票池",
+  "watchlist-hub": "← 返回 股票池",
   "ipo-junior":  "← 返回 IPO & 次新股",
   "real-holdings": "← 返回 我的持仓",
   "watchlist": "← 返回 自选股配置",
   "portfolio": "← 返回 AI 配仓",
+  "discovery": "← 返回 AI 推荐",
   "recommendations": "← 返回 AI 推荐",
   "overview": "← 返回 今日决策台",
 };
@@ -6753,7 +7147,7 @@ function _updateIpoMeta() {
   const meta = document.getElementById("ipo-junior-meta");
   if (!meta) return;
   if (!JUNIOR_RADAR || !JUNIOR_RADAR.generated_at) {
-    meta.innerHTML = `<span class="text-rose-700 font-semibold">⚠️ 未找到 junior_stock_radar.json</span> · 数据源缺失,请运行 <code class="bg-slate-100 px-1.5 py-0.5 rounded">python3 -m stock_research.jobs.ipo_daily && python3 -m stock_research.jobs.junior_stock_watcher</code> 后重建看板。`;
+    meta.innerHTML = `<span class="text-amber-700 font-semibold">⏸ IPO / 次新股雷达已暂停</span> · 暂不自动拉取；没有缓存时这里保持为空。`;
     return;
   }
   const gen = String(JUNIOR_RADAR.generated_at).slice(0, 19);
@@ -6774,11 +7168,11 @@ function _updateIpoMeta() {
   const hoursOld = isFinite(genTime) ? (Date.now() - genTime) / 3600000 : 0;
   let badge = "";
   if (hoursOld > 48) {
-    badge = `<span class="text-rose-700 font-semibold">⚠️ 数据已过期 ${hoursOld.toFixed(0)}h</span> · 建议跑 <code class="bg-slate-100 px-1.5 py-0.5 rounded">./daily_refresh.sh --research</code> 刷新 · `;
+    badge = `<span class="text-amber-700 font-semibold">⏸ 模块暂停中，缓存 ${hoursOld.toFixed(0)}h 前生成</span> · `;
   } else if (hoursOld > 30) {
-    badge = `<span class="text-amber-700">⏳ 数据 ${hoursOld.toFixed(0)}h 前生成（夜班可能未跑）</span> · `;
+    badge = `<span class="text-amber-700">⏸ 模块暂停中，缓存 ${hoursOld.toFixed(0)}h 前生成</span> · `;
   }
-  meta.innerHTML = `${badge}生成于 ${gen} · ${info}`;
+  meta.innerHTML = `${badge}缓存生成于 ${gen} · ${info}`;
 }
 
 function renderJuniorRadar() {
@@ -6787,11 +7181,11 @@ function renderJuniorRadar() {
 }
 
 async function refreshIpoData() {
-  // 触发后端 ipo_daily + junior_stock_watcher 串行重算 (~15s)，
-  // polling /api/ipo/radar 直到 generated_at 变化，然后替换 JUNIOR_RADAR + 重新渲染。
+  // 当前 IPO / 次新股雷达暂停，页面按钮禁用；保留此函数给以后恢复手动刷新时复用。
   // 注意：JUNIOR_RADAR 是 let（不是 const），允许整体替换。
   const btn = document.getElementById("ipo-refresh-btn");
   if (!btn) return;
+  if (btn.disabled) return;
   const orig = btn.innerHTML;
   btn.disabled = true;
   const oldStamp = String((JUNIOR_RADAR && JUNIOR_RADAR.generated_at) || "");
@@ -11969,6 +12363,7 @@ function _reasonSummaryHtml(row) {
       const byMarket = {US: 0, CN: 0, HK: 0};
       _dropouts.forEach(d => { const m = String(d.market || "").toUpperCase(); byMarket[m] = (byMarket[m] || 0) + 1; });
       const breakdown = ["US", "CN", "HK"].map(m => `${_marketLabel(m)} ${byMarket[m] || 0}`).join(" / ");
+      const marketTopLimit = Number((DISCOVERY.market_breakdown && DISCOVERY.market_breakdown[activeMarket] && DISCOVERY.market_breakdown[activeMarket].total) || 20);
       if (filtered.length === 0) {
         const otherMarkets = ["US", "CN", "HK"].filter(m => m !== activeMarket && byMarket[m] > 0);
         if (otherMarkets.length === 0) {
@@ -11985,15 +12380,28 @@ function _reasonSummaryHtml(row) {
         const aHeld = _heldTickers.has(String(a.ticker || "").toUpperCase()) ? 0 : 1;
         const bHeld = _heldTickers.has(String(b.ticker || "").toUpperCase()) ? 0 : 1;
         if (aHeld !== bHeld) return aHeld - bHeld;
-        return (a.prev_rank || 99) - (b.prev_rank || 99);
+        return (a.prev_market_rank || a.prev_rank || 99) - (b.prev_market_rank || b.prev_rank || 99);
       });
       const heldCount = filtered.filter(d => _heldTickers.has(String(d.ticker || "").toUpperCase())).length;
+      const rankedInMarket = filtered
+        .map(d => Number(d.prev_market_rank))
+        .filter(n => Number.isFinite(n));
+      const allFromMarketTop = rankedInMarket.length === filtered.length && rankedInMarket.every(n => n <= marketTopLimit);
+      const dropoutTitle = allFromMarketTop
+        ? `${_marketLabel(activeMarket)} 上批次在本市场 Top ${marketTopLimit}，本批次跌出`
+        : `${_marketLabel(activeMarket)} 上批候选，本批未入推荐`;
+      const dropoutExplain = allFromMarketTop
+        ? `这些票上次（${filtered[0].prev_date || "上批次"}）还在${_marketLabel(activeMarket)}推荐 Top ${marketTopLimit} 里，本批被新候选顶下去。`
+        : `这些票上次（${filtered[0].prev_date || "上批次"}）还在完整推荐批次里，本批没有进入当前完整推荐。`;
       const rows = sorted.map(d => {
         const tk = String(d.ticker || "");
         const tkUpper = tk.toUpperCase();
         const isHeld = _heldTickers.has(tkUpper);
         const name = String(d.name || "");
-        const rank = d.prev_rank != null ? `上次第 ${d.prev_rank} 名` : "上批次";
+        const marketRank = d.prev_market_rank != null ? `上次${_marketLabel(d.market)}第 ${d.prev_market_rank} 名` : "";
+        const globalRank = d.prev_rank != null ? `全市场第 ${d.prev_rank} 名` : "";
+        const rank = marketRank || (globalRank ? `上次${globalRank}` : "上批次");
+        const rankTitle = [marketRank, globalRank].filter(Boolean).join(" · ");
         const score = d.prev_score != null ? d.prev_score.toFixed(1) : "—";
         const rating = _ratingLabelCN(d.prev_rating);
         const heldBadge = isHeld
@@ -12001,7 +12409,7 @@ function _reasonSummaryHtml(row) {
           : "";
         const rowBg = isHeld ? "bg-amber-50 border-l-2 border-amber-400" : "";
         return `<li class="flex items-center gap-3 px-4 py-1.5 ${rowBg}">
-          <span class="font-mono text-[11px] text-slate-500 min-w-[88px]">${rank}</span>
+          <span class="text-[11px] text-slate-500 min-w-[112px]" title="${rankTitle}">${rank}</span>
           <span class="font-mono text-xs font-bold text-slate-900">${tk}</span>
           <span class="text-xs text-slate-600">${name}${heldBadge}</span>
           <span class="ml-auto text-[11px] text-slate-500 font-mono">上次 综合 ${score} / ${rating}</span>
@@ -12012,13 +12420,13 @@ function _reasonSummaryHtml(row) {
         : "";
       el.innerHTML = `<details class="bg-rose-50 border border-rose-200 rounded-lg p-4 mb-3 mx-3 text-[12px] text-rose-900 leading-relaxed" open>
         <summary class="cursor-pointer font-bold">
-          📉 ${_marketLabel(activeMarket)} 上批次在 Top、本批次跌出 (${filtered.length} 只)
+          📉 ${dropoutTitle} (${filtered.length} 只)
           ${titleSuffix}
           <span class="text-[11px] font-normal text-rose-600 ml-2">· 全市场 ${breakdown}</span>
         </summary>
         <p class="mt-2 text-[11px] text-rose-700 leading-relaxed">
-          这些票上次（${filtered[0].prev_date || "上批次"}）还在推荐 Top 20 里，今早被新候选顶下去。<br>
-          <strong>跌出 Top 20 ≠ 退出科技 universe</strong>——只是排名滑出前 20，可能仍在 21-50 候选区。若你手上有，建议复查持有理由。
+          ${dropoutExplain}<br>
+          <strong>跌出推荐 ≠ 退出科技 universe</strong>——只是本批没有入选当前展示批次；若你手上有，建议复查持有理由。
         </p>
         <ul class="mt-2 divide-y divide-rose-100 bg-white rounded">${rows}</ul>
       </details>`;
@@ -12177,7 +12585,6 @@ function _reasonSummaryHtml(row) {
       const scoreNum = Number(c.composite_z);
       const scoreText = Number.isFinite(scoreNum) ? (scoreNum >= 0 ? "+" : "") + scoreNum.toFixed(2) : "—";
       const zColor = scoreNum > 0 ? "text-emerald-600 font-bold" : (Number.isFinite(scoreNum) ? "text-rose-600" : "text-slate-400");
-      const etfs = (c.etfs || []).map(e => `<span class="inline-block px-1.5 py-0.5 mr-1 text-xs bg-indigo-100 text-indigo-700 rounded">${e}</span>`).join("");
       const reasonText = _reasonSummaryHtml(c);
       const entryText = _fmtEntryPrice(c);
       const factorHtml = _factorBreakdownHtml(c);
@@ -12193,6 +12600,18 @@ function _reasonSummaryHtml(row) {
         if (t.endsWith(".L"))  return "🇬🇧 英股";
         return "🇺🇸 美股";
       })();
+      const displayName = c.name || c.ticker || "";
+      const displayNameTitle = c.name_en && c.name_en !== displayName
+        ? `${displayName} / ${c.name_en}`
+        : displayName;
+      const themeText = _candidateThemeText(c) || "系统科技池";
+      const themeTitle = [
+        c.chain ? `链条：${c.chain}` : "",
+        c.chain_role ? `角色：${c.chain_role}` : "",
+        c.theme ? `系统主题：${c.theme}` : "",
+        c.industry ? `行业：${c.industry}` : "",
+        c.pool_source ? `来源：${_sourceLabel(c.pool_source)}` : "",
+      ].filter(Boolean).join(" · ");
       // 当前批次 alpha：未成熟显示"待T+N"，不混入同 ticker 老批次表现。
       const track = _lookupTrackingForToday(c.ticker, _candidateMarketCode(c));
       const alpha1 = track ? track.alpha_1d : null;
@@ -12200,24 +12619,22 @@ function _reasonSummaryHtml(row) {
       const alpha20 = track ? track.alpha_20d : null;
       const alpha60 = track ? track.alpha_60d : null;
       const tk = _esc(c.ticker);
+      const stockDetailAttrs = `data-code="${tk}" data-name="${_esc(displayName)}" onclick="openStockDetail(this.dataset.code, this.dataset.name)"`;
       return `<tr class="hover:bg-slate-50">
         <td class="px-2 py-1 font-mono text-xs text-slate-500">
-          <button id="disc-toggle-${tk}" onclick="toggleDiscoveryDetail('${tk}')"
-                  class="text-violet-600 hover:text-violet-800 mr-1 font-bold"
-                  title="展开/折叠推荐理由">▶</button>
           <span title="当前市场 tab 内排名 (后端全局 rank #${c.rank})">${idx + 1}</span>
         </td>
-        <td class="px-2 py-1 font-mono text-xs font-bold cursor-pointer"
-            onclick="toggleDiscoveryDetail('${tk}')">${c.ticker}${_newBadge(c)}${_riseBadge(c)}${_appearanceBadge(c)}</td>
+        <td class="px-2 py-1 font-mono text-xs font-bold text-violet-700 cursor-pointer hover:underline"
+            ${stockDetailAttrs} title="点击进入这只股票的完整详情页">${c.ticker}${_newBadge(c)}${_riseBadge(c)}${_appearanceBadge(c)}</td>
         <td class="px-2 py-1 text-xs text-slate-700 min-w-[180px] cursor-pointer"
-            onclick="toggleDiscoveryDetail('${tk}')">
-          <div class="truncate max-w-[200px]">${c.name || ""}</div>
+            ${stockDetailAttrs} title="点击进入这只股票的完整详情页">
+          <div class="truncate max-w-[220px]" title="${_esc(displayNameTitle)}">${_esc(displayName)}</div>
           ${c.quality_tag ? `<div class="mt-0.5">${_qualityTagHtml(c.quality_tag)}</div>` : ""}
-          <div class="mt-0.5">${stockPill(c.ticker, {layout: "mini"})}</div>
+          <div class="mt-0.5 inline-flex items-center gap-1 flex-wrap">${_candidateMiniTags(c)}</div>
         </td>
         <td class="px-2 py-1 text-xs whitespace-nowrap">${_signalBadge(c)}</td>
         <td class="px-2 py-1 text-xs whitespace-nowrap">${market}</td>
-        <td class="px-2 py-1 text-xs text-slate-600 whitespace-nowrap">${_esc(chainThemeFor(c.ticker) || c.sector || "")}</td>
+        <td class="px-2 py-1 text-xs text-slate-600 whitespace-nowrap" title="${_esc(themeTitle || themeText)}">${_esc(themeText)}</td>
         <td class="px-2 py-1 text-right text-xs font-mono ${zColor}">${scoreText}</td>
         <td class="px-2 py-1 text-xs min-w-[190px]">${factorHtml}</td>
         <td class="px-2 py-1 text-right text-xs font-mono whitespace-nowrap">${entryText}</td>
@@ -12228,22 +12645,26 @@ function _reasonSummaryHtml(row) {
         <td class="px-2 py-1 text-right text-xs">${_fmtCurrentRunAlpha(alpha60, "T+60", track)}</td>
         <td class="px-2 py-1 text-xs text-slate-700 min-w-[260px] max-w-[360px] whitespace-normal leading-snug">${reasonText}</td>
         <td class="px-2 py-1 text-xs min-w-[180px] max-w-[260px] whitespace-normal leading-snug">${_riskSummaryHtml(c, 1)}</td>
-        <td class="px-2 py-1 text-xs whitespace-nowrap">${etfs}</td>
         <td class="px-2 py-1 text-center text-[10px] whitespace-nowrap" title="${_esc(_discoveryTs.full)}">
           <div class="${_discoveryTs.age.includes('⚠️') ? 'text-rose-600 font-medium' : 'text-slate-500'}">🕐 ${_discoveryTs.short}</div>
           <div class="${_discoveryTs.age.includes('⚠️') ? 'text-rose-500' : 'text-slate-400'}">${_discoveryTs.age}</div>
         </td>
-        <td class="px-2 py-1 text-center">
+        <td class="px-2 py-1 text-center whitespace-nowrap min-w-[112px]">
+          <div class="inline-flex items-center justify-center gap-1">
+          <button data-code="${tk}" data-name="${_esc(displayName)}"
+                  onclick="openStockDetail(this.dataset.code, this.dataset.name)"
+                  title="查看这只股票的完整详情"
+                  class="px-2 py-1 text-[11px] bg-violet-50 hover:bg-violet-200 text-violet-700 border border-violet-200 rounded transition whitespace-nowrap font-semibold">
+            详情
+          </button>
           <button data-ticker="${tk}"
                   onclick="addDiscoveryToWatchlist('${tk}', this)"
                   title="加入自选股"
-                  class="discovery-add-btn px-1.5 py-0.5 text-[10px] bg-violet-600 hover:bg-violet-700 text-white rounded transition whitespace-nowrap">
-            ➕
+                  class="discovery-add-btn px-2 py-1 text-[11px] bg-violet-600 hover:bg-violet-700 text-white rounded transition whitespace-nowrap font-semibold">
+            关注
           </button>
+          </div>
         </td>
-      </tr>
-      <tr id="disc-detail-${tk}" class="disc-detail-row hidden">
-        <td colspan="17" class="p-0 border-t border-slate-100">${_renderReasonPanel(c)}</td>
       </tr>`;
       }).join("");
 
@@ -13078,15 +13499,56 @@ def _augment_source_health_with_catalyst(source_health: dict | None) -> None:
         if label == "event_calendar_cn":
             n_events = int(data.get("n_events") or 0)
             stale = age_days is not None and age_days > STALE_DAYS
+            nested_health = data.get("source_health") or {}
+            nested_sources = nested_health.get("sources") or {}
+            source_failures = []
+            seen_failures = set()
+            for source_name, row in nested_sources.items():
+                if not isinstance(row, dict):
+                    continue
+                row_status = str(row.get("status") or "").lower()
+                if row_status not in {"error", "down", "failed", "degraded"}:
+                    continue
+                raw_error = str(row.get("error") or row.get("reason") or "").strip()
+                if "stock_restricted_release_queue_em" in source_name:
+                    source_label = "解禁"
+                elif "stock_ggcg_em" in source_name:
+                    source_label = "增减持"
+                elif "stock_yjbb_em" in source_name:
+                    source_label = "财报"
+                else:
+                    source_label = source_name.split("/")[-1]
+
+                err_low = raw_error.lower()
+                if "missing_required_columns" in err_low:
+                    reason_text = "字段变更/缺列"
+                elif "read timed out" in err_low or "timeout" in err_low or "timed out" in err_low:
+                    reason_text = "东方财富接口超时"
+                elif "akshare_not_installed" in err_low:
+                    reason_text = "akshare 未安装"
+                else:
+                    reason_text = raw_error[:36] or row_status
+
+                failure_key = (source_label, reason_text)
+                if failure_key in seen_failures:
+                    continue
+                seen_failures.add(failure_key)
+                source_failures.append(f"{source_label}{reason_text}")
+            failure_detail = "；".join(source_failures[:4])
             if n_events < 1000:
+                impact = (
+                    f"{market_label} 0 条：事件源失败（{failure_detail}），不是市场无事件"
+                    if failure_detail and n_events == 0
+                    else f"{market_label} 仅 {n_events} 条事件 (期望 1000+)，A 股票 📰 覆盖会偏低"
+                )
                 sources[label] = {
                     "status": "degraded",
-                    "reason": "few_events",
-                    "impact": f"{market_label} 仅 {n_events} 条事件 (期望 1000+)，A 股票 📰 覆盖会偏低",
+                    "reason": "source_failed" if failure_detail and n_events == 0 else "few_events",
+                    "impact": impact,
                     "affected_fields": ["A 股 catalyst"],
                     "unaffected_fields": ["港股 / 美股 catalyst"],
-                    "operator_action": "重跑 `python3 -m stock_research.jobs.event_calendar_daily`",
-                    "last_event": {"ts": gen_at, "detail": f"n_events={n_events}, age={age_days}d"},
+                    "operator_action": "修复 A 股事件源（适配解禁字段 / 东财接口重试或备用源）后重跑 `python3 -m stock_research.jobs.event_calendar_daily`",
+                    "last_event": {"ts": gen_at, "detail": f"n_events={n_events}, age={age_days}d, failures={failure_detail or 'none'}"},
                 }
             elif stale:
                 sources[label] = {
@@ -13524,7 +13986,13 @@ def early_growth_radar_section_html(payload: dict | None = None) -> str:
 
     counts = payload.get("counts") or {}
     generated = str(payload.get("generated_at") or "")[:19].replace("T", " ")
-    run_id = esc(payload.get("latest_recommendation_run_id") or "无推荐批次")
+    raw_run_id = str(payload.get("latest_recommendation_run_id") or "")
+    run_id = esc(raw_run_id or "无推荐批次")
+    m = re.match(r"^rec_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})", raw_run_id)
+    if m:
+        batch_label = f"推荐批次 {m.group(1)}-{m.group(2)}-{m.group(3)} {m.group(4)}:{m.group(5)}"
+    else:
+        batch_label = "推荐批次待同步"
     early_body = "".join(row_html(r) for r in early_rows)
     if not early_body:
         early_body = '<tr><td colspan="8" class="py-4 text-sm text-slate-500">暂无未过热的早发现候选。</td></tr>'
@@ -13557,22 +14025,32 @@ def early_growth_radar_section_html(payload: dict | None = None) -> str:
           </details>
         """
 
+    early_count = counts.get('early_or_watch') or len(early_rows)
+    overheated_count = counts.get('overheated') or len(overheated_rows)
     return f"""
-  <section class="mb-5 rounded-xl border border-emerald-200 bg-white shadow-sm overflow-hidden">
-    <div class="px-4 py-3 bg-emerald-50 border-b border-emerald-100 flex flex-wrap items-center gap-2">
-      <div>
-        <h3 class="text-base font-bold text-slate-900">早发现雷达</h3>
-        <p class="text-xs text-slate-600 mt-0.5">只做研究提醒，不自动买入；点击“加关注”才写入自选股，并标记来源为早期关注推荐。</p>
+  <details class="mb-4 rounded-xl border border-emerald-200 bg-white shadow-sm overflow-hidden">
+    <summary class="cursor-pointer select-none px-4 py-3 bg-emerald-50 border-b border-emerald-100">
+      <div class="flex flex-wrap items-center gap-2">
+        <div>
+          <h3 class="text-base font-bold text-slate-900">早发现雷达 <span class="text-xs font-normal text-slate-500">研究前哨，默认折叠</span></h3>
+          <p class="text-xs text-slate-600 mt-0.5">可研究 {early_count} 只 · 已涨太多 {overheated_count} 只；展开后可买前研究或加关注。</p>
+        </div>
+        <div class="ml-auto flex flex-col items-end gap-1 text-[11px]">
+          <div class="text-slate-500">雷达生成 {esc(generated)}</div>
+          <button type="button"
+                  class="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-white px-3 py-1 font-semibold text-emerald-700 shadow-sm hover:bg-emerald-100 hover:border-emerald-400 transition"
+                  title="系统内部批次编号：{run_id}"
+                  onclick="openDiscoveryHistoryFromRadar(event)">
+            {esc(batch_label)} <span aria-hidden="true">→</span>
+          </button>
+        </div>
       </div>
-      <div class="ml-auto text-right text-[11px] text-slate-500">
-        <div>{esc(generated)}</div>
-        <div class="font-mono">{run_id}</div>
-      </div>
-    </div>
-    <div class="px-4 py-3">
+    </summary>
+    <div class="px-4 py-3 border-t border-emerald-100">
       <div class="mb-2 flex flex-wrap gap-2 text-xs text-slate-600">
-        <span class="px-2 py-1 rounded bg-emerald-50 text-emerald-700">可研究 {counts.get('early_or_watch') or len(early_rows)} 只</span>
-        <span class="px-2 py-1 rounded bg-amber-50 text-amber-800">已涨太多 {counts.get('overheated') or len(overheated_rows)} 只</span>
+        <span class="px-2 py-1 rounded bg-emerald-50 text-emerald-700">可研究 {early_count} 只</span>
+        <span class="px-2 py-1 rounded bg-amber-50 text-amber-800">已涨太多 {overheated_count} 只</span>
+        <span class="px-2 py-1 rounded bg-slate-50 text-slate-600">不进入正式推荐主榜统计</span>
       </div>
       <div class="overflow-x-auto">
         <table class="w-full text-sm">
@@ -13593,7 +14071,7 @@ def early_growth_radar_section_html(payload: dict | None = None) -> str:
       </div>
       {overheated_block}
     </div>
-  </section>
+  </details>
 """
 
 
@@ -13622,6 +14100,14 @@ def _runtime_load_pipeline_status(role: str = "production", mode: str | None = N
             continue
         if role == "research" and payload_mode != "research" and payload_role != "research":
             continue
+        payload = dict(payload)
+        path = os.path.join(_REPO, rel)
+        if os.path.exists(path):
+            try:
+                payload["_status_file"] = rel
+                payload["_status_mtime"] = datetime.fromtimestamp(os.path.getmtime(path)).isoformat(timespec="seconds")
+            except Exception:
+                pass
         dt = _runtime_parse_dt(payload.get("updated_at") or payload.get("completed_at") or payload.get("started_at"))
         stamp = dt or datetime.min
         candidate = (stamp, -idx, payload)
@@ -13752,37 +14238,38 @@ def _build_dropouts(strategy_version: str | None = None) -> list[dict]:
                     {where}
                 ),
                 latest_syms AS (
-                    SELECT p.symbol FROM recommendation_picks p
+                    SELECT p.market, p.symbol FROM recommendation_picks p
                     JOIN ordered o ON p.run_id = o.run_id WHERE o.rn = 1
                 ),
                 prev AS (
-                    SELECT p.symbol, p.name, p.rank, p.total_score, p.rating, o.run_date
+                    SELECT p.market, p.symbol, p.name, p.rank,
+                           ROW_NUMBER() OVER (PARTITION BY p.market ORDER BY p.rank) AS market_rank,
+                           p.total_score, p.rating, o.run_date
                     FROM recommendation_picks p JOIN ordered o ON p.run_id = o.run_id
                     WHERE o.rn = 2
                 )
-                SELECT symbol, name, rank, total_score, rating, CAST(run_date AS VARCHAR)
+                SELECT market, symbol, name, rank, market_rank, total_score, rating, CAST(run_date AS VARCHAR)
                 FROM prev
-                WHERE symbol NOT IN (SELECT symbol FROM latest_syms)
-                ORDER BY rank
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM latest_syms l
+                    WHERE l.market = prev.market AND l.symbol = prev.symbol
+                )
+                ORDER BY market, market_rank
                 """,
                 params,
             ).fetchall()
         finally:
             con.close()
         out = []
-        for symbol, name, rank, score, rating, run_date in rows:
-            t = (symbol or "").upper()
-            if t.endswith(".HK"):
-                market = "HK"
-            elif t.endswith(".SS") or t.endswith(".SZ") or t.endswith(".SH") or t.endswith(".BJ"):
-                market = "CN"
-            else:
-                market = "US"
+        for market, symbol, name, rank, market_rank, score, rating, run_date in rows:
+            market = str(market or "").upper()
             out.append({
                 "ticker": symbol,
-                "name": name or "",
+                "name": _display_stock_name(market, name),
+                "name_en": name or "",
                 "market": market,
                 "prev_rank": int(rank) if rank is not None else None,
+                "prev_market_rank": int(market_rank) if market_rank is not None else None,
                 "prev_score": round(float(score), 2) if score is not None else None,
                 "prev_rating": rating or "",
                 "prev_date": run_date,
@@ -14158,23 +14645,39 @@ def _runtime_db_stats() -> dict:
                             bucket["buy_n"] += int(n or 0)
             # 2026-05-20：pick_outcomes 按 market × horizon 拆 — runtime status 三市场展示
             if "pick_outcomes" in tables:
-                rows = con.execute(
-                    """
-                    SELECT po.market, po.horizon,
-                           COUNT(*) AS n_reviewed,
-                           SUM(CASE WHEN po.is_success THEN 1 ELSE 0 END) AS n_win,
-                           ROUND(AVG(po.alpha_pct), 2) AS avg_alpha,
-                           ROUND(AVG(po.return_pct), 2) AS avg_return,
-                           MAX(po.outcome_date) AS latest_outcome
-                    FROM pick_outcomes po
-                    JOIN recommendation_runs rr ON rr.run_id = po.run_id
-                    WHERE po.alpha_pct IS NOT NULL
-                      AND rr.universe_scope = 'system_tech_universe'
-                      AND rr.run_date >= ?
-                    GROUP BY po.market, po.horizon
-                    """,
-                    [PRODUCTION_METRICS_START_DATE],
-                ).fetchall()
+                # 统一口径（stock_research.core.strategy_eval）：当前 strategy_version +
+                # 每天最后一批 + (推荐日,股票)去重 + isfinite + buy/strong_buy。
+                # 旧 SQL 不去重、含已废 v1、未过滤 NaN → 三市场 1d n 虚高（US 540 实为去重后 80）。
+                from stock_research.core import strategy_eval as se
+                _last_batch = se.last_batch_run_ids(
+                    con, strategy_version=se.latest_strategy_version(con),
+                    metrics_start=str(PRODUCTION_METRICS_START_DATE))
+                rows = []
+                if _last_batch:
+                    _ph = ",".join(["?"] * len(_last_batch))
+                    rows = con.execute(
+                        f"""
+                        SELECT dpo.market, dpo.horizon,
+                               COUNT(*) AS n_reviewed,
+                               SUM(CASE WHEN dpo.is_success THEN 1 ELSE 0 END) AS n_win,
+                               ROUND(AVG(dpo.alpha_pct), 2) AS avg_alpha,
+                               ROUND(AVG(dpo.return_pct), 2) AS avg_return,
+                               MAX(dpo.outcome_date) AS latest_outcome
+                        FROM (
+                            SELECT DISTINCT po.run_id, po.market, po.symbol, po.horizon,
+                                   po.alpha_pct, po.return_pct, po.is_success, po.outcome_date
+                            FROM pick_outcomes po
+                            JOIN recommendation_picks rp
+                              ON rp.run_id = po.run_id AND rp.market = po.market AND rp.symbol = po.symbol
+                            WHERE po.run_id IN ({_ph})
+                              AND po.alpha_pct IS NOT NULL
+                              AND isfinite(po.alpha_pct)
+                              AND LOWER(COALESCE(rp.signal, rp.rating, '')) IN ('buy', 'strong_buy')
+                        ) dpo
+                        GROUP BY dpo.market, dpo.horizon
+                        """,
+                        list(_last_batch),
+                    ).fetchall()
                 for market, horizon, n_rev, n_win, avg_alpha, avg_ret, latest in rows:
                     key = str(market).upper()
                     bucket = stats["pick_outcomes_by_market"].setdefault(key, {})
@@ -14301,6 +14804,10 @@ def _runtime_v2_recommendations_fallback(limit: int | None = None) -> list[dict]
     cands = d.get("candidates") or []
     for c in cands:
         c.setdefault("source", "v2:discovery_candidates_fallback")
+        if str(c.get("market") or "").upper() == "US":
+            raw_name = c.get("name") or ""
+            c.setdefault("name_en", raw_name)
+            c["name"] = _display_stock_name("US", raw_name)
     return cands[:limit] if limit else cands
 
 
@@ -14359,10 +14866,16 @@ def _runtime_v2_recommendations(limit: int | None = None) -> list[dict]:
                 SELECT rp.market, rp.symbol, rp.name, rp.rank, rp.rating, rp.signal,
                        rp.total_score, rp.factor_scores_json, rp.recommendation_reason,
                        rp.risk_flags_json, rp.entry_price, rp.entry_currency,
-                       rp.source_origin, lp.market_cap, lp.one_year_pct, lp.forward_pe
+                       rp.source_origin, lp.market_cap, lp.one_year_pct, lp.forward_pe,
+                       su.theme, su.industry, su.source,
+                       cm.chain, cm.chain_tier, cm.chain_role, cm.layman_intro
                 FROM recommendation_picks rp
                 LEFT JOIN latest_price lp
                   ON lp.market = rp.market AND lp.symbol = rp.symbol
+                LEFT JOIN system_universe su
+                  ON su.market = rp.market AND su.symbol = rp.symbol
+                LEFT JOIN chain_metadata cm
+                  ON cm.market = rp.market AND cm.symbol = rp.symbol
                 WHERE rp.run_id = ?
                 ORDER BY rp.market, rp.rank NULLS LAST, rp.total_score DESC NULLS LAST, rp.symbol
                 {limit_sql}
@@ -14372,12 +14885,18 @@ def _runtime_v2_recommendations(limit: int | None = None) -> list[dict]:
         else:
             rows = con.execute(
                 f"""
-                SELECT market, symbol, name, rank, rating, signal, total_score,
-                       factor_scores_json, recommendation_reason, risk_flags_json,
-                       entry_price, entry_currency, source_origin, NULL, NULL, NULL
-                FROM recommendation_picks
-                WHERE run_id = ?
-                ORDER BY market, rank NULLS LAST, total_score DESC NULLS LAST, symbol
+                SELECT rp.market, rp.symbol, rp.name, rp.rank, rp.rating, rp.signal, rp.total_score,
+                       rp.factor_scores_json, rp.recommendation_reason, rp.risk_flags_json,
+                       rp.entry_price, rp.entry_currency, rp.source_origin, NULL, NULL, NULL,
+                       su.theme, su.industry, su.source,
+                       cm.chain, cm.chain_tier, cm.chain_role, cm.layman_intro
+                FROM recommendation_picks rp
+                LEFT JOIN system_universe su
+                  ON su.market = rp.market AND su.symbol = rp.symbol
+                LEFT JOIN chain_metadata cm
+                  ON cm.market = rp.market AND cm.symbol = rp.symbol
+                WHERE rp.run_id = ?
+                ORDER BY rp.market, rp.rank NULLS LAST, rp.total_score DESC NULLS LAST, rp.symbol
                 {limit_sql}
                 """,
                 [latest[0]],
@@ -14387,7 +14906,9 @@ def _runtime_v2_recommendations(limit: int | None = None) -> list[dict]:
         for (
             market, symbol, name, rank, rating, signal, total_score, factor_json,
             recommendation_reason, risk_flags_json, entry_price, entry_currency,
-            source_origin, market_cap, one_year_pct, forward_pe
+            source_origin, market_cap, one_year_pct, forward_pe,
+            su_theme, su_industry, su_source,
+            chain, chain_tier, chain_role, layman_intro
         ) in rows:
             factors = _json_value(factor_json, {})
             if not isinstance(factors, dict):
@@ -14409,7 +14930,8 @@ def _runtime_v2_recommendations(limit: int | None = None) -> list[dict]:
             out.append({
                 "ticker": symbol,
                 "code": symbol,
-                "name": name or "",
+                "name": _display_stock_name(market, name),
+                "name_en": name or "",
                 "market": market,
                 "rank": rank,
                 "rating": rating,
@@ -14432,6 +14954,14 @@ def _runtime_v2_recommendations(limit: int | None = None) -> list[dict]:
                 "detail": detail,
                 "source": "v2:recommendation_picks",
                 "source_origin": source_origin or "system_pool",
+                "theme": su_theme or None,
+                "sector": su_theme or su_industry or None,
+                "industry": su_industry or None,
+                "pool_source": su_source or None,
+                "chain": chain or None,
+                "chain_tier": chain_tier or None,
+                "chain_role": chain_role or None,
+                "layman_intro": layman_intro or None,
             })
         return out
     except Exception:
@@ -14633,7 +15163,8 @@ def _runtime_v2_discovery_history(limit: int = 1200, strategy_version: str | Non
             "market": market,
             "ticker": symbol,
             "code": symbol,
-            "name": name or "",
+            "name": _display_stock_name(market, name),
+            "name_en": name or "",
             "rank": int(rank) if rank is not None else None,
             "rating": rating,
             "signal": signal,
@@ -15019,13 +15550,59 @@ def _today_catalyst_movement_html() -> str:
             held.add(s)
 
     # 渲染一只票的行
-    def _row_html(tk: str, name: str, catalyst: str, extra: str = "") -> str:
+    def _risk_badges_html(flags) -> str:
+        """把 recommendation_picks.risk_flags_json 显示成人能看懂的短风险提示。"""
+        if not flags:
+            return ""
+        if not isinstance(flags, list):
+            flags = [flags]
+        code_labels = {
+            "ACUTE_PRICE_PULLBACK": "急跌风险",
+            "PRICE_ACTION_REVIEW_GATE": "价格红旗",
+            "OVERHEATED_1Y": "过热风险",
+        }
+        severity_cls = {
+            "high": "border-rose-300 bg-rose-50 text-rose-800",
+            "medium": "border-orange-300 bg-orange-50 text-orange-800",
+            "low": "border-amber-300 bg-amber-50 text-amber-800",
+        }
+        chips = []
+        for flag in flags[:2]:
+            if isinstance(flag, dict):
+                code = str(flag.get("code") or "")
+                severity = str(flag.get("severity") or "").lower()
+                message = str(flag.get("message") or code or "风险提示")
+            else:
+                code = ""
+                severity = ""
+                message = str(flag or "")
+            message = message.strip()
+            if not message:
+                continue
+            label = code_labels.get(code, "风险提示")
+            short_msg = message
+            if "单日" in short_msg and "。" in short_msg:
+                short_msg = short_msg.split("。", 1)[0]
+            if len(short_msg) > 42:
+                short_msg = short_msg[:42] + "..."
+            cls = severity_cls.get(severity, "border-amber-300 bg-amber-50 text-amber-800")
+            title = " · ".join(x for x in [code, severity, message] if x)
+            chips.append(
+                f'<span class="inline-flex items-center max-w-full px-2 py-0.5 rounded border text-[11px] font-semibold {cls}" title="{html_lib.escape(title, quote=True)}">'
+                f'⚠️ {html_lib.escape(label)}：{html_lib.escape(short_msg)}</span>'
+            )
+        if not chips:
+            return ""
+        return f'<div class="mt-1 flex flex-wrap gap-1">{"".join(chips)}</div>'
+
+    def _row_html(tk: str, name: str, catalyst: str, extra: str = "", risk_flags=None) -> str:
         """超紧凑 card：用于 3 列 grid。代码+名称一行；催化 truncate 一行（hover 看全）；extra 可选。"""
         market = _market_label_py(tk)
         action_inline = _catalyst_action_label_py(catalyst, validation) if catalyst else ""
         held_warn = "<span class='inline-block px-1 py-0 rounded text-[9px] font-bold bg-amber-200 text-amber-900 ml-1'>⚠️</span>" if tk.upper() in held else ""
         catalyst_disp = html_lib.escape(catalyst) if catalyst else '<span class="text-slate-300">—</span>'
         cat_title = html_lib.escape(catalyst) if catalyst else "无近期催化"
+        risk_html = _risk_badges_html(risk_flags)
         return f"""
         <div class="bg-white rounded border border-slate-200 px-2 py-1 text-[11px] leading-tight" title="{cat_title}">
           <div class="flex items-baseline gap-1 mb-0.5 overflow-hidden">
@@ -15036,6 +15613,7 @@ def _today_catalyst_movement_html() -> str:
           </div>
           <div class="text-[10.5px] text-slate-500 truncate">{catalyst_disp}</div>
           {('<div class="mt-0.5 scale-90 origin-left">' + action_inline + '</div>') if action_inline else ''}
+          {risk_html}
           {extra}
         </div>"""
 
@@ -15044,14 +15622,13 @@ def _today_catalyst_movement_html() -> str:
     if new_items:
         new_items.sort(key=lambda x: (_market_label_py(x[0]), x[0]))
         rows = []
-        for tk, info, c in new_items[:10]:
+        for tk, info, c in new_items:
             name = c.get("name") or ""
             catalyst = catalyst_idx.get(tk.upper()) or ""
-            rows.append(_row_html(tk, name, catalyst))
-        more = f' <span class="text-xs text-slate-500">+{len(new_items)-10} 只...</span>' if len(new_items) > 10 else ""
+            rows.append(_row_html(tk, name, catalyst, risk_flags=c.get("risk_flags")))
         new_html = f"""
     <div class="mb-3">
-      <div class="font-bold text-violet-900 text-[13px] mb-1.5">🆕 今日新进入推荐 <span class="text-slate-500 font-normal">({len(new_items)} 只){more}</span></div>
+      <div class="font-bold text-violet-900 text-[13px] mb-1.5">🆕 今日新进入推荐 <span class="text-slate-500 font-normal">({len(new_items)} 只)</span></div>
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">{''.join(rows)}</div>
     </div>"""
 
@@ -15060,7 +15637,7 @@ def _today_catalyst_movement_html() -> str:
     if rise_items:
         rise_items.sort(key=lambda x: -(x[1].get("rank_up") or 0))
         rows = []
-        for tk, info, c in rise_items[:10]:
+        for tk, info, c in rise_items:
             name = c.get("name") or ""
             catalyst = catalyst_idx.get(tk.upper()) or ""
             rank_up = info.get("rank_up") or 0
@@ -15071,11 +15648,10 @@ def _today_catalyst_movement_html() -> str:
             if score_up and score_up >= 2:
                 extra_parts.append(f"评分 +{score_up:.1f}")
             extra = f'<div class="text-[11px] text-amber-700 mt-0.5">📈 ' + " · ".join(extra_parts) + '</div>' if extra_parts else ""
-            rows.append(_row_html(tk, name, catalyst, extra))
-        more = f' <span class="text-xs text-slate-500">+{len(rise_items)-10} 只...</span>' if len(rise_items) > 10 else ""
+            rows.append(_row_html(tk, name, catalyst, extra, risk_flags=c.get("risk_flags")))
         rise_html = f"""
     <div class="mb-3">
-      <div class="font-bold text-amber-900 text-[13px] mb-1.5">📈 今日排名跃升 <span class="text-slate-500 font-normal">({len(rise_items)} 只){more}</span></div>
+      <div class="font-bold text-amber-900 text-[13px] mb-1.5">📈 今日排名跃升 <span class="text-slate-500 font-normal">({len(rise_items)} 只)</span></div>
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">{''.join(rows)}</div>
     </div>"""
 
@@ -15085,7 +15661,7 @@ def _today_catalyst_movement_html() -> str:
         # 持仓置顶
         sorted_drops = sorted(dropouts, key=lambda d: (0 if (d.get("ticker") or "").upper() in held else 1, d.get("prev_rank") or 99))
         rows = []
-        for d in sorted_drops[:10]:
+        for d in sorted_drops:
             tk = d.get("ticker") or ""
             name = d.get("name") or ""
             prev_rank = d.get("prev_rank")
@@ -15094,10 +15670,9 @@ def _today_catalyst_movement_html() -> str:
             rows.append(_row_html(tk, name, "", extra))
         held_in_drop = sum(1 for d in dropouts if (d.get("ticker") or "").upper() in held)
         warn = f' <span class="text-xs text-amber-700 font-bold">⚠️ 含 {held_in_drop} 只你持仓</span>' if held_in_drop else ""
-        more = f' <span class="text-xs text-slate-500">+{len(dropouts)-10} 只...</span>' if len(dropouts) > 10 else ""
         drop_html = f"""
     <div class="mb-2">
-      <div class="font-bold text-rose-900 text-[13px] mb-1.5">📉 今日跌出推荐 <span class="text-slate-500 font-normal">({len(dropouts)} 只){warn}{more}</span></div>
+      <div class="font-bold text-rose-900 text-[13px] mb-1.5">📉 今日跌出推荐 <span class="text-slate-500 font-normal">({len(dropouts)} 只){warn}</span></div>
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">{''.join(rows)}</div>
     </div>"""
 
@@ -15200,52 +15775,391 @@ def today_decision_panel_html() -> str:
         except Exception:
             return "—"
 
-    # 用户不想看 A 股科技/AI 池，这里只显示美股 Top 5（按各自 rank/总分排序）
+    def fmt_pct(value, digits=1):
+        try:
+            x = float(value) * 100.0 if abs(float(value)) <= 1 else float(value)
+            return f"{x:+.{digits}f}%"
+        except Exception:
+            return "—"
+
+    def fmt_weight(value):
+        try:
+            return f"{float(value) * 100:.1f}%"
+        except Exception:
+            return "—"
+
+    def fmt_money_rmb(value):
+        try:
+            x = float(value)
+        except Exception:
+            return "—"
+        if abs(x) >= 10000:
+            return f"¥{x / 10000:.1f}万"
+        return f"¥{x:,.0f}"
+
+    def short_text(value, limit=54):
+        s = str(value or "").strip()
+        return s if len(s) <= limit else s[:limit] + "..."
+
+    def coerce_flag(flag):
+        if isinstance(flag, dict):
+            return flag
+        if isinstance(flag, str) and flag.strip().startswith("{"):
+            try:
+                import ast
+                parsed = ast.literal_eval(flag)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                return flag
+        return flag
+
+    def flag_message(flag) -> str:
+        flag = coerce_flag(flag)
+        if isinstance(flag, dict):
+            return str(flag.get("message") or flag.get("code") or "风险提示")
+        return str(flag or "")
+
+    def flag_label(flag) -> str:
+        flag = coerce_flag(flag)
+        code = str(flag.get("code") or "") if isinstance(flag, dict) else ""
+        return {
+            "ACUTE_PRICE_PULLBACK": "急跌风险",
+            "PRICE_ACTION_REVIEW_GATE": "价格红旗",
+            "STRUCTURAL_DOWNTREND_REVIEW_GATE": "结构下跌",
+            "OVERHEATED_1Y": "过热风险",
+        }.get(code, "风险提示")
+
+    def flag_severity(flag) -> str:
+        flag = coerce_flag(flag)
+        return str(flag.get("severity") or "").lower() if isinstance(flag, dict) else ""
+
+    def risk_chip(flag, compact=False) -> str:
+        msg = flag_message(flag)
+        if not msg:
+            return '<span class="text-slate-400">未命中结构化风险</span>'
+        sev = flag_severity(flag)
+        cls = "border-rose-200 bg-rose-50 text-rose-800" if sev == "high" else "border-orange-200 bg-orange-50 text-orange-800"
+        label = flag_label(flag)
+        limit = 34 if compact else 72
+        return (
+            f'<span class="inline-flex max-w-full px-2 py-0.5 rounded border text-[11px] font-semibold {cls}" '
+            f'title="{html_lib.escape(msg, quote=True)}">⚠️ {html_lib.escape(label)}：{html_lib.escape(short_text(msg, limit))}</span>'
+        )
+
+    def factor_badge(label: str, value, tone: str = "slate") -> str:
+        tone_cls = {
+            "emerald": "bg-emerald-50 text-emerald-700 border-emerald-200",
+            "amber": "bg-amber-50 text-amber-700 border-amber-200",
+            "rose": "bg-rose-50 text-rose-700 border-rose-200",
+            "slate": "bg-slate-50 text-slate-600 border-slate-200",
+        }.get(tone, "bg-slate-50 text-slate-600 border-slate-200")
+        return f'<span class="inline-flex px-1.5 py-0.5 rounded border text-[11px] font-semibold {tone_cls}">{html_lib.escape(label)} {fmt_num(value, 0)}</span>'
+
+    def candidate_factor_summary(c: dict, b: dict) -> tuple[str, str]:
+        factors = c.get("factor_scores") if isinstance(c, dict) else {}
+        factors = factors if isinstance(factors, dict) else {}
+        valuation = factors.get("valuation")
+        momentum = factors.get("momentum")
+        reversal = factors.get("reversal")
+        quality = factors.get("data_quality") or factors.get("quality")
+        total = b.get("composite_z") or c.get("composite_z")
+
+        phrases = []
+        if isinstance(valuation, (int, float)):
+            phrases.append("估值分高" if valuation >= 80 else ("估值一般" if valuation >= 55 else "估值压力"))
+        if isinstance(momentum, (int, float)):
+            phrases.append("趋势强" if momentum >= 70 else ("趋势偏弱" if momentum < 45 else "趋势中性"))
+        if isinstance(reversal, (int, float)):
+            phrases.append("短线修复好" if reversal >= 70 else ("反转弱，别追" if reversal < 25 else "短线中性"))
+        if isinstance(quality, (int, float)) and quality >= 90:
+            phrases.append("数据质量足")
+        if not phrases:
+            phrases.append("AI 配仓候选，先做买前研究")
+        headline = " · ".join(phrases[:3])
+
+        badges = [f'<span class="inline-flex px-1.5 py-0.5 rounded border text-[11px] font-semibold bg-violet-50 text-violet-700 border-violet-200">总分 {fmt_num(total, 1)}</span>']
+        if isinstance(valuation, (int, float)):
+            badges.append(factor_badge("估值", valuation, "emerald" if valuation >= 80 else "slate"))
+        if isinstance(momentum, (int, float)):
+            badges.append(factor_badge("趋势", momentum, "emerald" if momentum >= 70 else ("amber" if momentum < 45 else "slate")))
+        if isinstance(reversal, (int, float)):
+            badges.append(factor_badge("反转", reversal, "emerald" if reversal >= 70 else ("rose" if reversal < 25 else "slate")))
+        return headline, "".join(badges[:4])
+
+    def candidate_action_line(c: dict, b: dict, flags: list) -> tuple[str, str, str]:
+        factors = c.get("factor_scores") if isinstance(c, dict) else {}
+        factors = factors if isinstance(factors, dict) else {}
+        momentum = factors.get("momentum")
+        reversal = factors.get("reversal")
+        score = b.get("composite_z") or c.get("composite_z") or 0
+        if flags:
+            return "先复查", "有红旗，买前研究不过不动。", "bg-orange-50 text-orange-800 border-orange-200"
+        if isinstance(reversal, (int, float)) and reversal < 25 and isinstance(momentum, (int, float)) and momentum >= 70:
+            return "等回踩", "趋势强但短线反转弱，开盘追高不划算。", "bg-amber-50 text-amber-800 border-amber-200"
+        if isinstance(momentum, (int, float)) and momentum < 45:
+            return "先验证", "分数靠估值/质量，先确认不是便宜陷阱。", "bg-sky-50 text-sky-800 border-sky-200"
+        if isinstance(score, (int, float)) and score >= 82:
+            return "优先看", "可进入买前研究，通过后再小批。", "bg-emerald-50 text-emerald-800 border-emerald-200"
+        return "候补看", "排在后面，先看前几只和持仓纪律。", "bg-slate-50 text-slate-700 border-slate-200"
+
+    def attention_item(title: str, detail: str, href: str = "", tone: str = "amber") -> str:
+        tone_cls = {
+            "rose": "border-rose-200 bg-rose-50 text-rose-900",
+            "amber": "border-amber-200 bg-amber-50 text-amber-900",
+            "emerald": "border-emerald-200 bg-emerald-50 text-emerald-900",
+            "slate": "border-slate-200 bg-slate-50 text-slate-800",
+        }.get(tone, "border-amber-200 bg-amber-50 text-amber-900")
+        link = f'<a href="{href}" class="text-xs font-semibold underline decoration-transparent hover:decoration-current">去处理</a>' if href else ""
+        return f"""
+          <div class="rounded-lg border px-3 py-2 {tone_cls}">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <div class="text-sm font-bold">{html_lib.escape(title)}</div>
+                <div class="text-xs mt-0.5 opacity-85">{html_lib.escape(detail)}</div>
+              </div>
+              {link}
+            </div>
+          </div>
+"""
+
+    real_review = _runtime_load_json("data/latest/real_holding_review.json") or {}
+    holding_items = real_review.get("items") or []
+
+    holding_rows = []
+    for h in holding_items:
+        symbol = h.get("symbol") or h.get("code") or "?"
+        action = h.get("action_label") or "观察"
+        price = h.get("current_price")
+        currency = h.get("current_currency") or ""
+        pnl = h.get("pnl_pct")
+        score = h.get("score")
+        weight = h.get("current_weight")
+        target = h.get("target_weight")
+        discipline = h.get("discipline") or {}
+        next_trigger = (discipline.get("next_triggers") or [None])[0] if isinstance(discipline, dict) else None
+        if discipline and discipline.get("triggered"):
+            discipline_line = f"{discipline.get('action_label') or '已触发'} · {discipline.get('suggested_size_text') or ''}"
+        elif next_trigger:
+            discipline_line = (
+                f"下一线 {next_trigger.get('threshold_text') or '—'} · "
+                f"{next_trigger.get('action_label') or '复查'} · {next_trigger.get('suggested_size_text') or ''}"
+            )
+        else:
+            discipline_line = "未设置纪律线"
+        risks = h.get("risk_flags") or []
+        risk_html = risk_chip(risks[0], compact=True) if risks else '<span class="text-slate-400">未命中强风险</span>'
+        action_cls = "bg-rose-50 text-rose-800 border-rose-200" if "减" in str(action) or "退" in str(action) else "bg-emerald-50 text-emerald-800 border-emerald-200"
+        holding_rows.append(f"""
+          <tr class="border-b border-slate-100 last:border-0 align-top">
+            <td class="py-3 pr-3">
+              <div class="font-mono font-bold text-slate-900">{html_lib.escape(str(symbol))}</div>
+              <div class="text-[11px] text-slate-500">分 {fmt_num(score, 1)} · 仓位 {fmt_weight(weight)}{f' / 目标 {fmt_weight(target)}' if target is not None else ''}</div>
+            </td>
+            <td class="py-3 pr-3 whitespace-nowrap">
+              <span class="inline-flex px-2 py-0.5 rounded border text-xs font-semibold {action_cls}">{html_lib.escape(str(action))}</span>
+              <div class="text-[11px] text-slate-500 mt-1">{fmt_num(price, 2)} {html_lib.escape(str(currency))} · {fmt_pct(pnl, 2)}</div>
+            </td>
+            <td class="py-3 pr-3 text-xs text-slate-700">{html_lib.escape(short_text(discipline_line, 86))}</td>
+            <td class="py-3 text-xs">{risk_html}</td>
+          </tr>
+""")
+    if not holding_rows:
+        holding_rows.append("""
+          <tr><td colspan="4" class="py-6 text-center text-sm text-slate-500">暂无真实持仓体检；录入持仓后这里会显示纪律线和风险。</td></tr>
+""")
+
+    # 用户不想看 A 股科技/AI 池，决策台候选优先取美股。
     us_candidates = [
         c for c in discovery_candidates
         if str(c.get("market") or c.get("location") or "").upper() == "US"
     ]
-    top_rows = []
-    for c in us_candidates[:5]:
-        ticker = c.get("ticker") or c.get("code") or "?"
-        name = c.get("name") or ""
-        market = c.get("market") or c.get("location") or "—"
-        score = c.get("composite_z")
-        detail = c.get("detail") or {}
-        one_month = detail.get("one_month_pct")
-        top_rows.append(f"""
-          <tr class="border-b border-slate-100 last:border-0">
-            <td class="py-2 pr-3 font-mono font-bold text-slate-900">{html_lib.escape(str(ticker))}</td>
-            <td class="py-2 pr-3 text-slate-700">{html_lib.escape(str(name))}</td>
-            <td class="py-2 pr-3 text-xs text-slate-500">{html_lib.escape(str(market))}</td>
-            <td class="py-2 pr-3 text-right font-mono text-slate-800">{fmt_num(score)}</td>
-            <td class="py-2 text-right font-mono text-slate-600">{fmt_num(one_month)}%</td>
+    rec_by_ticker = {(c.get("ticker") or c.get("code") or "").upper(): c for c in us_candidates}
+    buy_rows_source = list((trade_delta or {}).get("buys") or [])
+    if not buy_rows_source:
+        buy_rows_source = [
+            {
+                "ticker": c.get("ticker") or c.get("code") or "?",
+                "name": c.get("name") or "",
+                "v6_weight": None,
+                "amount_rmb": None,
+                "price_local": c.get("entry_price"),
+                "shares_estimate": None,
+                "composite_z": c.get("composite_z"),
+            }
+            for c in us_candidates[:5]
+        ]
+    candidate_rows = []
+    for idx, b in enumerate(buy_rows_source[:5], start=1):
+        ticker = str(b.get("ticker") or "?").upper()
+        c = rec_by_ticker.get(ticker) or {}
+        flags = c.get("risk_flags") or []
+        why_line, factor_badges = candidate_factor_summary(c, b)
+        action, action_detail, action_cls = candidate_action_line(c, b, flags)
+        risk_html = risk_chip(flags[0], compact=True) if flags else '<span class="inline-flex px-1.5 py-0.5 rounded border text-[11px] font-semibold bg-emerald-50 text-emerald-700 border-emerald-200">暂无红旗</span>'
+        shares = b.get("shares_estimate")
+        shares_line = f"参考 ≤{int(shares)} 股" if shares else "参考股数待算"
+        weight_line = f"模型上限 {fmt_weight(b.get('v6_weight'))}"
+        price_line = f"{fmt_num(b.get('price_local'), 2)} USD" if b.get("price_local") is not None else "价格待更新"
+        rec_rank = c.get("rank")
+        rank_line = f"AI 推荐榜 #{int(rec_rank)}" if isinstance(rec_rank, (int, float)) else "AI 推荐榜排名待同步"
+        candidate_rows.append(f"""
+          <tr class="border-b border-slate-100 last:border-0 align-top">
+            <td class="py-3 pr-3 text-center">
+              <span class="inline-flex items-center justify-center w-7 h-7 rounded-full bg-slate-900 text-white text-xs font-bold">{idx}</span>
+              <div class="text-[10px] text-slate-400 mt-1 leading-tight">配仓顺序</div>
+            </td>
+            <td class="py-3 pr-3">
+              <div class="font-mono font-bold text-slate-900">{html_lib.escape(ticker)}</div>
+              <div class="text-[11px] text-slate-500 truncate max-w-[180px]">{html_lib.escape(str(c.get('name') or b.get('name') or ''))}</div>
+              <div class="text-[11px] text-amber-700 mt-1">{html_lib.escape(rank_line)}</div>
+              <div class="text-[11px] text-slate-500 mt-1">{html_lib.escape(price_line)}</div>
+            </td>
+            <td class="py-3 pr-3 text-xs text-slate-700 min-w-[230px]">
+              <div class="font-semibold text-slate-900">{html_lib.escape(why_line)}</div>
+              <div class="flex flex-wrap gap-1 mt-1">{factor_badges}</div>
+            </td>
+            <td class="py-3 pr-3 text-xs text-slate-700 min-w-[190px]">
+              <span class="inline-flex px-2 py-0.5 rounded border text-xs font-semibold {action_cls}">{html_lib.escape(action)}</span>
+              <div class="mt-1">{html_lib.escape(action_detail)}</div>
+              <div class="text-slate-500 mt-1">{html_lib.escape(weight_line)} · {html_lib.escape(shares_line)}</div>
+            </td>
+            <td class="py-3 text-xs">{risk_html}</td>
           </tr>
 """)
-    if not top_rows:
-        top_rows.append("""
-          <tr>
-            <td colspan="5" class="py-6 text-center text-sm text-slate-500">暂无美股推荐候选；请先运行 AI 推荐生成链路。</td>
-          </tr>
+    if not candidate_rows:
+        candidate_rows.append("""
+          <tr><td colspan="5" class="py-6 text-center text-sm text-slate-500">暂无今晚候选；请先运行 AI 推荐生成链路。</td></tr>
 """)
 
-    card = lambda title, status, detail, href, action: f"""
-      <div class="bg-white rounded-xl border border-slate-200 p-4">
-        <div class="flex items-center justify-between gap-3 mb-2">
-          <div class="text-xs text-slate-500">{html_lib.escape(title)}</div>
-          {_runtime_badge(status)}
+    risk_alerts = []
+    seen_risks = set()
+    for h in holding_items:
+        sym = str(h.get("symbol") or h.get("code") or "")
+        for flag in (h.get("risk_flags") or [])[:1]:
+            msg = flag_message(flag)
+            key = ("hold", sym, msg)
+            if msg and key not in seen_risks:
+                seen_risks.add(key)
+                risk_alerts.append(("持仓", sym, flag))
+    for c in us_candidates[:20]:
+        ticker = str(c.get("ticker") or c.get("code") or "")
+        for flag in (c.get("risk_flags") or [])[:1]:
+            msg = flag_message(flag)
+            key = ("candidate", ticker, msg)
+            if msg and key not in seen_risks:
+                seen_risks.add(key)
+                risk_alerts.append(("候选", ticker, flag))
+
+    def risk_kind_badge(kind: str) -> str:
+        if kind == "持仓":
+            cls = "bg-emerald-50 text-emerald-700 border-emerald-200"
+            title = "来自你的真实持仓，先按纪律线复查"
+        else:
+            cls = "bg-sky-50 text-sky-700 border-sky-200"
+            title = "来自 AI 推荐/配仓候选，不是你的真实持仓"
+        return (
+            f'<span class="mt-0.5 inline-flex items-center justify-center w-12 shrink-0 rounded-full border px-2 py-0.5 '
+            f'text-[11px] font-bold {cls}" title="{html_lib.escape(title, quote=True)}">'
+            f'{html_lib.escape(kind)}</span>'
+        )
+
+    risk_alert_rows = []
+    for kind, ticker, flag in risk_alerts[:6]:
+        risk_alert_rows.append(f"""
+          <div class="flex items-start gap-3 py-2 border-b border-slate-100 last:border-0">
+            {risk_kind_badge(kind)}
+            <span class="font-mono font-bold text-slate-900 w-20 shrink-0">{html_lib.escape(ticker)}</span>
+            <div class="text-xs">{risk_chip(flag)}</div>
+          </div>
+""")
+    if not risk_alert_rows:
+        risk_alert_rows.append('<div class="py-3 text-sm text-slate-500">当前首屏候选和持仓未命中结构化高风险；仍需逐票买前审查。</div>')
+
+    attention_items = []
+    if blocking:
+        attention_items.append(attention_item("今天不能直接按推荐交易", overall_text, "#runtime-status", "rose"))
+    for h in holding_items:
+        symbol = str(h.get("symbol") or h.get("code") or "?").upper()
+        discipline = h.get("discipline") or {}
+        if isinstance(discipline, dict) and discipline.get("triggered"):
+            attention_items.append(attention_item(
+                f"{symbol} 纪律线已触发",
+                f"{discipline.get('action_label') or '需要处理'} · {discipline.get('suggested_size_text') or '先复查'}",
+                "#real-holdings",
+                "rose",
+            ))
+    held_symbols = {str(h.get("symbol") or h.get("code") or "").upper() for h in holding_items}
+    appearance = _runtime_load_json("data/latest/picks_appearance.json") or {}
+    tickers_appearance = appearance.get("tickers") or {}
+    movement_new_count = 0
+    movement_rise_count = 0
+    for _tk, info in tickers_appearance.items():
+        try:
+            if int(info.get("count") or 0) == 1:
+                movement_new_count += 1
+            rank_up = float(info.get("rank_up") or 0)
+            score_up = float(info.get("score_up") or 0)
+            if rank_up >= 3 or score_up >= 2:
+                movement_rise_count += 1
+        except Exception:
+            continue
+    dropouts = appearance.get("dropouts") or []
+    held_dropouts = [d for d in dropouts if str(d.get("ticker") or "").upper() in held_symbols]
+    for d in held_dropouts[:2]:
+        attention_items.append(attention_item(
+            f"{str(d.get('ticker') or '').upper()} 跌出推荐",
+            f"上次第 {d.get('prev_rank') or '—'} 名；真实持仓先按纪律线复查。",
+            "#real-holdings",
+            "amber",
+        ))
+    for kind, ticker, flag in risk_alerts[:3]:
+        attention_items.append(attention_item(
+            f"{ticker} {flag_label(flag)}",
+            short_text(flag_message(flag), 70),
+            "#buy-research" if kind == "候选" else "#real-holdings",
+            "rose" if flag_severity(flag) == "high" else "amber",
+        ))
+    if not attention_items:
+        attention_items.append(attention_item("今天没有强制处理项", "持仓和首屏候选未触发强风险；按候选顺序做买前研究即可。", "", "emerald"))
+    attention_html = "".join(attention_items[:5])
+
+    movement_summary_html = f"""
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <div class="rounded-lg border border-violet-100 bg-violet-50 px-3 py-2">
+          <div class="text-[11px] text-violet-700">新进推荐</div>
+          <div class="text-xl font-bold text-violet-900">{movement_new_count}</div>
         </div>
-        <div class="text-sm text-slate-700 min-h-[42px]">{html_lib.escape(detail)}</div>
-        <a href="{href}" class="inline-flex mt-3 text-xs font-medium text-violet-700 hover:text-violet-900">{html_lib.escape(action)} →</a>
+        <div class="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2">
+          <div class="text-[11px] text-amber-700">排名跃升</div>
+          <div class="text-xl font-bold text-amber-900">{movement_rise_count}</div>
+        </div>
+        <div class="rounded-lg border border-rose-100 bg-rose-50 px-3 py-2">
+          <div class="text-[11px] text-rose-700">跌出推荐</div>
+          <div class="text-xl font-bold text-rose-900">{len(dropouts)}</div>
+        </div>
+        <div class="rounded-lg border border-orange-100 bg-orange-50 px-3 py-2">
+          <div class="text-[11px] text-orange-700">持仓触及</div>
+          <div class="text-xl font-bold text-orange-900">{len(held_dropouts)}</div>
+        </div>
       </div>
 """
 
-    cards_html = "".join([
-        card("系统可用性", overall, overall_text, "#runtime-status", "查看系统状态"),
-        card("① AI 推荐", "OK" if discovery_n else "WARN", f"{discovery_n} 只系统池候选；来源不包含手动自选股池。", "#discovery", "打开 AI 推荐"),
-        card("② AI 配仓", plan_status, f"{plan_detail}；调仓清单：{trade_text}。", "#backtest", "查看 AI 配仓"),
-        card("已拉取股票池", "OK" if pool_total else "WARN", market_line, "#db-explorer", "查看股票池"),
-    ])
+    if blocking:
+        decision_label = "只读观察"
+        decision_detail = "质量闸门或生产验收失败，今天不要按推荐直接交易。"
+        decision_cls = "border-rose-200 bg-rose-50 text-rose-900"
+        primary_action = "先看系统状态"
+    elif risk_alerts:
+        decision_label = "谨慎观察"
+        decision_detail = "系统可用，但持仓/候选里有结构化风险；先按纪律线和买前研究过滤。"
+        decision_cls = "border-amber-200 bg-amber-50 text-amber-900"
+        primary_action = "只做小批、分批、先复查风险"
+    else:
+        decision_label = "可研究"
+        decision_detail = "系统链路可用；候选可以进入买前研究，但不等于自动下单。"
+        decision_cls = "border-emerald-200 bg-emerald-50 text-emerald-900"
+        primary_action = "从前 3-5 只候选开始"
 
     # 📅 本周市场事件 — 来自 junior_stock_radar.json（三市场聚合）
     radar = _runtime_load_json("data/latest/junior_stock_radar.json") or {}
@@ -15328,7 +16242,7 @@ def today_decision_panel_html() -> str:
     else:
         market_events_html = """
   <div class="mt-6 bg-white rounded-xl border border-slate-200 p-4 text-sm text-slate-500">
-    📅 本周市场事件：暂无数据；请先运行 <code class="text-xs bg-slate-100 px-1 rounded">junior_stock_watcher</code>。
+    📅 本周市场事件：IPO / 次新股雷达已暂停，暂无缓存数据。
   </div>
 """
 
@@ -15360,13 +16274,13 @@ def today_decision_panel_html() -> str:
     )
 
     return f"""
-  <div class="mb-6">
+  <div class="mb-5">
     <div class="flex items-start justify-between gap-4 flex-wrap">
       <div>
         <div class="text-xs font-semibold text-violet-700 mb-2">每日入口 · 只汇总，不写库</div>
         <h2 class="text-3xl font-bold text-slate-900">今日决策台</h2>
         <p class="text-sm text-slate-600 mt-2 max-w-3xl">
-          先看系统今天是否可用，再走「<strong>🧠 AI 工作台</strong>: ① 🔍 选股 → ② ⚖️ 配仓 → ③ 🧪 验证」工作流，或去买前研究 / 系统状态。这里不新增股票池，也不会自动写自选股或真实持仓。
+          只放每天需要马上看的内容：能不能动、真实持仓怎么处理、今晚优先研究哪几只、哪些票有风险红旗。
         </p>
       </div>
       <div class="text-right">
@@ -15376,70 +16290,115 @@ def today_decision_panel_html() -> str:
     </div>
   </div>
 
-  <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
-    {cards_html}
-  </div>
-
-  {recommendation_readiness_panel_html(compact=True)}
-
-  {_today_catalyst_movement_html()}
-
-  {_weekly_self_review_panel_html()}
-
-  {_defense_signal_explainer_html(compact=True, stale_strip=_stale_acceptance_strip_html(acceptance))}
-
   {empty_state_banner}
 
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
-    <div class="lg:col-span-2 bg-white rounded-xl border border-slate-200 overflow-hidden">
-      <div class="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3">
+  <section class="rounded-xl border p-5 mb-5 {decision_cls}">
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
+      <div class="lg:col-span-2">
+        <div class="text-xs font-semibold opacity-80 mb-1">今日行动档位</div>
+        <div class="text-3xl font-bold leading-tight">{html_lib.escape(decision_label)}</div>
+        <div class="text-sm mt-2 max-w-2xl">{html_lib.escape(decision_detail)}</div>
+      </div>
+      <div>
+        <div class="text-xs font-semibold opacity-80 mb-1">新增资金口径</div>
+        <div class="text-lg font-bold">{html_lib.escape(primary_action)}</div>
+        <div class="text-xs mt-2 opacity-80">能否参考：{_runtime_badge(quality_status)} {_runtime_badge(acceptance_status)} · <a href="#runtime-status" class="underline decoration-transparent hover:decoration-current">排错去系统状态</a></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="grid grid-cols-1 xl:grid-cols-3 gap-5 mb-5">
+    <div class="xl:col-span-2 bg-white rounded-xl border border-slate-200 p-4">
+      <div class="flex items-center justify-between gap-3 mb-3">
         <div>
-          <h3 class="font-bold text-slate-900">今日美股推荐 Top 5</h3>
-          <p class="text-xs text-slate-500">来自系统美股池，不是你的手动自选股。来源：{html_lib.escape(discovery_source)}</p>
+          <h3 class="font-bold text-slate-900">今天必须先看</h3>
+          <p class="text-xs text-slate-500">只放会影响今天买卖节奏的东西；系统排错和策略复盘不在这里展开。</p>
         </div>
-        <a href="#discovery" onclick="setTimeout(()=>switchDiscoveryView('today'),50)"
-           class="text-xs text-violet-700 hover:text-violet-900">完整列表 →</a>
+        <a href="#real-holdings" class="text-xs text-violet-700 hover:text-violet-900 whitespace-nowrap">持仓纪律 →</a>
+      </div>
+      <div class="space-y-2">{attention_html}</div>
+    </div>
+    <div class="bg-white rounded-xl border border-slate-200 p-4">
+      <div class="flex items-center justify-between gap-3 mb-3">
+        <div>
+          <h3 class="font-bold text-slate-900">今日变化摘要</h3>
+          <p class="text-xs text-slate-500">看有没有新机会、跳升、跌出，持仓触及要优先复查。</p>
+        </div>
+        <a href="#discovery" class="text-xs text-violet-700 hover:text-violet-900 whitespace-nowrap">AI 推荐 →</a>
+      </div>
+      {movement_summary_html}
+    </div>
+  </section>
+
+  <div class="grid grid-cols-1 xl:grid-cols-2 gap-5 mb-5">
+    <section class="bg-white rounded-xl border border-slate-200 overflow-hidden">
+      <div class="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-3">
+        <div>
+          <h3 class="font-bold text-slate-900">我的持仓动作</h3>
+          <p class="text-xs text-slate-500">来自真实持仓体检和你手动确认的纪律线；只提醒，不自动交易。</p>
+        </div>
+        <a href="#real-holdings" class="text-xs text-violet-700 hover:text-violet-900 whitespace-nowrap">持仓页 →</a>
       </div>
       <div class="overflow-x-auto px-4 py-2">
         <table class="w-full text-sm">
-          <thead class="text-xs text-slate-500 bg-white border-b border-slate-100">
+          <thead class="text-xs text-slate-500 border-b border-slate-100">
             <tr>
-              <th class="py-2 pr-3 text-left">代码</th>
-              <th class="py-2 px-3 text-left">名称</th>
-              <th class="py-2 px-3 text-left">市场</th>
-              <th class="py-2 px-3 text-right">综合 z</th>
-              <th class="py-2 pl-3 text-right">1 月涨幅</th>
+              <th class="py-2 pr-3 text-left">持仓</th>
+              <th class="py-2 pr-3 text-left">动作</th>
+              <th class="py-2 pr-3 text-left">纪律线</th>
+              <th class="py-2 text-left">风险</th>
             </tr>
           </thead>
-          <tbody>{''.join(top_rows)}</tbody>
+          <tbody>{''.join(holding_rows)}</tbody>
         </table>
       </div>
-    </div>
+    </section>
 
-    <div class="bg-white rounded-xl border border-slate-200 p-4">
-      <h3 class="font-bold text-slate-900 mb-3">今天怎么读</h3>
-      <div class="space-y-3 text-sm text-slate-700">
-        <div class="border-l-4 border-violet-400 pl-3">
-          <div class="font-semibold text-slate-900">1. 先看能不能用</div>
-          <div class="text-xs text-slate-500">质量闸门和生产验收失败时，推荐只作观察。</div>
+    <section class="bg-white rounded-xl border border-slate-200 overflow-hidden">
+      <div class="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-3">
+        <div>
+          <h3 class="font-bold text-slate-900">今晚优先研究</h3>
+          <p class="text-xs text-slate-500">左侧 1-5 是配仓买入候选的研究顺序，不是 AI 推荐榜 Top5；股票下方会显示真实推荐榜排名。</p>
         </div>
-        <div class="border-l-4 border-sky-400 pl-3">
-          <div class="font-semibold text-slate-900">2. 再看选谁 <span class="text-[10px] text-violet-600 font-mono">①</span></div>
-          <div class="text-xs text-slate-500"><a href="#discovery" class="text-violet-700 hover:underline">AI 推荐</a> 回答「哪些标的值得研究」。</div>
-        </div>
-        <div class="border-l-4 border-emerald-400 pl-3">
-          <div class="font-semibold text-slate-900">3. 最后看怎么买 <span class="text-[10px] text-violet-600 font-mono">②③</span></div>
-          <div class="text-xs text-slate-500"><a href="#backtest" class="text-violet-700 hover:underline">AI 配仓</a> 算目标仓位，<a href="#portfolio" class="text-violet-700 hover:underline">AI 跟踪</a> 看历史表现。</div>
-        </div>
-        <div class="border-l-4 border-orange-400 pl-3">
-          <div class="font-semibold text-slate-900">4. 飞书橙卡 ≠ 个股指令</div>
-          <div class="text-xs text-slate-500">「防御信号升档」只看大盘（VIX/200MA/PCR），不是持仓体检。</div>
-        </div>
+        <a href="#backtest" class="text-xs text-violet-700 hover:text-violet-900 whitespace-nowrap">配仓页 →</a>
       </div>
-    </div>
+      <div class="overflow-x-auto px-4 py-2">
+        <table class="w-full text-sm">
+          <thead class="text-xs text-slate-500 border-b border-slate-100">
+            <tr>
+              <th class="py-2 pr-3 text-center">配仓顺序</th>
+              <th class="py-2 pr-3 text-left">股票</th>
+              <th class="py-2 pr-3 text-left">为什么今天看</th>
+              <th class="py-2 pr-3 text-left">今晚处理</th>
+              <th class="py-2 text-left">红旗</th>
+            </tr>
+          </thead>
+          <tbody>{''.join(candidate_rows)}</tbody>
+        </table>
+      </div>
+    </section>
   </div>
 
-  {market_events_html}
+  <section class="bg-white rounded-xl border border-slate-200 p-4 mb-5">
+    <div class="flex items-center justify-between gap-3 mb-2">
+      <div>
+        <h3 class="font-bold text-slate-900">异常提醒</h3>
+        <p class="text-xs text-slate-500">把“排名升”和“风险红旗”放在同一眼看到的位置。</p>
+      </div>
+      <a href="#buy-research" class="text-xs text-violet-700 hover:text-violet-900 whitespace-nowrap">买前研究 →</a>
+    </div>
+    <div>{''.join(risk_alert_rows)}</div>
+  </section>
+
+  <details class="bg-white rounded-xl border border-slate-200 p-4 mb-4">
+    <summary class="cursor-pointer font-bold text-slate-900">展开：今日推荐变化</summary>
+    <div class="mt-4">{_today_catalyst_movement_html()}</div>
+  </details>
+
+  <details class="bg-white rounded-xl border border-slate-200 p-4">
+    <summary class="cursor-pointer font-bold text-slate-900">展开：本周市场事件</summary>
+    <div class="mt-4">{market_events_html}</div>
+  </details>
 """
 
 
@@ -15466,12 +16425,15 @@ def strategy_market_advisory_html() -> str:
     if not items:
         return ""
     return (
-        '<div class="mb-4 rounded-xl border-2 border-amber-300 bg-amber-50 px-4 py-3">'
-        '<div class="text-sm font-bold text-amber-900">⚠️ 分市场研究观察 —— CN/HK 当前冻结(只看不买)</div>'
-        f'<ul class="text-[12px] text-amber-800 mt-1 leading-relaxed list-disc pl-5">{"".join(items)}</ul>'
+        '<details class="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">'
+        '<summary class="cursor-pointer select-none text-sm font-bold text-amber-900">'
+        'CN/HK 冻结提醒：只做研究观察，不进真钱组合'
+        '<span class="ml-2 text-[11px] font-normal text-amber-700">点开看分市场实测</span>'
+        '</summary>'
+        f'<ul class="text-[12px] text-amber-800 mt-2 leading-relaxed list-disc pl-5">{"".join(items)}</ul>'
         '<div class="text-[11px] text-amber-700 mt-1">策略口径：只有 US 在验证轨道；CN/HK 一律冻结研究，'
         '与当时 alpha 高低无关，直到各自单独走完验证。</div>'
-        '</div>'
+        '</details>'
     )
 
 
@@ -15500,6 +16462,7 @@ def us_validation_progress_html() -> str:
         return v if isinstance(v, (int, float)) else None
 
     rows_html = []
+    us_summary = "US 影子验证样本继续累积中"
     for mk, label in (("US", "美股"), ("CN", "A股"), ("HK", "港股")):
         d1 = mh.get((mk, "1d")) or {}
         rev = int(d1.get("reviewed_shadow_buy_count") or 0)
@@ -15540,6 +16503,7 @@ def us_validation_progress_html() -> str:
             h_txt = f"{hit}%" if hit is not None else "—"
             detail = (f"影子 source {runs}/{min_runs}（raw {raw_runs}） · 1D reviewed {rev}/{min_rev} · alpha {a_txt} · 命中 {h_txt}"
                       + (f" · 距「可小仓试探」还差: {'、'.join(gaps)}" if gaps else " · 已达可小仓门槛"))
+            us_summary = f"US：source {runs}/{min_runs} · 1D样本 {rev}/{min_rev} · alpha {a_txt} · 命中 {h_txt}"
         rows_html.append(
             '<div class="flex items-start gap-2 py-1.5 border-t border-slate-100 first:border-0">'
             f'<div class="w-12 shrink-0 text-sm font-bold text-slate-700">{label}</div>'
@@ -15547,13 +16511,19 @@ def us_validation_progress_html() -> str:
             f'<div class="text-[11px] text-slate-600 mt-0.5 leading-relaxed">{html_lib.escape(detail)}</div></div></div>'
         )
     return (
-        '<div class="mb-4 rounded-xl border border-slate-200 bg-white px-4 py-3">'
-        '<div class="text-sm font-bold text-slate-900">📊 策略验证进度(分市场)</div>'
-        f'<div class="text-[11px] text-slate-500 mb-1">US 单独走「验证中 → 可小仓试探 → 正式可用」;CN/HK 冻结研究、不进真钱组合。'
-        f'达「可小仓试探」门槛:影子≥{min_runs}轮 · 1D reviewed≥{min_rev} · 覆盖≥{min_cov:.0f}% · alpha&gt;0 · 命中≥{min_hit:.0f}%。</div>'
-        + "".join(rows_html)
-        + '<div class="text-[10px] text-slate-400 mt-1">reviewed = 前瞻成熟样本(从推荐日往后真实兑现);现在多为 0 = 最新几轮还没到期,属正常累积中。</div>'
+        '<details class="mb-3 rounded-xl border border-slate-200 bg-white px-4 py-3">'
+        '<summary class="cursor-pointer select-none">'
+        '<div class="inline-flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3">'
+        '<span class="text-sm font-bold text-slate-900">策略验证进度</span>'
+        f'<span class="text-xs text-slate-600">{html_lib.escape(us_summary)}</span>'
+        '<span class="text-[11px] text-slate-400">点开看 CN/HK 冻结明细</span>'
         '</div>'
+        '</summary>'
+        f'<div class="text-[11px] text-slate-500 mt-2 mb-1">US 单独走「验证中 → 可小仓试探 → 正式可用」；CN/HK 冻结研究、不进真钱组合。'
+        f'达「可小仓试探」门槛：影子≥{min_runs}轮 · 1D reviewed≥{min_rev} · 覆盖≥{min_cov:.0f}% · alpha&gt;0 · 命中≥{min_hit:.0f}%。</div>'
+        + "".join(rows_html)
+        + '<div class="text-[10px] text-slate-400 mt-1">reviewed = 前瞻成熟样本；现在多为 0 = 最新几轮还没到期，属正常累积中。</div>'
+        '</details>'
     )
 
 
@@ -15611,7 +16581,7 @@ def recommendation_readiness_panel_html(*, compact: bool = False) -> str:
 
     if compact:
         return f"""
-  <div class="mb-6 rounded-xl border {'border-emerald-200 bg-emerald-50' if status == 'PASS' else 'border-amber-200 bg-amber-50'} px-4 py-3">
+  <div class="mb-3 rounded-xl border {'border-emerald-200 bg-emerald-50' if status == 'PASS' else 'border-amber-200 bg-amber-50'} px-4 py-3">
     <div class="flex items-start justify-between gap-3 flex-wrap">
       <div>
         <div class="flex items-center gap-2">
@@ -15627,7 +16597,7 @@ def recommendation_readiness_panel_html(*, compact: bool = False) -> str:
           · US验收 {_text(inputs.get('us_acceptance_status'))}
         </div>
       </div>
-      <a href="#discovery" class="text-xs font-medium text-violet-700 hover:text-violet-900 whitespace-nowrap">看 US 完整体检 →</a>
+      <a href="#runtime-status" class="text-xs font-medium text-violet-700 hover:text-violet-900 whitespace-nowrap">运行状态 →</a>
     </div>
   </div>
 """
@@ -15705,7 +16675,7 @@ def recommendation_readiness_panel_html(*, compact: bool = False) -> str:
 def us_strict_trial_section_html(payload: dict | None = None) -> str:
     """Render the US strict-trial research queue.
 
-    This is a read-only overlay fed by data/latest/us_strict_trial.json. It is
+    This is a read-only overlay fed by data/latest/us_strict_trial.json.  It is
     intentionally separate from the formal recommendation table and does not
     change ranking, watchlist, real holdings, or portfolio plans.
     """
@@ -15894,6 +16864,8 @@ def runtime_status_panel_html() -> str:
     acceptance = _runtime_load_json("data/latest/production_acceptance_check.json")
     evidence = _runtime_load_json("data/latest/recommendation_evidence.json")
     source_health = _runtime_load_json("data/latest/source_health.json")
+    _augment_source_health_with_catalyst(source_health)
+    _augment_source_health_with_paid_sources(source_health)
     discovery = {} if clean_v2 else _runtime_load_json("data/discovery_candidates.json")
     pipeline = _runtime_load_pipeline_status("production")
     research_pipeline = _runtime_load_pipeline_status("research")
@@ -15978,7 +16950,7 @@ def runtime_status_panel_html() -> str:
                     parts.append(f"{h}=待累积")
                     continue
                 alpha = d.get("avg_alpha")
-                alpha_s = f"{alpha:+.2f}%" if alpha is not None else "—"
+                alpha_s = f"{alpha:+.2f}%" if isinstance(alpha, (int, float)) and math.isfinite(alpha) else "—"
                 parts.append(f"{h}: n={d['n_reviewed']} win={d['win_rate']:.0f}% α̅={alpha_s}")
             rows.append(_runtime_row(
                 f"V2 推荐 alpha 评估（{market_code}）",
@@ -16081,6 +17053,39 @@ def runtime_status_panel_html() -> str:
     pipeline_run = pipeline.get("started_at") or "尚未记录"
     research_status = str(research_pipeline.get("status") or "UNKNOWN")
     research_run = research_pipeline.get("started_at") or "尚未记录"
+
+    def _pipeline_process_active(keywords: list[str]) -> bool:
+        try:
+            import subprocess
+            out = subprocess.check_output(["ps", "aux"], text=True, timeout=3)
+        except Exception:
+            return False
+        self_markers = ("build_stock_dashboard_html.py", "ps aux", "subprocess.check_output")
+        for line in out.splitlines():
+            if any(marker in line for marker in self_markers):
+                continue
+            if any(k in line for k in keywords):
+                return True
+        return False
+
+    def _running_status_display(payload: dict, status: str, keywords: list[str]) -> tuple[str, str | None]:
+        if str(status or "").upper() != "RUNNING":
+            return status, None
+        mtime = _runtime_parse_dt(payload.get("_status_mtime"))
+        age_min = ((datetime.now() - mtime).total_seconds() / 60) if mtime else None
+        active = _pipeline_process_active(keywords)
+        if active:
+            return "RUNNING", None
+        age_text = f"最后更新 {str(payload.get('_status_mtime'))[:16]}" if payload.get("_status_mtime") else "状态文件无更新时间"
+        if age_min is not None:
+            age_text += f" · {age_min:.0f} 分钟前"
+        return "WARN", f"状态未收尾（{age_text}，未发现后台进程）"
+
+    research_display_status, research_stale_note = _running_status_display(
+        research_pipeline,
+        research_status,
+        ["daily_refresh", "research_refresh", "compute_piotroski", "event_calendar", "policy_scan"],
+    )
     # shadow 调参验证进度 —— 让"新公式还在离线影子验证、门禁未过"对用户可见,
     # 防止把生产 PASS 误读成"调好的策略已上线"。数据来自 acceptance summary.shadow_tuning。
     shadow_tuning = acceptance_summary.get("shadow_tuning") or {}
@@ -16102,7 +17107,7 @@ def runtime_status_panel_html() -> str:
         ("AI 推荐", discovery_status, f"{discovery_n} 只候选 · evidence={evidence_grade}"),
         ("策略验证", shadow_gate if shadow_tuning else "INFO", shadow_detail),
         ("生产跑批", effective_pipeline_level, f"{str(pipeline_run)[:19]} · mode={pipeline.get('mode') or '—'} · raw={pipeline_status}"),
-        ("研究线", research_status if research_pipeline else "INFO", f"{str(research_run)[:19]} · mode={research_pipeline.get('mode') or '—'}"),
+        ("研究线", research_display_status if research_pipeline else "INFO", research_stale_note or f"{str(research_run)[:19]} · mode={research_pipeline.get('mode') or '—'}"),
     ]
     cards_html = "".join(
         f"""
@@ -16210,8 +17215,8 @@ def runtime_status_panel_html() -> str:
                 last_run = "今日未运行"
         elif name == "增强研究线":
             if research_pipeline:
-                last_status = str(research_pipeline.get("status") or "UNKNOWN")
-                last_run = str(research_pipeline.get("started_at") or "尚未记录")[:19]
+                last_status = research_display_status
+                last_run = research_stale_note or str(research_pipeline.get("started_at") or "尚未记录")[:19]
             elif before_clock("21:00"):
                 last_status = "DATA_NOT_EXPECTED"
                 last_run = "未到 21:00"
@@ -16351,6 +17356,412 @@ def runtime_status_panel_html() -> str:
   </div>
 """
 
+    def _status_level(raw: str | None, default: str = "INFO") -> str:
+        s = str(raw or default).strip().lower()
+        if s in {"ok", "pass", "healthy", "success"}:
+            return "OK"
+        if s in {"fail", "failed", "error", "down"}:
+            return "FAIL"
+        if s in {"warn", "warning", "degraded", "source_degraded", "partial", "unknown"}:
+            return "WARN"
+        if s in {"wait", "skip", "data_not_expected", "market_closed"}:
+            return s.upper()
+        return default.upper()
+
+    def _nfmt(value) -> str:
+        try:
+            return f"{int(value):,}"
+        except Exception:
+            return "—"
+
+    def _pct_text(value) -> str:
+        try:
+            n = float(value)
+            if not math.isfinite(n):
+                return "—"
+            return f"{n:.1f}%"
+        except Exception:
+            return "—"
+
+    def _alpha_text(value) -> str:
+        try:
+            n = float(value)
+            if not math.isfinite(n):
+                return "—"
+            cls = "text-emerald-700" if n >= 0 else "text-rose-700"
+            return f'<span class="font-mono font-semibold {cls}">{n:+.2f}%</span>'
+        except Exception:
+            return '<span class="text-slate-400">—</span>'
+
+    def _latest_fetch(source_name: str) -> dict:
+        needle = str(source_name or "").lower()
+        for item in db.get("source_fetch_log") or []:
+            if str(item.get("source") or "").lower() == needle:
+                return item
+        return {}
+
+    def _fetch_status(source_name: str, fallback: str = "INFO") -> str:
+        item = _latest_fetch(source_name)
+        if not item:
+            return fallback
+        return _status_level(item.get("status"), fallback)
+
+    def _fetch_detail(source_name: str, fallback: str = "尚无拉取记录") -> str:
+        item = _latest_fetch(source_name)
+        if not item:
+            return fallback
+        ts = str(item.get("fetched_at") or "")[:16]
+        msg = str(item.get("message") or item.get("status_code") or "").strip()
+        return f"{msg} · {ts}".strip(" ·")
+
+    def _fmt_dt_seconds(value) -> str:
+        if not value:
+            return "—"
+        text = str(value).strip().replace("T", " ")
+        if not text:
+            return "—"
+        return text[:19]
+
+    def _fetch_time(source_name: str, fallback: str = "—") -> str:
+        item = _latest_fetch(source_name)
+        return _fmt_dt_seconds(item.get("fetched_at")) if item else fallback
+
+    def _artifact_time(rel: str) -> str:
+        payload = _runtime_load_json(rel)
+        if payload and not payload.get("_error"):
+            ts = payload.get("generated_at") or payload.get("as_of") or payload.get("date")
+            if ts:
+                return _fmt_dt_seconds(ts)
+        path = os.path.join(_REPO, rel)
+        if os.path.exists(path):
+            try:
+                return _fmt_dt_seconds(datetime.fromtimestamp(os.path.getmtime(path)).isoformat(timespec="seconds"))
+            except Exception:
+                pass
+        return "—"
+
+    def _source_time(name: str, fallback: str = "—") -> str:
+        info = _source_info(name)
+        last = info.get("last_event") if isinstance(info, dict) else None
+        if isinstance(last, dict) and last.get("ts"):
+            return _fmt_dt_seconds(last.get("ts"))
+        return _fmt_dt_seconds(info.get("generated_at") or source_health.get("generated_at") or fallback)
+
+    def _source_info(*names: str) -> dict:
+        sources = source_health.get("sources") or {}
+        lowered = {str(k).lower(): v for k, v in sources.items()}
+        for name in names:
+            if name in sources and isinstance(sources[name], dict):
+                return sources[name]
+            found = lowered.get(str(name).lower())
+            if isinstance(found, dict):
+                return found
+        return {}
+
+    def _source_status(*names: str, default: str = "OK") -> str:
+        info = _source_info(*names)
+        return _status_level(info.get("status"), default) if info else default
+
+    def _source_detail(name: str, ok_text: str) -> str:
+        info = _source_info(name)
+        if not info:
+            return ok_text
+        status = _status_level(info.get("status"), "OK")
+        if status == "OK":
+            return ok_text
+        reason = _translate_source_reason(info.get("reason"))
+        impact = str(info.get("impact") or "").strip()
+        return f"{reason} · {impact}"[:180]
+
+    def _artifact_summary(rel: str, label: str = "") -> tuple[str, str]:
+        payload = _runtime_load_json(rel)
+        if not payload or payload.get("_error"):
+            return "FAIL", f"{label or rel} 缺失或 JSON 错误"
+        ts = str(payload.get("generated_at") or payload.get("as_of") or payload.get("date") or "")[:16]
+        if payload.get("n_events") is not None:
+            return "OK", f"{label or rel} {_nfmt(payload.get('n_events'))} 条 · {ts}"
+        cov = payload.get("coverage") or {}
+        if isinstance(cov, dict) and cov:
+            hit = int(cov.get("hit") or 0)
+            miss = int(cov.get("miss") or 0)
+            err = int(cov.get("errored") or 0)
+            total = hit + miss + err
+            status = "OK" if total and err == 0 else ("WARN" if total else "INFO")
+            return status, f"{label or rel} 命中 {hit}/{total} · 失败 {err} · {ts}"
+        rows = payload.get("events") or payload.get("items") or payload.get("candidates")
+        if isinstance(rows, list):
+            return "OK", f"{label or rel} {_nfmt(len(rows))} 条 · {ts}"
+        return "OK", f"{label or rel} 已生成 · {ts}"
+
+    def _summary_card(title: str, status: str, value: str, detail: str, tone: str = "slate") -> str:
+        border = {
+            "green": "border-emerald-200 bg-emerald-50",
+            "amber": "border-amber-200 bg-amber-50",
+            "rose": "border-rose-200 bg-rose-50",
+            "blue": "border-sky-200 bg-sky-50",
+            "violet": "border-violet-200 bg-violet-50",
+        }.get(tone, "border-slate-200 bg-white")
+        return f"""
+      <div class="rounded-lg border {border} p-3">
+        <div class="flex items-center justify-between gap-2 mb-2">
+          <div class="text-xs font-semibold text-slate-600">{html_lib.escape(title)}</div>
+          {_runtime_badge(status)}
+        </div>
+        <div class="text-lg font-bold text-slate-950">{value}</div>
+        <div class="text-xs text-slate-600 mt-1 leading-relaxed">{detail}</div>
+      </div>
+"""
+
+    decision_copy = {
+        "OK": "今天的数据链路可用；AI 推荐可以作为候选发现和买前研究入口，不等于自动买入。",
+        "WARN": "今天可以看，但需要先看黄色问题；受影响的市场或字段不要当作强信号。",
+        "FAIL": "今天不要依赖推荐做决策，先修复红色阻断项再看。",
+    }.get(overall, "状态未完全识别，先看下面的数据源和产物。")
+    plain_summary_html = f"""
+  <div class="rounded-xl border border-slate-200 bg-white p-4 mb-5">
+    <div class="flex items-start justify-between gap-4 flex-wrap">
+      <div>
+        <div class="flex items-center gap-2 flex-wrap mb-1">
+          <h3 class="font-bold text-slate-950">今天系统能不能用</h3>
+          {_runtime_badge(overall)}
+        </div>
+        <p class="text-sm text-slate-700">{html_lib.escape(decision_copy)}</p>
+        <p class="text-xs text-slate-400 mt-1">最后生成：{html_lib.escape(str(generated_at)[:19])}</p>
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs min-w-[320px]">
+        <div class="rounded border border-slate-200 bg-slate-50 p-2"><div class="text-slate-500">生产验收</div><div class="mt-1">{_runtime_badge(acceptance_status)}</div></div>
+        <div class="rounded border border-slate-200 bg-slate-50 p-2"><div class="text-slate-500">质量闸门</div><div class="mt-1">{_runtime_badge(quality_status)}</div></div>
+        <div class="rounded border border-slate-200 bg-slate-50 p-2"><div class="text-slate-500">推荐候选</div><div class="font-mono font-bold text-slate-900 mt-1">{_nfmt(discovery_n)} 只</div></div>
+        <div class="rounded border border-slate-200 bg-slate-50 p-2"><div class="text-slate-500">行情覆盖</div><div class="font-mono font-bold text-slate-900 mt-1">{_pct_text(coverage.get('pct'))}</div></div>
+      </div>
+    </div>
+  </div>
+"""
+
+    event_artifacts = [
+        ("data/event_calendar_us.json", "美股事件"),
+        ("data/event_calendar_us_sec.json", "SEC"),
+        ("data/event_calendar_us_form4.json", "Form 4"),
+        ("data/event_calendar_hk.json", "港股事件"),
+        ("data/event_calendar_hk_hkex.json", "HKEX"),
+        ("data/event_calendar.json", "A股事件"),
+        ("data/policy_events.json", "政策"),
+    ]
+    event_bits = []
+    event_statuses = []
+    event_times = []
+    for rel, label in event_artifacts:
+        st, detail = _artifact_summary(rel, label)
+        event_statuses.append(st)
+        event_bits.append(detail)
+        event_times.append(_artifact_time(rel))
+    event_health_keys = [
+        "event_calendar_cn", "event_calendar_hk", "event_calendar_us",
+        "event_calendar_hk_hkex", "event_calendar_us_sec", "event_calendar_us_form4",
+    ]
+    event_health_statuses = [_source_status(k, default="OK") for k in event_health_keys]
+    event_status = "FAIL" if "FAIL" in event_statuses or "FAIL" in event_health_statuses else ("WARN" if "WARN" in event_statuses or "WARN" in event_health_statuses else "OK")
+    event_warning_bits = []
+    for key in event_health_keys:
+        info = _source_info(key)
+        if _status_level(info.get("status"), "OK") in {"WARN", "FAIL"}:
+            impact = str(info.get("impact") or _translate_source_reason(info.get("reason")) or key).strip()
+            if impact:
+                event_warning_bits.append(impact)
+    event_detail = "；".join(event_bits[:4])
+    if len(event_bits) > 4:
+        event_detail += f"；其余 {len(event_bits) - 4} 类已生成"
+    if event_warning_bits:
+        event_detail = f"为什么 WARN：{'；'.join(event_warning_bits[:2])}。已拉到：" + event_detail
+    event_latest_time = max((t for t in event_times if t != "—"), default="—")
+
+    source_rows_def = [
+        {
+            "name": "系统股票池",
+            "provider": "内部 universe",
+            "status": _fetch_status("system_universe_refresh", "OK" if v2.get("system_universe") else "WARN"),
+            "time": _fetch_time("system_universe_refresh"),
+            "pulls": "科技/AI 候选范围",
+            "got": f"active {_nfmt(v2.get('system_universe'))} 只；pool_membership {_nfmt(v2.get('pool_membership'))} 只",
+            "where": "DuckDB.system_universe / pool_membership",
+            "detail": _fetch_detail("system_universe_refresh", "按当前系统池统计"),
+        },
+        {
+            "name": "行情价格",
+            "provider": "yfinance",
+            "status": _fetch_status("yfinance", "OK" if coverage.get("pct") else "WARN"),
+            "time": _fetch_time("yfinance"),
+            "pulls": "收盘价、涨跌、市值、估值",
+            "got": f"US {_nfmt(us_price)} / A股 {_nfmt(cn_price)} / 港股 {_nfmt(hk_price)}；覆盖 {_pct_text(coverage.get('pct'))}",
+            "where": "DuckDB.price_daily",
+            "detail": _fetch_detail("yfinance", f"最新交易日 {price_latest}"),
+        },
+        {
+            "name": "美股深度",
+            "provider": "FMP Starter",
+            "status": _source_status("FMP", default="OK"),
+            "time": _source_time("FMP"),
+            "pulls": "财务、估值、分析师、软红旗",
+            "got": _source_detail("FMP", "付费源已接入；主推荐和深度字段可读"),
+            "where": "source_health / financial fields",
+            "detail": "用于增强解释和红旗，不单独决定买卖。",
+        },
+        {
+            "name": "A股专业",
+            "provider": "Tushare Pro",
+            "status": _source_status("tushare", default="OK"),
+            "time": _source_time("tushare"),
+            "pulls": "A股行情、财报、F-Score、龙虎榜",
+            "got": _source_detail("tushare", "token 可用，API 初始化正常"),
+            "where": "Tushare API / DuckDB",
+            "detail": "用于 A 股付费数据增强；无数据时应降级而不是伪装成功。",
+        },
+        {
+            "name": "事件公告",
+            "provider": "SEC / HKEX / 事件日历",
+            "status": event_status,
+            "time": event_latest_time,
+            "pulls": "财报、8-K、Form 4、HKEX、A股公告、政策",
+            "got": event_detail,
+            "where": "data/event_calendar*.json",
+            "detail": "用于推荐依据里的事件解释，不直接改排名公式。",
+        },
+        {
+            "name": "资料补全",
+            "provider": "V2 enrichment",
+            "status": _fetch_status("v2_system_enrichment", "OK" if acceptance_summary.get("v2_enrichment_coverage") else "INFO"),
+            "time": _fetch_time("v2_system_enrichment"),
+            "pulls": "公司资料、行业、财务摘要",
+            "got": _fetch_detail("v2_system_enrichment", "等待下一次补全任务"),
+            "where": "DuckDB / snapshots",
+            "detail": "用于页面展示和研究解释。",
+        },
+    ]
+    data_source_rows = "".join(
+        f"""
+        <tr class="border-b border-slate-100 last:border-0 align-top">
+          <td class="py-2.5 pr-3">
+            <div class="font-semibold text-slate-900">{html_lib.escape(row['name'])}</div>
+            <div class="text-[11px] text-slate-400">{html_lib.escape(row['provider'])}</div>
+          </td>
+          <td class="py-2.5 pr-3">{_runtime_badge(row['status'])}</td>
+          <td class="py-2.5 pr-3 text-xs font-mono text-slate-600 whitespace-nowrap">{html_lib.escape(row.get('time') or '—')}</td>
+          <td class="py-2.5 pr-3 text-xs text-slate-700">{html_lib.escape(row['pulls'])}</td>
+          <td class="py-2.5 pr-3 text-xs text-slate-700">{html_lib.escape(row['got'])}</td>
+          <td class="py-2.5 pr-3 text-xs font-mono text-slate-500">{html_lib.escape(row['where'])}</td>
+          <td class="py-2.5 text-xs text-slate-500">{html_lib.escape(row['detail'])}</td>
+        </tr>
+""" for row in source_rows_def
+    )
+    data_sources_html = f"""
+  <div class="rounded-xl border border-slate-200 bg-white p-4 mb-5">
+    <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
+      <div>
+        <h3 class="font-bold text-slate-950">数据源拉取情况</h3>
+        <p class="text-xs text-slate-500 mt-1">看这里就知道今天调用了谁、拉了什么、拉到多少、落到哪里。</p>
+      </div>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-sm">
+        <thead class="text-xs text-slate-500 border-b border-slate-200">
+          <tr><th class="pb-2 pr-3">数据源</th><th class="pb-2 pr-3">状态</th><th class="pb-2 pr-3">最近拉取/检查</th><th class="pb-2 pr-3">拉什么</th><th class="pb-2 pr-3">今天拉到</th><th class="pb-2 pr-3">数据落点</th><th class="pb-2">影响</th></tr>
+        </thead>
+        <tbody>{data_source_rows}</tbody>
+      </table>
+    </div>
+  </div>
+"""
+
+    def _market_alpha(market_code: str, horizon: str) -> str:
+        d = ((outcomes_by_market.get(market_code) or {}).get(horizon) or {})
+        if not d.get("n_reviewed"):
+            return '<span class="text-slate-400">待样本</span>'
+        alpha = d.get("avg_alpha")
+        if not isinstance(alpha, (int, float)) or not math.isfinite(alpha):
+            alpha_html = '<span class="font-semibold text-amber-700">基准缺失/待清洗</span>'
+        else:
+            alpha_html = _alpha_text(alpha)
+        return f"{alpha_html} <span class=\"text-slate-500\">n={_nfmt(d.get('n_reviewed'))} / 胜率 {_pct_text(d.get('win_rate'))}</span>"
+
+    def _market_use_badge(label: str, tone: str) -> str:
+        cls = {
+            "green": "bg-emerald-100 text-emerald-700 border-emerald-200",
+            "blue": "bg-sky-100 text-sky-700 border-sky-200",
+            "amber": "bg-amber-100 text-amber-800 border-amber-200",
+            "slate": "bg-slate-100 text-slate-700 border-slate-200",
+        }.get(tone, "bg-slate-100 text-slate-700 border-slate-200")
+        return f'<span class="inline-flex px-2 py-0.5 rounded-full border text-[11px] font-semibold {cls}">{html_lib.escape(label)}</span>'
+
+    def _market_card(
+        title: str,
+        market_code: str,
+        price_n: int,
+        pick_key: str,
+        use_label: str,
+        use_detail: str,
+        use_tone: str,
+        alpha_tone: str,
+    ) -> str:
+        p = (db.get("picks") or {}).get(pick_key) or {}
+        data_status = "OK" if int(price_n or 0) > 0 and int(p.get("total_n") or 0) > 0 else "WARN"
+        return f"""
+      <div class="rounded-lg border border-slate-200 bg-white p-3">
+        <div class="flex items-center justify-between gap-2 mb-2">
+          <div>
+            <div class="font-bold text-slate-950">{html_lib.escape(title)}</div>
+            <div class="text-[11px] text-slate-500">{html_lib.escape(use_detail)}</div>
+          </div>
+          {_market_use_badge(use_label, use_tone)}
+        </div>
+        <div class="grid grid-cols-2 gap-2 text-xs">
+          <div class="rounded bg-slate-50 border border-slate-100 p-2"><div class="text-slate-500">数据状态</div><div>{_runtime_badge(data_status)}</div></div>
+          <div class="rounded bg-slate-50 border border-slate-100 p-2"><div class="text-slate-500">候选/行情</div><div class="font-mono font-bold text-slate-900">{_nfmt(p.get('total_n'))} / {_nfmt(price_n)} 只</div></div>
+          <div class="col-span-2 rounded bg-{alpha_tone}-50 border border-{alpha_tone}-100 p-2"><div class="text-slate-500">1d 策略验证</div><div>{_market_alpha(market_code, '1d')}</div></div>
+          <div class="col-span-2 rounded bg-slate-50 border border-slate-100 p-2"><div class="text-slate-500">5d alpha</div><div>{_market_alpha(market_code, '5d')}</div></div>
+        </div>
+      </div>
+"""
+
+    market_summary_html = f"""
+  <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 mb-5">
+    <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
+      <div>
+        <h3 class="font-bold text-slate-950">三市场数据结果</h3>
+        <p class="text-xs text-slate-500 mt-1">分清两件事：数据状态=有没有拉到；使用状态=能不能进真钱组合。A股/港股当前只做研究观察，不进真钱组合。</p>
+      </div>
+      <div class="text-xs text-slate-500">最新行情日：{html_lib.escape(str(price_latest))}</div>
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
+      {_market_card("美股", "US", us_price, "v2_us", "US 验证中", "优先验证和上线目标", "blue", "emerald")}
+      {_market_card("A股", "CN", cn_price, "v2_cn", "研究态", "数据已接，但策略未过真钱门禁", "amber", "amber")}
+      {_market_card("港股", "HK", hk_price, "v2_hk", "研究态", "数据已接，但策略未过真钱门禁", "amber", "sky")}
+    </div>
+  </div>
+"""
+
+    plan_artifact = _runtime_artifact("data/latest/plan_a_v5.json")
+    risk_artifact = _runtime_artifact("data/latest/risk_metrics.json")
+    evidence_artifact = _runtime_artifact("data/latest/recommendation_evidence.json")
+    quality_artifact = _runtime_artifact("data/latest/recommendation_quality_gate.json")
+    outputs_html = f"""
+  <div class="rounded-xl border border-slate-200 bg-white p-4 mb-5">
+    <div class="mb-3">
+      <h3 class="font-bold text-slate-950">关键产物</h3>
+      <p class="text-xs text-slate-500 mt-1">这些是页面和早报真正会读的结果文件/表。</p>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+      {_summary_card("AI 推荐", discovery_status, f"{_nfmt(v2_pick.get('total_n'))} 只", f"latest run {html_lib.escape(str(v2_pick.get('latest_run_id') or '—'))}", "blue")}
+      {_summary_card("AI 组合方案", plan_artifact.get('status', 'INFO'), html_lib.escape(plan_artifact.get('text') or '—'), html_lib.escape(plan_artifact.get('detail') or '—'), "violet")}
+      {_summary_card("风险指标", risk_artifact.get('status', 'INFO'), html_lib.escape(risk_artifact.get('text') or '—'), html_lib.escape(risk_artifact.get('detail') or '—'), "amber")}
+      {_summary_card("策略证据", evidence_artifact.get('status', 'INFO'), html_lib.escape(str(evidence_grade)), f"{html_lib.escape(evidence_artifact.get('detail') or '—')} · shadow {html_lib.escape(shadow_gate)}", "green")}
+      {_summary_card("质量闸门", quality_status, f"fail {html_lib.escape(str(quality_summary.get('fail', '—')))} / warn {html_lib.escape(str(quality_summary.get('warn', '—')))}", html_lib.escape(quality_artifact.get('detail') or '—'), "green" if quality_level == "PASS" else "amber")}
+      {_summary_card("真实持仓", "INFO", f"{_nfmt(acceptance_summary.get('real_holdings_count'))} 只", "只读展示；系统状态不会自动写持仓", "slate")}
+      {_summary_card("自选股", "INFO", f"{_nfmt(acceptance_summary.get('manual_watchlist_count'))} 只", "只来自你手动添加或明确点击加入关注", "slate")}
+      {_summary_card("数据库", "OK" if v2.get('price_coverage') else "WARN", f"{_nfmt(v2.get('price_daily'))} 行", "stock_history_v2.duckdb", "slate")}
+    </div>
+  </div>
+"""
+
     market_card = lambda title, rows: f"""
     <div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
       <div class="px-4 py-3 bg-slate-50 border-b border-slate-200">
@@ -16479,60 +17890,11 @@ def runtime_status_panel_html() -> str:
 """
 
     return f"""
-  <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 mb-6">
-    <div class="flex items-center justify-between gap-3 flex-wrap mb-4">
-      <div>
-        <h3 class="font-bold text-slate-900">今日影响总览</h3>
-        <p class="text-xs text-slate-500">最后生成：{html_lib.escape(str(generated_at)[:19])}</p>
-      </div>
-      <div class="text-xs text-slate-500">推荐是否可交易以“质量闸门 + 生产验收”为准</div>
-    </div>
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-3">{cards_html}</div>
-  </div>
-  {_defense_signal_explainer_html(compact=False)}
+  {plain_summary_html}
   {issue_html}
-  <details class="group rounded-xl border border-slate-200 bg-white hover:bg-slate-50 p-4 [&_summary::-webkit-details-marker]:hidden [&_summary::marker]:hidden">
-    <summary class="cursor-pointer select-none text-sm font-bold text-slate-900 flex items-center gap-2">
-      <span class="inline-block w-4 text-violet-600 transition-transform group-open:rotate-90">▶</span>
-      <span>展开技术诊断详情</span>
-      <span class="text-xs font-normal text-slate-500">数据时钟、自动化、三市场链路、DuckDB 表和最近步骤</span>
-      <span class="ml-auto text-xs font-normal text-violet-600 group-open:hidden">点击展开 ↓</span>
-      <span class="ml-auto text-xs font-normal text-slate-400 hidden group-open:inline">点击收起 ↑</span>
-    </summary>
-    <div class="mt-4">
-      {data_clock_html}
-      {infra_html}
-      <div class="rounded-xl border border-sky-200 bg-sky-50 p-4 mb-6">
-        <h3 class="font-bold text-sky-950 mb-3">数据落点怎么读</h3>
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-          <div class="bg-white rounded-lg border border-sky-100 p-3">
-            <div class="font-mono font-semibold text-slate-800 mb-1">DuckDB.price_daily</div>
-            <div class="text-slate-600">每日行情快照。看到"股票池/行情拉取"成功，这里就有最新价格、PE、PEG、涨幅、市值。</div>
-          </div>
-          <div class="bg-white rounded-lg border border-sky-100 p-3">
-            <div class="font-mono font-semibold text-slate-800 mb-1">DuckDB.recommendation_picks</div>
-            <div class="text-slate-600">AI 评分和入选记录。美股是 <span class="font-mono">v2_us</span>，A 股是 <span class="font-mono">v2_cn</span>，港股是 <span class="font-mono">v2_hk</span>。</div>
-          </div>
-          <div class="bg-white rounded-lg border border-sky-100 p-3">
-            <div class="font-mono font-semibold text-slate-800 mb-1">DuckDB.pick_outcomes</div>
-            <div class="text-slate-600">推荐后的表现跟踪。用来算 1d/5d/20d alpha、胜率，不决定股票属于哪个池子。</div>
-          </div>
-          <div class="bg-white rounded-lg border border-sky-100 p-3">
-            <div class="font-mono font-semibold text-slate-800 mb-1">data/latest/*.json</div>
-            <div class="text-slate-600">给页面和早报读取的最新产物，比如组合方案、调仓清单、质量闸门、风险指标。</div>
-          </div>
-        </div>
-      </div>
-      <div class="grid grid-cols-1 gap-5">
-        {market_card("🇺🇸 美股链路", us_rows)}
-        {market_card("🇨🇳 A 股链路", cn_rows)}
-        {market_card("🇭🇰 港股链路", hk_rows)}
-      </div>
-      {v2_tables_html}
-      {failure_html}
-      {pipeline_steps_html}
-    </div>
-  </details>
+  {data_sources_html}
+  {market_summary_html}
+  {outputs_html}
 """
 
 
@@ -17699,7 +19061,8 @@ def _runtime_db_explorer_snapshot() -> dict:
             code = str(symbol or "").strip()
             meta = {
                 "code": code,
-                "name": name or code,
+                "name": _display_stock_name(market, name) or code,
+                "name_en": name or "",
                 "market": market_label,
                 "industry": industry or "",
                 "theme": theme or "",
