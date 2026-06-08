@@ -27,6 +27,7 @@ if [ -f "$DIR/.env" ]; then
 fi
 
 DOW=$(date +%u)
+IPO_JUNIOR_PAUSED="${IPO_JUNIOR_PAUSED:-1}"   # 与 daily_refresh 同口径:默认暂停 IPO/次新
 STATUS_DIR="$DIR/data/latest"
 mkdir -p "$STATUS_DIR"
 ENH_STATUS="$STATUS_DIR/enhancement_status.json"
@@ -202,11 +203,16 @@ write_enh_status "RUNNING"
 estep "f_score" "F-Score 全量重算（季报）" "scripts/tools/compute_piotroski_v2.py --markets US,HK,CN" 600
 
 # 事件/披露增强
-estep "ipo"        "IPO 打新日历"                       "-m stock_research.jobs.ipo_daily" 180
 estep "hkex"       "港股 HKEX 披露易公告"               "-m stock_research.jobs.event_calendar_hk_hkex_daily" 240
 estep "sec_edgar"  "美股 SEC EDGAR（8-K/13G/13D/14A）"   "-m stock_research.jobs.event_calendar_us_sec_daily" 240
 estep "form4"      "美股 SEC Form 4 内部人交易"          "-m stock_research.jobs.event_calendar_us_form4_daily" 300
-estep "junior"     "次新股+解禁雷达"                     "-m stock_research.jobs.junior_stock_watcher" 600
+# IPO/次新:尊重 IPO_JUNIOR_PAUSED 暂停开关(默认暂停),与 daily_refresh 同口径
+if [ "$IPO_JUNIOR_PAUSED" != "1" ]; then
+    estep "ipo"    "IPO 打新日历"                       "-m stock_research.jobs.ipo_daily" 180
+    estep "junior" "次新股+解禁雷达"                     "-m stock_research.jobs.junior_stock_watcher" 600
+else
+    echo "[增强·ipo/junior] 跳过 — IPO/次新股模块暂停（IPO_JUNIOR_PAUSED=1）"
+fi
 
 # AI 主题雷达证据（周一全量 ETF+SEC 扫描，平日轻量）
 if [ "$DOW" = "1" ]; then
