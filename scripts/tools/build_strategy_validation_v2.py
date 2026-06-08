@@ -34,6 +34,7 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "scripts" / "lib"))
 
 from stock_db import DB_PATH  # noqa: E402
+from stock_research.core import strategy_eval as se  # noqa: E402
 
 OUT_PATH = REPO / "data" / "latest" / "strategy_validation_report.json"
 FACTORS = ("valuation", "momentum", "reversal", "data_quality", "coverage")
@@ -132,32 +133,37 @@ def _validation_status_from_reports(reports: list[dict[str, Any]]) -> tuple[str,
 
 
 def _load_outcome_summary(conn: duckdb.DuckDBPyConnection, strategy_version: str | None) -> tuple[dict, dict]:
-    sql = """
-        SELECT rr.strategy_version, po.market, po.horizon,
+    # 统一口径（stock_research.core.strategy_eval）：当前 strategy_version + 每天只取最后一批
+    # + (推荐日,股票) 去重。旧口径 COUNT(*) 含同日多批重复 pick → n 虚高（严筛 49 实为去重后 14）。
+    # signal 同时纳入 buy/strong_buy（旧 SQL 只算 buy，与严筛口径不一致）。
+    run_ids = se.last_batch_run_ids(
+        conn, strategy_version=strategy_version, metrics_start=PRODUCTION_METRICS_START_DATE)
+    if not run_ids:
+        return {}, {}
+    placeholders = ",".join(["?"] * len(run_ids))
+    sql = f"""
+        SELECT rr.strategy_version, dpo.market, dpo.horizon,
                COUNT(*) AS sample_size,
-               SUM(CASE WHEN po.is_success THEN 1 ELSE 0 END) AS wins,
-               AVG(po.alpha_pct) AS avg_alpha,
-               AVG(po.return_pct) AS avg_return,
+               SUM(CASE WHEN dpo.is_success THEN 1 ELSE 0 END) AS wins,
+               AVG(dpo.alpha_pct) AS avg_alpha,
+               AVG(dpo.return_pct) AS avg_return,
                MIN(rr.run_date) AS period_start,
-               MAX(po.outcome_date) AS period_end
-        FROM pick_outcomes po
-        JOIN recommendation_runs rr ON rr.run_id = po.run_id
-        JOIN recommendation_picks rp
-          ON rp.run_id = po.run_id AND rp.market = po.market AND rp.symbol = po.symbol
-        WHERE rr.universe_scope = 'system_tech_universe'
-          AND rr.run_date >= ?
-          AND po.alpha_pct IS NOT NULL
-          AND COALESCE(rp.signal, 'buy') = 'buy'
+               MAX(dpo.outcome_date) AS period_end
+        FROM (
+            SELECT DISTINCT po.run_id, po.market, po.symbol, po.horizon,
+                   po.alpha_pct, po.return_pct, po.is_success, po.outcome_date
+            FROM pick_outcomes po
+            JOIN recommendation_picks rp
+              ON rp.run_id = po.run_id AND rp.market = po.market AND rp.symbol = po.symbol
+            WHERE po.run_id IN ({placeholders})
+              AND po.alpha_pct IS NOT NULL
+              AND LOWER(COALESCE(rp.signal, rp.rating, '')) IN ('buy', 'strong_buy')
+        ) dpo
+        JOIN recommendation_runs rr ON rr.run_id = dpo.run_id
+        GROUP BY rr.strategy_version, dpo.market, dpo.horizon
+        ORDER BY rr.strategy_version, dpo.market, dpo.horizon
     """
-    params: list[Any] = [PRODUCTION_METRICS_START_DATE]
-    if strategy_version:
-        sql += " AND rr.strategy_version = ?"
-        params.append(strategy_version)
-    sql += """
-        GROUP BY rr.strategy_version, po.market, po.horizon
-        ORDER BY rr.strategy_version, po.market, po.horizon
-        """
-    rows = conn.execute(sql, params).fetchall()
+    rows = conn.execute(sql, list(run_ids)).fetchall()
     by_strategy_market: dict[tuple[str, str], dict[str, Any]] = defaultdict(lambda: {"by_horizon": {}})
     by_market_total: dict[str, dict[str, Any]] = {}
     for strategy_version, market, horizon, n, wins, avg_alpha, avg_return, start, end in rows:

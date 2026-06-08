@@ -29,6 +29,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
 from stock_research import config  # noqa: E402
+from stock_research.core import strategy_eval as se  # noqa: E402
 
 DB_PATH = Path(config.DUCKDB_PATH)
 OUT_JSON = REPO / "data" / "latest" / "us_strict_trial.json"
@@ -362,10 +363,14 @@ def _evidence_samples(
     horizon: str,
     metrics_start_date: str,
 ) -> list[dict[str, Any]]:
-    strategy_clause = " AND rr.strategy_version = ?" if strategy_version else ""
-    params: list[Any] = [horizon, metrics_start_date]
-    if strategy_version:
-        params.append(strategy_version)
+    # 统一口径：当前 strategy_version + 每天最后一批去重（stock_research.core.strategy_eval）。
+    # 旧实现取所有批次 → 同日多批重复推荐被算多次，strict n 虚高（49 实为去重后 14）。
+    run_ids = se.last_batch_run_ids(
+        conn, strategy_version=strategy_version, metrics_start=metrics_start_date)
+    if not run_ids:
+        return []
+    rid_placeholders = ",".join(["?"] * len(run_ids))
+    params: list[Any] = [horizon, *run_ids]
     rows = conn.execute(
         f"""
         SELECT *
@@ -401,10 +406,7 @@ def _evidence_samples(
            AND po.market = rp.market
            AND po.symbol = rp.symbol
            AND po.horizon = ?
-          WHERE rr.universe_scope = 'system_tech_universe'
-            AND rr.status = 'generated'
-            AND rr.run_date >= ?
-            {strategy_clause}
+          WHERE rp.run_id IN ({rid_placeholders})
             AND rp.market = 'US'
             AND LOWER(COALESCE(rp.signal, rp.rating, '')) IN ('buy', 'strong_buy')
             AND po.alpha_pct IS NOT NULL
