@@ -154,19 +154,38 @@ def _update_history(res: pg.GateResult, now: datetime) -> None:
 # 窗口守卫
 # ──────────────────────────────────────────────────
 
-def _is_valid_window(now: datetime) -> tuple[bool, str]:
-    """是否美股开盘前有效窗口。周末/美股假日跳过。
+def _us_open_beijing(now: datetime) -> datetime | None:
+    """今天美股开盘(09:30 ET)对应的北京时间（naive）。
 
-    北京傍晚 19-23 点对应同一美股交易日的美东上午（开盘前）。
+    用 zoneinfo 自动处理夏令时/冬令时：
+      夏令时(EDT) → 北京 21:30 开盘；冬令时(EST) → 北京 22:30 开盘。
+    北京傍晚对应同一日历日的美东上午，故直接用 now.date()。
     """
+    try:
+        from zoneinfo import ZoneInfo
+        et = datetime(now.year, now.month, now.day, 9, 30, tzinfo=ZoneInfo("America/New_York"))
+        return et.astimezone(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
+    except Exception as e:
+        logger.warning("时区计算失败，退回固定窗口: %s", e)
+        return None
+
+
+def _is_valid_window(now: datetime) -> tuple[bool, str]:
+    """是否美股开盘前有效窗口。周末/美股假日跳过；夏令时/冬令时自动适配。"""
     d = now.date()
     if now.weekday() >= 5:
         return False, f"{d} 是周末，美股休市"
     if d.isoformat() in US_HOLIDAYS_2026:
         return False, f"{d} 是美股假日，休市"
-    if not (19 <= now.hour <= 23):
-        return False, f"当前 {now:%H:%M} 不在盘前窗口（北京 19-23 点）"
-    return True, "盘前有效窗口"
+    open_bj = _us_open_beijing(now)
+    if open_bj is None:
+        # 兜底：时区库不可用时退回固定 19-23 点
+        return (19 <= now.hour <= 23), "盘前窗口(固定兜底)"
+    delta_min = (open_bj - now).total_seconds() / 60.0
+    # 盘前窗口 = 开盘前 5 ~ 95 分钟（三个扫描点 80/45/15 分钟前都落在内）
+    if 5 <= delta_min <= 95:
+        return True, f"盘前窗口（美股 {open_bj:%H:%M} 开盘，距开盘 {delta_min:.0f} 分）"
+    return False, f"不在盘前窗口（美股 {open_bj:%H:%M} 开盘，距开盘 {delta_min:.0f} 分）"
 
 
 # ──────────────────────────────────────────────────
@@ -264,14 +283,16 @@ def _load_real_holdings() -> list[dict]:
 # ──────────────────────────────────────────────────
 
 def _scan_label(now: datetime) -> str:
-    h, m = now.hour, now.minute
-    if h == 20 and m < 30:
+    """按"距开盘还有多久"命名，夏/冬令时通用。"""
+    open_bj = _us_open_beijing(now)
+    if open_bj is None:
+        return "盘前"
+    delta = (open_bj - now).total_seconds() / 60.0
+    if delta > 60:
         return "初扫"
-    if h == 20:
+    if delta > 25:
         return "数据后复扫"
-    if h >= 21:
-        return "开盘前最终"
-    return "盘前"
+    return "开盘前最终"
 
 
 def main() -> int:
@@ -287,6 +308,23 @@ def main() -> int:
     if not ok_window and not (args.force or args.dry_run):
         logger.info("跳过：%s（--force 可强制跑）", why)
         return 0
+
+    # 防近邻重复：launchd 夏/冬令时各排了点，季内可能有两个点挨得很近(如 21:10/21:15)。
+    # 同一天若上一次扫描在 18 分钟内，跳过这一次（--force 例外）。
+    if not (args.force or args.dry_run):
+        _st = _load_state()
+        if _st.get("date") == now.date().isoformat():
+            _scans = _st.get("scans", [])
+            if _scans:
+                try:
+                    last_hm = _scans[-1].get("at", "")
+                    lh, lm = (int(x) for x in last_hm.split(":"))
+                    gap = (now.hour * 60 + now.minute) - (lh * 60 + lm)
+                    if 0 <= gap < 18:
+                        logger.info("跳过：距上次扫描仅 %d 分钟（避免近邻重复）", gap)
+                        return 0
+                except Exception:
+                    pass
 
     holdings = _load_real_holdings()
     logger.info("拉行情 + %d 只真实持仓...", len(holdings))

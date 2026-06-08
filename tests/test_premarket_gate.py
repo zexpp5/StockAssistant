@@ -350,5 +350,30 @@ def test_baseline_vix_only():
     assert b["miss"] == 1              # 16那天VIX没警但真跌 → VIX 基准漏报
 
 
+# ──────────────────────────────────────────────────
+# 夏令时/冬令时自动适配（job 层）
+# ──────────────────────────────────────────────────
+
+def test_dst_us_open_summer_vs_winter():
+    from stock_research.jobs import premarket_gate as job
+    assert job._us_open_beijing(datetime(2026, 6, 8, 20, 0)).strftime("%H:%M") == "21:30"   # 夏令时
+    assert job._us_open_beijing(datetime(2026, 12, 8, 20, 0)).strftime("%H:%M") == "22:30"  # 冬令时
+
+
+def test_dst_window_picks_right_season():
+    from stock_research.jobs import premarket_gate as job
+    # 夏令时：20:10 在窗口、22:15 太晚（已开盘后）
+    assert job._is_valid_window(datetime(2026, 6, 8, 20, 10))[0] is True
+    assert job._is_valid_window(datetime(2026, 6, 8, 22, 15))[0] is False
+    # 冬令时：20:10 太早、22:15 在窗口
+    assert job._is_valid_window(datetime(2026, 12, 8, 20, 10))[0] is False
+    assert job._is_valid_window(datetime(2026, 12, 8, 22, 15))[0] is True
+
+
+def test_window_skips_weekend():
+    from stock_research.jobs import premarket_gate as job
+    assert job._is_valid_window(datetime(2026, 6, 13, 21, 15))[0] is False  # 周六
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
