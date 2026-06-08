@@ -1603,7 +1603,8 @@ _sys.exit(rc)
         h = stock_db.fetch_real_holding_by_id(holding_id)
         if not h:
             raise HTTPException(404, f"real holding id not found: {holding_id}")
-        # 账本持仓：数量/成本由交易流水决定。可改 名称/备注；改 ticker 则连交易流水一起 rename。
+        # 账本持仓：数量由交易流水决定。可改 名称/备注；改 ticker 则连交易流水一起 rename；
+        # 录错的成本价可在「单一买入、未卖出」时纠正（改那唯一一笔买入成交后 rebuild）。
         if h.get("close_status"):
             renamed = None
             new_sym = (item.get("symbol") or item.get("code") or "").strip().upper()
@@ -1612,10 +1613,23 @@ _sys.exit(rc)
                     renamed = stock_db.rename_real_holding_symbol(holding_id, new_sym)
                 except stock_db.LedgerError as e:
                     raise HTTPException(409, str(e))
+            price_corrected = None
+            new_price = item.get("entry_price")
+            if new_price is not None:
+                try:
+                    cur_price = float(h.get("entry_price") or 0)
+                    np = float(new_price)
+                except (TypeError, ValueError):
+                    np, cur_price = None, 0.0
+                if np is not None and abs(np - cur_price) > 1e-9:
+                    try:
+                        price_corrected = stock_db.correct_real_holding_buy_price(holding_id, np)
+                    except stock_db.LedgerError as e:
+                        raise HTTPException(409, str(e))
             n = stock_db.update_real_holding_meta(holding_id, name=item.get("name"), notes=item.get("notes"))
             return {"status": "ok", "id": holding_id, "rows_affected": n, "ledger_managed": True,
-                    "renamed": renamed,
-                    "note": "账本持仓的数量/成本由交易流水决定（改数量请用「加仓 / 卖出」）；代码与名称可改。"}
+                    "renamed": renamed, "price_corrected": price_corrected,
+                    "note": "账本持仓的数量由交易流水决定（改数量请用「加仓 / 卖出」）；代码、名称、未卖出的成本价可改。"}
         n = stock_db.update_real_holding(holding_id, item)
         return {"status": "ok", "id": holding_id, "rows_affected": n}
 

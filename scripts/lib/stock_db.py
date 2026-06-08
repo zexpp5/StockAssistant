@@ -2216,6 +2216,57 @@ def void_real_holding_trade(trade_id: int, *, reason: str | None = None, conn=No
             conn.close()
 
 
+def correct_real_holding_buy_price(holding_id: int, new_price: float, *, conn=None) -> dict[str, Any]:
+    """纠正录错的买入成本价：仅限「单一买入、尚未卖出」的干净记录。
+
+    直接改那唯一一笔买入成交的 trade_price（并同步 gross_amount_rmb）后 rebuild，
+    聚合行的 entry_price / cost_rmb_locked 由 rebuild 重算（单一来源，不在前端换算）。
+    多笔买入 / 已部分卖出 → 抛 LedgerError(→409)：此时成本是加权平均，不能直接反推，
+    应走持仓行的「加仓 / 卖出」或撤销具体交易后重录。
+    """
+    own = conn is None
+    if own:
+        conn = get_db()
+    try:
+        new_price = float(new_price)
+        if not (new_price > 0):
+            raise LedgerError("买入价必须是正数")
+        h = fetch_real_holding_by_id(int(holding_id), conn=conn)
+        if not h:
+            raise LedgerError(f"持仓不存在: {holding_id}")
+        acct = h.get("account") or "default"
+        mkt, sym = h.get("market"), h.get("symbol")
+        rows = conn.execute(
+            f"SELECT {','.join(REAL_HOLDING_TRADES_FULL_COLS)} FROM real_holding_trades "
+            "WHERE account = ? AND market = ? AND UPPER(symbol) = UPPER(?) AND status = 'active'",
+            [acct, mkt, sym],
+        ).fetchall()
+        trades = [_rowdict(REAL_HOLDING_TRADES_FULL_COLS, r) for r in rows]
+        buys = [t for t in trades if t["side"] == "buy"]
+        sells = [t for t in trades if t["side"] == "sell"]
+        if sells:
+            raise LedgerError("该持仓已有卖出/平仓记录，成本价是加权平均，不能直接改；请撤销对应卖出或用「加仓/卖出」修正。")
+        if len(buys) != 1:
+            raise LedgerError(f"该持仓有 {len(buys)} 笔买入，成本价是加权平均，不能直接改；请用持仓行的「加仓/卖出」或撤销具体交易后重录。")
+        buy = buys[0]
+        tid = int(buy["trade_id"])
+        old_price = float(buy["trade_price"])
+        qty = float(buy["quantity"])
+        fx = float(buy["fx_rate"] or 0)
+        gross_rmb = new_price * qty * fx if fx else None
+        conn.execute(
+            "UPDATE real_holding_trades SET trade_price = ?, gross_amount_rmb = ?, "
+            "updated_at = CURRENT_TIMESTAMP WHERE trade_id = ?",
+            [new_price, gross_rmb, tid],
+        )
+        rebuild_real_holdings_from_trades(conn=conn, account=acct, market=mkt, symbol=sym)
+        return {"corrected_trade_id": tid, "old_price": old_price, "new_price": new_price,
+                "holding_id": _current_holding_id(acct, mkt, sym, conn=conn)}
+    finally:
+        if own:
+            conn.close()
+
+
 def _trade_sort_key(t: Mapping[str, Any]):
     """权威排序键：trade_date > executed_at > order_in_day > created_at > trade_id。"""
     td = _to_date(t.get("trade_date"))
