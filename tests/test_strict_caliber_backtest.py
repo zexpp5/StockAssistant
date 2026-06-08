@@ -62,6 +62,16 @@ class StrictCaliberBacktestTest(unittest.TestCase):
         # median 负 → 不候选
         self.assertFalse(scb._is_candidate({"median_alpha_pct": -0.1, "win_rate_pct": 60, "median_drop_best": -0.1}))
 
+    def test_upgrade_ready_gates(self):
+        base = -8.63  # 原口径①最大亏损
+        ok = {"n": 20, "median_alpha_pct": 0.16, "win_rate_pct": 53, "median_drop_best": 0.16, "max_loss_pct": -2.92}
+        self.assertTrue(scb._upgrade_ready(ok, base))
+        self.assertFalse(scb._upgrade_ready({**ok, "n": 19}, base))            # 样本不足20
+        self.assertFalse(scb._upgrade_ready({**ok, "median_alpha_pct": -0.1}, base))  # median 负
+        self.assertFalse(scb._upgrade_ready({**ok, "median_drop_best": -0.05}, base))  # 靠极端赢家
+        self.assertFalse(scb._upgrade_ready({**ok, "max_loss_pct": -9.0}, base))  # 亏损比原口径更深
+        self.assertFalse(scb._upgrade_ready(None, base))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

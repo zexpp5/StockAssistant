@@ -70,6 +70,7 @@ def _fetch_pool(conn, market: str, horizon: str, strategy_version: str | None) -
     rows = conn.execute(
         """
         SELECT po.alpha_pct, po.is_success, rp.factor_scores_json, rp.risk_flags_json,
+          CAST(rr.run_date AS VARCHAR) AS run_date,
           ROW_NUMBER() OVER (PARTITION BY po.run_id ORDER BY rp.total_score DESC NULLS LAST, rp.symbol ASC) AS mr
         FROM pick_outcomes po
         JOIN recommendation_runs rr ON rr.run_id = po.run_id
@@ -82,12 +83,13 @@ def _fetch_pool(conn, market: str, horizon: str, strategy_version: str | None) -
         [market, horizon, sv],
     ).fetchall()
     out = []
-    for alpha, succ, fj, rj, mr in rows:
+    for alpha, succ, fj, rj, rd, mr in rows:
         out.append({
             "alpha_pct": float(alpha),
             "is_success": bool(succ),
             "momentum": se._momentum(fj),
             "risk_codes": se._risk_codes(rj),
+            "run_date": str(rd),
             "market_rank": int(mr),
         })
     return out, sv
@@ -118,8 +120,29 @@ def _is_candidate(e: dict[str, Any] | None) -> bool:
     return (e["median_alpha_pct"] or 0) > 0 and (e["win_rate_pct"] or 0) > 50 and (e["median_drop_best"] or 0) >= 0
 
 
+def _read_forward_start(json_path: Path) -> str | None:
+    """读已有输出里的前瞻起始日（持久化，每天读同一个，不重置）。"""
+    try:
+        d = json.loads(json_path.read_text(encoding="utf-8"))
+        return (d.get("forward_progress") or {}).get("forward_start")
+    except Exception:
+        return None
+
+
+def _upgrade_ready(fwd: dict[str, Any] | None, base_max_loss: float | None) -> bool:
+    """方案 §7 硬门槛：前瞻≥20 + median>0 + 胜率>50% + 留一不靠极端赢家 + 最大亏损低于原口径。"""
+    if not fwd or (fwd.get("n") or 0) < 20:
+        return False
+    ok = (fwd["median_alpha_pct"] or 0) > 0 and (fwd["win_rate_pct"] or 0) > 50 \
+        and (fwd["median_drop_best"] or 0) >= 0
+    if base_max_loss is not None:
+        ok = ok and (fwd["max_loss_pct"] or 0) > base_max_loss  # 负数：更大=亏损更小
+    return ok
+
+
 def build_payload(*, db_path: Path = DB_PATH, market: str = "US", horizon: str = "1d",
-                  strategy_version: str | None = "latest", now: datetime | None = None) -> dict[str, Any]:
+                  strategy_version: str | None = "latest", now: datetime | None = None,
+                  out_json: Path = OUT_JSON) -> dict[str, Any]:
     now = now or datetime.now()
     if not db_path.exists():
         return {"schema_version": "strict_caliber_backtest_v1", "generated_at": now.isoformat(timespec="seconds"),
@@ -151,16 +174,37 @@ def build_payload(*, db_path: Path = DB_PATH, market: str = "US", horizon: str =
     best = max(cands, key=lambda r: (r["stats"]["median_alpha_pct"], r["stats"]["median_drop_best"],
                                      r["stats"]["win_rate_pct"], r["stats"]["max_loss_pct"]), default=None)
 
+    # 前瞻验证：锁定起始日（持久化，每天读同一个），用最佳候选口径统计「起始日之后」的新成熟样本。
+    # 今天的推荐当天还没成熟 → 前瞻从 0 起累积；真钱冻结直到 upgrade_ready=true（方案 §7）。
+    forward_start = _read_forward_start(out_json) or now.date().isoformat()
+    base_max_loss = (results[0]["stats"] or {}).get("max_loss_pct")  # ①Top5 作原口径基准
+    if best:
+        best_crit = next((dict(c[1]) for c in CALIBERS if c[0] == best["caliber"]), None)
+        fwd_pool = [r for r in pool if r["run_date"] >= forward_start and _passes(r, **best_crit)]
+        fwd_stats = evaluate(fwd_pool)
+        forward_progress = {
+            "forward_start": forward_start,
+            "best_caliber": best["caliber"],
+            "n": (fwd_stats or {}).get("n", 0),
+            "stats": fwd_stats,
+            "upgrade_ready": _upgrade_ready(fwd_stats, base_max_loss),
+            "target": "前瞻≥20 + median>0 + 胜率>50% + 留一不靠极端赢家 + 最大亏损<原口径①",
+            "note": "前瞻样本=起始日之后符合最佳候选口径的成熟样本；真钱保持冻结直到 upgrade_ready=true。",
+        }
+    else:
+        forward_progress = {"forward_start": forward_start, "best_caliber": None, "n": 0,
+                            "upgrade_ready": False, "note": "无候选口径达标，前瞻不启动。"}
+
     return {
         "schema_version": "strict_caliber_backtest_v1",
         "generated_at": now.isoformat(timespec="seconds"),
         "safety_boundary": "只读影子回算；不改公式、不写持仓、不碰真钱。产出为候选口径，非已验证策略。",
         "market": market, "horizon": horizon, "strategy_version": sv,
-        "sample_note": "历史大样本（当前版本，不去重，诊断用统计力优先）。前瞻验证须用去重小样本，见方案 §7-8。",
+        "sample_note": "历史大样本（当前版本，不去重，诊断用统计力优先）；前瞻进度单列见 forward_progress。",
         "results": results,
         "factor_margins": margins,
         "best_candidate": best["caliber"] if best else None,
-        "forward_progress": {"forward_samples": 0, "note": "前瞻样本 0 起累积；升级门槛见方案 §7（前瞻≥20 + median>0 + 胜率>50% + 最大亏损降 + 连续2run不靠极端赢家）。"},
+        "forward_progress": forward_progress,
         "status": "OK",
     }
 
@@ -173,6 +217,7 @@ def _md(p: dict[str, Any]) -> str:
         rows.append(f"| {r['caliber']} | {s.get('n','—')} | {s.get('median_alpha_pct','—')}% | "
                     f"{s.get('win_rate_pct','—')}% | {s.get('max_loss_pct','—')}% | {s.get('median_drop_best','—')}%{mark} |")
     m = p.get("factor_margins", {})
+    fp = p.get("forward_progress") or {}
     return f"""# B1 严筛口径影子回算（只读）
 
 - 生成：{p.get('generated_at')} · 市场 {p.get('market')} · {p.get('horizon')} · 版本 {p.get('strategy_version')}
@@ -192,8 +237,12 @@ def _md(p: dict[str, Any]) -> str:
 
 ## 最佳候选口径：{p.get('best_candidate') or '（无组达标）'}
 
-⚠️ 这是**历史回算候选**，不是已验证策略。前瞻进度：{p.get('forward_progress',{}).get('forward_samples')} 笔。
-{p.get('forward_progress',{}).get('note')}
+### 前瞻验证进度
+- 起始日：{fp.get('forward_start')} · 前瞻样本：**{fp.get('n', 0)}** 笔 · 可升级：**{fp.get('upgrade_ready')}**
+- 升级门槛：{fp.get('target', '—')}
+- {fp.get('note', '')}
+
+⚠️ 历史回算候选 ≠ 已验证策略。真钱保持冻结直到 upgrade_ready=true。
 """
 
 
@@ -206,13 +255,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--json", default=str(OUT_JSON))
     ap.add_argument("--md", default=str(OUT_MD))
     a = ap.parse_args(argv)
-    p = build_payload(db_path=Path(a.db), market=a.market, horizon=a.horizon, strategy_version=a.strategy_version)
+    p = build_payload(db_path=Path(a.db), market=a.market, horizon=a.horizon,
+                      strategy_version=a.strategy_version, out_json=Path(a.json))
     Path(a.json).parent.mkdir(parents=True, exist_ok=True)
     Path(a.md).parent.mkdir(parents=True, exist_ok=True)
     Path(a.json).write_text(json.dumps(p, ensure_ascii=False, indent=2), encoding="utf-8")
     Path(a.md).write_text(_md(p), encoding="utf-8")
+    fp = p.get("forward_progress") or {}
     print(f"strict_caliber_backtest: {p.get('status')} · best={p.get('best_candidate')} · "
-          f"groups={len(p.get('results') or [])}")
+          f"前瞻 {fp.get('n', 0)} 笔(起 {fp.get('forward_start')}) · upgrade_ready={fp.get('upgrade_ready')}")
     return 0
 
 
