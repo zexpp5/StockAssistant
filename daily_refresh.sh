@@ -770,10 +770,14 @@ if [ ${#FAILED_STEPS[@]} -eq 0 ]; then
     notify "✅ 股票看板刷新完成" "$DONE_TS · 库已更新"
 else
     echo "⚠️  完成但有失败 — $DONE_TS"
-    echo "   失败步骤："
+    echo "   失败步骤（CRITICAL，阻断交付）："
     for s in "${FAILED_STEPS[@]}"; do
         echo "     - $s"
     done
+fi
+if [ ${#DEGRADED_STEPS[@]} -gt 0 ]; then
+    echo "   ⚠️ 增强步降级（ENHANCE，不阻断交付；数据用缓存或稍后补）："
+    for s in "${DEGRADED_STEPS[@]}"; do echo "     - $s"; done
 fi
 echo "  📋 产品主入口：dashboard 默认首页「今日决策台」（HTML 见下）"
 echo "  📨 飞书镜像：$DIR/morning_brief.md（每天 08:30 推群）"
