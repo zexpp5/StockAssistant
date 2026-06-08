@@ -1712,9 +1712,12 @@ _sys.exit(rc)
             gen = esc(doc.get("generated_at", ""))[:16].replace("T", " ")
             scan = esc(doc.get("scan_label", ""))
             cov = doc.get("coverage", 1)
+            when_html = (f'<div class="when">⏱ 预警时间 {gen} · {scan}</div>'
+                         if gen else "")
             body = f"""
             <div class="hero" style="background:{bg};border-color:{border}">
               <div class="verdict" style="color:{accent}">{head}</div>
+              {when_html}
               <div class="cb"><b>该怎么做：</b>{can_buy}</div>
               {srcs_html}
             </div>
@@ -1751,6 +1754,7 @@ body{{margin:0;background:#f8fafc;color:#0f172a;
 .title{{font-size:15px;color:#64748b;margin:0 0 12px;display:flex;justify-content:space-between;align-items:center}}
 .hero{{border:1px solid;border-radius:16px;padding:20px 22px;margin-bottom:14px}}
 .verdict{{font-size:22px;font-weight:800;letter-spacing:.3px}}
+.when{{margin-top:6px;font-size:12.5px;color:#94a3b8}}
 .cb{{margin-top:10px;font-size:15px}}
 .srcs{{margin-top:8px;font-size:13px;color:#475569}}
 .alarm{{background:#fff;border:2px solid #dc2626;border-radius:14px;padding:14px 16px;
