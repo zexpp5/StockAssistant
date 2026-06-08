@@ -51,10 +51,11 @@ is_research_step() {
 is_morning_step() {
     [ "$MODE" = "full" ] || [ "$MODE" = "morning" ]
 }
-# needs_ipo_data：IPO & 次新股 tab 数据源（step 18 + 19b），早班/夜班/full 都跑
-# 早班 8:30 看「今日可申购」必须有最新数据；A 股收盘单独闭环（--a-share-only）跳过
-# 实测 19b 全量 ~15s（美股缓存命中、A 股次新股池 77 只逐个拉），早班可接受
+# needs_ipo_data：IPO & 次新股 tab 数据源（step 18 + 19b）。
+# 2026-06-08：用户暂不关注 IPO/次新股雷达，默认暂停，避免早班被研究性数据拖慢。
+IPO_JUNIOR_PAUSED="${IPO_JUNIOR_PAUSED:-1}"
 needs_ipo_data() {
+    [ "$IPO_JUNIOR_PAUSED" != "1" ] || return 1
     [ "$MODE" = "full" ] || [ "$MODE" = "research" ] || [ "$MODE" = "morning" ]
 }
 
@@ -68,7 +69,8 @@ if [ -z "${PYTHON:-}" ]; then
     fi
 fi
 TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
-FAILED_STEPS=()
+FAILED_STEPS=()      # 只装 CRITICAL 步失败 → 阻断交付/拦推送
+DEGRADED_STEPS=()    # 装 ENHANCE 步失败/超时 → 不阻断,只降级告警(根治"周边拌倒交付")
 PIPELINE_RUN_ID="${MODE}_$(date "+%Y%m%d_%H%M%S")"
 PIPELINE_STARTED_AT="$TIMESTAMP"
 
@@ -207,6 +209,7 @@ record_pipeline_step() {
     local started_at="$4"
     local ended_at="$5"
     local duration_seconds="$6"
+    local critical="${7:-1}"   # 1=CRITICAL(默认) 0=ENHANCE;供验收闸门按"只认CRITICAL失败"判定
     local sink
     sink="$(pipeline_sink_for_label "$label")"
     PIPELINE_STATUS_STEPS="$PIPELINE_STATUS_STEPS" \
@@ -217,6 +220,7 @@ record_pipeline_step() {
     PIPELINE_STEP_ENDED_AT="$ended_at" \
     PIPELINE_STEP_DURATION="$duration_seconds" \
     PIPELINE_STEP_SINK="$sink" \
+    PIPELINE_STEP_CRITICAL="$critical" \
     "$PYTHON" - <<'PY' || true
 import json
 import os
@@ -229,6 +233,7 @@ row = {
     "ended_at": os.environ.get("PIPELINE_STEP_ENDED_AT", ""),
     "duration_seconds": int(os.environ.get("PIPELINE_STEP_DURATION") or 0),
     "sink": os.environ.get("PIPELINE_STEP_SINK", ""),
+    "critical": os.environ.get("PIPELINE_STEP_CRITICAL", "1") == "1",
 }
 with open(os.environ["PIPELINE_STATUS_STEPS"], "a", encoding="utf-8") as f:
     f.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -266,7 +271,9 @@ if os.path.exists(steps_path):
                 steps.append(json.loads(line))
 
 counts = Counter(step.get("status") for step in steps)
+# CRITICAL 失败才算 failed(阻断口径);ENHANCE 失败/超时落 DEGRADED,不阻断交付
 failed = [step for step in steps if step.get("status") == "FAIL"]
+degraded = [step for step in steps if step.get("status") in ("DEGRADED", "TIMEOUT")]
 slowest = sorted(steps, key=lambda s: s.get("duration_seconds") or 0, reverse=True)[:8]
 
 payload = {
@@ -287,6 +294,7 @@ payload = {
     ],
     "step_counts": dict(counts),
     "failed_steps": failed,
+    "degraded_steps": degraded,
     "slowest_steps": slowest,
     "steps": steps,
 }
@@ -311,64 +319,103 @@ for out in out_files:
 PY
 }
 
+# run_step v2（2026-06-08 流水线改造）：单步硬超时 + critical/enhance 分级 + DEGRADED 语义。
+#   用法：run_step <label> <script> [critical|enhance] [timeout_s]
+#     - 缺省 critical、timeout_s=0（无超时）→ 向后兼容旧的 2 参数调用。
+#     - CRITICAL 步失败/超时 → 进 FAILED_STEPS（阻断交付、拦推送）。
+#     - ENHANCE  步失败/超时 → 进 DEGRADED_STEPS（不阻断、只告警；根治"周边拌倒交付"）。
+#   单步超时用 bash 自实现（系统无 gtimeout）：后台跑 + 看门狗 sleep N 后 TERM→KILL；
+#   这是 R1 根治——任一步挂死再也拖不垮全链，且不依赖被休眠冻结的 6h 全局看门狗。
 run_step() {
     local label="$1"
     local script="$2"
-    local started_at
-    local ended_at
-    local started_epoch
-    local duration_seconds
+    local kind="${3:-critical}"        # critical | enhance
+    local timeout_s="${4:-0}"          # 0 = 无单步超时
+    local started_at ended_at started_epoch duration_seconds
     local status="OK"
-    local err_log
-    local attempt
+    local err_log timeout_marker attempt cmd_pid wd_pid rc
+    local crit_flag=1
+    [ "$kind" = "enhance" ] && crit_flag=0
     err_log=$(mktemp -t pipeline_step.XXXXXX)
+    timeout_marker=$(mktemp -t pipeline_step_to.XXXXXX)
     started_at=$(date '+%Y-%m-%d %H:%M:%S')
     started_epoch=$(date +%s)
     echo ""
-    # D'' 锁感知 retry：最多 3 次。非锁错误立刻 FAIL 不重试；锁冲突 sleep 30s 后再试。
+    # D'' 锁感知 retry：最多 3 次。非锁错误立刻 FAIL/DEGRADED 不重试；锁冲突 sleep 30s 后再试。
     # 2026-05-25 事故根因：DuckDB 写锁瞬时冲突让 0c 秒级 FAIL，下游全用旧 universe。
     for attempt in 1 2 3; do
+        : > "$timeout_marker"
         if [ "$attempt" -gt 1 ]; then
             echo "[$label] $script (attempt $attempt/3 · 锁冲突 retry) ..."
+        elif [ "$timeout_s" -gt 0 ]; then
+            echo "[$label] $script ... (超时上限 ${timeout_s}s · ${kind})"
         else
-            echo "[$label] $script ..."
+            echo "[$label] $script ... (${kind})"
         fi
-        # script 以 '-m' 开头 → 当成 python -m module 调用，不传相对脚本名
-        # tee 把 stderr 同时落到 err_log（用于判定是否锁冲突）和原 stderr（用户看得到）
-        if [[ "$script" == -m* ]]; then
-            if $PYTHON $script 2> >(tee "$err_log" >&2); then
-                [ "$attempt" -gt 1 ] && status="OK_RETRY" || status="OK"
-                break
-            fi
-        else
-            # 不能引号化 $script：当 script 形如 "path/x.py --dry-run" 需要 shell 拆词
-            if $PYTHON $script 2> >(tee "$err_log" >&2); then
-                [ "$attempt" -gt 1 ] && status="OK_RETRY" || status="OK"
-                break
-            fi
+        # 后台执行：stdout 透传终端；stderr 同时落 err_log（锁检测）和终端。
+        # 不能引号化 $script：形如 "path/x.py --flag" 或 "-m module" 都靠 shell 拆词。
+        $PYTHON $script 2> >(tee "$err_log" >&2) &
+        cmd_pid=$!
+        wd_pid=""
+        if [ "$timeout_s" -gt 0 ]; then
+            (
+                sleep "$timeout_s"
+                if kill -0 "$cmd_pid" 2>/dev/null; then
+                    echo "TIMEOUT" > "$timeout_marker"
+                    echo "⏱️  [$label] 单步超过 ${timeout_s}s — 看门狗终止该步" >&2
+                    pkill -TERM -P "$cmd_pid" 2>/dev/null; kill -TERM "$cmd_pid" 2>/dev/null
+                    sleep 5
+                    pkill -KILL -P "$cmd_pid" 2>/dev/null; kill -KILL "$cmd_pid" 2>/dev/null
+                fi
+            ) &
+            wd_pid=$!
+            disown "$wd_pid" 2>/dev/null  # 移出 job 表：稍后 kill 看门狗时不打 job-control 噪声到日志
         fi
-        # 非锁冲突立刻 FAIL，避免对真正的错误浪费重试时间
-        if ! grep -qiE "Conflicting lock|Could not set lock|database is locked" "$err_log"; then
-            echo "❌ [$label] $script 失败（非锁冲突，不重试）"
+        wait "$cmd_pid" 2>/dev/null
+        rc=$?
+        # 收掉看门狗（连它的 sleep 子进程），避免残留
+        if [ -n "$wd_pid" ]; then pkill -P "$wd_pid" 2>/dev/null; kill "$wd_pid" 2>/dev/null; fi
+        if [ "$rc" -eq 0 ]; then
+            [ "$attempt" -gt 1 ] && status="OK_RETRY" || status="OK"
+            break
+        fi
+        # 单步超时被看门狗杀
+        if [ -s "$timeout_marker" ]; then
+            if [ "$crit_flag" -eq 1 ]; then
+                echo "❌ [$label] CRITICAL 步超时 → FAIL"
+                FAILED_STEPS+=("$label/$script (timeout ${timeout_s}s)")
+                notify "📉 关键步超时" "$label（${timeout_s}s）"
+                status="FAIL"
+            else
+                echo "⚠️  [$label] ENHANCE 步超时 → DEGRADED（不阻断交付）"
+                DEGRADED_STEPS+=("$label/$script (timeout ${timeout_s}s)")
+                status="TIMEOUT"
+            fi
+            break
+        fi
+        # 锁冲突 → sleep 30s 重试（attempt < 3）
+        if grep -qiE "Conflicting lock|Could not set lock|database is locked" "$err_log" && [ "$attempt" -lt 3 ]; then
+            echo "🔒 [$label] DuckDB 锁冲突，sleep 30s 后重试..."
+            sleep 30
+            continue
+        fi
+        # 普通失败（或锁冲突重试 3 次仍败）
+        if [ "$crit_flag" -eq 1 ]; then
+            echo "❌ [$label] $script 失败 → FAIL"
             FAILED_STEPS+=("$label/$script")
             notify "📉 股票看板刷新失败" "$label: $script"
             status="FAIL"
-            break
-        fi
-        if [ "$attempt" -lt 3 ]; then
-            echo "🔒 [$label] DuckDB 锁冲突，sleep 30s 后重试..."
-            sleep 30
         else
-            echo "❌ [$label] $script 锁冲突重试 2 次后仍失败"
-            FAILED_STEPS+=("$label/$script")
-            notify "📉 股票看板刷新失败（锁持续冲突）" "$label: $script"
-            status="FAIL"
+            echo "⚠️  [$label] $script 失败 → DEGRADED（增强步，不阻断交付）"
+            DEGRADED_STEPS+=("$label/$script")
+            status="DEGRADED"
         fi
+        break
     done
-    rm -f "$err_log"
+    rm -f "$err_log" "$timeout_marker"
     ended_at=$(date '+%Y-%m-%d %H:%M:%S')
     duration_seconds=$(($(date +%s) - started_epoch))
-    record_pipeline_step "$label" "$script" "$status" "$started_at" "$ended_at" "$duration_seconds"
+    record_pipeline_step "$label" "$script" "$status" "$started_at" "$ended_at" "$duration_seconds" "$crit_flag"
     write_pipeline_status "RUNNING" ""
 }
 
@@ -522,7 +569,15 @@ run_step "16/25 实盘防御检查" "-m stock_research.jobs.realtime_defense"
 is_research_step && run_step "17/25 OpenBB 综合情报" "-m stock_research.jobs.openbb_intelligence --quick"
 
 # R — A 股事件层（IPO / 解禁 / 政策；19 比较慢）
-needs_ipo_data && run_step "18/25 IPO 打新日历" "-m stock_research.jobs.ipo_daily"
+if needs_ipo_data; then
+    run_step "18/25 IPO 打新日历" "-m stock_research.jobs.ipo_daily"
+else
+    echo ""
+    echo "[18/25 IPO 打新日历] 跳过 — IPO/次新股模块暂停（IPO_JUNIOR_PAUSED=$IPO_JUNIOR_PAUSED）"
+    ts=$(date '+%Y-%m-%d %H:%M:%S')
+    record_pipeline_step "18/25 IPO 打新日历" "IPO_JUNIOR_PAUSED=$IPO_JUNIOR_PAUSED" "SKIP" "$ts" "$ts" "0"
+    write_pipeline_status "RUNNING" ""
+fi
 # 19/19a/19c 三个事件日历给 morning 也跑：
 #   解禁/减持/财报当日时效性强，研究 21:00 才更新会错过早盘提示。
 #   yfinance/akshare 查询轻量,morning 也能承受。
@@ -539,7 +594,15 @@ else
     echo ""
     echo "[19f/25 SEC Form 4] 跳过 — 仅周一跑(SEC 申报 2-4 天延迟,周拉足够;今天 weekday=$DOW)"
 fi
-needs_ipo_data && run_step "19b/25 次新股+解禁雷达（IPO & 次新股 tab 数据源）" "-m stock_research.jobs.junior_stock_watcher"
+if needs_ipo_data; then
+    run_step "19b/25 次新股+解禁雷达（IPO & 次新股 tab 数据源）" "-m stock_research.jobs.junior_stock_watcher"
+else
+    echo ""
+    echo "[19b/25 次新股+解禁雷达] 跳过 — IPO/次新股模块暂停（IPO_JUNIOR_PAUSED=$IPO_JUNIOR_PAUSED）"
+    ts=$(date '+%Y-%m-%d %H:%M:%S')
+    record_pipeline_step "19b/25 次新股+解禁雷达（IPO & 次新股 tab 数据源）" "IPO_JUNIOR_PAUSED=$IPO_JUNIOR_PAUSED" "SKIP" "$ts" "$ts" "0"
+    write_pipeline_status "RUNNING" ""
+fi
 is_research_step && run_step "20/25 产业政策事件扫描" "-m stock_research.jobs.policy_scan_daily"
 
 # 聚合三层关键事件 (L1 公司 + L2 政策 + L3 行业大会) → data/latest/key_events.json
