@@ -71,6 +71,7 @@ fi
 TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S")
 FAILED_STEPS=()      # 只装 CRITICAL 步失败 → 阻断交付/拦推送
 DEGRADED_STEPS=()    # 装 ENHANCE 步失败/超时 → 不阻断,只降级告警(根治"周边拌倒交付")
+PIPELINE_STARTED_MAIN=0  # 主线是否已开跑(写过RUNNING);on_exit 据此决定要不要标 INTERRUPTED
 PIPELINE_RUN_ID="${MODE}_$(date "+%Y%m%d_%H%M%S")"
 PIPELINE_STARTED_AT="$TIMESTAMP"
 
@@ -97,6 +98,55 @@ notify() {
     local title="$1"
     local msg="$2"
     osascript -e "display notification \"$msg\" with title \"$title\"" 2>/dev/null
+}
+
+# R5 根治（2026-06-08）：异常终止（挂死被 kill / 崩溃）会把状态文件冻在 RUNNING 误导状态页。
+#   两道防线：① on_exit trap 退出时把本轮仍停在 RUNNING 的状态文件标 INTERRUPTED（覆盖 TERM/正常退出）；
+#             ② 启动 reconcile 把上一轮死掉但还显 RUNNING 的状态文件标 INTERRUPTED（覆盖 kill -9，trap 没机会跑的情况）。
+# 把单个状态文件从 RUNNING 翻成 INTERRUPTED。check_pid=1 仅当其 main_pid 已死才翻（reconcile 用）；
+#   check_pid=0 无条件翻（on_exit 自身退出用）。非 RUNNING 一律不动。
+mark_status_interrupted() {
+    local sfile="$1"; local reason="$2"; local check_pid="${3:-0}"
+    [ -f "$sfile" ] || return 0
+    STATUS_FILE="$sfile" STATUS_REASON="$reason" STATUS_CHECK_PID="$check_pid" SELF_PID="$$" \
+    "$PYTHON" - <<'PY' 2>/dev/null || true
+import json, os, datetime
+f = os.environ["STATUS_FILE"]
+try:
+    d = json.load(open(f, encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+if d.get("status") != "RUNNING":
+    raise SystemExit(0)
+if os.environ.get("STATUS_CHECK_PID") == "1":
+    pid = d.get("main_pid") or 0
+    self_pid = int(os.environ.get("SELF_PID") or 0)
+    if pid and pid != self_pid:
+        try:
+            os.kill(int(pid), 0)
+            raise SystemExit(0)        # 进程还活着 → 别动
+        except ProcessLookupError:
+            pass                       # 死了 → 往下翻 INTERRUPTED
+        except PermissionError:
+            raise SystemExit(0)        # 存在但无权 → 当活着，别动
+    # pid 缺失（旧格式）：启动 reconcile 时单锁保证无并发 daily_refresh，RUNNING 必为残留 → 翻
+d["status"] = "INTERRUPTED"
+d["updated_at"] = datetime.datetime.now().replace(microsecond=0).isoformat()
+d["note"] = os.environ.get("STATUS_REASON", "")
+tmp = f + ".tmp"
+json.dump(d, open(tmp, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+os.replace(tmp, f)
+print(f"  ↻ reconcile: {os.path.basename(f)} RUNNING → INTERRUPTED")
+PY
+}
+
+# 启动时清理上一轮残留的 RUNNING（单锁已保证此刻无并发 daily_refresh）
+reconcile_stale_status() {
+    local d
+    for d in production research morning a_share_only skip_a_share full; do
+        mark_status_interrupted "$PIPELINE_STATUS_DIR/pipeline_status_${d}.json" \
+            "reconcile@启动: 上一轮 ${d} 异常终止(挂死/被kill)未写终态，自动标 INTERRUPTED" 1
+    done
 }
 
 # D' 防止两个 daily_refresh.sh 同时跑（2026-05-25 事故根因：旧 run 残留 + 新 run 启动
@@ -138,8 +188,16 @@ MAIN_PID=$$
 WATCHDOG_PID=$!
 
 # EXIT 时清 PID 锁 + 收掉看门狗（正常结束时看门狗 subshell 还在 sleep，必须连它的 sleep 子进程
-#   一起杀，否则残留一个 sleep 进程直到超时——先 pkill -P 杀子 sleep，再 kill subshell 本身）
-trap 'rm -f "$PID_LOCK"; if [ -n "$WATCHDOG_PID" ]; then pkill -P "$WATCHDOG_PID" 2>/dev/null; kill "$WATCHDOG_PID" 2>/dev/null; fi' EXIT
+#   一起杀，否则残留一个 sleep 进程直到超时——先 pkill -P 杀子 sleep，再 kill subshell 本身）+
+#   R5：本轮若异常终止（被 kill/超时看门狗）但状态仍停 RUNNING，标 INTERRUPTED，免状态页误显"还在拉"。
+on_exit() {
+    rm -f "$PID_LOCK"
+    if [ -n "${WATCHDOG_PID:-}" ]; then pkill -P "$WATCHDOG_PID" 2>/dev/null; kill "$WATCHDOG_PID" 2>/dev/null; fi
+    if [ "${PIPELINE_STARTED_MAIN:-0}" = "1" ]; then
+        mark_status_interrupted "$PIPELINE_STATUS_FILE" "on_exit: 本轮异常终止(被kill/超时看门狗)，未达终态" 0
+    fi
+}
+trap on_exit EXIT
 
 PIPELINE_STATUS_DIR="$DIR/data/latest"
 PIPELINE_STATUS_MODE_FILE="$PIPELINE_STATUS_DIR/pipeline_status_${MODE}.json"
@@ -155,6 +213,9 @@ fi
 PIPELINE_STATUS_STEPS="$PIPELINE_STATUS_DIR/.pipeline_status_${PIPELINE_RUN_ID}.jsonl"
 mkdir -p "$PIPELINE_STATUS_DIR"
 : > "$PIPELINE_STATUS_STEPS"
+
+# R5 启动自愈：清理上一轮死掉但仍显 RUNNING 的状态文件（单锁已保证此刻无并发 daily_refresh）
+reconcile_stale_status
 
 pipeline_sink_for_label() {
     local label="$1"
@@ -254,6 +315,7 @@ write_pipeline_status() {
     PIPELINE_COMPLETED_AT="$completed_at" \
     PIPELINE_A_SHARE_READY="$A_SHARE_READY" \
     PIPELINE_A_SHARE_MODE="$A_SHARE_PRODUCTION_MODE" \
+    PIPELINE_MAIN_PID="$$" \
     "$PYTHON" - <<'PY' || true
 import json
 import os
@@ -281,6 +343,7 @@ payload = {
     "mode": os.environ.get("PIPELINE_MODE"),
     "status_role": os.environ.get("PIPELINE_STATUS_ROLE"),
     "status": os.environ.get("PIPELINE_STATUS"),
+    "main_pid": int(os.environ.get("PIPELINE_MAIN_PID") or 0),
     "started_at": os.environ.get("PIPELINE_STARTED_AT"),
     "updated_at": datetime.now().isoformat(timespec="seconds"),
     "completed_at": os.environ.get("PIPELINE_COMPLETED_AT") or None,
@@ -423,6 +486,7 @@ echo ""
 echo "================================================"
 echo "  ⏰ $TIMESTAMP — 每日刷新开始（mode=$MODE, a_share_ready=$A_SHARE_READY, a_share_mode=$A_SHARE_PRODUCTION_MODE）"
 echo "================================================"
+PIPELINE_STARTED_MAIN=1   # 主线正式开跑;此后异常退出由 on_exit 标 INTERRUPTED
 write_pipeline_status "RUNNING" ""
 
 # ── A 股闭环步骤封装：单独定义以便两种模式复用 ──
