@@ -2202,6 +2202,165 @@ b{{font-weight:700}}
         background.add_task(job.run_audit, only_code=code)
         return {"status": "queued", "job": "daily_audit", "code": code}
 
+    _V2_REFRESH_LOCK = _REPO_ROOT / "data" / "latest" / "v2_recommendation_refresh.lock"
+    _V2_REFRESH_LOG = _REPO_ROOT / "data" / "logs" / "v2_recommendation_refresh.log"
+
+    def _v2_refresh_status() -> dict[str, Any]:
+        import json as _json, os as _os, time as _time
+        if not _V2_REFRESH_LOCK.exists():
+            return {"running": False}
+        try:
+            info = _json.loads(_V2_REFRESH_LOCK.read_text(encoding="utf-8"))
+        except Exception:
+            _V2_REFRESH_LOCK.unlink(missing_ok=True)
+            return {"running": False, "stale_cleared": True}
+        pid = info.get("pid")
+        alive = False
+        if pid:
+            try:
+                _os.kill(int(pid), 0)
+                alive = True
+            except OSError:
+                alive = False
+        if not alive:
+            _V2_REFRESH_LOCK.unlink(missing_ok=True)
+            return {"running": False, "stale_cleared": True, "last_pid": pid}
+        age_s = _time.time() - float(info.get("started_at") or _time.time())
+        return {
+            "running": True,
+            "pid": pid,
+            "age_s": round(age_s, 1),
+            "trigger": info.get("trigger"),
+            "code": info.get("code"),
+            "log": str(_V2_REFRESH_LOG),
+        }
+
+    def _spawn_v2_recommendation_refresh(*, trigger: str, code: str | None = None) -> dict[str, Any]:
+        """后台刷新系统池行情并重算 AI 推荐。
+
+        只更新 system_tech_universe 的行情/推荐/组合产物，不写 watchlist 或真实持仓。
+        """
+        import json as _json, re as _re, subprocess as _sub, time as _time
+        existing = _v2_refresh_status()
+        if existing.get("running"):
+            return {"status": "already_running", **existing}
+
+        clean_code = str(code or "").strip().upper()
+        if clean_code and not _re.match(r"^[A-Z0-9][A-Z0-9.\-]{0,24}$", clean_code):
+            raise HTTPException(400, "code contains unsupported characters")
+
+        fetch_cmd = [
+            sys.executable,
+            str(_REPO_ROOT / "scripts" / "pipeline" / "fetch_stock_prices.py"),
+            "--source",
+            "tech-universe",
+            "--db-schema",
+            "v2",
+            "--refresh-fundamentals",
+        ]
+        if clean_code:
+            fetch_cmd.extend(["--code", clean_code])
+        steps = [
+            {"name": "fetch_stock_prices", "cmd": fetch_cmd},
+            {
+                "name": "build_v2_recommendations",
+                "cmd": [sys.executable, str(_REPO_ROOT / "scripts" / "tools" / "build_v2_recommendations.py")],
+            },
+            {
+                "name": "optimize_portfolio",
+                "cmd": [sys.executable, "-m", "stock_research.jobs.optimize_portfolio"],
+            },
+            {
+                "name": "recommendation_evidence_report",
+                "cmd": [sys.executable, str(_REPO_ROOT / "scripts" / "tools" / "recommendation_evidence_report.py")],
+            },
+            {
+                "name": "build_stock_dashboard_html",
+                "cmd": [sys.executable, str(_REPO_ROOT / "scripts" / "pipeline" / "build_stock_dashboard_html.py")],
+            },
+            {
+                "name": "production_acceptance_check",
+                "cmd": [sys.executable, str(_REPO_ROOT / "scripts" / "tools" / "production_acceptance_check.py")],
+            },
+        ]
+
+        wrapper_code = r"""
+import datetime as _dt
+import json as _json
+import subprocess as _sub
+import sys as _sys
+from pathlib import Path as _Path
+
+steps = _json.loads(_sys.argv[1])
+log_path = _Path(_sys.argv[2])
+lock_path = _Path(_sys.argv[3])
+repo_root = _sys.argv[4]
+trigger = _sys.argv[5].replace("\n", " ")[:240]
+code = _sys.argv[6].replace("\n", " ")[:80]
+
+log_path.parent.mkdir(parents=True, exist_ok=True)
+rc = 0
+try:
+    with log_path.open("a", encoding="utf-8") as log:
+        log.write(f"[v2-refresh] start trigger={trigger} code={code or '-'} at {_dt.datetime.now().isoformat(timespec='seconds')}\n")
+        for step in steps:
+            name = step.get("name")
+            cmd = step.get("cmd") or []
+            log.write(f"[v2-refresh] step {name}: {' '.join(cmd)}\n")
+            log.flush()
+            rc = _sub.call(cmd, cwd=repo_root, stdout=log, stderr=_sub.STDOUT)
+            log.write(f"[v2-refresh] step {name} exit={rc} at {_dt.datetime.now().isoformat(timespec='seconds')}\n")
+            log.flush()
+            if rc:
+                break
+        log.write(f"[v2-refresh] done exit={rc} at {_dt.datetime.now().isoformat(timespec='seconds')}\n")
+finally:
+    try:
+        lock_path.unlink()
+    except FileNotFoundError:
+        pass
+_sys.exit(rc)
+"""
+        _V2_REFRESH_LOCK.parent.mkdir(parents=True, exist_ok=True)
+        proc = _sub.Popen(
+            [
+                sys.executable,
+                "-c",
+                wrapper_code,
+                _json.dumps(steps, ensure_ascii=False),
+                str(_V2_REFRESH_LOG),
+                str(_V2_REFRESH_LOCK),
+                str(_REPO_ROOT),
+                str(trigger or "manual"),
+                clean_code,
+            ],
+            cwd=str(_REPO_ROOT),
+            stdout=_sub.DEVNULL,
+            stderr=_sub.DEVNULL,
+            start_new_session=True,
+        )
+        _V2_REFRESH_LOCK.write_text(_json.dumps({
+            "pid": proc.pid,
+            "started_at": _time.time(),
+            "trigger": trigger,
+            "code": clean_code or None,
+            "steps": [s["name"] for s in steps],
+            "log": str(_V2_REFRESH_LOG),
+        }, ensure_ascii=False))
+        return {"status": "started", "pid": proc.pid, "job": "refresh_v2_recommendations", "code": clean_code or None}
+
+    @app.get("/api/jobs/refresh-v2-recommendations/status")
+    def refresh_v2_recommendations_status() -> dict[str, Any]:
+        return _v2_refresh_status()
+
+    @app.post("/api/jobs/refresh-v2-recommendations")
+    def trigger_refresh_v2_recommendations(item: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+        """刷新系统池行情/估值并重算 AI 推荐、组合和看板（异步）。"""
+        return _spawn_v2_recommendation_refresh(
+            trigger=str(item.get("trigger") or "manual"),
+            code=item.get("code"),
+        )
+
     @app.get("/api/ipo/radar")
     def get_ipo_radar() -> dict[str, Any]:
         """返回最新 junior_stock_radar.json（IPO 日历 + 解禁雷达 + 次新股池）。

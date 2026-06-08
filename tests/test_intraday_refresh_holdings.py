@@ -45,6 +45,26 @@ class IntradayRefreshHoldingsDateTest(unittest.TestCase):
         with patch.object(refresh, "_market_now", return_value=self._at("MCD", 2026, 6, 2, 4, 28)):
             self.assertIsNone(refresh._market_trade_date("MCD", date(2026, 6, 1)))
 
+    def test_beijing_saturday_does_not_skip_us_friday_session(self):
+        def fake_market_now(symbol: str) -> datetime:
+            if refresh._infer_market(symbol) == "US":
+                return self._at("MCD", 2026, 6, 5, 14, 30)
+            return self._at("9992.HK", 2026, 6, 6, 2, 30)
+
+        with patch.object(refresh, "_market_now", side_effect=fake_market_now):
+            self.assertIsNone(refresh._skip_reason(["MCD", "9992.HK"]))
+            self.assertEqual(refresh._market_trade_date("MCD", date(2026, 6, 5)), date(2026, 6, 5))
+            self.assertIsNone(refresh._market_trade_date("9992.HK", date(2026, 6, 5)))
+
+    def test_skip_only_when_all_holding_markets_are_weekend(self):
+        def fake_market_now(symbol: str) -> datetime:
+            if refresh._infer_market(symbol) == "US":
+                return self._at("MCD", 2026, 6, 6, 9, 0)
+            return self._at("9992.HK", 2026, 6, 6, 21, 0)
+
+        with patch.object(refresh, "_market_now", side_effect=fake_market_now):
+            self.assertIn("所有持仓市场均为周末", refresh._skip_reason(["MCD", "9992.HK"]) or "")
+
     def test_string_trade_date_is_accepted(self):
         with patch.object(refresh, "_market_now", return_value=self._at("9992.HK", 2026, 6, 2, 16, 2)):
             self.assertEqual(refresh._market_trade_date("9992.HK", "2026-06-02 00:00:00+08:00"), date(2026, 6, 2))

@@ -395,6 +395,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <title>AI 投资研究 Dashboard</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<script>
+window.echarts = window.echarts || {
+  init: function(){ return { setOption: function(){}, resize: function(){} }; },
+  getInstanceByDom: function(){ return null; }
+};
+</script>
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif; -webkit-font-smoothing: antialiased; }
   .field-block { white-space: pre-wrap; line-height: 1.65; }
@@ -1147,19 +1153,59 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </div>
     <div id="discovery-count-explain" class="hidden mb-4 rounded-lg border border-violet-200 bg-white px-4 py-3 text-sm text-slate-700"></div>
     <div id="discovery-market-tabs" class="hidden mb-4 flex flex-wrap gap-2"></div>
+    <div id="discovery-data-health" class="hidden mb-4"></div>
     <style>
-      /* 2026-05-27: 与"完整批次历史"对齐 — 默认换行，长字段（推荐依据/风险）显式限宽。
-         撤掉了原全局 nowrap + sticky 首两列（视觉太撑、横向滚动碍事）。
-         行内因子拆解的 pill 不换行；展开详情面板允许换行。 */
+      /* AI 推荐表：横向滚动时固定股票身份列，避免滑到右侧后不知道是哪家公司。 */
+      #discovery-table-wrap table,
+      .discovery-history-table-wrap table { border-collapse: separate; border-spacing: 0; }
+      #discovery-table-wrap .disc-sticky-rank,
+      #discovery-table-wrap .disc-sticky-code,
+      #discovery-table-wrap .disc-sticky-name,
+      .discovery-history-table-wrap .disc-sticky-rank,
+      .discovery-history-table-wrap .disc-sticky-code,
+      .discovery-history-table-wrap .disc-sticky-name {
+        position: sticky;
+        background: #ffffff;
+        white-space: nowrap;
+        z-index: 3;
+      }
+      #discovery-table-wrap thead .disc-sticky-rank,
+      #discovery-table-wrap thead .disc-sticky-code,
+      #discovery-table-wrap thead .disc-sticky-name,
+      .discovery-history-table-wrap thead .disc-sticky-rank,
+      .discovery-history-table-wrap thead .disc-sticky-code,
+      .discovery-history-table-wrap thead .disc-sticky-name {
+        background: #f8fafc;
+        z-index: 4;
+      }
+      #discovery-table-wrap .disc-sticky-rank,
+      .discovery-history-table-wrap .disc-sticky-rank { left: 0; min-width: 64px; width: 64px; }
+      #discovery-table-wrap .disc-sticky-code,
+      .discovery-history-table-wrap .disc-sticky-code { left: 64px; min-width: 118px; width: 118px; }
+      #discovery-table-wrap .disc-sticky-name,
+      .discovery-history-table-wrap .disc-sticky-name {
+        left: 182px;
+        min-width: 240px;
+        width: 240px;
+        max-width: 240px;
+        box-shadow: 1px 0 0 rgba(15, 23, 42, 0.08);
+      }
+      #discovery-table-wrap tbody tr:hover .disc-sticky-rank,
+      #discovery-table-wrap tbody tr:hover .disc-sticky-code,
+      #discovery-table-wrap tbody tr:hover .disc-sticky-name,
+      .discovery-history-table-wrap tbody tr:hover .disc-sticky-rank,
+      .discovery-history-table-wrap tbody tr:hover .disc-sticky-code,
+      .discovery-history-table-wrap tbody tr:hover .disc-sticky-name { background: #f8fafc; }
+      /* 长字段（推荐依据/风险）仍可换行；行内因子拆解的 pill 不换行。 */
       #discovery-table-wrap tbody tr .flex-wrap { flex-wrap: nowrap; }
     </style>
     <div id="discovery-table-wrap" class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
       <table class="w-full min-w-[1760px] text-sm">
         <thead class="bg-slate-50 text-slate-500 text-[10px] uppercase tracking-wide">
           <tr>
-            <th class="px-2 py-1 text-left">排名</th>
-            <th class="px-2 py-1 text-left">代码</th>
-            <th class="px-2 py-1 text-left">名称</th>
+            <th class="disc-sticky-rank px-2 py-1 text-left">排名</th>
+            <th class="disc-sticky-code px-2 py-1 text-left">代码</th>
+            <th class="disc-sticky-name px-2 py-1 text-left">名称</th>
             <th class="px-2 py-1 text-left">信号</th>
             <th class="px-2 py-1 text-left">市场</th>
             <th class="px-2 py-1 text-left">主题</th>
@@ -3454,6 +3500,78 @@ async function _checkApiStatus() {
 
 function _esc(s) {
   return (s || "").toString().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function _dataRepairCommand(code) {
+  const safeCode = String(code || "").trim().replace(/[^A-Za-z0-9.\-]/g, "");
+  const codeArg = safeCode ? ` --code ${safeCode}` : "";
+  return [
+    `/opt/homebrew/bin/python3 scripts/pipeline/fetch_stock_prices.py --source tech-universe --db-schema v2 --refresh-fundamentals${codeArg}`,
+    `/opt/homebrew/bin/python3 scripts/tools/build_v2_recommendations.py`,
+    `/opt/homebrew/bin/python3 -m stock_research.jobs.optimize_portfolio`,
+    `/opt/homebrew/bin/python3 scripts/tools/recommendation_evidence_report.py`,
+    `/opt/homebrew/bin/python3 scripts/pipeline/build_stock_dashboard_html.py`,
+    `/opt/homebrew/bin/python3 scripts/tools/production_acceptance_check.py`,
+  ].join(" && ");
+}
+
+async function _copyTextToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    await navigator.clipboard.writeText(text);
+    return true;
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.left = "-9999px";
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  const ok = document.execCommand("copy");
+  document.body.removeChild(ta);
+  return ok;
+}
+
+async function copyDataUsabilityRepairCommand(code, btn) {
+  const text = _dataRepairCommand(code);
+  const old = btn ? btn.textContent : "";
+  try {
+    await _copyTextToClipboard(text);
+    if (btn) {
+      btn.textContent = "已复制";
+      setTimeout(() => { btn.textContent = old || "复制命令"; }, 1800);
+    }
+  } catch (e) {
+    window.prompt("复制下面命令到终端执行：", text);
+  }
+}
+
+async function triggerDataUsabilityRepair(code, btn) {
+  const old = btn ? btn.textContent : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "排队中...";
+  }
+  try {
+    const r = await fetch(WATCHLIST_API_BASE + "/api/jobs/refresh-v2-recommendations", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({code: code || null, trigger: code ? "data_usability:single" : "data_usability:all"}),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json().catch(() => ({}));
+    if (btn) {
+      btn.textContent = data.status === "already_running" ? "已有任务" : "已排队";
+      btn.title = "后台正在补数据并重算；完成后刷新页面看新结果。";
+      setTimeout(() => { btn.disabled = false; btn.textContent = old || "补数据"; }, 3500);
+    }
+  } catch (e) {
+    await copyDataUsabilityRepairCommand(code, btn || null);
+    if (btn) {
+      btn.disabled = false;
+      btn.title = "本地 API 没连上，已复制命令；可到终端执行。";
+    }
+  }
 }
 
 // 把 manual_watchlist.created_at 的 ISO 时间格式化成相对/紧凑显示
@@ -12305,6 +12423,7 @@ function _reasonSummaryHtml(row) {
   const historyEl = document.getElementById("discovery-history-list");
   const countExplainEl = document.getElementById("discovery-count-explain");
   const marketTabsEl = document.getElementById("discovery-market-tabs");
+  const dataHealthEl = document.getElementById("discovery-data-health");
   const cands = (DISCOVERY && DISCOVERY.candidates) || [];
 
   // ── sub-tab 计数显示
@@ -12553,6 +12672,124 @@ function _reasonSummaryHtml(row) {
       window._activeDiscoveryMarket = _availableMarkets[0] || "US";
     }
 
+    function _renderDiscoveryDataHealth() {
+      if (!dataHealthEl) return;
+      const audit = (DISCOVERY && DISCOVERY.data_usability_audit) || {};
+      if (!audit || !audit.generated_at) {
+        dataHealthEl.classList.add("hidden");
+        dataHealthEl.innerHTML = "";
+        return;
+      }
+      const activeMarket = window._activeDiscoveryMarket || "US";
+      const summary = audit.summary_by_market || {};
+      const marketSummary = summary[activeMarket] || {};
+      const blockedAll = Array.isArray(audit.blocked) ? audit.blocked : [];
+      const attentionAll = Array.isArray(audit.attention) ? audit.attention : [];
+      const blocked = blockedAll.filter(r => String(r.market || "").toUpperCase() === activeMarket);
+      const attention = attentionAll.filter(r => String(r.market || "").toUpperCase() === activeMarket);
+      const blockedTotal = Number(audit.blocked_count || 0);
+      const attentionTotal = Number(audit.attention_count || 0);
+      const selectedAttentionTotal = Number(audit.selected_attention_count || 0);
+      const marketBlocked = Number(marketSummary.blocked || blocked.length || 0);
+      const marketAttention = Number(marketSummary.attention || attention.length || 0);
+      const marketSelectedAttention = Number(marketSummary.selected_attention || attention.filter(r => r.in_recommendation_list).length || 0);
+      const generated = _fmtTs(audit.generated_at);
+      const statusCls = blockedTotal > 0
+        ? "border-amber-300 bg-amber-50 text-amber-900"
+        : (attentionTotal > 0 ? "border-sky-200 bg-sky-50 text-sky-900" : "border-emerald-200 bg-emerald-50 text-emerald-900");
+      const statusTitle = blockedTotal > 0
+        ? `有 ${blockedTotal} 只因为核心数据不足被拦截`
+        : (attentionTotal > 0 ? `无硬拦截；${attentionTotal} 只有数据提醒` : "本批没有数据不足拦截");
+      const statusExplain = blockedTotal > 0
+        ? "被拦截的票不会进入可买推荐；需要先补数据或只做研究观察。"
+        : (attentionTotal > 0 ? "这些不是硬错误，但说明部分票复用了近期快照或字段不够满，买前要看原因。" : "这表示候选池里的核心行情、动量、估值字段满足当前公式要求。");
+
+      function _rowHtml(r, kind) {
+        const reasons = (r.reasons || []).map(_esc).join("；") || "—";
+        const score = r.data_usability == null ? "—" : `${Number(r.data_usability).toFixed(1)}分`;
+        const coverage = r.coverage_pct == null ? "—" : `${Number(r.coverage_pct).toFixed(1)}%`;
+        const rank = r.in_recommendation_list
+          ? `<span class="px-1.5 py-0.5 rounded bg-violet-50 text-violet-700 border border-violet-200">已入榜 #${_esc(String(r.rank || ""))}</span>`
+          : `<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">未入榜</span>`;
+        const symbol = _esc(r.symbol || "");
+        const repairButtons = `<div class="inline-flex items-center gap-1">
+          <button onclick="triggerDataUsabilityRepair('${symbol}', this)"
+                  class="px-2 py-1 rounded bg-amber-600 hover:bg-amber-700 disabled:bg-amber-300 text-white text-[11px] font-semibold whitespace-nowrap"
+                  title="只刷新这只股票的行情/估值，然后重算推荐和看板">补这只</button>
+          <button onclick="copyDataUsabilityRepairCommand('${symbol}', this)"
+                  class="px-2 py-1 rounded bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 text-[11px] whitespace-nowrap"
+                  title="API 没开时，复制命令到终端执行">复制命令</button>
+        </div>`;
+        const badgeCls = kind === "blocked"
+          ? "bg-amber-100 text-amber-800 border-amber-200"
+          : "bg-sky-100 text-sky-800 border-sky-200";
+        const badgeText = kind === "blocked" ? "数据不足" : "数据提醒";
+        return `<tr class="border-t border-slate-100">
+          <td class="py-2 pr-3 font-mono font-bold text-slate-900">${_esc(r.symbol || "")}</td>
+          <td class="py-2 pr-3 text-slate-700 min-w-[170px]">${_esc(r.name || "")}</td>
+          <td class="py-2 pr-3 text-xs"><span class="px-1.5 py-0.5 rounded border ${badgeCls}">${badgeText}</span></td>
+          <td class="py-2 pr-3 text-xs text-slate-700 min-w-[280px]">${reasons}</td>
+          <td class="py-2 pr-3 text-xs font-mono whitespace-nowrap">${score} / 覆盖 ${coverage}</td>
+          <td class="py-2 pr-3 text-xs text-slate-500 whitespace-nowrap">行情 ${_esc(r.trade_date || "—")} · 动量 ${_esc(r.momentum_trade_date || "—")} · 估值 ${_esc(r.fundamentals_trade_date || "—")}</td>
+          <td class="py-2 pr-3 text-xs text-slate-700 min-w-[220px]">${_esc(r.next_action || "")}</td>
+          <td class="py-2 text-xs whitespace-nowrap">${rank}</td>
+          <td class="py-2 pl-3 text-xs whitespace-nowrap">${repairButtons}</td>
+        </tr>`;
+      }
+
+      const blockedRows = blocked.slice(0, 12).map(r => _rowHtml(r, "blocked")).join("");
+      const attentionRows = attention.slice(0, 12).map(r => _rowHtml(r, "attention")).join("");
+      const detailsHtml = (blockedRows || attentionRows) ? `
+        <details class="mt-3 bg-white/70 border border-slate-200 rounded-lg overflow-hidden">
+          <summary class="cursor-pointer px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-white">
+            展开看 ${_marketLabel(activeMarket)} 缺什么数据
+            <span class="text-slate-400 font-normal">（硬拦截 ${marketBlocked} · 数据提醒 ${marketAttention} · 入榜提醒 ${marketSelectedAttention}）</span>
+          </summary>
+          <div class="overflow-x-auto">
+            <table class="w-full min-w-[1320px] text-xs bg-white">
+              <thead class="text-slate-500 bg-slate-50">
+                <tr>
+                  <th class="py-2 pr-3 pl-3 text-left">代码</th>
+                  <th class="py-2 pr-3 text-left">名称</th>
+                  <th class="py-2 pr-3 text-left">状态</th>
+                  <th class="py-2 pr-3 text-left">缺什么 / 为什么提醒</th>
+                  <th class="py-2 pr-3 text-left">数据分</th>
+                  <th class="py-2 pr-3 text-left">数据日期</th>
+                  <th class="py-2 pr-3 text-left">下一步</th>
+                  <th class="py-2 text-left">是否入榜</th>
+                  <th class="py-2 pl-3 text-left">处理</th>
+                </tr>
+              </thead>
+              <tbody>${blockedRows}${attentionRows}</tbody>
+            </table>
+          </div>
+        </details>` : "";
+
+      dataHealthEl.classList.remove("hidden");
+      dataHealthEl.innerHTML = `<div class="rounded-xl border ${statusCls} px-4 py-3">
+        <div class="flex items-start md:items-center gap-3 justify-between flex-col md:flex-row">
+          <div>
+            <div class="text-sm font-bold">数据够不够用：${statusTitle}</div>
+            <div class="text-xs mt-1">${statusExplain}</div>
+          </div>
+          <div class="text-[11px] text-right md:min-w-[360px]">
+            <div class="flex items-center justify-end gap-2 mb-1 flex-wrap">
+              <button onclick="triggerDataUsabilityRepair('', this)"
+                      class="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-700 disabled:bg-amber-300 text-white text-[11px] font-semibold"
+                      title="刷新整个系统科技/AI 股票池行情和估值，然后重算推荐、组合和看板">全量补数据并重算</button>
+              <button onclick="copyDataUsabilityRepairCommand('', this)"
+                      class="px-2.5 py-1 rounded bg-white/80 hover:bg-white border border-slate-300 text-slate-700 text-[11px]"
+                      title="本地 API 没开时复制命令到终端执行">复制全量命令</button>
+              <a href="#runtime-status" class="px-2.5 py-1 rounded bg-white/70 hover:bg-white border border-slate-300 text-slate-700 text-[11px]">系统状态</a>
+            </div>
+            <div>当前市场 ${_marketLabel(activeMarket)}：硬拦截 <b>${marketBlocked}</b> · 数据提醒 <b>${marketAttention}</b> · 入榜提醒 <b>${marketSelectedAttention}</b></div>
+            <div class="text-slate-500">全池 ${audit.candidate_count || "?"} 只 · 推荐 ${audit.selected_count || "?"} 只 · 审计 ${_esc(generated.short)} ${_esc(generated.age)}</div>
+          </div>
+        </div>
+        ${detailsHtml}
+      </div>`;
+    }
+
     function _renderDiscoveryMarketTabs() {
       if (!marketTabsEl) return;
       marketTabsEl.classList.remove("hidden");
@@ -12621,12 +12858,12 @@ function _reasonSummaryHtml(row) {
       const tk = _esc(c.ticker);
       const stockDetailAttrs = `data-code="${tk}" data-name="${_esc(displayName)}" onclick="openStockDetail(this.dataset.code, this.dataset.name)"`;
       return `<tr class="hover:bg-slate-50">
-        <td class="px-2 py-1 font-mono text-xs text-slate-500">
+        <td class="disc-sticky-rank px-2 py-1 font-mono text-xs text-slate-500">
           <span title="当前市场 tab 内排名 (后端全局 rank #${c.rank})">${idx + 1}</span>
         </td>
-        <td class="px-2 py-1 font-mono text-xs font-bold text-violet-700 cursor-pointer hover:underline"
+        <td class="disc-sticky-code px-2 py-1 font-mono text-xs font-bold text-violet-700 cursor-pointer hover:underline"
             ${stockDetailAttrs} title="点击进入这只股票的完整详情页">${c.ticker}${_newBadge(c)}${_riseBadge(c)}${_appearanceBadge(c)}</td>
-        <td class="px-2 py-1 text-xs text-slate-700 min-w-[180px] cursor-pointer"
+        <td class="disc-sticky-name px-2 py-1 text-xs text-slate-700 cursor-pointer"
             ${stockDetailAttrs} title="点击进入这只股票的完整详情页">
           <div class="truncate max-w-[220px]" title="${_esc(displayNameTitle)}">${_esc(displayName)}</div>
           ${c.quality_tag ? `<div class="mt-0.5">${_qualityTagHtml(c.quality_tag)}</div>` : ""}
@@ -12675,10 +12912,12 @@ function _reasonSummaryHtml(row) {
     window.switchDiscoveryMarket = function(market) {
       window._activeDiscoveryMarket = market;
       _renderDiscoveryMarketTabs();
+      _renderDiscoveryDataHealth();
       _renderDiscoveryMarketRows();
       if (typeof window._renderDropoutsBanner === "function") window._renderDropoutsBanner();
     };
     _renderDiscoveryMarketTabs();
+    _renderDiscoveryDataHealth();
     _renderDiscoveryMarketRows();
     // tab 初始化完后 banner 重新渲染一次，确保 activeMarket 正确
     if (typeof window._renderDropoutsBanner === "function") window._renderDropoutsBanner();
@@ -12819,9 +13058,9 @@ function _reasonSummaryHtml(row) {
           const etfs = _etfsLookup(r.ticker);
           const tk = _esc(r.ticker || "");
           return `<tr class="hover:bg-slate-50">
-            <td class="px-2 py-1 font-mono text-xs text-slate-500">#${r.rank}</td>
-            <td class="px-2 py-1 font-mono text-xs font-bold">${r.ticker}${newTag}</td>
-            <td class="px-2 py-1 text-xs text-slate-700 min-w-[180px]">
+            <td class="disc-sticky-rank px-2 py-1 font-mono text-xs text-slate-500">#${r.rank}</td>
+            <td class="disc-sticky-code px-2 py-1 font-mono text-xs font-bold">${r.ticker}${newTag}</td>
+            <td class="disc-sticky-name px-2 py-1 text-xs text-slate-700">
               <div class="truncate max-w-[200px]">${r.name || ""}</div>
               ${r.quality_tag ? `<div class="mt-0.5">${_qualityTagHtml(r.quality_tag)}</div>` : ""}
               <div class="mt-0.5">${stockPill(r.ticker, {layout: "mini"})}</div>
@@ -12855,13 +13094,13 @@ function _reasonSummaryHtml(row) {
         const id = "disc-hist-" + d.replace(/[^a-zA-Z0-9]/g, "_");
         return `<details class="bg-white rounded-lg border border-slate-200 overflow-hidden">
           <summary class="cursor-pointer px-4 py-3 hover:bg-slate-50">${summary}</summary>
-          <div class="px-4 py-3 border-t border-slate-100 overflow-x-auto">
-            <table class="w-full text-sm">
+          <div class="discovery-history-table-wrap px-4 py-3 border-t border-slate-100 overflow-x-auto">
+            <table class="w-full min-w-[1840px] text-sm">
               <thead class="text-[10px] text-slate-500 uppercase">
                 <tr>
-                  <th class="px-2 py-1 text-left">排名</th>
-                  <th class="px-2 py-1 text-left">代码</th>
-                  <th class="px-2 py-1 text-left">名称</th>
+                  <th class="disc-sticky-rank px-2 py-1 text-left">排名</th>
+                  <th class="disc-sticky-code px-2 py-1 text-left">代码</th>
+                  <th class="disc-sticky-name px-2 py-1 text-left">名称</th>
                   <th class="px-2 py-1 text-left">信号</th>
                   <th class="px-2 py-1 text-left">市场</th>
                   <th class="px-2 py-1 text-left">主题</th>
@@ -19302,10 +19541,21 @@ def build():
     # 今日推荐展示必须覆盖最新 V2 批次的完整候选，而不是只展示综合 Top 20。
     # discovery_candidates.json 只作为富字段补充；候选范围以 DuckDB recommendation_picks 为准。
     discovery_json = _load_json("data/discovery_candidates.json")
+    data_usability_audit = _load_json("data/latest/recommendation_data_usability_audit.json")
     source_health = _load_json("data/latest/source_health.json")
     _augment_source_health_with_catalyst(source_health)
     _augment_source_health_with_paid_sources(source_health)
     batch_meta_main = _runtime_v2_latest_batch_meta()
+    if (
+        data_usability_audit
+        and batch_meta_main.get("batch_run_id")
+        and data_usability_audit.get("run_id") != batch_meta_main.get("batch_run_id")
+    ):
+        print(
+            "  ⚠️ 数据可用性审计跳过："
+            f"audit run {data_usability_audit.get('run_id')} != latest {batch_meta_main.get('batch_run_id')}"
+        )
+        data_usability_audit = {}
     v2_candidates_main = _runtime_v2_recommendations()
     if v2_candidates_main:
         rich_by_ticker = {
@@ -19388,11 +19638,14 @@ def build():
             "appearance_total_runs": appearance_total_runs,
             "dropouts": dropouts,
             "history_strategy_version": current_strategy_version,
+            "data_usability_audit": data_usability_audit,
         }
     else:
         discovery = discovery_json
         if clean_v2 and discovery and not discovery.get("source"):
             discovery = {**discovery, "source": "v2:discovery_candidates"}
+        if discovery and data_usability_audit:
+            discovery = {**discovery, "data_usability_audit": data_usability_audit}
     if discovery and batch_meta_main:
         discovery = {
             **discovery,

@@ -295,7 +295,7 @@ def main() -> int:
     r = _step_refresh_etf(args.refresh_etf); results.append(r); print(f"  → {r['status']} · {r.get('action')}")
 
     print("\n[Step 3/7] SEC 公司证据扫描 + stale 规则")
-    r = _step_sec_scan(args.scan_sec); results.append(r); print(f"  → {r['status']} · {r.get('action')}")
+    r = _step_sec_scan(args.scan_sec); results.append(r); print(f"  → {r['status']} · {r.get('error') or r.get('action')}")
 
     print("\n[Step 3b/7] 第 3 类 A 源 fetcher (WNA/USGS/DOE)")
     r = _step_third_party_a_source(); results.append(r); print(f"  → {r['status']} · {r.get('by_source_id')}")

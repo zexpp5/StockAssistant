@@ -8,7 +8,7 @@
 - 轻量：只动真实持仓那几只，跑完 < 10s
 - 不推飞书：和 daily_refresh.sh --morning 区分开，避免盘中重复推送
 - 容错：单只失败不中断；DuckDB 写锁冲突自动 retry
-- 节能：周末直接跳过；工作日允许收盘后补写已出现的当日 daily bar
+- 节能：按持仓所属市场的本地日期判断周末；工作日允许收盘后补写已出现的当日 daily bar
 """
 from __future__ import annotations
 
@@ -41,11 +41,27 @@ MAX_INTRADAY_JUMP_PCT = 15.0
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 
-def _skip_reason() -> str | None:
-    """非交易日直接跳过，省 yfinance 配额 + 减少 DB 锁竞争。"""
+def _skip_reason(symbols: list[str] | None = None) -> str | None:
+    """所有真实持仓所属市场都在周末时才跳过。
+
+    不能用电脑本地时间做全局周末判断：北京时间周六凌晨仍可能是美股周五交易时段。
+    """
+    if symbols:
+        market_weekdays: dict[str, int] = {}
+        for symbol in symbols:
+            market = _infer_market(symbol)
+            market_weekdays[market] = _market_now(symbol).weekday()
+        if market_weekdays and all(day >= 5 for day in market_weekdays.values()):
+            labels = ", ".join(
+                f"{market}:{['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day]}"
+                for market, day in sorted(market_weekdays.items())
+            )
+            return f"所有持仓市场均为周末({labels})"
+        return None
+
     now = datetime.now()
     if now.weekday() >= 5:
-        return f"周末({['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][now.weekday()]})"
+        return f"本地周末({['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][now.weekday()]})"
     return None
 
 
@@ -409,6 +425,10 @@ def _run_with_lock_retry(max_attempts: int = 3, wait_sec: int = 60) -> int:
             if not symbols:
                 logger.info("real_holdings 为空，跳过。")
                 return 0
+            skip = _skip_reason(symbols)
+            if skip:
+                logger.info("跳过本轮刷新: %s", skip)
+                return 0
 
             logger.info("拉取 %d 只真实持仓的盘中价: %s", len(symbols), ", ".join(symbols))
             fetched_all = [r for r in (_fetch_one(s) for s in symbols) if r is not None]
@@ -445,10 +465,6 @@ def _run_with_lock_retry(max_attempts: int = 3, wait_sec: int = 60) -> int:
 
 
 def main() -> int:
-    skip = _skip_reason()
-    if skip:
-        logger.info("跳过本轮刷新: %s", skip)
-        return 0
     return _run_with_lock_retry()
 
 

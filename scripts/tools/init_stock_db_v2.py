@@ -627,7 +627,7 @@ def _seed_universe(conn: duckdb.DuckDBPyConnection) -> int:
 
     try:
         from scripts.tools.discover_candidates import build_universe as build_dynamic_universe
-        discovered = build_dynamic_universe(skip_codes=set())
+        discovered = build_dynamic_universe(skip_codes=set(), conn=conn)
         if discovered:
             add(discovered, default_source="discover_candidates")
     except Exception as e:

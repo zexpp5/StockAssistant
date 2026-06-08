@@ -29,6 +29,9 @@ class PriceActionReviewGateTest(unittest.TestCase):
             "one_week_pct": 1.0,
             "one_month_pct": 2.0,
             "one_year_pct": 40.0,
+            "trade_date": "2026-06-06",
+            "momentum_trade_date": "2026-06-06",
+            "fundamentals_trade_date": "2026-06-06",
         }
 
     def test_deep_reversal_candidate_is_downgraded_to_watch(self):
@@ -189,6 +192,123 @@ class ValuationInputTest(unittest.TestCase):
 
         self.assertEqual(flags[0]["code"], "INVALID_VALUATION_RATIO")
         self.assertIn("不视为便宜", flags[0]["message"])
+
+
+class DataUsabilityGateTest(unittest.TestCase):
+    def _strong_row(self) -> dict:
+        return {
+            "close": 100.0,
+            "prev_close": 99.0,
+            "market_cap": 85_000_000_000,
+            "forward_pe": 12.0,
+            "trailing_pe": 20.0,
+            "peg_ratio": 0.8,
+            "ytd_pct": 25.0,
+            "one_week_pct": 2.0,
+            "one_month_pct": 6.0,
+            "one_year_pct": 80.0,
+            "trade_date": "2026-06-06",
+            "momentum_trade_date": "2026-06-06",
+            "fundamentals_trade_date": "2026-06-06",
+        }
+
+    def test_complete_usable_data_does_not_gate_buy_candidate(self):
+        row = self._strong_row()
+        scores = build_v2._factor_scores(row)
+
+        flags = build_v2._apply_data_usability_gate(row, scores)
+
+        self.assertEqual(flags, [])
+        self.assertNotIn("data_usability_gate", scores)
+        self.assertGreaterEqual(scores["data_usability"], 90.0)
+
+    def test_missing_fundamentals_cannot_be_buy(self):
+        row = {
+            **self._strong_row(),
+            "forward_pe": None,
+            "trailing_pe": None,
+            "peg_ratio": None,
+            "fundamentals_trade_date": None,
+        }
+        scores = build_v2._factor_scores(row)
+
+        flags = build_v2._apply_data_usability_gate(row, scores)
+
+        self.assertEqual(scores["data_usability_gate"], "core_data")
+        self.assertLess(scores["total"], 60.0)
+        self.assertNotEqual(build_v2._signal(scores["total"]), "buy")
+        self.assertEqual(flags[0]["code"], "DATA_USABILITY_REVIEW_GATE")
+        self.assertIn("缺估值数据源", flags[0]["message"])
+        self.assertIn("没有可用正向估值字段", flags[0]["message"])
+
+    def test_stale_factor_snapshot_cannot_be_buy(self):
+        row = {
+            **self._strong_row(),
+            "trade_date": "2026-06-06",
+            "momentum_trade_date": "2026-05-15",
+            "fundamentals_trade_date": "2026-05-15",
+        }
+        scores = build_v2._factor_scores(row)
+
+        flags = build_v2._apply_data_usability_gate(row, scores)
+
+        self.assertEqual(scores["data_usability_gate"], "core_data")
+        self.assertLess(scores["total"], 60.0)
+        self.assertIn("动量数据已过期", flags[0]["message"])
+        self.assertIn("估值数据已过期", flags[0]["message"])
+
+    def test_audit_lists_blocked_and_attention_candidates(self):
+        good = {
+            **self._strong_row(),
+            "market": "US",
+            "symbol": "GOOD",
+            "name": "Good Co",
+            "theme": "AI",
+            "industry": "Software",
+        }
+        blocked = {
+            **good,
+            "symbol": "MISS",
+            "name": "Missing Fundamentals",
+            "forward_pe": None,
+            "trailing_pe": None,
+            "peg_ratio": None,
+            "fundamentals_trade_date": None,
+        }
+        attention = {
+            **good,
+            "symbol": "REUSE",
+            "name": "Reused Snapshot",
+            "trade_date": "2026-06-06",
+            "momentum_trade_date": "2026-06-01",
+            "fundamentals_trade_date": "2026-06-01",
+        }
+        scored = []
+        for row in (good, blocked, attention):
+            scores = build_v2._factor_scores(row)
+            data_flags = build_v2._apply_data_usability_gate(row, scores)
+            scored.append({
+                **row,
+                "factor_scores": scores,
+                "risk_flags": data_flags + build_v2._quality_flags(row),
+                "total_score": scores["total"],
+                "signal": build_v2._signal(scores["total"]),
+                "rating": build_v2._rating(scores["total"]),
+            })
+
+        audit = build_v2._build_data_usability_audit(
+            scored,
+            [scored[0], scored[2]],
+            run_id="r1",
+            generated_at=build_v2.datetime(2026, 6, 6, 9, 0, 0),
+        )
+
+        self.assertEqual(audit["blocked_count"], 1)
+        self.assertEqual(audit["blocked"][0]["symbol"], "MISS")
+        self.assertIn("缺估值数据源", audit["blocked"][0]["reasons"])
+        self.assertEqual(audit["attention_count"], 1)
+        self.assertEqual(audit["attention"][0]["symbol"], "REUSE")
+        self.assertTrue(audit["attention"][0]["in_recommendation_list"])
 
 
 class PortfolioCandidateFilterTest(unittest.TestCase):

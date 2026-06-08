@@ -18,7 +18,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -36,8 +36,12 @@ def _clip(value: float, lo: float = 0.0, hi: float = 100.0) -> float:
 
 _NEGATIVE_VALUATION_SCORE = 27.5  # loss / earnings decline: not "cheap"
 _PRICE_ACTION_REVIEW_SCORE_CAP = 59.99
-STRATEGY_VERSION = "tech_ai_v2_price_action_gate"
-MODEL_VERSION = "v2_rule_factor_2026_06_price_action_gate"
+_DATA_USABILITY_REVIEW_SCORE_CAP = 59.99
+_DATA_USABILITY_MIN_BUY_SCORE = 70.0
+_STALE_SOURCE_DAYS = 10
+STRATEGY_VERSION = "tech_ai_v2_usable_data_gate"
+MODEL_VERSION = "v2_rule_factor_2026_06_usable_data_gate"
+DATA_USABILITY_AUDIT_PATH = REPO / "data" / "latest" / "recommendation_data_usability_audit.json"
 
 
 def _score_lower_better(value: Any, good: float, bad: float, missing: float = 30.0) -> float:
@@ -90,6 +94,79 @@ def _score_reversal(row: dict[str, Any]) -> float:
     except (TypeError, ValueError):
         return 45.0
     return _clip(50.0 - x * (50.0 / 15.0))
+
+
+def _as_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_date(value: Any) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except Exception:
+        return None
+
+
+def _date_gap_days(newer: Any, older: Any) -> int | None:
+    a = _as_date(newer)
+    b = _as_date(older)
+    if a is None or b is None:
+        return None
+    return abs((a - b).days)
+
+
+def _positive_valuation_count(row: dict[str, Any]) -> int:
+    count = 0
+    for key in ("peg_ratio", "forward_pe", "trailing_pe"):
+        value = _as_float(row.get(key))
+        if value is not None and value > 0:
+            count += 1
+    return count
+
+
+def _data_usability_score(row: dict[str, Any], coverage: float) -> float:
+    """Score whether this row is usable for real recommendations.
+
+    Field coverage alone is not enough: a row can have many fields but no real
+    valuation source, stale factor snapshots, or no latest price. Those names
+    may still be worth researching, but they should not graduate to buy.
+    """
+    score = coverage * 100.0
+
+    if row.get("close") is None:
+        score -= 35.0
+    if row.get("market_cap") is None:
+        score -= 10.0
+
+    if not row.get("momentum_trade_date"):
+        score -= 25.0
+    elif (_date_gap_days(row.get("trade_date"), row.get("momentum_trade_date")) or 0) > _STALE_SOURCE_DAYS:
+        score -= 15.0
+
+    if not row.get("fundamentals_trade_date"):
+        score -= 25.0
+    elif (_date_gap_days(row.get("trade_date"), row.get("fundamentals_trade_date")) or 0) > _STALE_SOURCE_DAYS:
+        score -= 15.0
+
+    valuation_count = _positive_valuation_count(row)
+    if valuation_count == 0:
+        score -= 20.0
+    elif valuation_count == 1:
+        score -= 8.0
+
+    if row.get("one_month_pct") is None and row.get("one_year_pct") is None:
+        score -= 10.0
+
+    return _clip(score)
 
 
 def _load_reversal_weight() -> float:
@@ -151,7 +228,8 @@ def _factor_scores(row: dict[str, Any]) -> dict[str, Any]:
         "ytd_pct", "one_week_pct", "one_month_pct", "one_year_pct",
     )
     coverage = sum(1 for key in coverage_fields if row.get(key) is not None) / len(coverage_fields)
-    data_quality = coverage * 100.0
+    field_coverage_quality = coverage * 100.0
+    data_usability = _data_usability_score(row, coverage)
     # 2026-05-26: momentum 0.42→0.15、valuation 0.38→0.65（IC 审计判 momentum 失效）。
     # 2026-05-27: 引入 reversal 因子 — calibrated_factor_weights.json 判 reversal
     # 🟢 strong (IC=0.062, hit=72.2%)，是 V2 唯一被独立验证的 alpha。reversal 子权重
@@ -163,13 +241,17 @@ def _factor_scores(row: dict[str, Any]) -> dict[str, Any]:
         0.15 * momentum
         + val_w * valuation
         + rev_w * reversal
-        + 0.20 * data_quality
+        + 0.20 * data_usability
     )
     scores: dict[str, Any] = {
         "valuation": round(valuation, 2),
         "momentum": round(momentum, 2),
         "reversal": round(reversal, 2),
-        "data_quality": round(data_quality, 2),
+        # data_quality is kept for downstream UI compatibility; it now means
+        # real recommendation usability, not just raw field count.
+        "data_quality": round(data_usability, 2),
+        "data_usability": round(data_usability, 2),
+        "field_coverage_quality": round(field_coverage_quality, 2),
         "coverage": round(coverage, 4),
         "total": round(total, 2),
     }
@@ -182,13 +264,6 @@ def _factor_scores(row: dict[str, Any]) -> dict[str, Any]:
     if quality_score is not None:
         scores["quality"] = round(float(quality_score), 2)
     return scores
-
-
-def _as_float(value: Any) -> float | None:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def _daily_pct(row: dict[str, Any]) -> float | None:
@@ -321,6 +396,197 @@ def _apply_price_action_review_gate(row: dict[str, Any], scores: dict[str, Any])
                "。属于跌深反转候选，已从 buy 降为 watch；需先进入买前审查。")
         ),
     }]
+
+
+def _data_usability_review_reasons(row: dict[str, Any], scores: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    coverage = _as_float(scores.get("coverage"))
+    usability = _as_float(scores.get("data_usability") or scores.get("data_quality"))
+
+    if row.get("close") is None:
+        reasons.append("缺最新价格")
+    if coverage is not None and coverage < 0.70:
+        reasons.append(f"核心字段覆盖不足 {coverage * 100:.0f}%")
+    if usability is not None and usability < _DATA_USABILITY_MIN_BUY_SCORE:
+        reasons.append(f"数据可用性 {usability:.1f} 分低于 {_DATA_USABILITY_MIN_BUY_SCORE:.0f}")
+
+    if not row.get("momentum_trade_date"):
+        reasons.append("缺动量数据源")
+    else:
+        gap = _date_gap_days(row.get("trade_date"), row.get("momentum_trade_date"))
+        if gap is not None and gap > _STALE_SOURCE_DAYS:
+            reasons.append(f"动量数据已过期 {gap} 天")
+
+    if not row.get("fundamentals_trade_date"):
+        reasons.append("缺估值数据源")
+    else:
+        gap = _date_gap_days(row.get("trade_date"), row.get("fundamentals_trade_date"))
+        if gap is not None and gap > _STALE_SOURCE_DAYS:
+            reasons.append(f"估值数据已过期 {gap} 天")
+
+    if _positive_valuation_count(row) == 0:
+        reasons.append("没有可用正向估值字段")
+
+    # Preserve order while removing duplicates caused by the generic usability line.
+    deduped: list[str] = []
+    for reason in reasons:
+        if reason not in deduped:
+            deduped.append(reason)
+    return deduped
+
+
+def _apply_data_usability_gate(row: dict[str, Any], scores: dict[str, Any]) -> list[dict[str, Any]]:
+    reasons = _data_usability_review_reasons(row, scores)
+    if not reasons:
+        return []
+
+    raw_total = float(scores.get("raw_total", scores["total"]))
+    scores.setdefault("raw_total", round(raw_total, 2))
+    scores["data_usability_gate"] = "core_data"
+    scores["total"] = round(min(float(scores["total"]), _DATA_USABILITY_REVIEW_SCORE_CAP), 2)
+    return [{
+        "code": "DATA_USABILITY_REVIEW_GATE",
+        "severity": "high",
+        "message": (
+            "数据可用性红旗："
+            + "；".join(reasons)
+            + "。已限制为非买入；只能先研究/补数据，不能直接进入可买推荐。"
+        ),
+    }]
+
+
+def _data_gap_next_action(reasons: list[str]) -> str:
+    text = "；".join(reasons)
+    if "缺最新价格" in text or "缺动量数据源" in text or "动量数据已过期" in text:
+        return "先补行情和涨跌幅数据，再重新生成推荐。"
+    if "缺估值数据源" in text or "估值数据已过期" in text:
+        return "先补估值/财务字段，再重新生成推荐。"
+    if "没有可用正向估值字段" in text:
+        return "多半是亏损或估值口径不可用；只做研究观察，不直接按低估值买入。"
+    if "核心字段覆盖不足" in text or "数据可用性" in text:
+        return "先查缺失字段来源，补齐后再允许进入买入候选。"
+    return "进入买前研究前先核对行情、估值和财务来源。"
+
+
+def _risk_codes(flags: list[dict[str, Any]]) -> set[str]:
+    out: set[str] = set()
+    for flag in flags:
+        if isinstance(flag, dict) and flag.get("code"):
+            out.add(str(flag["code"]))
+    return out
+
+
+def _audit_row(row: dict[str, Any], selected_rank: int | None, reasons: list[str]) -> dict[str, Any]:
+    scores = row.get("factor_scores") or {}
+    coverage = _as_float(scores.get("coverage"))
+    return {
+        "market": row.get("market"),
+        "symbol": row.get("symbol"),
+        "name": row.get("name"),
+        "theme": row.get("theme"),
+        "industry": row.get("industry"),
+        "total_score": row.get("total_score"),
+        "raw_total": scores.get("raw_total"),
+        "signal": row.get("signal"),
+        "rating": row.get("rating"),
+        "in_recommendation_list": selected_rank is not None,
+        "rank": selected_rank,
+        "data_usability": scores.get("data_usability") or scores.get("data_quality"),
+        "field_coverage_quality": scores.get("field_coverage_quality"),
+        "coverage_pct": round(coverage * 100.0, 1) if coverage is not None else None,
+        "trade_date": str(row.get("trade_date"))[:10] if row.get("trade_date") else None,
+        "momentum_trade_date": str(row.get("momentum_trade_date"))[:10] if row.get("momentum_trade_date") else None,
+        "fundamentals_trade_date": str(row.get("fundamentals_trade_date"))[:10] if row.get("fundamentals_trade_date") else None,
+        "reasons": reasons,
+        "next_action": _data_gap_next_action(reasons),
+    }
+
+
+def _build_data_usability_audit(
+    scored: list[dict[str, Any]],
+    selected: list[dict[str, Any]],
+    *,
+    run_id: str,
+    generated_at: datetime,
+) -> dict[str, Any]:
+    selected_rank: dict[tuple[Any, Any], int] = {}
+    market_rank_counter: dict[str, int] = {}
+    for row in selected:
+        market = str(row.get("market") or "UNKNOWN")
+        market_rank_counter[market] = market_rank_counter.get(market, 0) + 1
+        selected_rank[(row.get("market"), row.get("symbol"))] = market_rank_counter[market]
+    blocked: list[dict[str, Any]] = []
+    attention: list[dict[str, Any]] = []
+    summary_by_market: dict[str, dict[str, int]] = {}
+
+    attention_codes = {
+        "MOMENTUM_REUSED_RECENT_V2_SNAPSHOT",
+        "FUNDAMENTALS_REUSED_RECENT_V2_SNAPSHOT",
+        "INVALID_VALUATION_RATIO",
+        "ACUTE_PRICE_PULLBACK",
+    }
+    for row in scored:
+        market = str(row.get("market") or "UNKNOWN")
+        bucket = summary_by_market.setdefault(
+            market,
+            {"candidates": 0, "blocked": 0, "attention": 0, "selected_attention": 0},
+        )
+        bucket["candidates"] += 1
+        key = (row.get("market"), row.get("symbol"))
+        rank = selected_rank.get(key)
+        scores = row.get("factor_scores") or {}
+        reasons = _data_usability_review_reasons(row, scores)
+        if reasons:
+            bucket["blocked"] += 1
+            blocked.append(_audit_row(row, rank, reasons))
+            continue
+
+        usability = _as_float(scores.get("data_usability") or scores.get("data_quality")) or 0.0
+        coverage = _as_float(scores.get("field_coverage_quality")) or 0.0
+        codes = _risk_codes(row.get("risk_flags") or [])
+        weak_reasons: list[str] = []
+        if usability < 90.0:
+            weak_reasons.append(f"数据可用性 {usability:.1f} 分，未触发硬拦截但不算满格")
+        if coverage < 90.0:
+            weak_reasons.append(f"字段覆盖 {coverage:.1f}%")
+        if codes & attention_codes:
+            for flag in row.get("risk_flags") or []:
+                if isinstance(flag, dict) and flag.get("code") in attention_codes:
+                    weak_reasons.append(str(flag.get("message") or flag.get("code")))
+        if weak_reasons:
+            bucket["attention"] += 1
+            if rank is not None:
+                bucket["selected_attention"] += 1
+            attention.append(_audit_row(row, rank, weak_reasons))
+
+    blocked.sort(key=lambda r: (r.get("market") or "", -(r.get("raw_total") or r.get("total_score") or 0), r.get("symbol") or ""))
+    attention.sort(key=lambda r: (
+        0 if r.get("in_recommendation_list") else 1,
+        r.get("data_usability") if r.get("data_usability") is not None else 999,
+        -(r.get("total_score") or 0),
+        r.get("symbol") or "",
+    ))
+    return {
+        "generated_at": generated_at.isoformat(timespec="seconds"),
+        "run_id": run_id,
+        "strategy_version": STRATEGY_VERSION,
+        "model_version": MODEL_VERSION,
+        "candidate_count": len(scored),
+        "selected_count": len(selected),
+        "blocked_count": len(blocked),
+        "attention_count": len(attention),
+        "selected_attention_count": sum(1 for r in attention if r.get("in_recommendation_list")),
+        "summary_by_market": summary_by_market,
+        "blocked": blocked[:120],
+        "attention": attention[:120],
+        "note": "blocked=硬拦截，不能进入 buy；attention=数据偏弱或复用旧快照，仍可研究但需看原因。",
+    }
+
+
+def _write_data_usability_audit(payload: dict[str, Any]) -> None:
+    DATA_USABILITY_AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(DATA_USABILITY_AUDIT_PATH, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
 
 
 def _rating(total: float) -> str:
@@ -542,12 +808,13 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
         price_action_flags = _apply_price_action_review_gate(row, scores)
         if not price_action_flags:
             price_action_flags = _price_action_warning_flags(row)
+        data_usability_flags = _apply_data_usability_gate(row, scores)
         total = scores["total"]
         scored.append({
             **row,
             "total_score": total,
             "factor_scores": scores,
-            "risk_flags": price_action_flags + _quality_flags(row),
+            "risk_flags": data_usability_flags + price_action_flags + _quality_flags(row),
             "rating": _rating(total),
             "signal": _signal(total),
         })
@@ -558,6 +825,12 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
         market_rows.sort(key=lambda x: (-x["total_score"], x["symbol"]))
         selected.extend(market_rows[:top_per_market])
     selected.sort(key=lambda x: (x["market"], -x["total_score"], x["symbol"]))
+    data_usability_audit = _build_data_usability_audit(
+        scored,
+        selected,
+        run_id=run_id,
+        generated_at=now,
+    )
 
     if dry_run:
         conn.close()
@@ -569,6 +842,12 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
             "price_daily_count": price_daily_count,
             "candidate_count": len(candidates),
             "selected_count": len(selected),
+            "data_usability_audit": {
+                "blocked_count": data_usability_audit["blocked_count"],
+                "attention_count": data_usability_audit["attention_count"],
+                "selected_attention_count": data_usability_audit["selected_attention_count"],
+                "summary_by_market": data_usability_audit["summary_by_market"],
+            },
             "selected": [
                 {"market": r["market"], "symbol": r["symbol"], "name": r["name"], "score": r["total_score"], "signal": r["signal"]}
                 for r in selected
@@ -588,15 +867,23 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
         [
             strategy_version,
             (
-                "V2 system tech universe rule-factor strategy with price-action review gate, "
-                "invalid valuation-ratio guard, and buy-only portfolio eligibility."
+                "V2 system tech universe rule-factor strategy with usable-data gate, "
+                "price-action review gate, invalid valuation-ratio guard, and buy-only portfolio eligibility."
             ),
             json.dumps({
                 "top_per_market": top_per_market,
                 "portfolio_size": portfolio_size,
                 "score_cap_price_action_review": _PRICE_ACTION_REVIEW_SCORE_CAP,
+                "score_cap_data_usability_review": _DATA_USABILITY_REVIEW_SCORE_CAP,
+                "data_usability_min_buy_score": _DATA_USABILITY_MIN_BUY_SCORE,
+                "stale_source_days": _STALE_SOURCE_DAYS,
                 "invalid_valuation_ratio_score": _NEGATIVE_VALUATION_SCORE,
                 "structural_repair_requires": "one_month>=+5%, one_week>=0%, latest_day>-3%",
+                "formula": (
+                    "total=0.15*momentum+(0.65-reversal_w)*valuation+"
+                    "reversal_w*reversal+0.20*data_usability; "
+                    "data_usability gates buy eligibility"
+                ),
             }, ensure_ascii=False),
             now,
             now,
@@ -619,7 +906,8 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
             (
                 f"candidate_count={len(candidates)}; selected_count={len(selected)}; "
                 f"pool_membership={pool_membership_count}; price_daily={price_daily_count}; "
-                "scoring_change=price_action_review_gate+structural_downtrend_gate+invalid_zero_valuation_guard"
+                "scoring_change=usable_data_gate+price_action_review_gate+"
+                "structural_downtrend_gate+invalid_zero_valuation_guard"
             ),
         ],
     )
@@ -698,6 +986,7 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
             """,
             [run_id, now, now],
         )
+    _write_data_usability_audit(data_usability_audit)
     conn.close()
     return {
         "db_path": str(db_path),
@@ -708,6 +997,8 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
         "candidate_count": len(candidates),
         "selected_count": len(selected),
         "portfolio_count": len(portfolio_rows),
+        "data_usability_blocked_count": data_usability_audit["blocked_count"],
+        "data_usability_attention_count": data_usability_audit["attention_count"],
     }
 
 
