@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -200,6 +201,45 @@ def test_megacap_breadth_counts():
     assert mega["stress"] >= 2.0
 
 
+def test_megacap_regular_or_daily_fallback_not_used_as_premarket():
+    """真钱保护：没拿到真实 preMarketPrice 时，巨头广度不拿昨收/日K冒充盘前。"""
+    q = {
+        k: {
+            "last": 100.0,
+            "prev_close": 103.0,
+            "pct": -2.91,
+            "source": k,
+            "source_kind": "fast_info",
+            "ok": True,
+            "premarket": False,
+            "stale_for_premarket": True,
+        }
+        for k in pg.MEGA7
+    }
+    sig = pg._sig_megacap(q)
+    assert sig.available is False
+    assert "可靠盘前价不足" in sig.headline
+    assert len(sig.data["skipped_stale_or_regular"]) == len(pg.MEGA7)
+
+
+def test_megacap_accepts_enough_explicit_premarket_quotes():
+    """拿到足够真实盘前价时，巨头广度正常参与计算。"""
+    q = {
+        "AAPL": _q(pct=-1.2),
+        "MSFT": _q(pct=-1.4),
+        "NVDA": _q(pct=-2.0),
+        "GOOGL": _q(pct=-1.1),
+    }
+    for v in q.values():
+        v["source"] = "live"
+        v["premarket"] = True
+        v["source_kind"] = "premarket"
+    sig = pg._sig_megacap(q)
+    assert sig.available is True
+    assert len(sig.data["down_over_1pct"]) == 4
+    assert sig.stress >= 2.0
+
+
 # ──────────────────────────────────────────────────
 # 宏观日历
 # ──────────────────────────────────────────────────
@@ -255,6 +295,23 @@ def test_macro_real_calendar_overrides_heuristic():
     macro = next(f for f in res.families if f["key"] == "macro")
     assert macro["stress"] == 0.0
     assert macro["data"]["source"] == "finnhub"
+
+
+def test_earnings_aftershock_flags_ai_infra_bellwether():
+    """财报/8-K 后龙头大跌 → 单独识别为 AI 硬件链余波。"""
+    q = _scenario_calm()
+    q["AVGO"] = _q(pct=-12.6)
+    evs = [{"ticker": "AVGO", "event_date": "2026-06-04", "label": "📋 财报", "source": "sec"}]
+    res = pg.compute_gate(
+        quotes=q,
+        as_of=date(2026, 6, 5),
+        now=datetime(2026, 6, 5, 20, 30),
+        earnings_events=evs,
+    )
+    earnings = next(f for f in res.families if f["key"] == "earnings")
+    assert earnings["stress"] >= 2.0
+    assert "earnings_aftershock" in earnings["tags"]
+    assert "ai_hardware" in earnings["tags"]
 
 
 # ──────────────────────────────────────────────────
@@ -445,6 +502,23 @@ def test_staleness_fuse():
     assert _pm_is_stale({"as_of": "2026-06-08"}, datetime(2026, 6, 8, 21, 0)) is False
     # 无 as_of → 保守视为过期
     assert _pm_is_stale({}, datetime(2026, 6, 8, 21, 0)) is True
+    # 周末/非交易日产物 → 立即过期，不能被当成盘前有效预警
+    assert _pm_is_stale({"as_of": "2026-06-06"}, datetime(2026, 6, 6, 17, 0)) is True
+
+
+def test_real_holding_review_snapshot_fallback(tmp_path):
+    from stock_research.jobs import premarket_gate as job
+    p = tmp_path / "real_holding_review.json"
+    p.write_text(json.dumps({
+        "items": [
+            {"symbol": "MRVL", "market": "US", "shares": 50},
+            {"code": "GOOGL", "market": "US"},
+            {"symbol": "", "market": "US"},
+        ]
+    }), encoding="utf-8")
+    rows = job._load_real_holdings_from_review_snapshot(p)
+    assert [r["symbol"] for r in rows] == ["MRVL", "GOOGL"]
+    assert rows[0]["source"] == "real_holding_review_snapshot"
 
 
 if __name__ == "__main__":

@@ -22,8 +22,10 @@
 CLI：
   python3 -m stock_research.jobs.premarket_gate              # 正常跑（按窗口+分级推送）
   python3 -m stock_research.jobs.premarket_gate --dry-run    # 只算只打印，不写 state 不推送
-  python3 -m stock_research.jobs.premarket_gate --push       # 算完按分级推送（同 normal）
-  python3 -m stock_research.jobs.premarket_gate --force      # 无视窗口+state，强制推一次（测试）
+  python3 -m stock_research.jobs.premarket_gate --force      # 演练：无视窗口计算，但不写生产/不推送
+  python3 -m stock_research.jobs.premarket_gate --force --push-production  # 盘前窗口内手动写真推送
+  python3 -m stock_research.jobs.premarket_gate --force --push-production --allow-outside-window-production
+      # 极少数人工应急：允许窗口外写真推送
 
 launchd（北京 20:10 / 20:45 / 21:15）见 docs / LaunchAgents。
 """
@@ -66,6 +68,7 @@ logger = logging.getLogger(__name__)
 OUT_JSON = _REPO / "data" / "latest" / "premarket_gate.json"
 STATE_FILE = _REPO / "data" / "premarket_gate_state.json"
 HISTORY_FILE = _REPO / "data" / "premarket_gate_history.json"
+REAL_HOLDING_REVIEW_JSON = _REPO / "data" / "latest" / "real_holding_review.json"
 
 # 美股 2026 假日（NYSE 全天休市；待人工校准/逐年更新）
 US_HOLIDAYS_2026 = {
@@ -242,6 +245,33 @@ def _build_card(res: pg.GateResult, scan_label: str) -> dict:
     }
 
 
+def _build_downgrade_card(res: pg.GateResult, scan_label: str, previous_color: str) -> dict:
+    """风险降级/解除卡。真钱场景里，解除警报也要主动告诉用户。"""
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    prev_icon = pg.ICON.get(previous_color, "⚪")
+    curr_icon = pg.ICON.get(res.color, "⚪")
+    content = (
+        f"### {curr_icon} 盘前风险已从 {prev_icon}{previous_color} 降到 {curr_icon}{res.color}\n\n"
+        f"**现在怎么做**：{res.can_buy}\n\n"
+        "这不是追涨信号，只表示前一轮警报的压力有所缓解；仍按你的仓位纪律和买前研究执行。"
+    )
+    return {
+        "msg_type": "interactive",
+        "card": {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": f"🚦 盘前风险降级 · {now_str}"},
+                "subtitle": {"tag": "plain_text", "content": scan_label},
+                "template": pg.TEMPLATE.get(res.color, "blue"),
+            },
+            "elements": [
+                {"tag": "div", "text": {"tag": "lark_md", "content": content}},
+                {"tag": "note", "elements": [{"tag": "plain_text", "content": "仅供参考，不是投资建议。"}]},
+            ],
+        },
+    }
+
+
 def _push(card: dict) -> bool:
     webhook = (
         os.environ.get("FEISHU_ALERT_WEBHOOK", "").strip()
@@ -265,17 +295,50 @@ def _push(card: dict) -> bool:
 # 数据
 # ──────────────────────────────────────────────────
 
+def _load_real_holdings_from_review_snapshot(path: Path = REAL_HOLDING_REVIEW_JSON) -> list[dict]:
+    """Fallback: read latest advisory holding review snapshot when DuckDB is locked.
+
+    It is read-only and never writes holdings/watchlist/model portfolios.
+    """
+    if not path.exists():
+        return []
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("持仓快照读取失败: %s", exc)
+        return []
+    out: list[dict] = []
+    for item in doc.get("items") or []:
+        sym = str(item.get("symbol") or item.get("code") or "").strip().upper()
+        if not sym:
+            continue
+        out.append({
+            "symbol": sym,
+            "code": sym,
+            "market": item.get("market") or "US",
+            "shares": item.get("shares") or item.get("remaining_shares"),
+            "source": "real_holding_review_snapshot",
+        })
+    if out:
+        logger.warning("使用 real_holding_review 快照兜底读取真实持仓（%d 只）", len(out))
+    return out
+
+
 def _load_real_holdings() -> list[dict]:
     try:
         import stock_db  # type: ignore
     except Exception as e:
         logger.warning("持仓读取跳过: %s", e)
-        return []
+        return _load_real_holdings_from_review_snapshot()
     try:
-        return stock_db.fetch_all_real_holdings()
+        rows = stock_db.fetch_all_real_holdings()
+        if rows:
+            return rows
+        logger.warning("real_holdings 为空，尝试使用最新持仓体检快照兜底")
+        return _load_real_holdings_from_review_snapshot()
     except Exception as e:
         logger.warning("fetch_all_real_holdings 失败: %s", e)
-        return []
+        return _load_real_holdings_from_review_snapshot()
 
 
 # ──────────────────────────────────────────────────
@@ -303,6 +366,8 @@ def main() -> int:
                    help="无视窗口/state 强制计算（测试用，默认不写生产 JSON、不推飞书）")
     p.add_argument("--push-production", action="store_true",
                    help="配合 --force：明确允许写生产 JSON/state/history 并按档位推送（慎用）")
+    p.add_argument("--allow-outside-window-production", action="store_true",
+                   help="极少数人工应急：允许 --force --push-production 在非盘前窗口写生产")
     args = p.parse_args()
 
     now = datetime.now()
@@ -314,6 +379,9 @@ def main() -> int:
     if not ok_window and not (args.force or args.dry_run):
         logger.info("跳过：%s（--force 可强制跑）", why)
         return 0
+    if args.force and args.push_production and not ok_window and not args.allow_outside_window_production:
+        logger.error("拒绝窗口外写真推送：%s。若确认为人工应急，需显式加 --allow-outside-window-production", why)
+        return 2
 
     # 防近邻重复：launchd 夏/冬令时各排了点，季内可能有两个点挨得很近(如 21:10/21:15)。
     # 同一天若上一次扫描在 18 分钟内，跳过这一次（--force 例外）。
@@ -376,8 +444,13 @@ def main() -> int:
     curr_rank = pg.SEVERITY_ORDER.get(res.color, 0)
     pushed_rank = pg.SEVERITY_ORDER.get(state.get("last_pushed_color", "NONE"), 0)
 
-    # 只有橙/红才推飞书；同日同档（或更低）不重复，升档才再推（--force 不再强推，须档位达标）
+    # 只有橙/红才报警；同日升档才再报警。
+    # 若已推过橙/红，后续明显降级也推一次"解除/降级"，否则用户只收到坏消息，收不到风险缓解。
     should_push = curr_rank >= pg.SEVERITY_ORDER["HIGH"] and curr_rank > pushed_rank
+    should_push_downgrade = (
+        pushed_rank >= pg.SEVERITY_ORDER["HIGH"]
+        and curr_rank < pushed_rank
+    )
 
     if should_push:
         logger.info("🚦 推送飞书：%s（%s）", res.color, scan)
@@ -385,6 +458,15 @@ def main() -> int:
         state["last_pushed_color"] = res.color
         state["last_push_at"] = now.isoformat(timespec="seconds")
         state["last_push_ok"] = ok
+        state["last_push_kind"] = "warning"
+    elif should_push_downgrade:
+        prev = state.get("last_pushed_color", "NONE")
+        logger.info("🚦 推送风险降级：%s → %s（%s）", prev, res.color, scan)
+        ok = _push(_build_downgrade_card(res, scan, prev))
+        state["last_pushed_color"] = res.color
+        state["last_push_at"] = now.isoformat(timespec="seconds")
+        state["last_push_ok"] = ok
+        state["last_push_kind"] = "downgrade"
     else:
         if curr_rank >= pg.SEVERITY_ORDER["HIGH"]:
             logger.info("橙/红但同档已推过，不重复轰炸（%s，今日已推 %s）",

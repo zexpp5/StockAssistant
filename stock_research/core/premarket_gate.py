@@ -15,15 +15,15 @@
     - 都亮                 → 直接橙/红
   所以不是盯某一只，而是看"压力从哪来，传导到你哪些持仓"。
 
-Phase 1 信号族（7 开 + 1 延后）：
+Phase 1 信号族（8 类已接入）：
   1. 美股期货 ES/NQ/RTY     —— 最直接的开盘预读（近 24h 交易）
   2. 利率/美元 10Y/5Y/DXY    —— 急涨杀成长股估值
   3. VIX/期权 PCR           —— 恐慌情绪（复用 options_signals）
   4. 巨头盘前 mag7 广度      —— 7 只里几只盘前跌超 1%
   5. 板块 XLK/SMH/SOXX/XLP/XLU —— 成长杀 vs 单一板块、防御轮动
   6. 海外领先 KOSPI/日经/台股/港股 —— 美股开盘前它们已收，真·领先读数
-  7. 宏观日历 NFP/CPI/FOMC   —— 事件日风险（硬编排表 + 启发式）
-  8. 财报余波（AVGO 类）     —— Phase 2，需财报日历
+  7. 财报余波（AVGO 类）     —— SEC/yfinance 事件日历 + 龙头盘后/盘前反应
+  8. 宏观日历 NFP/CPI/FOMC   —— Finnhub 真实日历优先，失败再启发式兜底
 
 颜色沿用现有语言（NONE/LOW/HIGH/CRITICAL），不发明新体系：
   🟢 NONE     正常研究
@@ -41,9 +41,10 @@ Phase 1 信号族（7 开 + 1 延后）：
 """
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field, asdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -69,6 +70,9 @@ UNIVERSE: dict[str, list[str]] = {
     "XLK": ["XLK"], "SMH": ["SMH"], "SOXX": ["SOXX"], "XLP": ["XLP"], "XLU": ["XLU"],
     # 海外领先（美股开盘前已收）
     "KOSPI": ["^KS11"], "NIKKEI": ["^N225"], "TWSE": ["^TWII"], "HSI": ["^HSI"],
+    # AI 基建财报/盘后传导龙头（用于“财报余波”族，不进巨头广度）
+    "AVGO": ["AVGO"], "MRVL": ["MRVL"], "HPE": ["HPE"], "SMCI": ["SMCI"], "DELL": ["DELL"],
+    "VRT": ["VRT"], "CRDO": ["CRDO"], "TSM": ["TSM"],
 }
 
 MEGA7 = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA"]
@@ -109,6 +113,7 @@ HEADLINE_PLAIN = {
 # 信号族权重（期货最直接，权重最高）
 # 数据质量保险丝阈值：覆盖率低于此，绿/黄不给买入结论
 MIN_COVERAGE = 0.6
+MIN_MEGACAP_PREMARKET_QUOTES = 4
 
 WEIGHTS = {
     "futures": 3.0,
@@ -117,8 +122,29 @@ WEIGHTS = {
     "megacap": 2.0,
     "sector": 1.5,
     "overseas": 1.5,
+    "earnings": 1.5,
     "macro": 1.0,
 }
+
+# NYSE 全天休市（2026；盘前闸门用来避免周末/假日/手工测试产物被当成有效信号）
+US_HOLIDAYS_2026 = {
+    "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
+    "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
+}
+
+AI_AFTERSHOCK_BELLWETHERS = {"AVGO", "MRVL", "HPE", "SMCI", "DELL", "VRT", "CRDO", "TSM", "NVDA"}
+
+
+def is_us_trading_day(d: date) -> bool:
+    """Conservative NYSE trading-day check for the premarket gate."""
+    return d.weekday() < 5 and d.isoformat() not in US_HOLIDAYS_2026
+
+
+def _epoch_to_iso(v: Any) -> str | None:
+    try:
+        return datetime.fromtimestamp(float(v), tz=timezone.utc).isoformat(timespec="seconds")
+    except Exception:
+        return None
 
 
 # ──────────────────────────────────────────────────
@@ -184,7 +210,18 @@ def _fetch_one(yf_symbols: list[str], prefer_premarket: bool = False) -> dict[st
       - 期货近 24h 交易 → last 即盘前/隔夜价（最稳）
       - 海外指数（已收盘）→ last≈今日收盘，pct=今日全天涨跌
     """
-    out = {"last": None, "prev_close": None, "pct": None, "source": "", "ok": False, "premarket": False}
+    out = {
+        "last": None,
+        "prev_close": None,
+        "pct": None,
+        "source": "",
+        "source_kind": "",
+        "ok": False,
+        "premarket": False,
+        "quote_time": None,
+        "quote_date": None,
+        "stale_for_premarket": bool(prefer_premarket),
+    }
     try:
         import yfinance as yf
     except Exception as e:  # pragma: no cover
@@ -204,6 +241,11 @@ def _fetch_one(yf_symbols: list[str], prefer_premarket: bool = False) -> dict[st
                     rc = info.get("regularMarketPreviousClose") or info.get("previousClose")
                     if pm and rc:
                         last, prev, premarket = float(pm), float(rc), True
+                        out["source_kind"] = "premarket"
+                        out["quote_time"] = _epoch_to_iso(
+                            info.get("preMarketTime") or info.get("regularMarketTime")
+                        )
+                        out["stale_for_premarket"] = False
                 except Exception:
                     pass
 
@@ -212,6 +254,7 @@ def _fetch_one(yf_symbols: list[str], prefer_premarket: bool = False) -> dict[st
                     fi = t.fast_info
                     last = float(fi.last_price)
                     prev = float(fi.previous_close)
+                    out["source_kind"] = "fast_info"
                 except Exception:
                     last = prev = None
 
@@ -220,8 +263,15 @@ def _fetch_one(yf_symbols: list[str], prefer_premarket: bool = False) -> dict[st
                 closes = [float(x) for x in h["Close"].tolist() if x == x] if len(h) else []
                 if len(closes) >= 2:
                     last, prev = closes[-1], closes[-2]
+                    out["source_kind"] = "daily_history"
+                    try:
+                        out["quote_date"] = h.index[-1].date().isoformat()
+                    except Exception:
+                        pass
 
             if last is not None and prev and prev > 0:
+                if not prefer_premarket:
+                    out["stale_for_premarket"] = False
                 out.update(
                     last=round(last, 4),
                     prev_close=round(prev, 4),
@@ -255,6 +305,19 @@ def _pct(quotes: dict, key: str) -> float | None:
 def _val(quotes: dict, key: str) -> float | None:
     q = quotes.get(key) or {}
     return q.get("last") if q.get("ok") else None
+
+
+def _quote_is_reliable_premarket(q: dict) -> bool:
+    """Whether a stock quote is acceptable for premarket breadth.
+
+    Live yfinance stock data is only reliable here when it exposes an explicit
+    preMarketPrice. Unit tests inject source=mock to validate historical scenes.
+    """
+    if not q or not q.get("ok"):
+        return False
+    if q.get("source") == "mock" or q.get("source_kind") == "mock":
+        return True
+    return bool(q.get("premarket"))
 
 
 # ──────────────────────────────────────────────────
@@ -406,15 +469,25 @@ def _sig_vol(quotes: dict) -> FamilySignal:
 def _sig_megacap(quotes: dict) -> FamilySignal:
     """巨头盘前广度：7 只里几只盘前跌超 1%。看广度不看单只。"""
     sig = FamilySignal("megacap", "巨头盘前")
-    pcts = {k: _pct(quotes, k) for k in MEGA7}
+    raw = {k: quotes.get(k) or {} for k in MEGA7}
+    pcts = {k: q.get("pct") for k, q in raw.items() if _quote_is_reliable_premarket(q)}
     have = {k: v for k, v in pcts.items() if v is not None}
-    if not have:
+    skipped = [k for k, q in raw.items() if q.get("ok") and not _quote_is_reliable_premarket(q)]
+    if len(have) < MIN_MEGACAP_PREMARKET_QUOTES:
         sig.available = False
-        sig.headline = "巨头盘前未取到"
+        sig.headline = f"巨头可靠盘前价不足（{len(have)}/{len(MEGA7)}）"
+        sig.plain = ("科技巨头没有拿到足够可靠的盘前成交价，"
+                     "这部分不参与今晚结论，避免把昨收/旧价当成盘前信号。")
+        sig.data = {
+            "usable": list(have.keys()),
+            "skipped_stale_or_regular": skipped,
+            "min_required": MIN_MEGACAP_PREMARKET_QUOTES,
+        }
         return sig
     down1 = [k for k, v in have.items() if v <= -1.0]
     avg = sum(have.values()) / len(have)
-    sig.data = {"pct": have, "down_over_1pct": down1, "avg": round(avg, 2)}
+    sig.data = {"pct": have, "down_over_1pct": down1, "avg": round(avg, 2),
+                "usable": list(have.keys()), "skipped_stale_or_regular": skipped}
     n = len(down1)
     if n >= 5:
         sig.stress = 3.0
@@ -437,6 +510,125 @@ def _sig_megacap(quotes: dict) -> FamilySignal:
                      "这几只权重特别大，它们跌，整个指数就难看。")
     else:
         sig.plain = "7 大科技巨头盘前没明显下跌，权重股暂时稳。"
+    return sig
+
+
+def _load_recent_earnings_events(as_of: date, window_days: int = 4) -> list[dict]:
+    """Read recent US earnings/8-K events for AI-infra bellwethers.
+
+    Uses local SEC/yfinance event artifacts only. Missing files are a soft
+    degrade; the premarket gate still runs on price/cross-market signals.
+    """
+    start = as_of - timedelta(days=window_days)
+    events: list[dict] = []
+    paths = [
+        (_REPO_ROOT_PG / "data" / "event_calendar_us_sec.json", "sec"),
+        (_REPO_ROOT_PG / "data" / "event_calendar_us.json", "earnings_calendar"),
+    ]
+    for path, source_name in paths:
+        if not path.exists():
+            continue
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.debug("earnings event read failed %s: %s", path.name, str(exc)[:80])
+            continue
+        for ev in doc.get("events") or []:
+            sym = str(ev.get("ticker") or ev.get("symbol") or "").upper()
+            if sym not in AI_AFTERSHOCK_BELLWETHERS:
+                continue
+            try:
+                ed = date.fromisoformat(str(ev.get("event_date") or "")[:10])
+            except Exception:
+                continue
+            if not (start <= ed <= as_of):
+                continue
+            label = str(ev.get("item_label") or ev.get("event_type") or ev.get("description") or "")
+            primary = str(ev.get("primary_item") or "")
+            items = ev.get("items") or []
+            is_earnings = (
+                "财报" in label
+                or "earnings" in label.lower()
+                or ev.get("event_type") == "earnings"
+                or ev.get("event_type") == "earnings_upcoming"
+                or primary == "2.02"
+                or "2.02" in items
+            )
+            if not is_earnings:
+                continue
+            events.append({
+                "ticker": sym,
+                "name": ev.get("name") or sym,
+                "event_date": ed.isoformat(),
+                "label": label or "earnings",
+                "source": source_name,
+                "description": ev.get("description") or ev.get("title") or label,
+            })
+    # de-dupe by ticker/date/source
+    seen = set()
+    out: list[dict] = []
+    for ev in sorted(events, key=lambda x: (x["event_date"], x["ticker"]), reverse=True):
+        key = (ev["ticker"], ev["event_date"], ev["source"])
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(ev)
+    return out
+
+
+def _sig_earnings_aftershock(quotes: dict, as_of: date,
+                             events: list[dict] | None = None) -> FamilySignal:
+    """AI infra bellwether earnings / after-hours shock transmission.
+
+    This catches the AVGO/HPE/SMCI/MRVL style pattern: a bellwether reports,
+    then the whole AI hardware chain reprices before the next US open.
+    """
+    sig = FamilySignal("earnings", "财报/盘后余波")
+    evs = events if events is not None else _load_recent_earnings_events(as_of)
+    tickers = sorted({str(e.get("ticker") or "").upper() for e in evs if e.get("ticker")})
+    moves = {}
+    for sym in tickers:
+        p = _pct(quotes, sym)
+        if p is not None:
+            moves[sym] = p
+
+    sig.data = {"events": evs[:12], "tickers": tickers, "moves": moves}
+    if not evs:
+        sig.stress = 0.0
+        sig.headline = "近几天没有 AI 基建龙头财报事件"
+        sig.plain = "近几天没有命中 AI 基建龙头的财报/8-K 余波事件。"
+        return sig
+    if not moves:
+        sig.available = False
+        sig.headline = f"有财报事件但未拿到盘前/现价：{' '.join(tickers[:6])}"
+        sig.plain = "命中了 AI 基建龙头财报事件，但没拿到对应行情，先不把它计入压力分。"
+        return sig
+
+    worst_sym = min(moves, key=moves.get)
+    worst = moves[worst_sym]
+    negatives = [s for s, p in moves.items() if p <= -3.0]
+    if worst <= -10:
+        sig.stress = 3.0
+    elif worst <= -6:
+        sig.stress = 2.0
+    elif worst <= -3:
+        sig.stress = 1.0
+    else:
+        sig.stress = 0.0
+    if sig.stress >= 1.0:
+        sig.tags += ["earnings_aftershock", "ai_hardware"]
+    sig.headline = f"{worst_sym} 财报/盘后相关跌幅 {worst:+.1f}%"
+    if len(negatives) >= 2:
+        sig.stress = min(3.0, sig.stress + 0.5)
+        sig.headline += f" · {len(negatives)} 只龙头跌超 3%"
+    if sig.stress >= 2.0:
+        sig.plain = (f"{worst_sym} 这类 AI 基建龙头刚经历财报/8-K 事件后明显下跌（约 {worst:+.1f}%）。"
+                     "这不是单只股票的问题，可能会传导到 MRVL/AVGO/HPE/SMCI/DELL 这条 AI 硬件链。")
+    elif sig.stress >= 1.0:
+        sig.plain = (f"{worst_sym} 财报/盘后余波偏负面（{worst:+.1f}%），"
+                     "AI 硬件链今晚需要更谨慎。")
+    else:
+        sig.plain = "近几天虽有 AI 基建龙头财报事件，但相关股票没有明显负面反应。"
     return sig
 
 
@@ -821,10 +1013,12 @@ def compute_gate(
     now: datetime | None = None,
     holdings: list[dict] | None = None,
     econ_calendar: list[dict] | None = None,
+    earnings_events: list[dict] | None = None,
 ) -> GateResult:
     """主入口。quotes 不传则实时拉取（测试可注入复现历史场景）。
 
     econ_calendar 不传且实盘(quotes 也不传)时，从 Finnhub 拉真实经济日历；
+    earnings_events 不传且实盘时，从本地 SEC/yfinance 事件日历读近期财报余波；
     测试注入 quotes 时不联网，econ_calendar 为 None → 宏观族退回启发式。
     """
     live = quotes is None
@@ -834,6 +1028,8 @@ def compute_gate(
         quotes = fetch_all_quotes()
     if econ_calendar is None and live:
         econ_calendar = fetch_us_econ_calendar(as_of)
+    if earnings_events is None and live:
+        earnings_events = _load_recent_earnings_events(as_of)
 
     families = [
         _sig_futures(quotes),
@@ -842,6 +1038,7 @@ def compute_gate(
         _sig_megacap(quotes),
         _sig_sector(quotes),
         _sig_overseas(quotes),
+        _sig_earnings_aftershock(quotes, as_of, earnings_events),
         _sig_macro(as_of, now, econ_calendar),
     ]
 

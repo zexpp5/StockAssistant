@@ -73,16 +73,23 @@ def _pm_us_close_beijing(as_of_iso: str):
 def _pm_is_stale(doc: dict, now=None) -> bool:
     """时效保险丝：预警只对当场美股交易日有效，过了该日收盘即过期。
 
-    无 as_of → 视为过期(宁可保守)。算不出收盘时间 → 不强制过期(兜底)。
+    无 as_of / 非交易日 / 算不出收盘时间 → 视为过期(宁可保守)。
     """
-    from datetime import datetime as _dt
+    from datetime import date as _date, datetime as _dt
+    from stock_research.core import premarket_gate as _pg
     now = now or _dt.now()
     as_of = doc.get("as_of")
     if not as_of:
         return True
+    try:
+        d = _date.fromisoformat(str(as_of))
+    except Exception:
+        return True
+    if not _pg.is_us_trading_day(d):
+        return True
     close_bj = _pm_us_close_beijing(as_of)
     if close_bj is None:
-        return False
+        return True
     return now > close_bj
 
 
