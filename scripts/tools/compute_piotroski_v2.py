@@ -379,6 +379,12 @@ def main() -> int:
     parser.add_argument("--markets", default="US,HK", help="逗号分隔市场代码")
     parser.add_argument("--symbols", default="", help="逗号分隔 symbol 限定（覆盖 markets）")
     parser.add_argument("--limit", type=int, default=0, help="限量测试，>0 才生效")
+    # 2026-06-08 流水线改造：F-Score 是季度财报数据、日内不变。早班只补缺(读缓存)，
+    #   全量重算放夜班/增强子进程。--only-missing 跳过已有近期 f_score 的标的(秒级)。
+    parser.add_argument("--only-missing", action="store_true",
+                        help="只算 factor_metadata 里缺 f_score 或 f_score 已过期(>reuse-recent-days)的标的；早班补缺用")
+    parser.add_argument("--reuse-recent-days", type=int, default=7,
+                        help="--only-missing 时,computed_at 在 N 天内的 f_score 视为可用、跳过(默认7)")
     args = parser.parse_args()
 
     conn = get_db()
@@ -418,6 +424,23 @@ def main() -> int:
             f"SELECT market, symbol FROM system_universe WHERE active=true AND market IN ({placeholders})",
             markets,
         ).fetchall()
+    if args.only_missing:
+        # 跳过已有近期 f_score 的标的（季度财报日内不变，复用缓存）
+        fresh_rows = conn.execute(
+            f"""
+            SELECT market, symbol FROM factor_metadata
+            WHERE f_score IS NOT NULL
+              AND computed_at >= CURRENT_TIMESTAMP - INTERVAL '{int(args.reuse_recent_days)}' DAY
+            """
+        ).fetchall()
+        fresh = {(m, s) for m, s in fresh_rows}
+        before = len(targets)
+        targets = [t for t in targets if (t[0], t[1]) not in fresh]
+        logger.info(
+            "--only-missing: 总 %d 只,已有近 %d 天内 f_score 跳过 %d 只,待补缺 %d 只",
+            before, args.reuse_recent_days, before - len(targets), len(targets),
+        )
+
     if args.limit:
         targets = targets[:args.limit]
     logger.info("待计算 %d 只", len(targets))
