@@ -105,6 +105,9 @@ HEADLINE_PLAIN = {
 }
 
 # 信号族权重（期货最直接，权重最高）
+# 数据质量保险丝阈值：覆盖率低于此，绿/黄不给买入结论
+MIN_COVERAGE = 0.6
+
 WEIGHTS = {
     "futures": 3.0,
     "rates": 2.0,
@@ -153,6 +156,7 @@ class GateResult:
     holdings_impact: list[dict] = field(default_factory=list)  # [{symbol, reason}]
     pressure_sources: list[str] = field(default_factory=list)
     coverage: float = 1.0         # 数据覆盖率（拿到/应拿）
+    insufficient_data: bool = False  # 数据质量保险丝：覆盖率过低，绿/黄时不给买入结论
     notes: list[str] = field(default_factory=list)
 
     @property
@@ -765,6 +769,20 @@ def compute_gate(
         reasons_plain = ["🟢 " + r for r in tw_reasons]
         reasons = [f"顺风：{r}" for r in tw_reasons]
 
+    # 数据质量保险丝：覆盖率过低时，绿/黄不给"可以买"的全清结论（缺的部分可能藏着风险）；
+    # 红/橙仍可警（已有信号足以预警）。
+    insufficient_data = coverage < MIN_COVERAGE
+    if insufficient_data:
+        is_tailwind = False
+        if SEVERITY_ORDER.get(color, 0) < SEVERITY_ORDER["HIGH"]:
+            headline = "❓ 数据不足：行情没拿全，今晚不给可靠结论"
+            can_buy = (f"今晚只拿到约 {coverage:.0%} 的行情数据，不全——不给买入/卖出结论。"
+                       "建议手动确认或保守对待（缺的那部分可能正藏着风险）。")
+            reasons_plain = ["❓ 部分行情源没取到，无法确认环境是否安全。"]
+            reasons = [f"数据不足：覆盖率仅 {coverage:.0%}"]
+        else:
+            notes.append("⚠️ 数据不全，但已有信号足以预警")
+
     return GateResult(
         as_of=as_of.isoformat(),
         generated_at=(now or datetime.now()).isoformat(timespec="seconds"),
@@ -782,6 +800,7 @@ def compute_gate(
         holdings_impact=holdings_impact,
         pressure_sources=pressure_sources,
         coverage=coverage,
+        insufficient_data=insufficient_data,
         notes=notes,
     )
 

@@ -134,6 +134,25 @@ def test_no_tailwind_when_warning():
     assert res.is_tailwind is False and res.tailwind_score == 0
 
 
+def test_insufficient_data_no_buy_conclusion():
+    """覆盖率太低 → 不给买入结论(数据不足)，且不喊顺风。"""
+    q = {"VIX": _q(last=14.0, prev=14.0)}  # 只有 VIX，其它全缺
+    res = pg.compute_gate(quotes=q, as_of=date(2026, 6, 9), now=datetime(2026, 6, 9, 20, 30))
+    assert res.insufficient_data is True
+    assert "数据不足" in res.headline_plain
+    assert res.is_tailwind is False
+    assert res.coverage < 0.6
+
+
+def test_insufficient_data_still_warns_when_red():
+    """覆盖率低但已有信号暴跌 → 仍预警，红灯不被覆盖成"数据不足"。"""
+    q = {"NQ": _q(pct=-3.0)}  # 只有期货且暴跌
+    res = pg.compute_gate(quotes=q, as_of=date(2026, 6, 9), now=datetime(2026, 6, 9, 20, 30))
+    assert res.insufficient_data is True
+    assert pg.SEVERITY_ORDER[res.color] >= pg.SEVERITY_ORDER["HIGH"]
+    assert "数据不足" not in res.headline_plain
+
+
 def test_vix_panic_forces_critical():
     """VIX≥40 硬覆盖到 CRITICAL。"""
     q = _scenario_calm()
