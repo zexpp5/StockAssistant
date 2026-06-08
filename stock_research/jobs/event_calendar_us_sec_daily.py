@@ -21,6 +21,7 @@ EDGAR Rate Limit: 10 req/s，User-Agent 必填（含联系邮箱）。
 """
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import sys
@@ -291,7 +292,21 @@ def _gather_universe() -> dict[str, str]:
     return out
 
 
+def _filter_universe(universe: dict[str, str], symbols_arg: str = "", limit: int = 0) -> dict[str, str]:
+    if symbols_arg:
+        symbols = [s.strip().upper() for s in symbols_arg.split(",") if s.strip()]
+        return {sym: universe.get(sym, "") for sym in symbols}
+    if limit and limit > 0:
+        return dict(sorted(universe.items())[:limit])
+    return universe
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Refresh US SEC EDGAR event calendar.")
+    parser.add_argument("--symbols", default="", help="Comma-separated US tickers to refresh; defaults to full universe.")
+    parser.add_argument("--limit", type=int, default=0, help="Limit tickers after sorting when --symbols is not provided.")
+    args = parser.parse_args()
+
     try:
         import requests
     except ImportError:
@@ -304,7 +319,7 @@ def main() -> int:
         logger.error("SEC ticker mapping 缺失，无法继续")
         return 2
 
-    universe = _gather_universe()
+    universe = _filter_universe(_gather_universe(), args.symbols, args.limit)
     logger.info("覆盖 %d 只美股 ticker", len(universe))
 
     events: list[dict] = []
@@ -365,6 +380,9 @@ def main() -> int:
     }
 
     out = REPO / "data" / "event_calendar_us_sec.json"
+    if hit == 0 and out.exists():
+        logger.error("SEC EDGAR 本轮 0 命中，保留旧文件不覆盖: %s", out)
+        return 2
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 

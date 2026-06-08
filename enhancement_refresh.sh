@@ -235,6 +235,67 @@ estep() {
     write_enh_status "RUNNING"
 }
 
+priority_us_symbols() {
+    local limit="${1:-45}"
+    SYMBOL_LIMIT="$limit" "$PYTHON" - <<'PY' 2>/dev/null || true
+import os
+from pathlib import Path
+
+repo = Path.cwd()
+limit = int(os.environ.get("SYMBOL_LIMIT") or "45")
+symbols: list[str] = []
+try:
+    import duckdb
+    con = duckdb.connect(str(repo / "stock_history_v2.duckdb"), read_only=True)
+    try:
+        row = con.execute(
+            """
+            SELECT run_id
+            FROM recommendation_runs
+            WHERE universe_scope = 'system_tech_universe'
+            ORDER BY generated_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if row:
+            symbols = [
+                r[0] for r in con.execute(
+                    """
+                    SELECT symbol
+                    FROM recommendation_picks
+                    WHERE run_id = ? AND market = 'US'
+                    ORDER BY
+                      CASE WHEN signal = 'buy' THEN 0 ELSE 1 END,
+                      total_score DESC
+                    LIMIT ?
+                    """,
+                    [row[0], limit],
+                ).fetchall()
+                if r[0]
+            ]
+        if not symbols:
+            symbols = [
+                r[0] for r in con.execute(
+                    """
+                    SELECT symbol
+                    FROM system_universe
+                    WHERE market = 'US'
+                    ORDER BY symbol
+                    LIMIT ?
+                    """,
+                    [limit],
+                ).fetchall()
+                if r[0]
+            ]
+    finally:
+        con.close()
+except Exception:
+    pass
+
+print(",".join(dict.fromkeys(str(s).upper() for s in symbols if s)))
+PY
+}
+
 echo "================================================"
 echo "  🔧 $TS_START — 早班异步增强开始（PID $$, DOW=$DOW）"
 echo "================================================"
@@ -242,13 +303,18 @@ write_enh_status "RUNNING"
 
 # === 重网络增强步（全部 DEGRADE 级，永不阻断已发出的早班简报）===
 
-# F-Score 全量重算（早班只补缺，这里全刷新季报 → 刷新 computed_at 新鲜度）
-estep "f_score" "F-Score 全量重算（季报）" "scripts/tools/compute_piotroski_v2.py --markets US,HK,CN" 600
+# F-Score 季报日内不变；早班增强只补缺/检查缓存，全量刷新交给 21:00 研究线。
+estep "f_score" "F-Score 补缺/缓存检查（季报）" "scripts/tools/compute_piotroski_v2.py --markets US,HK,CN --only-missing" 180
 
 # 事件/披露增强
+US_PRIORITY_SYMBOLS="$(priority_us_symbols 45)"
+US_PRIORITY_ARGS=""
+if [ -n "$US_PRIORITY_SYMBOLS" ]; then
+    US_PRIORITY_ARGS=" --symbols $US_PRIORITY_SYMBOLS"
+fi
 estep "hkex"       "港股 HKEX 披露易公告"               "-m stock_research.jobs.event_calendar_hk_hkex_daily" 240
-estep "sec_edgar"  "美股 SEC EDGAR（8-K/13G/13D/14A）"   "-m stock_research.jobs.event_calendar_us_sec_daily" 240
-estep "form4"      "美股 SEC Form 4 内部人交易"          "-m stock_research.jobs.event_calendar_us_form4_daily" 300
+estep "sec_edgar"  "美股 SEC EDGAR（重点推荐票）"        "-m stock_research.jobs.event_calendar_us_sec_daily$US_PRIORITY_ARGS" 240
+estep "form4"      "美股 SEC Form 4（重点推荐票）"       "-m stock_research.jobs.event_calendar_us_form4_daily$US_PRIORITY_ARGS" 300
 # IPO/次新:尊重 IPO_JUNIOR_PAUSED 暂停开关(默认暂停),与 daily_refresh 同口径
 if [ "$IPO_JUNIOR_PAUSED" != "1" ]; then
     estep "ipo"    "IPO 打新日历"                       "-m stock_research.jobs.ipo_daily" 180
@@ -258,9 +324,9 @@ else
     eskip "junior" "次新股+解禁雷达" "IPO/次新股模块暂停（IPO_JUNIOR_PAUSED=1）"
 fi
 
-# AI 主题雷达证据（周一全量 ETF+SEC 扫描，平日轻量）
+# AI 主题雷达证据：早班增强只做轻量/ETF；SEC 全扫留给 21:00 研究线，避免拖黄早班状态。
 if [ "$DOW" = "1" ]; then
-    estep "ai_theme" "AI 主题雷达证据（周一全量 ETF+SEC）" "-m stock_research.jobs.ai_theme_evidence_refresh --refresh-etf --scan-sec" 600
+    estep "ai_theme" "AI 主题雷达证据（周一 ETF + 缓存）" "-m stock_research.jobs.ai_theme_evidence_refresh --refresh-etf" 300
 else
     estep "ai_theme" "AI 主题雷达证据（每日轻量）"         "-m stock_research.jobs.ai_theme_evidence_refresh" 240
 fi

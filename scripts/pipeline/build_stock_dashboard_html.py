@@ -17679,7 +17679,7 @@ def runtime_status_panel_html() -> str:
             "status": enhancement_level,
             "schedule": "08:30 主线完成后自动跑",
             "time": enhancement_time,
-            "pulls": "F-Score 全量、SEC、Form 4、HKEX、主题证据、策略诊断",
+            "pulls": "F-Score 补缺、SEC/Form 4 重点票、HKEX、主题证据、策略诊断",
             "got": enhancement_detail,
             "where": "data/latest/enhancement_status.json",
             "detail": "不阻断早班交付；降级时页面继续用缓存并标新鲜度。",
