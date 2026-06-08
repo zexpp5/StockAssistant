@@ -58,6 +58,34 @@ def _pm_rec_time(r: dict) -> str:
     return scans[-1].get("at", "") if scans else ""
 
 
+def _pm_us_close_beijing(as_of_iso: str):
+    """as_of 那个美股交易日的收盘(16:00 ET)对应的北京时间（naive）。"""
+    try:
+        from zoneinfo import ZoneInfo
+        from datetime import date as _date, datetime as _dt
+        d = _date.fromisoformat(as_of_iso)
+        c = _dt(d.year, d.month, d.day, 16, 0, tzinfo=ZoneInfo("America/New_York"))
+        return c.astimezone(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
+    except Exception:
+        return None
+
+
+def _pm_is_stale(doc: dict, now=None) -> bool:
+    """时效保险丝：预警只对当场美股交易日有效，过了该日收盘即过期。
+
+    无 as_of → 视为过期(宁可保守)。算不出收盘时间 → 不强制过期(兜底)。
+    """
+    from datetime import datetime as _dt
+    now = now or _dt.now()
+    as_of = doc.get("as_of")
+    if not as_of:
+        return True
+    close_bj = _pm_us_close_beijing(as_of)
+    if close_bj is None:
+        return False
+    return now > close_bj
+
+
 def _pm_summary_html(summ: dict) -> str:
     """战绩汇总卡：统计格 + 样本量提示 + 颜色分档 + 基准对照。"""
     sd = summ.get("settled_days", 0)
@@ -1608,6 +1636,10 @@ _sys.exit(rc)
         try:
             doc = json.loads(p.read_text(encoding="utf-8"))
             doc["available"] = True
+            # 时效保险丝：过了当场美股交易日收盘即过期，前端据此不再当有效红灯
+            doc["stale"] = _pm_is_stale(doc)
+            vu = _pm_us_close_beijing(doc.get("as_of", ""))
+            doc["valid_until"] = vu.isoformat(timespec="minutes") if vu else None
             return doc
         except Exception as e:
             return {"available": False, "color": "NONE", "reason": f"读取失败: {e}"}
@@ -1685,9 +1717,20 @@ _sys.exit(rc)
             foot_html = ('<div class="foot">📖 这是「美股开盘前的看天气」：开盘前帮你看今晚适不适合买。'
                          '🟢正常买 🟡小仓试 🟠先别开新仓 🔴别买只看好已有 · ⚠️ 仅供参考，不是投资建议</div>')
         else:
+            stale = _pm_is_stale(doc)
             color = doc.get("color", "NONE")
-            accent, bg, border = THEME.get(color, THEME["NONE"])
+            if stale:
+                # 过期：不再当有效红灯，整体灰显 + 顶部说明
+                accent, bg, border = "#64748b", "#f1f5f9", "#cbd5e1"
+            else:
+                accent, bg, border = THEME.get(color, THEME["NONE"])
+            stale_html = ('<div style="background:#f1f5f9;border:1px solid #cbd5e1;border-radius:10px;'
+                          'padding:10px 14px;margin-bottom:12px;font-size:13px;color:#475569">'
+                          '⏸ 这是<b>上一场预警，已过期</b>（美股那场已收盘）。今晚的预警要等盘前'
+                          '（北京约 20:10/20:45/21:15）才生成，届时这里会自动更新。</div>') if stale else ""
             head = esc(doc.get("headline_plain", ""))
+            if stale:
+                head = "⏸ 上一场预警（已过期）"
             can_buy = esc(doc.get("can_buy", ""))
             top = doc.get("top_alarm", "")
             top_html = (f'<div class="alarm">{esc(top)}</div>') if top else ""
@@ -1715,6 +1758,7 @@ _sys.exit(rc)
             when_html = (f'<div class="when">⏱ 预警时间 {gen} · {scan}</div>'
                          if gen else "")
             body = f"""
+            {stale_html}
             <div class="hero" style="background:{bg};border-color:{border}">
               <div class="verdict" style="color:{accent}">{head}</div>
               {when_html}

@@ -375,5 +375,19 @@ def test_window_skips_weekend():
     assert job._is_valid_window(datetime(2026, 6, 13, 21, 15))[0] is False  # 周六
 
 
+# ──────────────────────────────────────────────────
+# 时效保险丝（过期预警自动失效）
+# ──────────────────────────────────────────────────
+
+def test_staleness_fuse():
+    from stock_research.api.main import _pm_is_stale
+    # 周五的预警，到下周一已过期
+    assert _pm_is_stale({"as_of": "2026-06-05"}, datetime(2026, 6, 8, 21, 0)) is True
+    # 当晚盘前(美股周一上午、未收盘)不过期
+    assert _pm_is_stale({"as_of": "2026-06-08"}, datetime(2026, 6, 8, 21, 0)) is False
+    # 无 as_of → 保守视为过期
+    assert _pm_is_stale({}, datetime(2026, 6, 8, 21, 0)) is True
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
