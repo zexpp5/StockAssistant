@@ -157,6 +157,7 @@ def _load_outcome_summary(conn: duckdb.DuckDBPyConnection, strategy_version: str
               ON rp.run_id = po.run_id AND rp.market = po.market AND rp.symbol = po.symbol
             WHERE po.run_id IN ({placeholders})
               AND po.alpha_pct IS NOT NULL
+              AND isfinite(po.alpha_pct)
               AND LOWER(COALESCE(rp.signal, rp.rating, '')) IN ('buy', 'strong_buy')
         ) dpo
         JOIN recommendation_runs rr ON rr.run_id = dpo.run_id

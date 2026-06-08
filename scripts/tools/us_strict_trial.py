@@ -410,6 +410,7 @@ def _evidence_samples(
             AND rp.market = 'US'
             AND LOWER(COALESCE(rp.signal, rp.rating, '')) IN ('buy', 'strong_buy')
             AND po.alpha_pct IS NOT NULL
+            AND isfinite(po.alpha_pct)
         )
         ORDER BY generated_at ASC, market_rank ASC
         """,

@@ -17,6 +17,8 @@ Per the 2026-05-20 user plan: 做策略验证最小闭环 — 每天更新 pick_
 """
 from __future__ import annotations
 
+import bisect
+import math
 import os
 import sys
 from datetime import date, timedelta
@@ -111,6 +113,37 @@ def _next_trade_day_close(conn, market: str, symbol: str, target_date: date) -> 
     return row[0], float(row[1])
 
 
+def _trading_days(conn, market: str) -> list[date]:
+    """该市场交易日历 —— 用 benchmark 在 price_daily 的 trade_date（benchmark 每日灌，最全）。"""
+    benchmark = BENCHMARK_BY_MARKET.get(str(market).upper())
+    if not benchmark:
+        return []
+    rows = conn.execute(
+        "SELECT DISTINCT trade_date FROM price_daily WHERE market = ? AND symbol = ? ORDER BY trade_date",
+        [market, benchmark],
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
+def _nth_trading_day_after(days: list[date], start: date, n: int) -> date | None:
+    """start 之后第 n 个交易日（第 N 个交易日口径，非 +N 自然日，避免 5d/20d 跨周末错位）。"""
+    i = bisect.bisect_right(days, start)
+    idx = i + n - 1
+    return days[idx] if 0 <= idx < len(days) else None
+
+
+def _close_on(conn, market: str, symbol: str, d: date) -> float | None:
+    """price_daily 中 symbol 在 d 当天的收盘（精确日；缺失或非有限值返回 None，根治 NaN 入库）。"""
+    row = conn.execute(
+        "SELECT close FROM price_daily WHERE market = ? AND symbol = ? AND trade_date = ?",
+        [market, symbol, d],
+    ).fetchone()
+    if not row or row[0] is None:
+        return None
+    v = float(row[0])
+    return v if math.isfinite(v) else None
+
+
 def main() -> int:
     db_path = os.environ.get("STOCK_DB_PATH") or str(REPO / "stock_history_v2.duckdb")
     conn = duckdb.connect(db_path)
@@ -146,97 +179,77 @@ def main() -> int:
             )
         """)
 
+        trading_days_cache: dict[str, list[date]] = {}
         for run_id, run_date in runs:
             picks = conn.execute(
                 """
-                SELECT market, symbol, entry_price FROM recommendation_picks
+                SELECT market, symbol FROM recommendation_picks
                 WHERE run_id = ?
-                  AND COALESCE(signal, 'buy') = 'buy'
+                  AND LOWER(COALESCE(signal, rating, '')) IN ('buy', 'strong_buy')
                 """,
                 [run_id],
             ).fetchall()
-            for market, symbol, entry_price in picks:
-                if entry_price is None or entry_price <= 0:
+            for market, symbol in picks:
+                mkey = str(market).upper()
+                # 入场价 = 推荐日（run_date）收盘价 —— 统一可复现基准点。
+                # entry_price 是写 run 时的盘中价，系统性偏离收盘（例 META 6-01 entry 632.51 vs 收盘 600.47），
+                # 会让 alpha 虚高；双源验证真实严筛 1D 为 +0.54%，而 entry_price 口径虚高到 +1.65%。
+                entry_close = _close_on(conn, market, symbol, run_date)
+                if entry_close is None or entry_close <= 0:
                     continue
-                benchmark = BENCHMARK_BY_MARKET.get(str(market).upper())
+                benchmark = BENCHMARK_BY_MARKET.get(mkey)
+                if mkey not in trading_days_cache:
+                    trading_days_cache[mkey] = _trading_days(conn, market)
+                days = trading_days_cache[mkey]
+                bench_entry = _close_on(conn, market, benchmark, run_date) if benchmark else None
                 for horizon_name, horizon_days in HORIZONS.items():
-                    target_date = run_date + timedelta(days=horizon_days)
-                    if target_date > today:
+                    # 第 N 个交易日（非 +N 自然日）
+                    outcome_date = _nth_trading_day_after(days, run_date, horizon_days)
+                    if outcome_date is None or outcome_date > today:
                         skipped_immature += 1
                         continue
-                    # 已写过且 alpha 已补齐才跳过；早先可能因为 benchmark 缺失只写了 return_pct，
-                    # 后续 benchmark 到库后需要幂等回填 benchmark_pct / alpha_pct。
+                    # 幂等：已算且 alpha 有限就跳过。换口径重跑时先 DELETE 历史 outcome，使其全部重算。
                     existing = conn.execute(
-                        """
-                        SELECT outcome_date, return_pct, alpha_pct
-                        FROM pick_outcomes
-                        WHERE run_id=? AND market=? AND symbol=? AND horizon=?
-                        """,
+                        "SELECT alpha_pct FROM pick_outcomes WHERE run_id=? AND market=? AND symbol=? AND horizon=?",
                         [run_id, market, symbol, horizon_name],
                     ).fetchone()
-                    if existing and existing[2] is not None:
+                    if existing and existing[0] is not None and math.isfinite(float(existing[0])):
                         continue
-                    if existing and existing[0] is not None and existing[1] is not None:
-                        outcome_date = existing[0]
-                        return_pct = float(existing[1])
-                    else:
-                        # 标的当期 close
-                        stock_row = _next_trade_day_close(conn, market, symbol, target_date)
-                        if not stock_row:
-                            continue
-                        outcome_date, stock_close = stock_row
-                        return_pct = (stock_close / float(entry_price) - 1) * 100
-                    # 基准
+                    stock_exit = _close_on(conn, market, symbol, outcome_date)
+                    if stock_exit is None:
+                        continue
+                    return_pct = (stock_exit / entry_close - 1) * 100
                     benchmark_pct = None
-                    if benchmark:
-                        bench_entry = _fetch_benchmark_close(
-                            bench_cache, benchmark, run_date, conn=conn, market=market,
-                        )
-                        bench_exit = _fetch_benchmark_close(
-                            bench_cache, benchmark, outcome_date, conn=conn, market=market,
-                        )
-                        if bench_entry and bench_exit and bench_entry > 0:
-                            benchmark_pct = (bench_exit / bench_entry - 1) * 100
-                    alpha_pct = (return_pct - benchmark_pct) if benchmark_pct is not None else None
+                    if benchmark and bench_entry and bench_entry > 0:
+                        bench_exit = _close_on(conn, market, benchmark, outcome_date)
+                        if bench_exit is not None and bench_exit > 0:
+                            bp = (bench_exit / bench_entry - 1) * 100
+                            benchmark_pct = bp if math.isfinite(bp) else None
+                    alpha_pct = None
+                    if benchmark_pct is not None and math.isfinite(return_pct):
+                        a = return_pct - benchmark_pct
+                        alpha_pct = a if math.isfinite(a) else None
                     is_success = bool(alpha_pct is not None and alpha_pct > 0)
-                    if existing:
-                        if alpha_pct is None:
-                            continue
-                        conn.execute(
-                            """
-                            UPDATE pick_outcomes
-                            SET benchmark_symbol=?,
-                                benchmark_pct=?,
-                                alpha_pct=?,
-                                is_success=?,
-                                updated_at=CURRENT_TIMESTAMP
-                            WHERE run_id=? AND market=? AND symbol=? AND horizon=?
-                            """,
-                            [
-                                benchmark,
-                                round(benchmark_pct, 4) if benchmark_pct is not None else None,
-                                round(alpha_pct, 4),
-                                is_success,
-                                run_id, market, symbol, horizon_name,
-                            ],
-                        )
-                        backfilled += 1
-                    else:
-                        conn.execute(
-                            """
-                            INSERT INTO pick_outcomes (
-                                run_id, market, symbol, horizon, outcome_date,
-                                return_pct, benchmark_symbol, benchmark_pct, alpha_pct,
-                                is_success, updated_at
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                            """,
-                            [run_id, market, symbol, horizon_name, outcome_date,
-                             round(return_pct, 4), benchmark,
-                             round(benchmark_pct, 4) if benchmark_pct is not None else None,
-                             round(alpha_pct, 4) if alpha_pct is not None else None,
-                             is_success],
-                        )
-                        wrote += 1
+                    # DELETE+INSERT：换口径时旧行被新口径覆盖（有效行已在上面幂等跳过）。
+                    conn.execute(
+                        "DELETE FROM pick_outcomes WHERE run_id=? AND market=? AND symbol=? AND horizon=?",
+                        [run_id, market, symbol, horizon_name],
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO pick_outcomes (
+                            run_id, market, symbol, horizon, outcome_date,
+                            return_pct, benchmark_symbol, benchmark_pct, alpha_pct,
+                            is_success, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                        """,
+                        [run_id, market, symbol, horizon_name, outcome_date,
+                         round(return_pct, 4), benchmark,
+                         round(benchmark_pct, 4) if benchmark_pct is not None else None,
+                         round(alpha_pct, 4) if alpha_pct is not None else None,
+                         is_success],
+                    )
+                    wrote += 1
 
         # 汇总成熟样本 / 总样本，供 morning_brief surface
         latest_strategy = conn.execute(

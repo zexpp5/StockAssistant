@@ -155,7 +155,7 @@ def mature_samples(conn: duckdb.DuckDBPyConnection, *,
         FROM picks p
         JOIN pick_outcomes po
           ON po.run_id = p.run_id AND po.market = ? AND po.symbol = p.symbol AND po.horizon = ?
-        WHERE po.alpha_pct IS NOT NULL
+        WHERE po.alpha_pct IS NOT NULL AND isfinite(po.alpha_pct)
         ORDER BY p.run_date, p.market_rank
     """
     params = list(run_ids) + [market, market, horizon]
@@ -201,7 +201,8 @@ def is_strict(sample: dict[str, Any], *,
 
 def summarize(samples: list[dict[str, Any]]) -> dict[str, Any]:
     """对一组样本算 n / 平均 alpha / 命中率（alpha>0 占比）。"""
-    alphas = [s["alpha_pct"] for s in samples if s.get("alpha_pct") is not None]
+    alphas = [s["alpha_pct"] for s in samples
+              if s.get("alpha_pct") is not None and math.isfinite(s["alpha_pct"])]
     if not alphas:
         return {"n": 0, "avg_alpha_pct": None, "win_rate_pct": None}
     wins = sum(1 for a in alphas if a > 0)

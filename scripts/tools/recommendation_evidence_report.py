@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "scripts" / "lib"))
 
 from stock_db import get_db  # noqa: E402
@@ -113,28 +114,37 @@ def _v2_market_metrics(conn, strategy_version: str | None = None) -> list[dict[s
     tables = _tables(conn)
     if not {"pick_outcomes", "recommendation_runs", "recommendation_picks"}.issubset(tables):
         return []
-    strategy_clause, strategy_params = _strategy_filter(conn, strategy_version)
+    # 统一口径（stock_research.core.strategy_eval）：当前 strategy_version + 每天最后一批
+    # + (推荐日,股票) 去重 + isfinite。旧 SQL 含同日多批重复，且未过滤 NaN / 漏 strong_buy。
+    from stock_research.core import strategy_eval as se
+    run_ids = se.last_batch_run_ids(
+        conn, strategy_version=strategy_version, metrics_start=PRODUCTION_METRICS_START_DATE)
+    if not run_ids:
+        return []
+    placeholders = ",".join(["?"] * len(run_ids))
     rows = conn.execute(
         f"""
-        SELECT po.market, po.horizon,
+        SELECT dpo.market, dpo.horizon,
                COUNT(*) AS n,
-               ROUND(AVG(po.return_pct), 2) AS avg_pct,
-               ROUND(AVG(po.benchmark_pct), 2) AS avg_benchmark_pct,
-               ROUND(AVG(po.alpha_pct), 2) AS avg_alpha_pct,
-               ROUND(SUM(CASE WHEN po.is_success THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) AS hit_rate
-        FROM pick_outcomes po
-        JOIN recommendation_runs rr ON rr.run_id = po.run_id
-        JOIN recommendation_picks p
-          ON p.run_id = po.run_id AND p.market = po.market AND p.symbol = po.symbol
-        WHERE po.alpha_pct IS NOT NULL
-          AND rr.universe_scope = 'system_tech_universe'
-          AND rr.run_date >= ?
-          AND COALESCE(p.signal, 'buy') = 'buy'
-          {strategy_clause}
-        GROUP BY po.market, po.horizon
-        ORDER BY po.market, po.horizon
+               ROUND(AVG(dpo.return_pct), 2) AS avg_pct,
+               ROUND(AVG(dpo.benchmark_pct), 2) AS avg_benchmark_pct,
+               ROUND(AVG(dpo.alpha_pct), 2) AS avg_alpha_pct,
+               ROUND(SUM(CASE WHEN dpo.is_success THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) AS hit_rate
+        FROM (
+            SELECT DISTINCT po.run_id, po.market, po.symbol, po.horizon,
+                   po.return_pct, po.benchmark_pct, po.alpha_pct, po.is_success
+            FROM pick_outcomes po
+            JOIN recommendation_picks p
+              ON p.run_id = po.run_id AND p.market = po.market AND p.symbol = po.symbol
+            WHERE po.run_id IN ({placeholders})
+              AND po.alpha_pct IS NOT NULL
+              AND isfinite(po.alpha_pct)
+              AND LOWER(COALESCE(p.signal, p.rating, '')) IN ('buy', 'strong_buy')
+        ) dpo
+        GROUP BY dpo.market, dpo.horizon
+        ORDER BY dpo.market, dpo.horizon
         """,
-        [PRODUCTION_METRICS_START_DATE, *strategy_params],
+        list(run_ids),
     ).fetchall()
     out = []
     for market, horizon, n, avg_pct, avg_bench, avg_alpha, hit_rate in rows:
