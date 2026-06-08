@@ -131,6 +131,10 @@ def _update_history(res: pg.GateResult, now: datetime) -> None:
         rec["can_buy"] = res.can_buy
         rec["headline_plain"] = res.headline_plain   # 当晚结论(人话)
         rec["reasons_plain"] = res.reasons_plain      # 当晚报的全部理由(可回看验证)
+        rec["coverage"] = res.coverage                # 当晚数据覆盖率(低则该降权)
+        # 🔴 当晚每类信号的结构化数值快照 —— 点位数据,过时不可恢复,必须当场存。
+        # 用于将来校准:逐信号分析谁真能预测、要不要重新加权/换阈值重打分。
+        rec["families"] = res.families
         # 当晚观察到的 VIX —— 给"只看VIX"基准对照用
         _vol = next((f for f in res.families if f.get("key") == "vol"), {})
         _vix = (_vol.get("data") or {}).get("vix")
