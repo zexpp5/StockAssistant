@@ -232,6 +232,19 @@ def create_app():
         pass
 
     # ────────── 健康检查 ──────────
+    @app.get("/")
+    def home_dashboard():
+        """系统首页 = dashboard。也用 http 提供一份，让盘前各页能「返回首页」
+        （http 页面无法直接跳本地 file://，统一到同一 http 源即可互相跳转）。"""
+        from fastapi.responses import HTMLResponse
+        p = _REPO_ROOT / "stock_dashboard.html"
+        if not p.exists():
+            return HTMLResponse('<div style="font-family:sans-serif;padding:40px">'
+                                '<h2>📊 首页 dashboard 尚未生成</h2>'
+                                '<p>跑 build_stock_dashboard_html.py 生成后即可。</p>'
+                                '<p><a href="/premarket">→ 先看盘前预警</a></p></div>')
+        return HTMLResponse(p.read_text(encoding="utf-8"))
+
     @app.get("/health")
     def health():
         """进程存活探活：始终 HTTP 200，避免 DuckDB 被流水线占锁时前端误判「API 未启动」。
@@ -1792,7 +1805,8 @@ b{{font-weight:700}}
         summ = _pg.summarize_history(hist)
 
         body = (
-            '<a class="back" href="/premarket">‹ 返回今晚预警</a>'
+            '<a class="back" href="/">‹ 返回首页</a>'
+            '<a class="back" href="/premarket" style="margin-left:14px">今晚预警 ›</a>'
             '<h2>📜 盘前预警 · 全部历史记录</h2>'
             f'<div class="card">{_pm_summary_html(summ)}</div>'
             f'<div class="card listcard">{_pm_history_list_html(hist_sorted)}</div>'
