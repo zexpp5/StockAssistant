@@ -144,6 +144,9 @@ class GateResult:
     can_buy: str = ""
     headline_plain: str = ""      # 颜色→一句话人话标题
     top_alarm: str = ""           # 🚨 最该注意的一条（最严重信号，置顶突出）
+    tailwind_score: int = 0       # 顺风读数：有几样「有利」(仅环境层面，绿灯时才看)
+    is_tailwind: bool = False     # 绿灯且明显顺风
+    tailwind_reasons: list[str] = field(default_factory=list)  # 为什么算顺风(人话)
     reasons: list[str] = field(default_factory=list)       # 触发原因（技术口径，带数字）
     reasons_plain: list[str] = field(default_factory=list)  # 触发原因（人话，按严重度标🔴/🟠）
     families: list[dict] = field(default_factory=list)     # 各族明细
@@ -634,6 +637,51 @@ def _holdings_overlay(families: list[FamilySignal], holdings: list[dict] | None)
     return impact
 
 
+def _tailwind(families: list[FamilySignal]) -> tuple[int, list[str]]:
+    """顺风读数：防守闸门之外，数一数有几样是「有利」的（仅环境层面，不喊买某只）。"""
+    by = {f.key: f for f in families}
+    score = 0
+    reasons: list[str] = []
+    fut = by.get("futures")
+    if fut and fut.available:
+        vals = [v for v in (fut.data.get("NQ"), fut.data.get("ES")) if v is not None]
+        head = max(vals) if vals else None
+        if head is not None and head >= 0.5:
+            score += 1
+            reasons.append(f"美股盘前「预演价」在涨（科技股那档 {head:+.1f}%）")
+    vol = by.get("vol")
+    if vol and vol.available:
+        vix = vol.data.get("vix")
+        if vix is not None and vix < 16:
+            score += 1
+            reasons.append(f"市场情绪平静（恐慌指数 VIX 只有 {vix:.0f}，偏低）")
+    mega = by.get("megacap")
+    if mega and mega.available:
+        avg = mega.data.get("avg")
+        if avg is not None and avg >= 0.5:
+            score += 1
+            reasons.append(f"科技巨头盘前普遍在涨（平均 {avg:+.1f}%）")
+    sec = by.get("sector")
+    if sec and sec.available:
+        g = sec.data.get("growth_avg")
+        if g is not None and g >= 0.5:
+            score += 1
+            reasons.append(f"科技/成长板块在涨（平均 {g:+.1f}%）")
+    ovs = by.get("overseas")
+    if ovs and ovs.available:
+        avg = ovs.data.get("avg")
+        if avg is not None and avg >= 0.5:
+            score += 1
+            reasons.append(f"亚洲市场普涨，给美股递了好消息（平均 {avg:+.1f}%）")
+    rate = by.get("rates")
+    if rate and rate.available:
+        bps = rate.data.get("ten_year_bps_1d")
+        if bps is not None and bps <= -4:
+            score += 1
+            reasons.append(f"美国利率在回落（10 年 {bps:+.0f}bp），利好高估值科技股")
+    return score, reasons
+
+
 def compute_gate(
     quotes: dict[str, dict] | None = None,
     as_of: date | None = None,
@@ -706,14 +754,28 @@ def compute_gate(
 
     holdings_impact = _holdings_overlay(families, holdings)
 
+    # 顺风读数：只在绿灯(无风险)时看「环境有没有特别有利」，不喊买某只股
+    tw_score, tw_reasons = _tailwind(families)
+    is_tailwind = (color == "NONE") and tw_score >= 3
+    headline = HEADLINE_PLAIN.get(color, "")
+    can_buy = CAN_BUY.get(color, "")
+    if is_tailwind:
+        headline = "🟢 今晚顺风：环境有利，可以正常买"
+        can_buy = "环境顺风，可以按计划买。但「环境顺风」≠「某只股就该追高」，仍按你的纪律来。"
+        reasons_plain = ["🟢 " + r for r in tw_reasons]
+        reasons = [f"顺风：{r}" for r in tw_reasons]
+
     return GateResult(
         as_of=as_of.isoformat(),
         generated_at=(now or datetime.now()).isoformat(timespec="seconds"),
         color=color,
         composite=round(composite, 3),
-        can_buy=CAN_BUY.get(color, ""),
-        headline_plain=HEADLINE_PLAIN.get(color, ""),
+        can_buy=can_buy,
+        headline_plain=headline,
         top_alarm=top_alarm,
+        tailwind_score=tw_score,
+        is_tailwind=is_tailwind,
+        tailwind_reasons=tw_reasons,
         reasons=reasons,
         reasons_plain=reasons_plain,
         families=[f.to_dict() for f in families],

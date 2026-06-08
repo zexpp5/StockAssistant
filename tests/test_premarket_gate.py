@@ -90,6 +90,50 @@ def test_calm_day_is_green_or_yellow():
     assert res.color in ("NONE", "LOW"), f"应为绿/黄，实际 {res.color}（composite={res.composite}）"
 
 
+def _scenario_tailwind() -> dict:
+    """明显顺风的盘前：期货涨、恐慌低、巨头涨、板块涨、海外涨、利率回落。"""
+    return {
+        "NQ": _q(pct=1.0), "ES": _q(pct=0.8), "RTY": _q(pct=0.7),
+        "US10Y": _q(last=4.10, prev=4.16), "US5Y": _q(last=3.90, prev=3.95),
+        "DXY": _q(pct=-0.2),
+        "VIX": _q(last=13.0, prev=13.5),
+        "AAPL": _q(pct=0.9), "MSFT": _q(pct=1.1), "NVDA": _q(pct=1.5),
+        "GOOGL": _q(pct=0.8), "AMZN": _q(pct=0.7), "META": _q(pct=1.0),
+        "TSLA": _q(pct=0.6),
+        "XLK": _q(pct=1.0), "SMH": _q(pct=1.4), "SOXX": _q(pct=1.3),
+        "XLP": _q(pct=0.1), "XLU": _q(pct=0.0),
+        "KOSPI": _q(pct=1.2), "TWSE": _q(pct=1.0), "NIKKEI": _q(pct=0.8),
+        "HSI": _q(pct=0.9),
+    }
+
+
+def test_tailwind_strong_day_flagged():
+    """明显顺风 → is_tailwind=True，标题说「顺风」，仍是绿灯。"""
+    res = pg.compute_gate(quotes=_scenario_tailwind(), as_of=date(2026, 6, 9),
+                          now=datetime(2026, 6, 9, 20, 30))
+    assert res.color == "NONE"
+    assert res.is_tailwind is True and res.tailwind_score >= 3
+    assert "顺风" in res.headline_plain
+    assert res.tailwind_reasons  # 有"为什么算顺风"
+    # 仍只到环境层面，不喊买某只股
+    assert "追高" in res.can_buy or "纪律" in res.can_buy
+
+
+def test_calm_day_not_tailwind():
+    """风平浪静但不够有利 → 绿灯但不算顺风（不夸大）。"""
+    res = pg.compute_gate(quotes=_scenario_calm(), as_of=date(2026, 6, 9),
+                          now=datetime(2026, 6, 9, 20, 30))
+    assert res.color in ("NONE", "LOW")
+    assert res.is_tailwind is False
+
+
+def test_no_tailwind_when_warning():
+    """逆风大跌日不可能是顺风。"""
+    res = pg.compute_gate(quotes=_scenario_2026_06_05(), as_of=date(2026, 6, 5),
+                          now=datetime(2026, 6, 5, 20, 30))
+    assert res.is_tailwind is False and res.tailwind_score == 0
+
+
 def test_vix_panic_forces_critical():
     """VIX≥40 硬覆盖到 CRITICAL。"""
     q = _scenario_calm()
