@@ -589,14 +589,23 @@ is_morning_step && run_step "0a/25 V1 表 DROP 守卫（V2 schema 完整性）" 
 # M
 is_morning_step && run_step "0b/25 汇率刷新（单一 FX 源）" "scripts/tools/refresh_fx_rates.py"
 # M
+# 0c 关键步加 300s 硬超时:2026-06-07 夜跑就是挂死在这步 11 小时(akshare login 卡住)。
+#   critical→超时即 FAIL 快速失败,reconcile/下轮重试,绝不再挂 11h。
 run_step "0c/25 V2 系统池刷新（live universe → system_universe/pool_membership）" \
-    "scripts/tools/refresh_system_universe_v2.py"
+    "scripts/tools/refresh_system_universe_v2.py" critical 300
 run_step "1/25 抓价格（手动 watchlist + 科技/AI universe）" "scripts/pipeline/fetch_stock_prices.py --source both"
 # M — V2 Piotroski P5-Lite（必须早于 build_v2_recommendations，让 picks 当日带上 f_score）
 # 2026-06-01：A 股已用 akshare stock_financial_abstract 接通（杜邦三表融合宽表）
 # 全 3 市场跑 ~10 分钟（yfinance 美/港 + akshare A 股 ~ 17% 入库率，其余 akshare 限流）
-run_step "1c/25 V2 F-Score 计算（P5-Lite · 美/港/A 股 → factor_metadata）" \
-    "scripts/tools/compute_piotroski_v2.py --markets US,HK,CN"
+# 1c F-Score:2026-06-08 改——季报日内不变,早班只补缺(秒级,picks 经 LEFT JOIN 读缓存),
+#   全量重算放夜班(research/full)+早班 enhancement_refresh.sh 异步刷新 computed_at 新鲜度。
+if is_research_step; then
+    run_step "1c/25 V2 F-Score 全量（P5-Lite · 美/港/A 股 → factor_metadata）" \
+        "scripts/tools/compute_piotroski_v2.py --markets US,HK,CN" critical 900
+else
+    run_step "1c/25 V2 F-Score 补缺（早班 only-missing · 读缓存）" \
+        "scripts/tools/compute_piotroski_v2.py --markets US,HK,CN --only-missing" critical 180
+fi
 # M — V2 推荐 run（必须在 step 10/23 之前跑，让两者拿到今日 picks 而不是昨日）
 run_step "1b/25 V2 推荐 run（system_universe → recommendation_picks/portfolio_plans）" \
     "scripts/tools/build_v2_recommendations.py"
@@ -645,19 +654,15 @@ fi
 # 19/19a/19c 三个事件日历给 morning 也跑：
 #   解禁/减持/财报当日时效性强，研究 21:00 才更新会错过早盘提示。
 #   yfinance/akshare 查询轻量,morning 也能承受。
-run_step "19/25 事件日历（解禁/减持/财报）" "-m stock_research.jobs.event_calendar_daily"
-run_step "19a/25 港股事件日历（yfinance 财报+超预期）" "-m stock_research.jobs.event_calendar_hk_daily"
-run_step "19d/25 港股 HKEX 披露易公告（盈警/停牌/股东/回购/并购）" "-m stock_research.jobs.event_calendar_hk_hkex_daily"
-run_step "19c/25 美股事件日历（yfinance 财报+超预期）" "-m stock_research.jobs.event_calendar_us_daily"
-run_step "19e/25 美股 SEC EDGAR（8-K/13G/13D/DEF 14A）" "-m stock_research.jobs.event_calendar_us_sec_daily"
-# 19f Form 4 内部人交易:仅周一(DOW=1)跑 — SEC 申报本身 2-4 天延迟,周拉足够,
-# 不必每天阻塞 morning 8 分钟。2026-05-27 优化:--morning 25 分钟 → 目标 6 分钟。
-if [ "$DOW" = "1" ]; then
-    run_step "19f/25 美股 SEC Form 4 内部人交易（净买/卖额聚合）" "-m stock_research.jobs.event_calendar_us_form4_daily"
-else
-    echo ""
-    echo "[19f/25 SEC Form 4] 跳过 — 仅周一跑(SEC 申报 2-4 天延迟,周拉足够;今天 weekday=$DOW)"
-fi
+# 19/19a/19c 轻量事件(解禁/减持/财报)留早班——当日时效强;但 enhance 级 + 90s 硬超时,挂死只降级不阻断
+run_step "19/25 事件日历（解禁/减持/财报）" "-m stock_research.jobs.event_calendar_daily" enhance 90
+run_step "19a/25 港股事件日历（yfinance 财报+超预期）" "-m stock_research.jobs.event_calendar_hk_daily" enhance 90
+run_step "19c/25 美股事件日历（yfinance 财报+超预期）" "-m stock_research.jobs.event_calendar_us_daily" enhance 90
+# 19d HKEX / 19e SEC EDGAR / 19f Form4:重网络,2026-06-08 移出早班→夜班(research);
+#   早班由 enhancement_refresh.sh 异步刷(28 push 后 fork)。SEC 申报 2-4 天延迟,早班缺也无新意。
+is_research_step && run_step "19d/25 港股 HKEX 披露易公告（盈警/停牌/股东/回购/并购）" "-m stock_research.jobs.event_calendar_hk_hkex_daily" enhance 240
+is_research_step && run_step "19e/25 美股 SEC EDGAR（8-K/13G/13D/DEF 14A）" "-m stock_research.jobs.event_calendar_us_sec_daily" enhance 240
+is_research_step && [ "$DOW" = "1" ] && run_step "19f/25 美股 SEC Form 4 内部人交易（净买/卖额聚合）" "-m stock_research.jobs.event_calendar_us_form4_daily" enhance 300
 if needs_ipo_data; then
     run_step "19b/25 次新股+解禁雷达（IPO & 次新股 tab 数据源）" "-m stock_research.jobs.junior_stock_watcher"
 else
@@ -686,26 +691,29 @@ run_step "23a-pre/25 基准指数行情灌入" "scripts/pipeline/ingest_benchmar
 
 # M — V2 pick alpha 评估（扫过去 70 天 recommendation_runs，每只 pick 算 1d/5d/20d
 # alpha 写 pick_outcomes；已成熟样本不重算，幂等；带网络 yfinance benchmark 但有内存缓存）
-run_step "23a/25 V2 pick alpha 评估" "scripts/tools/evaluate_v2_picks.py"
-run_step "23a2/25 V2 策略验证汇总" "scripts/tools/build_strategy_validation_v2.py"
+# 23a/23a2 评估/验证:研究类,2026-06-08 移出早班→夜班;早班由 enhancement_refresh.sh 异步刷
+is_research_step && run_step "23a/25 V2 pick alpha 评估" "scripts/tools/evaluate_v2_picks.py" enhance 300
+is_research_step && run_step "23a2/25 V2 策略验证汇总" "scripts/tools/build_strategy_validation_v2.py" enhance 180
 
 # R — 旧 discovery 准确度评估（V1 discovery_tracking 路径，clean v2 上无新数据）
 # 2026-05-20 删 step 23b (evaluate_discovery V1 discovery_tracking)，已由 evaluate_v2_picks 取代
 # M
 run_step "23c/25 推荐质量闸门（收盘后复核）" "scripts/tools/recommendation_quality_gate.py"
 run_step "23d/25 推荐有效性证据报告" "scripts/tools/recommendation_evidence_report.py"
-run_step "23d2/25 策略失败诊断（只读归因）" "scripts/tools/strategy_failure_diagnosis.py --markets all --horizon 1d"
-run_step "23d3/25 策略调权建议（只读灰度）" "scripts/tools/strategy_tuning_proposal.py --horizon 1d"
-run_step "23d4/25 shadow 调权模拟（只读对照）" "scripts/tools/build_shadow_tuning_run.py --horizon 1d"
-run_step "23d5/25 shadow 生产门禁（只读证据）" "scripts/tools/evaluate_shadow_tuning_run.py"
-run_step "23d6/25 US shadow 预检（唯一 source run · 只读）" "scripts/tools/us_shadow_preflight_check.py"
-run_step "23d7/25 US-only 生产验收（先上线美股 · 只读）" "scripts/tools/us_production_acceptance_check.py"
-run_step "23d8/25 推荐规则快速体检（US 优先 · 只读）" "scripts/tools/recommendation_readiness_check.py"
-run_step "23d9/25 US 严筛试运行（只读研究队列）" "scripts/tools/us_strict_trial.py"
+# 23d2–23d9 策略诊断/调权/shadow/严筛:只读研究类,2026-06-08 移出早班→夜班;早班由 enhancement_refresh.sh 异步刷
+is_research_step && run_step "23d2/25 策略失败诊断（只读归因）" "scripts/tools/strategy_failure_diagnosis.py --markets all --horizon 1d" enhance 180
+is_research_step && run_step "23d3/25 策略调权建议（只读灰度）" "scripts/tools/strategy_tuning_proposal.py --horizon 1d" enhance 180
+is_research_step && run_step "23d4/25 shadow 调权模拟（只读对照）" "scripts/tools/build_shadow_tuning_run.py --horizon 1d" enhance 180
+is_research_step && run_step "23d5/25 shadow 生产门禁（只读证据）" "scripts/tools/evaluate_shadow_tuning_run.py" enhance 120
+is_research_step && run_step "23d6/25 US shadow 预检（唯一 source run · 只读）" "scripts/tools/us_shadow_preflight_check.py" enhance 120
+is_research_step && run_step "23d7/25 US-only 生产验收（先上线美股 · 只读）" "scripts/tools/us_production_acceptance_check.py" enhance 120
+is_research_step && run_step "23d8/25 推荐规则快速体检（US 优先 · 只读）" "scripts/tools/recommendation_readiness_check.py" enhance 120
+is_research_step && run_step "23d9/25 US 严筛试运行（只读研究队列）" "scripts/tools/us_strict_trial.py" enhance 180
 # 2026-05-21 V2 cutover 补洞：替代被删的 V1 audit_picks，喂 dashboard「买前审查」tab
 run_step "23e/25 picks 反向审查（V2 · Risk Parity + 估值 + Markowitz）" "-m stock_research.jobs.audit_picks_v2 --fast"
 run_step "23f/25 真实持仓每日体检（评分/建议/说明）" "-m stock_research.jobs.real_holding_review"
-run_step "23g/25 早发现雷达（未过热 + 赛道/催化/13F 补盲）" "-m stock_research.jobs.early_growth_radar"
+# 23g 早发现雷达:研究类,2026-06-08 移出早班→夜班;早班由 enhancement_refresh.sh 异步刷
+is_research_step && run_step "23g/25 早发现雷达（未过热 + 赛道/催化/13F 补盲）" "-m stock_research.jobs.early_growth_radar" enhance 240
 
 # M — DuckDB pipeline 同步 + HTML 重建 + brief + 验收
 # （这几步在 morning 必跑，research mode 不重做避免覆盖 morning 已落地的 dashboard）
@@ -716,13 +724,15 @@ is_morning_step && run_step "24b/25 V2 产业链分类入库" "scripts/tools/cla
 # 文档：docs/V2/AI主题雷达_产品定位.md §十一 / 评审 P3 #8 自动化频率
 #   日常：数据源 URL 健康检查 + stale 规则 + tags 聚合
 #   周一：额外刷 ETF 持仓 + SEC EDGAR 公司证据扫描
-if is_morning_step; then
+# 24c: AI 主题雷达证据 — 2026-06-08 整块移出早班→夜班(SEC 扫描重网络,今天 FAIL 元凶);
+#   早班由 enhancement_refresh.sh 异步刷,dashboard 主题 tab 读缓存+标新鲜度。
+if is_research_step; then
     if [ "$DOW" = "1" ]; then
         run_step "24c/25 AI 主题雷达证据刷新（周一全量：ETF + SEC）" \
-            "-m stock_research.jobs.ai_theme_evidence_refresh --refresh-etf --scan-sec"
+            "-m stock_research.jobs.ai_theme_evidence_refresh --refresh-etf --scan-sec" enhance 600
     else
         run_step "24c/25 AI 主题雷达证据刷新（每日轻量）" \
-            "-m stock_research.jobs.ai_theme_evidence_refresh"
+            "-m stock_research.jobs.ai_theme_evidence_refresh" enhance 240
     fi
 fi
 # 注：F-Score 计算已挪到 step 1c（必须在 build_v2_recommendations 之前，让 picks 当日带 f_score）
@@ -790,6 +800,16 @@ if [ ${#FAILED_STEPS[@]} -eq 0 ]; then
         echo "[28 早安简报推送] pipeline_status=OK 后重新生成并推送..."
         if ! $PYTHON -m stock_research.jobs.morning_brief; then
             echo "⚠️  早安简报最终推送失败（pipeline 已 OK，本地数据不回滚）"
+        fi
+        # 29 早班异步增强:核心已交付(简报已推、dashboard 已出、DuckDB 写已完)→ 此刻 detached
+        #   fork 增强子进程,独占 DuckDB 慢慢抓 SEC/次新/主题/F-Score全量,抓完刷新 dashboard 增强块。
+        #   主线不等它、立即收尾退出(释放 .daily_refresh.pid)。增强用独立 .enhancement_refresh.pid。
+        if [ "$MODE" = "morning" ]; then
+            echo ""
+            echo "[29 早班异步增强] fork enhancement_refresh.sh（后台,主线不等）..."
+            nohup "$DIR/enhancement_refresh.sh" > "$DIR/logs/enhancement_$(date +%Y%m%d_%H%M).log" 2>&1 &
+            disown $! 2>/dev/null
+            echo "  → 增强子进程 PID $! ；日志 logs/enhancement_*.log"
         fi
     fi
 else
