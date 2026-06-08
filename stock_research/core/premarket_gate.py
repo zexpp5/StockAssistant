@@ -802,8 +802,29 @@ def score_outcome(color: str, spy_pct: float | None, nq_pct: float | None) -> st
     return "TRUE_NEGATIVE"
 
 
-def summarize_history(records: list[dict]) -> dict[str, Any]:
-    """战绩汇总：命中率 / 漏报数 / 虚惊数。"""
+# 样本量门槛：低于这个数，战绩只供观察、不当统计依据（诚实优先）
+MIN_SAMPLE = 20
+# VIX-only 基准的预警阈值（Whaley 2009 的常用线）
+VIX_BASELINE_WARN = 20.0
+
+
+def _day_return(r: dict) -> float | None:
+    """当天大盘代表涨跌：优先标普，缺则纳指。"""
+    a = r.get("actual") or {}
+    spy, nq = a.get("spy_pct"), a.get("nq_pct")
+    return spy if spy is not None else nq
+
+
+def _is_bad_day(r: dict) -> bool:
+    """当天是否"真跌"（标普≤-0.8% 或 纳指≤-1.2%）。"""
+    a = r.get("actual") or {}
+    spy = a.get("spy_pct") if a.get("spy_pct") is not None else 0.0
+    nq = a.get("nq_pct") if a.get("nq_pct") is not None else 0.0
+    return (spy <= _BAD_SPY) or (nq <= _BAD_NQ)
+
+
+def summarize_history(records: list[dict], min_sample: int = MIN_SAMPLE) -> dict[str, Any]:
+    """战绩汇总：命中率/漏报 + 按颜色分档 + 基准对照 + 样本量诚实标注。"""
     settled = [r for r in records if r.get("outcome")]
     n = len(settled)
     c = {k: 0 for k in OUTCOME_CN}
@@ -815,6 +836,47 @@ def summarize_history(records: list[dict]) -> dict[str, Any]:
     precision = round(tp / warn_total * 100) if warn_total else None  # 警报里真跌占比
     recall = round(tp / bad_total * 100) if bad_total else None       # 真跌被抓到的比例
     accuracy = round((tp + tn) / n * 100) if n else None
+
+    # ① 按颜色分档：每档事后平均涨跌 + 真跌占比（闸门有用 → 红档明显比绿档惨）
+    buckets = {}
+    for color in ("NONE", "LOW", "HIGH", "CRITICAL"):
+        rs = [r for r in settled if r.get("color") == color]
+        rets = [_day_return(r) for r in rs if _day_return(r) is not None]
+        buckets[color] = {
+            "n": len(rs),
+            "avg_return": round(sum(rets) / len(rets), 2) if rets else None,
+            "bad_rate": round(sum(1 for r in rs if _is_bad_day(r)) / len(rs) * 100) if rs else None,
+        }
+
+    # ② 基准对照：闸门必须跑赢这俩"笨办法"才算真有用
+    bad_days = sum(1 for r in settled if _is_bad_day(r))
+    # 基准A：永远说绿（从不预警）→ 抓真跌能力=0，但靠"多数日子没事"也有不低的 accuracy
+    base_never = {
+        "recall_pct": 0 if bad_days else None,
+        "accuracy_pct": round((n - bad_days) / n * 100) if n else None,
+    }
+    # 基准B：只看 VIX（VIX≥20 就预警）—— 用闸门当晚观察到的 VIX
+    vix_rs = [r for r in settled if r.get("vix") is not None]
+    base_vix = None
+    if vix_rs:
+        vtp = vfa = vmiss = 0
+        for r in vix_rs:
+            warned = r["vix"] >= VIX_BASELINE_WARN
+            bad = _is_bad_day(r)
+            if warned and bad:
+                vtp += 1
+            elif warned and not bad:
+                vfa += 1
+            elif (not warned) and bad:
+                vmiss += 1
+        vwarn, vbad = vtp + vfa, vtp + vmiss
+        base_vix = {
+            "n": len(vix_rs),
+            "precision_pct": round(vtp / vwarn * 100) if vwarn else None,
+            "recall_pct": round(vtp / vbad * 100) if vbad else None,
+            "miss": vmiss,
+        }
+
     return {
         "settled_days": n,
         "warnings_issued": warn_total,
@@ -822,6 +884,12 @@ def summarize_history(records: list[dict]) -> dict[str, Any]:
         "precision_pct": precision,   # 发警报的准度
         "recall_pct": recall,         # 抓真跌的能力
         "accuracy_pct": accuracy,
+        "bad_days": bad_days,
+        "enough_sample": n >= min_sample,   # ③ 样本够不够（不够则 UI 灰显、仅供观察）
+        "min_sample": min_sample,
+        "color_buckets": buckets,
+        "baseline_never_warn": base_never,
+        "baseline_vix_only": base_vix,
     }
 
 

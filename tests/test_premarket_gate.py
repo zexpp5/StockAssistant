@@ -234,6 +234,57 @@ def test_summarize_empty():
     s = pg.summarize_history([])
     assert s["settled_days"] == 0
     assert s["precision_pct"] is None
+    assert s["enough_sample"] is False
+
+
+def test_enough_sample_threshold():
+    """样本量低于门槛 → enough_sample=False（UI 据此灰显）。"""
+    recs = [{"date": f"2026-06-{d:02d}", "color": "NONE", "outcome": "TRUE_NEGATIVE",
+             "actual": {"spy_pct": 0.2, "nq_pct": 0.3}} for d in range(1, 6)]
+    s = pg.summarize_history(recs, min_sample=20)
+    assert s["enough_sample"] is False and s["settled_days"] == 5
+    # 凑够门槛
+    s2 = pg.summarize_history(recs, min_sample=5)
+    assert s2["enough_sample"] is True
+
+
+def test_color_buckets_separation():
+    """按颜色分档：红档事后应明显比绿档惨。"""
+    recs = [
+        {"color": "CRITICAL", "outcome": "TRUE_POSITIVE", "actual": {"spy_pct": -2.5, "nq_pct": -4.0}},
+        {"color": "CRITICAL", "outcome": "TRUE_POSITIVE", "actual": {"spy_pct": -1.5, "nq_pct": -2.0}},
+        {"color": "NONE", "outcome": "TRUE_NEGATIVE", "actual": {"spy_pct": 0.4, "nq_pct": 0.6}},
+        {"color": "NONE", "outcome": "TRUE_NEGATIVE", "actual": {"spy_pct": 0.2, "nq_pct": 0.1}},
+    ]
+    s = pg.summarize_history(recs)
+    assert s["color_buckets"]["CRITICAL"]["avg_return"] == -2.0
+    assert s["color_buckets"]["NONE"]["avg_return"] == 0.3
+    assert s["color_buckets"]["CRITICAL"]["bad_rate"] == 100
+    assert s["color_buckets"]["NONE"]["bad_rate"] == 0
+
+
+def test_baseline_never_warn_recall_zero():
+    """永远说绿基准：有真跌日时 recall=0（一个都抓不到）。"""
+    recs = [
+        {"color": "CRITICAL", "outcome": "TRUE_POSITIVE", "actual": {"spy_pct": -2.0, "nq_pct": -3.0}},
+        {"color": "NONE", "outcome": "TRUE_NEGATIVE", "actual": {"spy_pct": 0.3, "nq_pct": 0.2}},
+    ]
+    s = pg.summarize_history(recs)
+    assert s["bad_days"] == 1
+    assert s["baseline_never_warn"]["recall_pct"] == 0
+
+
+def test_baseline_vix_only():
+    """只看VIX基准：VIX≥20 当预警，与真实涨跌比。"""
+    recs = [
+        {"color": "NONE", "outcome": "MISS", "vix": 16.0, "actual": {"spy_pct": -1.5, "nq_pct": -2.0}},  # 低VIX没警→VIX基准也漏
+        {"color": "CRITICAL", "outcome": "TRUE_POSITIVE", "vix": 28.0, "actual": {"spy_pct": -2.0, "nq_pct": -3.0}},  # 高VIX→VIX基准警中
+    ]
+    s = pg.summarize_history(recs)
+    b = s["baseline_vix_only"]
+    assert b is not None and b["n"] == 2
+    assert b["precision_pct"] == 100   # VIX 警了1次(28那天)，命中
+    assert b["miss"] == 1              # 16那天VIX没警但真跌 → VIX 基准漏报
 
 
 if __name__ == "__main__":

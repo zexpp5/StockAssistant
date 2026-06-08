@@ -1582,6 +1582,66 @@ _sys.exit(rc)
         else:
             stat = ('<div class="muted" style="font-size:13px">还没有可验证的历史——从今天起每天记一笔，'
                     '第二天用当天真实涨跌核对，攒几天就能看命中率了。</div>')
+
+        sd = summ.get("settled_days", 0)
+        enough = summ.get("enough_sample", False)
+
+        def _pc(v):
+            return f'{v}%' if v is not None else "—"
+
+        # ③ 样本不足提示
+        sample_note = ""
+        if sd > 0 and not enough:
+            sample_note = (
+                '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;'
+                'padding:8px 10px;font-size:12.5px;color:#92400e;margin-bottom:10px">'
+                f'⚠️ 样本不足（{sd}/{summ.get("min_sample", 20)} 个交易日），以下数字仅供观察、'
+                '还不具统计意义——攒够再看才靠谱。</div>'
+            )
+
+        # ① 按颜色分档
+        cb = summ.get("color_buckets") or {}
+        rows_b = ""
+        for cbk in ("CRITICAL", "HIGH", "LOW", "NONE"):
+            b = cb.get(cbk) or {}
+            if not b.get("n"):
+                continue
+            avg = b.get("avg_return")
+            br = b.get("bad_rate")
+            rows_b += (
+                '<div style="display:flex;justify-content:space-between;font-size:12.5px;'
+                'padding:4px 0;border-bottom:1px solid #f5f7fa">'
+                f'<span>{_DOT.get(cbk, "")} {cbk} <span class="muted">({b["n"]}天)</span></span>'
+                f'<span>事后平均 <b>{(f"{avg:+.1f}%" if avg is not None else "—")}</b>'
+                f' · 真跌占比 {(f"{br}%" if br is not None else "—")}</span></div>'
+            )
+        buckets_html = (
+            '<div style="margin-top:12px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">'
+            '① 按颜色分档 <span class="muted" style="font-weight:400">（闸门有用→红档该明显比绿档惨）</span></div>'
+            + rows_b + '</div>'
+        ) if rows_b else ""
+
+        # ② 基准对照
+        baseline_html = ""
+        if sd > 0:
+            bv = summ.get("baseline_vix_only")
+            bn = summ.get("baseline_never_warn") or {}
+            lines = ('<div style="display:flex;justify-content:space-between;font-size:12.5px;'
+                     'padding:4px 0;border-bottom:1px solid #f5f7fa"><span>🚦 <b>本闸门</b></span>'
+                     f'<span>命中 {_pc(summ.get("precision_pct"))} · 抓真跌 {_pc(summ.get("recall_pct"))}</span></div>')
+            if bv:
+                lines += ('<div style="display:flex;justify-content:space-between;font-size:12.5px;'
+                          'padding:4px 0;border-bottom:1px solid #f5f7fa"><span>只看 VIX</span>'
+                          f'<span>命中 {_pc(bv.get("precision_pct"))} · 抓真跌 {_pc(bv.get("recall_pct"))}</span></div>')
+            lines += ('<div style="display:flex;justify-content:space-between;font-size:12.5px;'
+                      'padding:4px 0"><span>永远说绿（从不预警）</span>'
+                      f'<span>抓真跌 {_pc(bn.get("recall_pct"))}</span></div>')
+            baseline_html = (
+                '<div style="margin-top:12px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">'
+                '② 对比「笨办法」<span class="muted" style="font-weight:400">（本闸门要明显更能抓真跌才算有用）</span></div>'
+                + lines + '</div>'
+            )
+
         items = ""
         for r in hist_sorted[:30]:
             d = esc(r.get("date", ""))
@@ -1613,10 +1673,12 @@ _sys.exit(rc)
                 + detail
                 + '</div>'
             )
+        dim = 'opacity:.55' if (sd > 0 and not enough) else ''
         history_html = (
             '<div class="card"><h3>📊 战绩回溯 '
             '<span class="muted" style="font-weight:400;font-size:13px">— 当晚报了啥 + 事后准不准，可逐条核对</span></h3>'
-            f'<div class="stats">{stat}</div>'
+            + sample_note
+            + f'<div style="{dim}"><div class="stats">{stat}</div>{buckets_html}{baseline_html}</div>'
             + (items if items else '')
             + '</div>'
         )

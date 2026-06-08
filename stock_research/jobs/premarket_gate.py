@@ -131,6 +131,11 @@ def _update_history(res: pg.GateResult, now: datetime) -> None:
         rec["can_buy"] = res.can_buy
         rec["headline_plain"] = res.headline_plain   # 当晚结论(人话)
         rec["reasons_plain"] = res.reasons_plain      # 当晚报的全部理由(可回看验证)
+        # 当晚观察到的 VIX —— 给"只看VIX"基准对照用
+        _vol = next((f for f in res.families if f.get("key") == "vol"), {})
+        _vix = (_vol.get("data") or {}).get("vix")
+        if _vix is not None:
+            rec["vix"] = _vix
     rec.setdefault("scans", []).append(
         {"at": now.strftime("%H:%M"), "color": res.color, "composite": res.composite})
 
