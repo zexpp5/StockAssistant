@@ -16864,6 +16864,7 @@ def runtime_status_panel_html() -> str:
     acceptance = _runtime_load_json("data/latest/production_acceptance_check.json")
     evidence = _runtime_load_json("data/latest/recommendation_evidence.json")
     source_health = _runtime_load_json("data/latest/source_health.json")
+    enhancement = _runtime_load_json("data/latest/enhancement_status.json")
     _augment_source_health_with_catalyst(source_health)
     _augment_source_health_with_paid_sources(source_health)
     discovery = {} if clean_v2 else _runtime_load_json("data/discovery_candidates.json")
@@ -17054,6 +17055,46 @@ def runtime_status_panel_html() -> str:
     research_status = str(research_pipeline.get("status") or "UNKNOWN")
     research_run = research_pipeline.get("started_at") or "尚未记录"
 
+    def _enhancement_status(payload: dict) -> tuple[str, str, str]:
+        if not isinstance(payload, dict) or payload.get("_error"):
+            return "INFO", "异步增强状态未生成；只看早班主线产物", "—"
+        raw = str(payload.get("status") or "UNKNOWN").upper()
+        level = {
+            "OK": "OK",
+            "FRESH": "OK",
+            "RUNNING": "WARN",
+            "DEGRADED": "WARN",
+            "INTERRUPTED": "FAIL",
+            "FAIL": "FAIL",
+        }.get(raw, "INFO")
+        sections = payload.get("sections") or {}
+        counts = {"fresh": 0, "degraded": 0, "skipped": 0}
+        degraded_labels = []
+        skipped_labels = []
+        for key, row in sections.items():
+            st = str((row or {}).get("status") or "").lower()
+            label = str((row or {}).get("label") or key)
+            if st in {"degraded", "timeout", "interrupted"}:
+                counts["degraded"] += 1
+                degraded_labels.append(label)
+            elif st == "skipped":
+                counts["skipped"] += 1
+                skipped_labels.append(label)
+            else:
+                counts["fresh"] += 1
+        raw_time = payload.get("generated_at") or payload.get("started_at") or ""
+        time_text = str(raw_time).strip().replace("T", " ")[:19] if raw_time else "—"
+        detail = (
+            f"{time_text} · fresh {counts['fresh']} / degraded {counts['degraded']} / skipped {counts['skipped']}"
+        )
+        if degraded_labels:
+            detail += "；降级：" + "、".join(degraded_labels[:3])
+        if skipped_labels:
+            detail += "；暂停：" + "、".join(skipped_labels[:2])
+        return level, detail[:220], time_text
+
+    enhancement_level, enhancement_detail, enhancement_time = _enhancement_status(enhancement)
+
     def _pipeline_process_active(keywords: list[str]) -> bool:
         try:
             import subprocess
@@ -17107,6 +17148,7 @@ def runtime_status_panel_html() -> str:
         ("AI 推荐", discovery_status, f"{discovery_n} 只候选 · evidence={evidence_grade}"),
         ("策略验证", shadow_gate if shadow_tuning else "INFO", shadow_detail),
         ("生产跑批", effective_pipeline_level, f"{str(pipeline_run)[:19]} · mode={pipeline.get('mode') or '—'} · raw={pipeline_status}"),
+        ("异步增强", enhancement_level, enhancement_detail),
         ("研究线", research_display_status if research_pipeline else "INFO", research_stale_note or f"{str(research_run)[:19]} · mode={research_pipeline.get('mode') or '—'}"),
     ]
     cards_html = "".join(
@@ -17625,6 +17667,16 @@ def runtime_status_panel_html() -> str:
             "got": event_detail,
             "where": "data/event_calendar*.json",
             "detail": "用于推荐依据里的事件解释，不直接改排名公式。",
+        },
+        {
+            "name": "异步增强",
+            "provider": "早班后台子进程",
+            "status": enhancement_level,
+            "time": enhancement_time,
+            "pulls": "F-Score 全量、SEC、Form 4、HKEX、主题证据、策略诊断",
+            "got": enhancement_detail,
+            "where": "data/latest/enhancement_status.json",
+            "detail": "不阻断早班交付；降级时页面继续用缓存并标新鲜度。",
         },
         {
             "name": "资料补全",

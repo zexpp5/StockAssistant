@@ -80,20 +80,43 @@ if os.path.exists(p):
         if line:
             steps.append(json.loads(line))
 sections = {}
+priority = {"degraded": 3, "timeout": 3, "interrupted": 3, "fresh": 1, "skipped": 0}
 for s in steps:
-    sections[s["section"]] = {
+    section = s["section"]
+    status = str(s.get("status") or "fresh")
+    cur = sections.setdefault(section, {
         "label": s.get("label"),
-        "status": s.get("status"),                # fresh | degraded
+        "labels": [],
+        "status": status,
         "last_refresh": s.get("ended_at"),
-        "duration_seconds": s.get("duration_seconds"),
-    }
+        "duration_seconds": 0,
+        "step_count": 0,
+        "degraded_steps": [],
+    })
+    label = s.get("label")
+    if label:
+        cur["labels"].append(label)
+    cur["step_count"] += 1
+    cur["duration_seconds"] += int(s.get("duration_seconds") or 0)
+    if s.get("ended_at") and (not cur.get("last_refresh") or str(s.get("ended_at")) > str(cur.get("last_refresh"))):
+        cur["last_refresh"] = s.get("ended_at")
+    if priority.get(status, 1) > priority.get(str(cur.get("status") or "fresh"), 1):
+        cur["status"] = status
+    if status in {"degraded", "timeout", "interrupted"} and label:
+        cur["degraded_steps"].append(label)
+for cur in sections.values():
+    labels = cur.get("labels") or []
+    if len(labels) > 1:
+        cur["label"] = f"{labels[0]} 等 {len(labels)} 步"
+    elif labels:
+        cur["label"] = labels[0]
 payload = {
     "generated_at": datetime.datetime.now().replace(microsecond=0).isoformat(),
     "started_at": os.environ.get("ENH_STARTED"),
     "main_pid": int(os.environ.get("ENH_PID") or 0),
     "status": os.environ.get("ENH_OVERALL"),      # RUNNING | OK | DEGRADED | INTERRUPTED
     "sections": sections,
-    "degraded_sections": [k for k, v in sections.items() if v.get("status") == "degraded"],
+    "degraded_sections": [k for k, v in sections.items() if v.get("status") in {"degraded", "timeout", "interrupted"}],
     "steps": steps,
 }
 out = os.environ["ENH_STATUS"]
@@ -145,6 +168,33 @@ fi
 #   estep <section> <label> <script> [timeout_s]
 #   失败/超时一律 DEGRADED（增强步永不阻断），记 ENH_STEPS。
 DEGRADED_COUNT=0
+record_enh_step() {
+    local section="$1"; local label="$2"; local st="$3"; local started="$4"; local ended="$5"; local dur="$6"; local reason="${7:-}"
+    ENH_SEC="$section" ENH_LABEL="$label" ENH_ST="$st" ENH_STARTED2="$started" ENH_ENDED="$ended" ENH_DUR="$dur" ENH_REASON="$reason" ENH_STEPS="$ENH_STEPS" \
+    "$PYTHON" - <<'PY' 2>/dev/null || true
+import json, os
+row = {
+    "section": os.environ["ENH_SEC"],
+    "label": os.environ["ENH_LABEL"],
+    "status": os.environ["ENH_ST"],
+    "started_at": os.environ["ENH_STARTED2"],
+    "ended_at": os.environ["ENH_ENDED"],
+    "duration_seconds": int(os.environ.get("ENH_DUR") or 0),
+}
+reason = os.environ.get("ENH_REASON")
+if reason:
+    row["reason"] = reason
+open(os.environ["ENH_STEPS"], "a", encoding="utf-8").write(json.dumps(row, ensure_ascii=False) + "\n")
+PY
+}
+eskip() {
+    local section="$1"; local label="$2"; local reason="$3"
+    local ts
+    ts=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[增强·$section] 跳过 — $reason"
+    record_enh_step "$section" "$label" "skipped" "$ts" "$ts" "0" "$reason"
+    write_enh_status "RUNNING"
+}
 estep() {
     local section="$1"; local label="$2"; local script="$3"; local timeout_s="${4:-300}"
     local started ended started_epoch dur err_log to_marker attempt cmd_pid wd_pid rc st
@@ -181,14 +231,7 @@ estep() {
     rm -f "$err_log" "$to_marker"
     ended=$(date '+%Y-%m-%d %H:%M:%S'); dur=$(($(date +%s) - started_epoch))
     [ "$st" = "degraded" ] && DEGRADED_COUNT=$((DEGRADED_COUNT+1))
-    ENH_SEC="$section" ENH_LABEL="$label" ENH_ST="$st" ENH_STARTED2="$started" ENH_ENDED="$ended" ENH_DUR="$dur" ENH_STEPS="$ENH_STEPS" \
-    "$PYTHON" - <<'PY' 2>/dev/null || true
-import json, os
-row = {"section": os.environ["ENH_SEC"], "label": os.environ["ENH_LABEL"], "status": os.environ["ENH_ST"],
-       "started_at": os.environ["ENH_STARTED2"], "ended_at": os.environ["ENH_ENDED"],
-       "duration_seconds": int(os.environ.get("ENH_DUR") or 0)}
-open(os.environ["ENH_STEPS"], "a", encoding="utf-8").write(json.dumps(row, ensure_ascii=False) + "\n")
-PY
+    record_enh_step "$section" "$label" "$st" "$started" "$ended" "$dur" ""
     write_enh_status "RUNNING"
 }
 
@@ -211,7 +254,8 @@ if [ "$IPO_JUNIOR_PAUSED" != "1" ]; then
     estep "ipo"    "IPO 打新日历"                       "-m stock_research.jobs.ipo_daily" 180
     estep "junior" "次新股+解禁雷达"                     "-m stock_research.jobs.junior_stock_watcher" 600
 else
-    echo "[增强·ipo/junior] 跳过 — IPO/次新股模块暂停（IPO_JUNIOR_PAUSED=1）"
+    eskip "ipo" "IPO 打新日历" "IPO/次新股模块暂停（IPO_JUNIOR_PAUSED=1）"
+    eskip "junior" "次新股+解禁雷达" "IPO/次新股模块暂停（IPO_JUNIOR_PAUSED=1）"
 fi
 
 # AI 主题雷达证据（周一全量 ETF+SEC 扫描，平日轻量）
