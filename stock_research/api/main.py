@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 # ───── 盘前闸门战绩渲染（详情页 + 历史二级页共用，避免两份口径漂移）─────
 _PM_DOT = {"CRITICAL": "🔴", "HIGH": "🟠", "LOW": "🟡", "NONE": "🟢"}
+_PM_CN_COLOR = {"CRITICAL": "红色预警", "HIGH": "橙色预警", "LOW": "黄色提醒", "NONE": "绿色（没警）"}
 _PM_OC = {"TRUE_POSITIVE": ("✅", "真预警"), "FALSE_ALARM": ("🟡", "虚惊"),
           "MISS": ("❌", "漏报"), "TRUE_NEGATIVE": ("·", "正常")}
 
@@ -85,28 +86,46 @@ def _pm_summary_html(summ: dict) -> str:
             continue
         avg = b.get("avg_return")
         br = b.get("bad_rate")
+        avg_txt = ("—" if avg is None else (f"跌 {abs(avg):.1f}%" if avg < 0 else f"涨 {avg:.1f}%"))
         rows_b += ('<div style="display:flex;justify-content:space-between;font-size:12.5px;'
                    'padding:4px 0;border-bottom:1px solid #f5f7fa">'
-                   f'<span>{_PM_DOT.get(k, "")} {k} <span class="muted">({b["n"]}天)</span></span>'
-                   f'<span>事后平均 <b>{(f"{avg:+.1f}%" if avg is not None else "—")}</b>'
-                   f' · 真跌占比 {(f"{br}%" if br is not None else "—")}</span></div>')
+                   f'<span>{_PM_DOT.get(k, "")} {_PM_CN_COLOR.get(k, k)} <span class="muted">({b["n"]}天)</span></span>'
+                   f'<span>事后平均<b>{avg_txt}</b>'
+                   f'{f"，其中真跌 {br}%" if br is not None else ""}</span></div>')
     buckets = ('<div style="margin-top:12px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">'
-               '① 按颜色分档 <span class="muted" style="font-weight:400">（闸门有用→红档该明显比绿档惨）</span></div>'
+               '① 不同颜色，事后真有差别吗？<span class="muted" style="font-weight:400">'
+               '（闸门有用→红色那天该比绿色那天跌得多）</span></div>'
                + rows_b + '</div>') if rows_b else ""
-    bv = summ.get("baseline_vix_only")
-    bn = summ.get("baseline_never_warn") or {}
-    bl = ('<div style="display:flex;justify-content:space-between;font-size:12.5px;padding:4px 0;'
-          'border-bottom:1px solid #f5f7fa"><span>🚦 <b>本闸门</b></span>'
-          f'<span>命中 {pc(summ.get("precision_pct"))} · 抓真跌 {pc(summ.get("recall_pct"))}</span></div>')
-    if bv:
-        bl += ('<div style="display:flex;justify-content:space-between;font-size:12.5px;padding:4px 0;'
-               'border-bottom:1px solid #f5f7fa"><span>只看 VIX</span>'
-               f'<span>命中 {pc(bv.get("precision_pct"))} · 抓真跌 {pc(bv.get("recall_pct"))}</span></div>')
-    bl += ('<div style="display:flex;justify-content:space-between;font-size:12.5px;padding:4px 0">'
-           f'<span>永远说绿（从不预警）</span><span>抓真跌 {pc(bn.get("recall_pct"))}</span></div>')
-    baseline = ('<div style="margin-top:12px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">'
-                '② 对比「笨办法」<span class="muted" style="font-weight:400">（本闸门要明显更能抓真跌才算有用）</span></div>'
-                + bl + '</div>')
+
+    # ② 跟「偷懒办法」PK —— 样本不够就只讲它以后要干嘛，不摆看不懂的百分比
+    pk_head = ('<div style="margin-top:12px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">'
+               '② 它比「偷懒办法」强吗？<span class="muted" style="font-weight:400">'
+               '（同样的日子里比，看谁更会提前喊对「要跌」）</span></div>')
+    if enough:
+        bv = summ.get("baseline_vix_only")
+        bn = summ.get("baseline_never_warn") or {}
+
+        def _bl_row(name, p, r, show_p=True):
+            right = (f"喊对 {pc(p)} · " if show_p else "") + f"真跌抓到 {pc(r)}"
+            return ('<div style="display:flex;justify-content:space-between;font-size:12.5px;'
+                    f'padding:4px 0;border-bottom:1px solid #f5f7fa"><span>{name}</span><span>{right}</span></div>')
+
+        bl = ('<div class="muted" style="font-size:11.5px;margin-bottom:4px">'
+              '（「喊对」=喊要跌、结果真跌的比例；「真跌抓到」=真正跌的日子有几成被提前喊到）</div>')
+        bl += _bl_row('🚦 <b>本闸门</b>（综合看 7 样）', summ.get("precision_pct"), summ.get("recall_pct"))
+        if bv:
+            bl += _bl_row('😴 只看一个 VIX', bv.get("precision_pct"), bv.get("recall_pct"))
+        bl += _bl_row('🙈 从不预警（鸵鸟）', None, bn.get("recall_pct"), show_p=False)
+        baseline = pk_head + bl + '</div>'
+    else:
+        baseline = pk_head + (
+            '<div style="font-size:12.5px;color:#475569;line-height:1.8">'
+            '等攒够交易日，这里会让三种办法在<b>同样的日子</b>比一比：<br>'
+            '• 🚦 <b>本闸门</b>：综合看 7 样东西（期货 / 利率 / 恐慌指数 / 巨头 / 板块 / 海外 / 宏观）<br>'
+            '• 😴 <b>只看一个恐慌指数 VIX</b>：最省事的笨办法<br>'
+            '• 🙈 <b>从不预警</b>：假装没事的鸵鸟<br>'
+            '看本闸门是不是<b>明显更会提前喊对「要跌」、又少瞎喊</b>。现在样本太少，先不下结论。</div>'
+        ) + '</div>'
     dim = 'opacity:.55' if not enough else ''
     return note + f'<div style="{dim}"><div class="stats">{stat}</div>{buckets}{baseline}</div>'
 
