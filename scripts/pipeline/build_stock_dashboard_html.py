@@ -410,6 +410,135 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 </head>
 <body class="bg-gradient-to-b from-slate-50 to-white" style="padding-left: 14rem;">
 
+<!-- 🚦 盘前预警：顶部条幅 + 右侧抽屉（点击原地滑出，不跳页）— premarket_gate job 写 JSON，本 JS 实时拉 -->
+<div id="pm-alert-banner" style="display:none;padding:12px 18px 0"></div>
+<div id="pm-backdrop" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.35);z-index:90"></div>
+<div id="pm-drawer" style="position:fixed;top:0;right:0;height:100vh;width:440px;max-width:92vw;background:#f8fafc;box-shadow:-10px 0 40px rgba(0,0,0,.18);z-index:100;transform:translateX(100%);transition:transform .28s ease;overflow-y:auto">
+  <div id="pm-drawer-body" style="padding:18px;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif;line-height:1.6;color:#0f172a"></div>
+</div>
+<script>
+(function(){
+  var API="http://127.0.0.1:8765";
+  var DOTC={CRITICAL:"#dc2626",HIGH:"#ea580c",LOW:"#ca8a04",NONE:"#16a34a"};
+  var BG={CRITICAL:"#fef2f2",HIGH:"#fff7ed",LOW:"#fefce8",NONE:"#f0fdf4"};
+  var BD={CRITICAL:"#fecaca",HIGH:"#fed7aa",LOW:"#fde68a",NONE:"#bbf7d0"};
+  var _gate=null;
+  function esc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+  function card(inner){return '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px;margin-top:12px">'+inner+'</div>';}
+  function pmHistory(hist){
+    // 战绩 + 全部历史按钮：始终显示（今天没预警也能看历史）
+    var btn='<a href="'+API+'/premarket/history" target="_blank" style="display:block;margin-top:12px;text-align:center;background:#f1f5f9;color:#334155;text-decoration:none;padding:9px;border-radius:9px;font-size:13px;font-weight:600">📜 查看全部历史记录（列表）›</a>';
+    if(!hist||!hist.summary) return card('<h4 style="margin:0;font-size:14px">📊 战绩回溯</h4><div style="font-size:12px;color:#94a3b8;margin-top:6px">历史加载中…</div>'+btn);
+    var s=hist.summary, sd=s.settled_days||0, en=s.enough_sample, pc=function(v){return v==null?"—":v+"%";};
+    var st='<h4 style="margin:0 0 8px;font-size:14px">📊 战绩回溯 <span style="font-weight:400;color:#94a3b8;font-size:12px">— 当晚报了啥+事后准不准</span></h4>';
+    if(sd<=0) return card(st+'<div style="font-size:12.5px;color:#94a3b8">还没有可验证的历史——每天记一笔，第二天用真实涨跌核对，攒几天就有了。</div>'+btn);
+    if(!en) st+='<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 10px;font-size:12px;color:#92400e;margin-bottom:10px">⚠️ 样本不足（'+sd+'/'+(s.min_sample||20)+' 个交易日），下面仅供观察、还不具统计意义。</div>';
+    st+='<div style="'+(!en?"opacity:.55":"")+'">';
+    st+='<div style="display:flex;gap:8px;margin-bottom:10px">';
+    st+='<div style="flex:1;background:#f8fafc;border-radius:8px;padding:8px;text-align:center"><b style="display:block;font-size:18px">'+sd+'</b><span style="font-size:11px;color:#94a3b8">已验证</span></div>';
+    st+='<div style="flex:1;background:#f8fafc;border-radius:8px;padding:8px;text-align:center"><b style="display:block;font-size:18px">'+pc(s.precision_pct)+'</b><span style="font-size:11px;color:#94a3b8">警报命中</span></div>';
+    st+='<div style="flex:1;background:#f8fafc;border-radius:8px;padding:8px;text-align:center"><b style="display:block;font-size:18px;color:#dc2626">'+s.miss+'</b><span style="font-size:11px;color:#94a3b8">漏报</span></div></div>';
+    var cb=s.color_buckets||{}, D2={CRITICAL:"🔴",HIGH:"🟠",LOW:"🟡",NONE:"🟢"}, CN={CRITICAL:"红色预警",HIGH:"橙色预警",LOW:"黄色提醒",NONE:"绿色（没警）"}, rb="";
+    ["CRITICAL","HIGH","LOW","NONE"].forEach(function(k){var b=cb[k]||{};if(!b.n)return;
+      var av=b.avg_return==null?"—":(b.avg_return<0?"跌 "+Math.abs(b.avg_return)+"%":"涨 "+b.avg_return+"%");
+      rb+='<div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:1px solid #f5f7fa"><span>'+D2[k]+' '+CN[k]+' <span style="color:#94a3b8">('+b.n+'天)</span></span><span>事后平均<b>'+av+'</b>'+(b.bad_rate==null?"":"，其中真跌 "+b.bad_rate+"%")+'</span></div>';});
+    if(rb) st+='<div style="margin-top:4px;font-size:13px;font-weight:600">① 不同颜色，事后真有差别吗？<span style="font-weight:400;color:#94a3b8;font-size:11px">（红色那天该比绿色那天跌得多）</span></div>'+rb;
+    st+='<div style="margin-top:8px;font-size:13px;font-weight:600">② 它比「偷懒办法」强吗？<span style="font-weight:400;color:#94a3b8;font-size:11px">（看谁更会提前喊对「要跌」）</span></div>';
+    if(en){
+      st+='<div style="font-size:11px;color:#94a3b8;margin-bottom:4px">（喊对=喊要跌结果真跌；真跌抓到=真跌的日子有几成提前喊到）</div>';
+      st+='<div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:1px solid #f5f7fa"><span>🚦 <b>本闸门</b>（综合7样）</span><span>喊对 '+pc(s.precision_pct)+' · 真跌抓到 '+pc(s.recall_pct)+'</span></div>';
+      if(s.baseline_vix_only) st+='<div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:1px solid #f5f7fa"><span>😴 只看一个 VIX</span><span>喊对 '+pc(s.baseline_vix_only.precision_pct)+' · 真跌抓到 '+pc(s.baseline_vix_only.recall_pct)+'</span></div>';
+      st+='<div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0"><span>🙈 从不预警（鸵鸟）</span><span>真跌抓到 '+pc((s.baseline_never_warn||{}).recall_pct)+'</span></div>';
+    } else {
+      st+='<div style="font-size:12px;color:#475569;line-height:1.8">等攒够交易日，这里会让三种办法在<b>同样的日子</b>比一比：<br>• 🚦 <b>本闸门</b>：综合看 7 样东西<br>• 😴 <b>只看一个恐慌指数 VIX</b>（最省事）<br>• 🙈 <b>从不预警</b>（鸵鸟）<br>看本闸门是不是<b>明显更会提前喊对、又少瞎喊</b>。现在样本太少，先不下结论。</div>';
+    }
+    var tw=s.tailwind||{};
+    st+='<div style="margin-top:8px;font-size:13px;font-weight:600">③ 「顺风」准不准？<span style="font-weight:400;color:#94a3b8;font-size:11px">（说顺风那些天事后真涨了吗）</span></div>';
+    if(tw.n){
+      var tav=tw.avg_return==null?"—":(tw.avg_return>=0?"涨 "+tw.avg_return+"%":"跌 "+Math.abs(tw.avg_return)+"%");
+      st+='<div style="font-size:12px;color:#475569;padding:2px 0">🟢 顺风 <b>'+tw.n+'</b> 天：事后平均<b>'+tav+'</b>，其中 '+(tw.rose||0)+' 天真涨'+(tw.backfired?'；<span style="color:#dc2626">⚠️ '+tw.backfired+' 天反而大跌（打脸）</span>':'')+'</div>';
+    } else {
+      st+='<div style="font-size:12px;color:#94a3b8">还没碰上「顺风」日，碰上了会单独记账。</div>';
+    }
+    st+='</div>'+btn;
+    return card(st);
+  }
+  function renderDetail(hist){
+    var d=_gate, body=document.getElementById("pm-drawer-body");
+    if(!body) return;
+    var x='<span id="pm-x" style="cursor:pointer;color:#94a3b8;font-size:18px">✕</span>';
+    var h='<div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:15px">🚦 美股盘前 · 今晚能不能买</b>'+x+'</div>';
+    if(!d||!d.available){
+      h+='<div style="background:#f1f5f9;border:1px solid #e2e8f0;border-radius:12px;padding:14px;margin:10px 0 2px;color:#64748b;font-size:13px;line-height:1.6">盘前闸门<b>今日尚未生成</b> —— 美股开盘前（北京约 20:10 / 20:45 / 21:15）才跑，周末 / 美股假日不跑。<br>👇 下面的历史记录随时都能看。</div>';
+      h+=pmHistory(hist);
+      h+='<div style="font-size:11px;color:#94a3b8;padding:12px 2px 30px">🟢正常买 🟡小仓试 🟠先别开新仓 🔴别买只看好已有 · ⚠️ 仅供参考</div>';
+      body.innerHTML=h;
+      document.getElementById("pm-x").onclick=closeDrawer; return;
+    }
+    var stale=!!d.stale;
+    var color=d.color||"NONE", ac=stale?"#64748b":DOTC[color];
+    var hbg=stale?"#f1f5f9":BG[color], hbd=stale?"#cbd5e1":BD[color];
+    var gen=(d.generated_at||"").replace("T"," ").slice(0,16);
+    var sc=d.scan_label||"";
+    var h='<div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:15px">🚦 美股盘前 · 今晚能不能买</b>'+x+'</div>';
+    h+='<div style="font-size:12px;color:#94a3b8;margin:2px 0 12px">⏱ 预警时间 '+(gen||"—")+(sc?' · '+sc:'')+'</div>';
+    if(stale) h+='<div style="background:#f1f5f9;border:1px solid #cbd5e1;border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:#475569">⏸ 这是<b>上一场预警，已过期</b>（美股那场已收盘）。今晚的预警要等盘前生成，届时自动更新。</div>';
+    h+='<div style="background:'+hbg+';border:1px solid '+hbd+';border-radius:14px;padding:16px"><div style="color:'+ac+';font-size:18px;font-weight:800">'+(stale?"⏸ 上一场预警（已过期）":esc(d.headline_plain))+'</div><div style="margin-top:8px;font-size:14px"><b>该怎么做：</b>'+esc(d.can_buy)+'</div>';
+    if(d.pressure_sources&&d.pressure_sources.length) h+='<div style="margin-top:6px;font-size:12.5px;color:#475569">压力源：'+esc(d.pressure_sources.join("、"))+'</div>';
+    h+='</div>';
+    if(d.top_alarm) h+='<div style="background:#fff;border:2px solid #dc2626;border-radius:12px;padding:12px;margin-top:12px;font-weight:700;color:#b91c1c;font-size:14px">'+esc(d.top_alarm)+'</div>';
+    if(d.reasons_plain&&d.reasons_plain.length){
+      var rr='<h4 style="margin:0 0 8px;font-size:14px">为什么这么判断</h4>';
+      d.reasons_plain.forEach(function(r){rr+='<div style="padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:13.5px">'+esc(r)+'</div>';});
+      h+=card(rr);
+    }
+    if(d.holdings_impact&&d.holdings_impact.length){
+      var hh='<h4 style="margin:0 0 8px;font-size:14px">💼 对你持仓的影响 <span style="font-weight:400;color:#94a3b8;font-size:12px">（只是提醒，不是叫你一定买卖）</span></h4>';
+      d.holdings_impact.forEach(function(o){hh+='<div style="padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:13.5px"><b>'+esc(o.symbol)+'</b>：'+esc(o.reason)+'</div>';});
+      h+=card(hh);
+    }
+    h+=pmHistory(hist);
+    h+='<div style="font-size:11px;color:#94a3b8;padding:12px 2px 30px">🟢正常买 🟡小仓试 🟠先别开新仓 🔴别买只看好已有 · ⚠️ 仅供参考，不是投资建议</div>';
+    body.innerHTML=h;
+    document.getElementById("pm-x").onclick=closeDrawer;
+  }
+  function openDrawer(){
+    document.getElementById("pm-backdrop").style.display="block";
+    document.getElementById("pm-drawer").style.transform="translateX(0)";
+    renderDetail();
+    fetch(API+"/api/premarket-gate").then(function(r){return r.json();}).then(function(d){_gate=d;
+      fetch(API+"/api/premarket-gate/history").then(function(r){return r.json();}).then(function(hh){renderDetail(hh);}).catch(function(){renderDetail();});
+    }).catch(function(){renderDetail();});
+  }
+  function closeDrawer(){
+    document.getElementById("pm-backdrop").style.display="none";
+    document.getElementById("pm-drawer").style.transform="translateX(100%)";
+  }
+  window.pmOpenDrawer=openDrawer;
+  function renderBanner(d){
+    _gate=d;
+    var fresh=d&&d.available&&!d.stale;   // 过期预警不当有效
+    var color=fresh?(d.color||"NONE"):"NONE";
+    var dot=document.getElementById("pm-nav-dot");
+    if(dot){dot.style.background=(d&&d.available&&d.stale)?"#cbd5e1":(DOTC[color]||"#cbd5e1");dot.title="盘前预警："+(d&&d.stale?"已过期":color);}
+    var b=document.getElementById("pm-alert-banner");
+    if(!b) return;
+    if(fresh&&(color==="HIGH"||color==="CRITICAL")){
+      var bd=DOTC[color], bg=(color==="CRITICAL")?"#fef2f2":"#fff7ed", icon=(color==="CRITICAL")?"🔴":"🟠";
+      b.innerHTML='<div onclick="window.pmOpenDrawer()" style="cursor:pointer;background:'+bg+';border:1px solid '+bd+';border-left:5px solid '+bd+';border-radius:10px;padding:11px 16px;color:#0f172a;font-size:14px;line-height:1.5">'
+        +'<b style="color:'+bd+'">'+icon+' 盘前预警</b> · '+esc(d.headline_plain||"今晚环境偏差")
+        +'<span style="float:right;color:'+bd+';font-weight:600">查看详情 ›</span></div>';
+      b.style.display="block";
+    } else { b.style.display="none"; }
+  }
+  function load(){fetch(API+"/api/premarket-gate").then(function(r){return r.json();}).then(renderBanner).catch(function(){});}
+  document.addEventListener("click",function(e){if(e.target&&e.target.id==="pm-backdrop")closeDrawer();});
+  document.addEventListener("keydown",function(e){if(e.key==="Escape")closeDrawer();});
+  if(document.readyState!=="loading") load(); else document.addEventListener("DOMContentLoaded",load);
+  setInterval(load,300000);
+})();
+</script>
+
 <!-- ============ 左侧 sidebar 导航（今日 + 我的池子 + AI 助手 + 深度研究 + 管理） ============ -->
 <aside id="tab-nav" class="fixed left-0 top-0 h-screen w-56 bg-white border-r border-slate-200 shadow-sm overflow-y-auto z-50">
   <div class="p-4">
@@ -421,6 +550,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div class="mb-4">
       <div class="text-base font-bold text-slate-800 mb-2 px-2">今日</div>
       <a href="#today" data-tab="today" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">今日决策台</a>
+      <a href="javascript:void(0)" onclick="window.pmOpenDrawer&&window.pmOpenDrawer()" class="block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition"><span id="pm-nav-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#cbd5e1;margin-right:6px;vertical-align:middle"></span>盘前预警</a>
       <a href="#overview" data-tab="overview" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">关键事件</a>
     </div>
 
