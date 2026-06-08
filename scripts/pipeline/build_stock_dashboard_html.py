@@ -17622,6 +17622,7 @@ def runtime_status_panel_html() -> str:
             "name": "系统股票池",
             "provider": "内部 universe",
             "status": _fetch_status("system_universe_refresh", "OK" if v2.get("system_universe") else "WARN"),
+            "schedule": "08:30 早班",
             "time": _fetch_time("system_universe_refresh"),
             "pulls": "科技/AI 候选范围",
             "got": f"active {_nfmt(v2.get('system_universe'))} 只；pool_membership {_nfmt(v2.get('pool_membership'))} 只",
@@ -17632,6 +17633,7 @@ def runtime_status_panel_html() -> str:
             "name": "行情价格",
             "provider": "yfinance",
             "status": _fetch_status("yfinance", "OK" if coverage.get("pct") else "WARN"),
+            "schedule": "08:30 早班；16:30 A/H 收盘",
             "time": _fetch_time("yfinance"),
             "pulls": "收盘价、涨跌、市值、估值",
             "got": f"US {_nfmt(us_price)} / A股 {_nfmt(cn_price)} / 港股 {_nfmt(hk_price)}；覆盖 {_pct_text(coverage.get('pct'))}",
@@ -17642,6 +17644,7 @@ def runtime_status_panel_html() -> str:
             "name": "美股深度",
             "provider": "FMP Starter",
             "status": _source_status("FMP", default="OK"),
+            "schedule": "08:30 早班；21:00 研究线",
             "time": _source_time("FMP"),
             "pulls": "财务、估值、分析师、软红旗",
             "got": _source_detail("FMP", "付费源已接入；主推荐和深度字段可读"),
@@ -17652,6 +17655,7 @@ def runtime_status_panel_html() -> str:
             "name": "A股专业",
             "provider": "Tushare Pro",
             "status": _source_status("tushare", default="OK"),
+            "schedule": "16:30 A/H 收盘；21:00 研究线",
             "time": _source_time("tushare"),
             "pulls": "A股行情、财报、F-Score、龙虎榜",
             "got": _source_detail("tushare", "token 可用，API 初始化正常"),
@@ -17662,6 +17666,7 @@ def runtime_status_panel_html() -> str:
             "name": "事件公告",
             "provider": "SEC / HKEX / 事件日历",
             "status": event_status,
+            "schedule": "08:30 早班轻量；后台增强补齐",
             "time": event_latest_time,
             "pulls": "财报、8-K、Form 4、HKEX、A股公告、政策",
             "got": event_detail,
@@ -17672,6 +17677,7 @@ def runtime_status_panel_html() -> str:
             "name": "异步增强",
             "provider": "早班后台子进程",
             "status": enhancement_level,
+            "schedule": "08:30 主线完成后自动跑",
             "time": enhancement_time,
             "pulls": "F-Score 全量、SEC、Form 4、HKEX、主题证据、策略诊断",
             "got": enhancement_detail,
@@ -17682,6 +17688,7 @@ def runtime_status_panel_html() -> str:
             "name": "资料补全",
             "provider": "V2 enrichment",
             "status": _fetch_status("v2_system_enrichment", "OK" if acceptance_summary.get("v2_enrichment_coverage") else "INFO"),
+            "schedule": "21:00 研究线",
             "time": _fetch_time("v2_system_enrichment"),
             "pulls": "公司资料、行业、财务摘要",
             "got": _fetch_detail("v2_system_enrichment", "等待下一次补全任务"),
@@ -17697,6 +17704,7 @@ def runtime_status_panel_html() -> str:
             <div class="text-[11px] text-slate-400">{html_lib.escape(row['provider'])}</div>
           </td>
           <td class="py-2.5 pr-3">{_runtime_badge(row['status'])}</td>
+          <td class="py-2.5 pr-3 text-xs text-slate-700 whitespace-nowrap">{html_lib.escape(row.get('schedule') or '—')}</td>
           <td class="py-2.5 pr-3 text-xs font-mono text-slate-600 whitespace-nowrap">{html_lib.escape(row.get('time') or '—')}</td>
           <td class="py-2.5 pr-3 text-xs text-slate-700">{html_lib.escape(row['pulls'])}</td>
           <td class="py-2.5 pr-3 text-xs text-slate-700">{html_lib.escape(row['got'])}</td>
@@ -17716,7 +17724,7 @@ def runtime_status_panel_html() -> str:
     <div class="overflow-x-auto">
       <table class="w-full text-left text-sm">
         <thead class="text-xs text-slate-500 border-b border-slate-200">
-          <tr><th class="pb-2 pr-3">数据源</th><th class="pb-2 pr-3">状态</th><th class="pb-2 pr-3">最近拉取/检查</th><th class="pb-2 pr-3">拉什么</th><th class="pb-2 pr-3">今天拉到</th><th class="pb-2 pr-3">数据落点</th><th class="pb-2">影响</th></tr>
+          <tr><th class="pb-2 pr-3">数据源</th><th class="pb-2 pr-3">状态</th><th class="pb-2 pr-3">计划执行</th><th class="pb-2 pr-3">最近拉取/检查</th><th class="pb-2 pr-3">拉什么</th><th class="pb-2 pr-3">今天拉到</th><th class="pb-2 pr-3">数据落点</th><th class="pb-2">影响</th></tr>
         </thead>
         <tbody>{data_source_rows}</tbody>
       </table>

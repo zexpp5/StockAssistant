@@ -826,7 +826,7 @@ if [ ${#FAILED_STEPS[@]} -eq 0 ]; then
             ENH_LOG="$DIR/logs/enhancement_$(date +%Y%m%d_%H%M).log"
             ENH_LABEL="com.linearview.stockassistant.enhancement.$(date +%Y%m%d%H%M%S)"
             echo "[29 早班异步增强] submit enhancement_refresh.sh（launchd 后台,主线不等）..."
-            if launchctl submit -l "$ENH_LABEL" -o "$ENH_LOG" -e "$ENH_LOG" -- "$DIR/enhancement_refresh.sh"; then
+            if launchctl submit -l "$ENH_LABEL" -o "$ENH_LOG" -e "$ENH_LOG" -- /bin/bash "$DIR/enhancement_refresh.sh"; then
                 echo "  → 增强任务已交给 launchd：$ENH_LABEL；日志 ${ENH_LOG#$DIR/}"
             else
                 echo "⚠️  增强任务提交失败（不影响早班主线 PASS；运行状态页会显示上次增强新鲜度）"
