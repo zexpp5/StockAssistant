@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field, asdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -107,6 +107,7 @@ HEADLINE_PLAIN = {
 # 信号族权重（期货最直接，权重最高）
 # 数据质量保险丝阈值：覆盖率低于此，绿/黄不给买入结论
 MIN_COVERAGE = 0.6
+MIN_MEGACAP_PREMARKET_QUOTES = 4
 
 WEIGHTS = {
     "futures": 3.0,
@@ -117,6 +118,24 @@ WEIGHTS = {
     "overseas": 1.5,
     "macro": 1.0,
 }
+
+# NYSE 全天休市（2026；盘前闸门用来避免周末/假日/手工测试产物被当成有效信号）
+US_HOLIDAYS_2026 = {
+    "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
+    "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
+}
+
+
+def is_us_trading_day(d: date) -> bool:
+    """Conservative NYSE trading-day check for the premarket gate."""
+    return d.weekday() < 5 and d.isoformat() not in US_HOLIDAYS_2026
+
+
+def _epoch_to_iso(v: Any) -> str | None:
+    try:
+        return datetime.fromtimestamp(float(v), tz=timezone.utc).isoformat(timespec="seconds")
+    except Exception:
+        return None
 
 
 # ──────────────────────────────────────────────────
@@ -182,7 +201,18 @@ def _fetch_one(yf_symbols: list[str], prefer_premarket: bool = False) -> dict[st
       - 期货近 24h 交易 → last 即盘前/隔夜价（最稳）
       - 海外指数（已收盘）→ last≈今日收盘，pct=今日全天涨跌
     """
-    out = {"last": None, "prev_close": None, "pct": None, "source": "", "ok": False, "premarket": False}
+    out = {
+        "last": None,
+        "prev_close": None,
+        "pct": None,
+        "source": "",
+        "source_kind": "",
+        "ok": False,
+        "premarket": False,
+        "quote_time": None,
+        "quote_date": None,
+        "stale_for_premarket": bool(prefer_premarket),
+    }
     try:
         import yfinance as yf
     except Exception as e:  # pragma: no cover
@@ -202,6 +232,11 @@ def _fetch_one(yf_symbols: list[str], prefer_premarket: bool = False) -> dict[st
                     rc = info.get("regularMarketPreviousClose") or info.get("previousClose")
                     if pm and rc:
                         last, prev, premarket = float(pm), float(rc), True
+                        out["source_kind"] = "premarket"
+                        out["quote_time"] = _epoch_to_iso(
+                            info.get("preMarketTime") or info.get("regularMarketTime")
+                        )
+                        out["stale_for_premarket"] = False
                 except Exception:
                     pass
 
@@ -210,6 +245,7 @@ def _fetch_one(yf_symbols: list[str], prefer_premarket: bool = False) -> dict[st
                     fi = t.fast_info
                     last = float(fi.last_price)
                     prev = float(fi.previous_close)
+                    out["source_kind"] = "fast_info"
                 except Exception:
                     last = prev = None
 
@@ -218,8 +254,15 @@ def _fetch_one(yf_symbols: list[str], prefer_premarket: bool = False) -> dict[st
                 closes = [float(x) for x in h["Close"].tolist() if x == x] if len(h) else []
                 if len(closes) >= 2:
                     last, prev = closes[-1], closes[-2]
+                    out["source_kind"] = "daily_history"
+                    try:
+                        out["quote_date"] = h.index[-1].date().isoformat()
+                    except Exception:
+                        pass
 
             if last is not None and prev and prev > 0:
+                if not prefer_premarket:
+                    out["stale_for_premarket"] = False
                 out.update(
                     last=round(last, 4),
                     prev_close=round(prev, 4),
@@ -253,6 +296,19 @@ def _pct(quotes: dict, key: str) -> float | None:
 def _val(quotes: dict, key: str) -> float | None:
     q = quotes.get(key) or {}
     return q.get("last") if q.get("ok") else None
+
+
+def _quote_is_reliable_premarket(q: dict) -> bool:
+    """Whether a stock quote is acceptable for premarket breadth.
+
+    Live yfinance stock data is only reliable here when it exposes an explicit
+    preMarketPrice. Unit tests inject source=mock to validate historical scenes.
+    """
+    if not q or not q.get("ok"):
+        return False
+    if q.get("source") == "mock" or q.get("source_kind") == "mock":
+        return True
+    return bool(q.get("premarket"))
 
 
 # ──────────────────────────────────────────────────
@@ -404,15 +460,25 @@ def _sig_vol(quotes: dict) -> FamilySignal:
 def _sig_megacap(quotes: dict) -> FamilySignal:
     """巨头盘前广度：7 只里几只盘前跌超 1%。看广度不看单只。"""
     sig = FamilySignal("megacap", "巨头盘前")
-    pcts = {k: _pct(quotes, k) for k in MEGA7}
+    raw = {k: quotes.get(k) or {} for k in MEGA7}
+    pcts = {k: q.get("pct") for k, q in raw.items() if _quote_is_reliable_premarket(q)}
     have = {k: v for k, v in pcts.items() if v is not None}
-    if not have:
+    skipped = [k for k, q in raw.items() if q.get("ok") and not _quote_is_reliable_premarket(q)]
+    if len(have) < MIN_MEGACAP_PREMARKET_QUOTES:
         sig.available = False
-        sig.headline = "巨头盘前未取到"
+        sig.headline = f"巨头可靠盘前价不足（{len(have)}/{len(MEGA7)}）"
+        sig.plain = ("科技巨头没有拿到足够可靠的盘前成交价，"
+                     "这部分不参与今晚结论，避免把昨收/旧价当成盘前信号。")
+        sig.data = {
+            "usable": list(have.keys()),
+            "skipped_stale_or_regular": skipped,
+            "min_required": MIN_MEGACAP_PREMARKET_QUOTES,
+        }
         return sig
     down1 = [k for k, v in have.items() if v <= -1.0]
     avg = sum(have.values()) / len(have)
-    sig.data = {"pct": have, "down_over_1pct": down1, "avg": round(avg, 2)}
+    sig.data = {"pct": have, "down_over_1pct": down1, "avg": round(avg, 2),
+                "usable": list(have.keys()), "skipped_stale_or_regular": skipped}
     n = len(down1)
     if n >= 5:
         sig.stress = 3.0
