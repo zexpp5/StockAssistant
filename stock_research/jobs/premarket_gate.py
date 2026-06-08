@@ -298,12 +298,18 @@ def _scan_label(now: datetime) -> str:
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     p = argparse.ArgumentParser(description="美股盘前风险闸门")
-    p.add_argument("--dry-run", action="store_true", help="只算只打印，不写 state 不推送")
-    p.add_argument("--push", action="store_true", help="算完按分级推送（同 normal）")
-    p.add_argument("--force", action="store_true", help="无视窗口+state，强制推一次（测试）")
+    p.add_argument("--dry-run", action="store_true", help="只算只打印，绝不写生产/不推送")
+    p.add_argument("--force", action="store_true",
+                   help="无视窗口/state 强制计算（测试用，默认不写生产 JSON、不推飞书）")
+    p.add_argument("--push-production", action="store_true",
+                   help="配合 --force：明确允许写生产 JSON/state/history 并按档位推送（慎用）")
     args = p.parse_args()
 
     now = datetime.now()
+    # 保险丝：--force 默认是"演练"，不碰生产、不推送；要真写真推必须显式 --push-production。
+    test_mode = args.force and not args.push_production
+    do_production = (not args.dry_run) and (not test_mode)
+
     ok_window, why = _is_valid_window(now)
     if not ok_window and not (args.force or args.dry_run):
         logger.info("跳过：%s（--force 可强制跑）", why)
@@ -343,8 +349,9 @@ def main() -> int:
     if res.notes:
         print("备注：" + "；".join(res.notes))
 
-    if args.dry_run:
-        print("\n[--dry-run] 不写 JSON / state / 不推送")
+    if not do_production:
+        tag = "--dry-run" if args.dry_run else "--force 测试模式（未带 --push-production）"
+        print(f"\n[{tag}] 演练：不写生产 JSON / state / history，不推送飞书")
         return 0
 
     # 写唯一事实源
@@ -369,8 +376,8 @@ def main() -> int:
     curr_rank = pg.SEVERITY_ORDER.get(res.color, 0)
     pushed_rank = pg.SEVERITY_ORDER.get(state.get("last_pushed_color", "NONE"), 0)
 
-    # 只有橙/红才推飞书；同日同档（或更低）不重复，升档才再推
-    should_push = args.force or (curr_rank >= pg.SEVERITY_ORDER["HIGH"] and curr_rank > pushed_rank)
+    # 只有橙/红才推飞书；同日同档（或更低）不重复，升档才再推（--force 不再强推，须档位达标）
+    should_push = curr_rank >= pg.SEVERITY_ORDER["HIGH"] and curr_rank > pushed_rank
 
     if should_push:
         logger.info("🚦 推送飞书：%s（%s）", res.color, scan)
