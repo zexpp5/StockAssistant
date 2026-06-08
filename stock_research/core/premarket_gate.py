@@ -238,7 +238,15 @@ def _fetch_one(yf_symbols: list[str], prefer_premarket: bool = False) -> dict[st
                 try:
                     info = t.info or {}
                     pm = info.get("preMarketPrice")
-                    rc = info.get("regularMarketPreviousClose") or info.get("previousClose")
+                    # Yahoo's regularMarketPreviousClose can lag one session in
+                    # Monday premarket. Compare premarket against the latest
+                    # completed regular-session close instead.
+                    rc = (
+                        info.get("regularMarketPrice")
+                        or info.get("postMarketPrice")
+                        or info.get("regularMarketPreviousClose")
+                        or info.get("previousClose")
+                    )
                     if pm and rc:
                         last, prev, premarket = float(pm), float(rc), True
                         out["source_kind"] = "premarket"
@@ -722,7 +730,7 @@ def _sig_overseas(quotes: dict) -> FamilySignal:
             lead = f"**{_cn[worst_k]}股市明显异动、大跌 {abs(worst_v):.1f}%**——这是今晚亚洲最强的坏信号。"
         sig.plain = lead + f"比美股更早开盘的亚洲市场已收盘，普遍在跌（{parts_cn}）。"
         if "asia_semis_lead" in sig.tags:
-            sig.plain += "韩国和台湾芯片股扎堆，它们先跳水，往往是美国芯片股的「预告片」。"
+            sig.plain += "韩国和台湾芯片股权重高，说明 AI/半导体链外部压力还在；若美股盘前已修复，应把它当成风险背景，而不是单独的卖出信号。"
     else:
         sig.plain = "亚洲市场今天没明显下跌，没给美股递坏消息。"
     return sig
@@ -933,6 +941,7 @@ def _holdings_overlay(families: list[FamilySignal], holdings: list[dict] | None)
     ai_hardware_hot = "ai_hardware" in all_tags
     futures_hot = fam_by_key.get("futures") and fam_by_key["futures"].stress >= 2
     megacap_hot = "megacap_broad" in all_tags
+    us_premarket_weak = bool(futures_hot or megacap_hot)
 
     impact: list[dict] = []
     for h in holdings:
@@ -946,8 +955,10 @@ def _holdings_overlay(families: list[FamilySignal], holdings: list[dict] | None)
         base = sym.split(".")[0]
         reasons = []
         if base in AI_HARDWARE or sym in AI_HARDWARE:
-            if ai_hardware_hot:
+            if ai_hardware_hot and us_premarket_weak:
                 reasons.append("你这只是芯片/AI 硬件股，今晚芯片是重灾区，别加仓，盯好你的止损线")
+            elif ai_hardware_hot:
+                reasons.append("亚洲半导体链今天明显承压，但美股盘前未同步走弱；先看开盘后 30-60 分钟确认，别追涨")
             elif futures_hot:
                 reasons.append("科技股盘前走弱，今晚开盘波动可能大，先观望")
         if base in MEGA_PLATFORM:
