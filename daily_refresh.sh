@@ -654,10 +654,12 @@ fi
 # 19/19a/19c 三个事件日历给 morning 也跑：
 #   解禁/减持/财报当日时效性强，研究 21:00 才更新会错过早盘提示。
 #   yfinance/akshare 查询轻量,morning 也能承受。
-# 19/19a/19c 轻量事件(解禁/减持/财报)留早班——当日时效强;但 enhance 级 + 90s 硬超时,挂死只降级不阻断
-run_step "19/25 事件日历（解禁/减持/财报）" "-m stock_research.jobs.event_calendar_daily" enhance 90
-run_step "19a/25 港股事件日历（yfinance 财报+超预期）" "-m stock_research.jobs.event_calendar_hk_daily" enhance 90
-run_step "19c/25 美股事件日历（yfinance 财报+超预期）" "-m stock_research.jobs.event_calendar_us_daily" enhance 90
+# 19/19a/19c 事件(解禁/减持/财报)留早班——当日时效强(用户定)。enhance 级:超时/失败只降级用缓存,不阻断。
+#   超时设宽容(覆盖正常耗时:实测 19≈8min/19c≈4min/19a≈25s,非"轻量"),只兜真挂死。
+#   ⚠️ 这三步使早班仍含 ~12min;若要早班极致≤10min,需把 19/19c 也挪 async(待用户定,见交付说明)。
+run_step "19/25 事件日历（解禁/减持/财报）" "-m stock_research.jobs.event_calendar_daily" enhance 600
+run_step "19a/25 港股事件日历（yfinance 财报+超预期）" "-m stock_research.jobs.event_calendar_hk_daily" enhance 180
+run_step "19c/25 美股事件日历（yfinance 财报+超预期）" "-m stock_research.jobs.event_calendar_us_daily" enhance 360
 # 19d HKEX / 19e SEC EDGAR / 19f Form4:重网络,2026-06-08 移出早班→夜班(research);
 #   早班由 enhancement_refresh.sh 异步刷(28 push 后 fork)。SEC 申报 2-4 天延迟,早班缺也无新意。
 is_research_step && run_step "19d/25 港股 HKEX 披露易公告（盈警/停牌/股东/回购/并购）" "-m stock_research.jobs.event_calendar_hk_hkex_daily" enhance 240
