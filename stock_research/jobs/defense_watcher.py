@@ -1,4 +1,4 @@
-"""触发式 Alert watcher — 每 15 min 跑市场层防御 + 持仓日内回撤，升档/新触发时推飞书。
+"""触发式 Alert watcher — 跑市场层防御 + 持仓日内回撤，关键变化及时推飞书。
 
 设计：
   - 市场层：VIX + SPY/200MA + 宏观 + PCR。
@@ -6,20 +6,22 @@
   - picks 止损仍日级，不在此重复。
   - 状态文件 data/defense_watcher_state.json 记录上次 severity
   - 严重度排序: NONE(0) < LOW(1) < HIGH(2) < CRITICAL(3)
-  - 仅升档时推送（降档静默，避免噪音和"刚升又降"的来回打扰）
+  - 固定每 5 分钟扫描；升档立刻推，HIGH/CRITICAL 降档也推一条恢复/降档卡
   - 推送复用 morning_brief 的 webhook（FEISHU_ALERT_WEBHOOK > FEISHU_BRIEF_WEBHOOK）
 
 CLI:
   python3 -m stock_research.jobs.defense_watcher          # 正常跑
   python3 -m stock_research.jobs.defense_watcher --force  # 强制推送当前 severity 一次（测试用）
   python3 -m stock_research.jobs.defense_watcher --reset  # 把 state 重置为 NONE（下次升档才推）
+  python3 -m stock_research.jobs.defense_watcher --dry-run --no-holdings
 
-Cron（每 15 min，盘前 8:00 - 盘后 22:00；夜里不跑省费用）:
-  */15 8-22 * * * cd /Users/yanli/我的代码_新/线性视界/StockAssistant && \
-    /usr/bin/python3 -m stock_research.jobs.defense_watcher >> data/defense_watcher.log 2>&1
+推荐调度：
+  bash scripts/setup_defense_watcher_launchd.sh
+  # 美股盘中每 5 分钟固定扫描一次。
 """
 from __future__ import annotations
 import argparse
+import fcntl
 import json
 import logging
 import os
@@ -58,6 +60,8 @@ SEVERITY_ORDER = {"NONE": 0, "LOW": 1, "HIGH": 2, "CRITICAL": 3}
 ICON_MAP = {"NONE": "🟢", "LOW": "🟡", "HIGH": "🟠", "CRITICAL": "🔴"}
 TEMPLATE_MAP = {"NONE": "blue", "LOW": "yellow", "HIGH": "orange", "CRITICAL": "red"}
 STATE_FILE = _REPO / "data" / "defense_watcher_state.json"
+LOCK_FILE = _REPO / "data" / "defense_watcher.lock"
+FAST_SCAN_MINUTES = 5
 
 
 def _load_state() -> dict:
@@ -75,6 +79,19 @@ def _save_state(state: dict) -> None:
     STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _acquire_lock():
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fh = LOCK_FILE.open("w")
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        fh.close()
+        return None
+    fh.write(str(os.getpid()))
+    fh.flush()
+    return fh
+
+
 def _holding_intraday_alerts() -> list[dict]:
     """真实持仓日内波动（用 price_daily 最近两收，非 tick）。"""
     try:
@@ -85,7 +102,11 @@ def _holding_intraday_alerts() -> list[dict]:
         return []
 
     alerts: list[dict] = []
-    conn = stock_db.get_db()
+    try:
+        conn = stock_db.get_db()
+    except Exception as exc:
+        logger.warning("持仓日内检查跳过: DB 连接失败: %s", str(exc)[:120])
+        return []
     try:
         holdings = stock_db.fetch_all_real_holdings(conn=conn)
         if not holdings:
@@ -196,7 +217,78 @@ def _market_severity() -> tuple[str, list[dict]]:
     return sev, alerts
 
 
-def _build_alert_card(prev: str, curr: str, alerts: list[dict]) -> dict:
+def _fetch_market_context() -> dict:
+    """给告警卡补价格端上下文；失败时不影响主告警。"""
+    out: dict = {"generated_at": datetime.now().isoformat(timespec="seconds"), "quotes": []}
+    try:
+        import yfinance as yf
+    except Exception as exc:
+        out["error"] = f"yfinance unavailable: {str(exc)[:80]}"
+        return out
+
+    for label, symbol in [("SPY", "SPY"), ("QQQ", "QQQ"), ("SMH", "SMH"), ("VIX", "^VIX")]:
+        try:
+            hist = yf.Ticker(symbol).history(period="5d", interval="1d")
+            if hist is None or len(hist) == 0 or "Close" not in hist:
+                continue
+            closes = [float(x) for x in hist["Close"].dropna().tolist()]
+            if not closes:
+                continue
+            last = closes[-1]
+            prev = closes[-2] if len(closes) >= 2 else None
+            pct = ((last / prev - 1.0) * 100.0) if prev else None
+            out["quotes"].append({
+                "label": label,
+                "price": round(last, 2),
+                "pct": round(pct, 2) if pct is not None else None,
+            })
+        except Exception as exc:
+            out.setdefault("quote_errors", {})[label] = str(exc)[:80]
+    return out
+
+
+def _market_context_lines(context: dict | None, alerts: list[dict]) -> list[str]:
+    lines: list[str] = []
+    if not context:
+        return lines
+    quotes = context.get("quotes") or []
+    if quotes:
+        bits = []
+        for q in quotes:
+            pct = q.get("pct")
+            pct_txt = "—" if pct is None else f"{pct:+.2f}%"
+            bits.append(f"{q.get('label')} {q.get('price')} ({pct_txt})")
+        lines.append("价格端：" + " · ".join(bits))
+
+    pcr_alert = next((a for a in alerts if a.get("type") == "PUT_CALL_RATIO"), None)
+    if pcr_alert:
+        pcr = pcr_alert.get("pcr_volume")
+        pcr_oi = pcr_alert.get("pcr_oi")
+        lines.append(f"期权端：SPY PCR(volume)={pcr if pcr is not None else '—'} · PCR(OI)={pcr_oi if pcr_oi is not None else '—'}")
+
+    quote_map = {q.get("label"): q for q in quotes}
+    weak_prices = [
+        label for label in ("SPY", "QQQ", "SMH")
+        if (quote_map.get(label) or {}).get("pct") is not None and (quote_map.get(label) or {}).get("pct") < 0
+    ]
+    if pcr_alert and not weak_prices:
+        lines.append("读法：期权避险升温，但价格端暂未同步转弱，先当作风险提示而不是单独交易指令。")
+    elif weak_prices:
+        lines.append(f"读法：价格端也有转弱迹象（{', '.join(weak_prices)}），这类告警权重要提高。")
+    return lines
+
+
+def _build_market_context_block(context: dict | None, alerts: list[dict]) -> dict | None:
+    lines = _market_context_lines(context, alerts)
+    if not lines:
+        return None
+    return {
+        "tag": "div",
+        "text": {"tag": "lark_md", "content": "**盘中上下文**\n" + "\n".join(f"• {line}" for line in lines)},
+    }
+
+
+def _build_alert_card(prev: str, curr: str, alerts: list[dict], context: dict | None = None) -> dict:
     """飞书 interactive card v1 — 与 morning_brief 视觉一致。"""
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     prev_icon = ICON_MAP.get(prev, "⚪")
@@ -210,14 +302,13 @@ def _build_alert_card(prev: str, curr: str, alerts: list[dict]) -> dict:
             "👉 **大盘风控 · 偏高风险档**（不是个股买卖单）\n\n"
             "**市场在说什么**：触发明细里的指标（常见是 SPY 期权 Put/Call 比 PCR）"
             "显示整体看跌情绪偏强。\n\n"
-            "**系统模板建议**：整体减仓约 30–50%、暂停新开仓；"
-            "可考虑防御型蓝筹（如 KO、MCD）——仅作风格参考。\n\n"
+            "**怎么处理**：新开仓降速、别追高；已有仓位继续按个股价格、止损线和仓位计划处理。\n\n"
             "**不要和这些混读**：① AI 推荐买哪只 ② AI 组合调仓 ③「我的持仓」里每只股的体检结论。"
         ),
         "CRITICAL": (
             "👉 **大盘风控 · 极高风险档**（不是个股买卖单）\n"
-            "建议大幅降仓或观望；历史压力测试显示崩盘期策略可能明显跑输 SPY。"
-            "等档位回落到 LOW 以下再考虑恢复正常仓位。"
+            "先暂停追高和新大仓位，检查组合集中度、止损线和现金缓冲。"
+            "它是风控提醒，不是自动清仓指令；是否卖出仍看价格端是否共振转弱。"
         ),
     }.get(curr, "")
 
@@ -228,6 +319,10 @@ def _build_alert_card(prev: str, curr: str, alerts: list[dict]) -> dict:
             f"{advice}"
         )},
     }]
+
+    context_block = _build_market_context_block(context, alerts)
+    if context_block:
+        elements.append(context_block)
 
     if alerts:
         alert_lines = []
@@ -244,9 +339,9 @@ def _build_alert_card(prev: str, curr: str, alerts: list[dict]) -> dict:
 
     elements.append({"tag": "note", "elements": [
         {"tag": "plain_text", "content": (
-            "📖 这是什么：defense_watcher 每 15 分钟扫大盘（VIX/200MA/宏观/PCR），"
-            "只在档位变差时推飞书 · 不是 AI 荐股也不是持仓体检 · "
-            "🟢正常 🟡留意 🟠减仓 🔴清仓 · ⚠️ 不构成投资建议"
+            "📖 这是什么：defense_watcher 每 5 分钟扫大盘（VIX/200MA/宏观/PCR），"
+            "不是 AI 荐股也不是持仓体检 · "
+            "🟢正常 🟡留意 🟠高风险 🔴极高风险 · ⚠️ 不构成投资建议"
         )},
     ]})
 
@@ -258,6 +353,51 @@ def _build_alert_card(prev: str, curr: str, alerts: list[dict]) -> dict:
                 "title": {"tag": "plain_text", "content": f"🚨 防御信号升档 · {now_str}"},
                 "subtitle": {"tag": "plain_text", "content": f"{prev} → {curr}"},
                 "template": TEMPLATE_MAP.get(curr, "grey"),
+            },
+            "elements": elements,
+        },
+    }
+
+
+def _build_downgrade_card(prev: str, curr: str, alerts: list[dict], context: dict | None = None) -> dict:
+    """降档/恢复卡：不延迟，下一次扫描看到降档就推。"""
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    curr_icon = ICON_MAP.get(curr, "⚪")
+    title = "防御信号回落" if SEVERITY_ORDER.get(curr, 0) <= SEVERITY_ORDER["LOW"] else "防御信号降档"
+    lines = [
+        f"✅ **{title}**：{prev} → {curr_icon} **{curr}**",
+        "",
+        "这不是买入信号，只是告诉你上一条高风险状态已经变化；接下来仍按个股价格、成交量和仓位计划处理。",
+    ]
+    if SEVERITY_ORDER.get(curr, 0) >= SEVERITY_ORDER["HIGH"]:
+        lines.append("当前仍在高风险档，只是比上一档缓和。")
+    else:
+        lines.append("当前已不按高风险状态处理，可以回到正常盘中观察节奏。")
+
+    elements: list[dict] = [
+        {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}},
+    ]
+    context_block = _build_market_context_block(context, alerts)
+    if context_block:
+        elements.append(context_block)
+    if alerts:
+        alert_lines = []
+        for a in alerts[:5]:
+            alert_lines.append(f"• [{a.get('severity', '')}] **{a.get('type') or a.get('name', '')}**: {a.get('trigger') or a.get('suggested_action', '')}")
+        elements.append({"tag": "hr"})
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "**当前仍触发**\n" + "\n".join(alert_lines)}})
+    elements.append({"tag": "note", "elements": [{
+        "tag": "plain_text",
+        "content": "降档/恢复卡由下一次扫描立即推送，用来纠正旧红卡/橙卡造成的滞后印象。",
+    }]})
+    return {
+        "msg_type": "interactive",
+        "card": {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": f"✅ {title} · {now_str}"},
+                "subtitle": {"tag": "plain_text", "content": f"{prev} → {curr}"},
+                "template": TEMPLATE_MAP.get(curr, "green" if curr == "NONE" else "blue"),
             },
             "elements": elements,
         },
@@ -289,28 +429,65 @@ def main() -> int:
     p = argparse.ArgumentParser(description="触发式防御 Alert watcher（市场层 only）")
     p.add_argument("--force", action="store_true", help="强制推送当前 severity 一次（测试）")
     p.add_argument("--reset", action="store_true", help="重置 state 为 NONE")
+    p.add_argument("--dry-run", action="store_true", help="打印判定，不推送/不写 state")
+    p.add_argument("--no-holdings", action="store_true", help="跳过真实持仓日内检查")
     args = p.parse_args()
+
+    lock_fh = _acquire_lock()
+    if lock_fh is None:
+        logger.info("已有 defense_watcher 正在运行，本轮跳过")
+        return 0
 
     if args.reset:
         _save_state({"last_severity": "NONE", "reset_at": datetime.now().isoformat(timespec="seconds")})
         print("✅ state 已重置为 NONE")
         return 0
 
-    curr, alerts = _market_severity()
     state = _load_state()
+    curr, alerts = _market_severity()
+    context = _fetch_market_context()
     prev = state.get("last_severity", "NONE")
 
     curr_rank = SEVERITY_ORDER.get(curr, -1)
     prev_rank = SEVERITY_ORDER.get(prev, -1)
 
-    should_push = args.force or (curr_rank > prev_rank)
+    push_type = "none"
+    should_push = False
+    if args.force or (curr_rank > prev_rank):
+        should_push = True
+        push_type = "escalation"
+    elif curr_rank < prev_rank and prev_rank >= SEVERITY_ORDER["HIGH"]:
+        should_push = True
+        push_type = "downgrade"
+
+    if args.dry_run:
+        print(json.dumps({
+            "previous_severity": prev,
+            "current_severity": curr,
+            "push_type": push_type,
+            "would_push": should_push,
+            "scan_interval_minutes": FAST_SCAN_MINUTES,
+            "alerts": alerts,
+            "context": context,
+        }, ensure_ascii=False, indent=2))
+        return 0
+
     if should_push:
-        logger.info(f"🚨 推送：{prev} → {curr}（{len(alerts)} 条 alert）")
-        card = _build_alert_card(prev, curr, alerts)
+        logger.info(f"🚨 推送 {push_type}：{prev} → {curr}（{len(alerts)} 条 alert）")
+        if push_type == "downgrade":
+            card = _build_downgrade_card(prev, curr, alerts, context=context)
+        else:
+            card = _build_alert_card(prev, curr, alerts, context=context)
         ok = _push(card)
-        state["last_alert_at"] = datetime.now().isoformat(timespec="seconds")
-        state["last_alert_sent_ok"] = ok
-        state["last_alert_severity"] = curr
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        if push_type == "downgrade":
+            state["last_recovery_at"] = now_iso
+            state["last_recovery_sent_ok"] = ok
+            state["last_recovery_severity"] = curr
+        else:
+            state["last_alert_at"] = now_iso
+            state["last_alert_sent_ok"] = ok
+            state["last_alert_severity"] = curr
     elif curr_rank < prev_rank:
         logger.info(f"📉 降档静默：{prev} → {curr}（仅更新 state，不推送）")
     else:
@@ -318,9 +495,14 @@ def main() -> int:
 
     state["last_severity"] = curr
     state["last_check_at"] = datetime.now().isoformat(timespec="seconds")
+    state["last_full_check_at"] = state["last_check_at"]
     state["last_alert_count"] = len(alerts)
+    state["last_push_type"] = push_type
+    state["scan_interval_minutes"] = FAST_SCAN_MINUTES
+    state.pop("last_schedule_reason", None)
+    state.pop("next_interval_minutes", None)
 
-    hold_alerts = _holding_intraday_alerts()
+    hold_alerts = [] if args.no_holdings else _holding_intraday_alerts()
     hold_fp = _holding_alert_fingerprint(hold_alerts)
     prev_hold_fp = state.get("holding_alert_fingerprint", "")
     if hold_alerts and (args.force or hold_fp != prev_hold_fp):
