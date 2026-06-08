@@ -37,6 +37,117 @@ if _LIB_DIR not in sys.path:
 
 logger = logging.getLogger(__name__)
 
+# ───── 盘前闸门战绩渲染（详情页 + 历史二级页共用，避免两份口径漂移）─────
+_PM_DOT = {"CRITICAL": "🔴", "HIGH": "🟠", "LOW": "🟡", "NONE": "🟢"}
+_PM_OC = {"TRUE_POSITIVE": ("✅", "真预警"), "FALSE_ALARM": ("🟡", "虚惊"),
+          "MISS": ("❌", "漏报"), "TRUE_NEGATIVE": ("·", "正常")}
+
+
+def _pm_esc(s) -> str:
+    return str("" if s is None else s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _pm_rec_time(r: dict) -> str:
+    """报到当前档位的那次扫描时间（缺则取最后一次）。"""
+    scans = r.get("scans") or []
+    color = r.get("color")
+    for s in scans:
+        if s.get("color") == color:
+            return s.get("at", "")
+    return scans[-1].get("at", "") if scans else ""
+
+
+def _pm_summary_html(summ: dict) -> str:
+    """战绩汇总卡：统计格 + 样本量提示 + 颜色分档 + 基准对照。"""
+    sd = summ.get("settled_days", 0)
+    enough = summ.get("enough_sample", False)
+    pc = lambda v: f"{v}%" if v is not None else "—"
+    if sd <= 0:
+        return ('<div class="muted" style="font-size:13px">还没有可验证的历史——从今天起每天记一笔，'
+                '第二天用当天真实涨跌核对，攒几天就能看命中率了。</div>')
+    note = ""
+    if not enough:
+        note = ('<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;'
+                'padding:8px 10px;font-size:12.5px;color:#92400e;margin-bottom:10px">'
+                f'⚠️ 样本不足（{sd}/{summ.get("min_sample", 20)} 个交易日），以下数字仅供观察、'
+                '还不具统计意义——攒够再看才靠谱。</div>')
+    stat = (
+        f'<div class="stat"><b>{sd}</b><span>已验证</span></div>'
+        f'<div class="stat"><b>{summ.get("warnings_issued", 0)}</b><span>发过警报</span></div>'
+        f'<div class="stat"><b>{pc(summ.get("precision_pct"))}</b><span>警报命中</span></div>'
+        f'<div class="stat"><b style="color:#dc2626">{summ.get("miss", 0)}</b><span>漏报</span></div>'
+    )
+    cb = summ.get("color_buckets") or {}
+    rows_b = ""
+    for k in ("CRITICAL", "HIGH", "LOW", "NONE"):
+        b = cb.get(k) or {}
+        if not b.get("n"):
+            continue
+        avg = b.get("avg_return")
+        br = b.get("bad_rate")
+        rows_b += ('<div style="display:flex;justify-content:space-between;font-size:12.5px;'
+                   'padding:4px 0;border-bottom:1px solid #f5f7fa">'
+                   f'<span>{_PM_DOT.get(k, "")} {k} <span class="muted">({b["n"]}天)</span></span>'
+                   f'<span>事后平均 <b>{(f"{avg:+.1f}%" if avg is not None else "—")}</b>'
+                   f' · 真跌占比 {(f"{br}%" if br is not None else "—")}</span></div>')
+    buckets = ('<div style="margin-top:12px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">'
+               '① 按颜色分档 <span class="muted" style="font-weight:400">（闸门有用→红档该明显比绿档惨）</span></div>'
+               + rows_b + '</div>') if rows_b else ""
+    bv = summ.get("baseline_vix_only")
+    bn = summ.get("baseline_never_warn") or {}
+    bl = ('<div style="display:flex;justify-content:space-between;font-size:12.5px;padding:4px 0;'
+          'border-bottom:1px solid #f5f7fa"><span>🚦 <b>本闸门</b></span>'
+          f'<span>命中 {pc(summ.get("precision_pct"))} · 抓真跌 {pc(summ.get("recall_pct"))}</span></div>')
+    if bv:
+        bl += ('<div style="display:flex;justify-content:space-between;font-size:12.5px;padding:4px 0;'
+               'border-bottom:1px solid #f5f7fa"><span>只看 VIX</span>'
+               f'<span>命中 {pc(bv.get("precision_pct"))} · 抓真跌 {pc(bv.get("recall_pct"))}</span></div>')
+    bl += ('<div style="display:flex;justify-content:space-between;font-size:12.5px;padding:4px 0">'
+           f'<span>永远说绿（从不预警）</span><span>抓真跌 {pc(bn.get("recall_pct"))}</span></div>')
+    baseline = ('<div style="margin-top:12px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">'
+                '② 对比「笨办法」<span class="muted" style="font-weight:400">（本闸门要明显更能抓真跌才算有用）</span></div>'
+                + bl + '</div>')
+    dim = 'opacity:.55' if not enough else ''
+    return note + f'<div style="{dim}"><div class="stats">{stat}</div>{buckets}{baseline}</div>'
+
+
+def _pm_history_list_html(records: list) -> str:
+    """历史台账可展开列表：每条 = 日期·时间 | 预警 | 结果 | 事后涨跌，点开看当晚理由。"""
+    if not records:
+        return '<div class="muted" style="font-size:13px;padding:10px 0">暂无历史记录。</div>'
+    head = ('<div class="hl-head"><span>日期 · 时间</span><span>预警</span>'
+            '<span>结果</span><span>事后涨跌</span></div>')
+    rows = ""
+    for r in records:
+        d = _pm_esc(r.get("date", ""))
+        tm = _pm_esc(_pm_rec_time(r))
+        color = r.get("color", "NONE")
+        oc = r.get("outcome")
+        act = r.get("actual", {}) or {}
+        spv, nqv = act.get("spy_pct"), act.get("nq_pct")
+        move = " ".join(t for t in [f'标普{spv:+.1f}%' if spv is not None else "",
+                                    f'纳指{nqv:+.1f}%' if nqv is not None else ""] if t) or "—"
+        if oc:
+            ic, name = _PM_OC.get(oc, ("", oc))
+            res = f'{ic} {name}'
+        else:
+            res = '<span class="muted">待验证</span>'
+        said = _pm_esc(r.get("headline_plain") or r.get("can_buy", ""))
+        top = _pm_esc(r.get("top_alarm", ""))
+        reasons = r.get("reasons_plain") or []
+        rli = "".join(f'<li>{_pm_esc(x)}</li>' for x in reasons)
+        detail = (f'<div class="hl-said">当晚结论：{said}</div>'
+                  + (f'<div class="hl-top">{top}</div>' if top else '')
+                  + (f'<ul class="rlist">{rli}</ul>' if rli else ''))
+        rows += (
+            '<details class="hl"><summary class="hl-row">'
+            f'<span>{_PM_DOT.get(color, "")} <b>{d}</b> <span class="htime">{tm}</span></span>'
+            f'<span>{_pm_esc(color)}</span><span>{res}</span><span class="hl-move">{move}</span>'
+            '</summary>'
+            f'<div class="hl-detail">{detail}</div></details>'
+        )
+    return head + rows
+
 
 def create_app():
     if FastAPI is None:
@@ -1566,120 +1677,12 @@ _sys.exit(rc)
                 f'生成 {gen}（{scan}）· ⚠️ 仅供参考，不是投资建议</div>'
             )
 
-        # ── 战绩回溯板块（验证预警准不准）──
-        _OC = {"TRUE_POSITIVE": ("✅", "真预警"), "FALSE_ALARM": ("🟡", "虚惊"),
-               "MISS": ("❌", "漏报"), "TRUE_NEGATIVE": ("·", "正常")}
-        _DOT = {"CRITICAL": "🔴", "HIGH": "🟠", "LOW": "🟡", "NONE": "🟢"}
-        if summ.get("settled_days", 0) > 0:
-            sp = summ.get("precision_pct")
-            rc = summ.get("recall_pct")
-            stat = (
-                f'<div class="stat"><b>{summ["settled_days"]}</b><span>已验证</span></div>'
-                f'<div class="stat"><b>{summ["warnings_issued"]}</b><span>发过警报</span></div>'
-                f'<div class="stat"><b>{sp if sp is not None else "—"}%</b><span>警报命中</span></div>'
-                f'<div class="stat"><b style="color:#dc2626">{summ["miss"]}</b><span>漏报</span></div>'
-            )
-        else:
-            stat = ('<div class="muted" style="font-size:13px">还没有可验证的历史——从今天起每天记一笔，'
-                    '第二天用当天真实涨跌核对，攒几天就能看命中率了。</div>')
-
-        sd = summ.get("settled_days", 0)
-        enough = summ.get("enough_sample", False)
-
-        def _pc(v):
-            return f'{v}%' if v is not None else "—"
-
-        # ③ 样本不足提示
-        sample_note = ""
-        if sd > 0 and not enough:
-            sample_note = (
-                '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;'
-                'padding:8px 10px;font-size:12.5px;color:#92400e;margin-bottom:10px">'
-                f'⚠️ 样本不足（{sd}/{summ.get("min_sample", 20)} 个交易日），以下数字仅供观察、'
-                '还不具统计意义——攒够再看才靠谱。</div>'
-            )
-
-        # ① 按颜色分档
-        cb = summ.get("color_buckets") or {}
-        rows_b = ""
-        for cbk in ("CRITICAL", "HIGH", "LOW", "NONE"):
-            b = cb.get(cbk) or {}
-            if not b.get("n"):
-                continue
-            avg = b.get("avg_return")
-            br = b.get("bad_rate")
-            rows_b += (
-                '<div style="display:flex;justify-content:space-between;font-size:12.5px;'
-                'padding:4px 0;border-bottom:1px solid #f5f7fa">'
-                f'<span>{_DOT.get(cbk, "")} {cbk} <span class="muted">({b["n"]}天)</span></span>'
-                f'<span>事后平均 <b>{(f"{avg:+.1f}%" if avg is not None else "—")}</b>'
-                f' · 真跌占比 {(f"{br}%" if br is not None else "—")}</span></div>'
-            )
-        buckets_html = (
-            '<div style="margin-top:12px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">'
-            '① 按颜色分档 <span class="muted" style="font-weight:400">（闸门有用→红档该明显比绿档惨）</span></div>'
-            + rows_b + '</div>'
-        ) if rows_b else ""
-
-        # ② 基准对照
-        baseline_html = ""
-        if sd > 0:
-            bv = summ.get("baseline_vix_only")
-            bn = summ.get("baseline_never_warn") or {}
-            lines = ('<div style="display:flex;justify-content:space-between;font-size:12.5px;'
-                     'padding:4px 0;border-bottom:1px solid #f5f7fa"><span>🚦 <b>本闸门</b></span>'
-                     f'<span>命中 {_pc(summ.get("precision_pct"))} · 抓真跌 {_pc(summ.get("recall_pct"))}</span></div>')
-            if bv:
-                lines += ('<div style="display:flex;justify-content:space-between;font-size:12.5px;'
-                          'padding:4px 0;border-bottom:1px solid #f5f7fa"><span>只看 VIX</span>'
-                          f'<span>命中 {_pc(bv.get("precision_pct"))} · 抓真跌 {_pc(bv.get("recall_pct"))}</span></div>')
-            lines += ('<div style="display:flex;justify-content:space-between;font-size:12.5px;'
-                      'padding:4px 0"><span>永远说绿（从不预警）</span>'
-                      f'<span>抓真跌 {_pc(bn.get("recall_pct"))}</span></div>')
-            baseline_html = (
-                '<div style="margin-top:12px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">'
-                '② 对比「笨办法」<span class="muted" style="font-weight:400">（本闸门要明显更能抓真跌才算有用）</span></div>'
-                + lines + '</div>'
-            )
-
-        items = ""
-        for r in hist_sorted[:30]:
-            d = esc(r.get("date", ""))
-            color = r.get("color", "NONE")
-            dot = _DOT.get(color, "")
-            oc = r.get("outcome")
-            act = r.get("actual", {}) or {}
-            spv, nqv = act.get("spy_pct"), act.get("nq_pct")
-            act_txt = " · ".join(
-                t for t in [f'标普 {spv:+.1f}%' if spv is not None else "",
-                            f'纳指 {nqv:+.1f}%' if nqv is not None else ""] if t)
-            if oc:
-                ic, name = _OC.get(oc, ("", oc))
-                res_badge = f'<span style="font-weight:600">{ic} {name}</span>'
-            else:
-                res_badge = '<span class="muted">待验证（要等当天美股收盘）</span>'
-            said = esc(r.get("headline_plain") or r.get("can_buy", ""))
-            top = esc(r.get("top_alarm", ""))
-            reasons = r.get("reasons_plain") or []
-            reasons_li = "".join(f'<li>{esc(x)}</li>' for x in reasons)
-            detail = (f'<details><summary>当晚报了哪些理由（{len(reasons)} 条）</summary>'
-                      f'<ul class="rlist">{reasons_li}</ul></details>') if reasons else ''
-            items += (
-                f'<div class="hitem">'
-                f'<div class="hrow"><span>{dot} <b>{d}</b> · {esc(color)}</span>{res_badge}</div>'
-                f'<div class="hsaid">当晚结论：{said}</div>'
-                + (f'<div class="htop">{top}</div>' if top else '')
-                + (f'<div class="hact">事后真实：{act_txt}</div>' if act_txt else '')
-                + detail
-                + '</div>'
-            )
-        dim = 'opacity:.55' if (sd > 0 and not enough) else ''
+        # ── 战绩回溯板块：汇总卡 + 跳「全部历史」二级列表页的按钮 ──
         history_html = (
             '<div class="card"><h3>📊 战绩回溯 '
-            '<span class="muted" style="font-weight:400;font-size:13px">— 当晚报了啥 + 事后准不准，可逐条核对</span></h3>'
-            + sample_note
-            + f'<div style="{dim}"><div class="stats">{stat}</div>{buckets_html}{baseline_html}</div>'
-            + (items if items else '')
+            '<span class="muted" style="font-weight:400;font-size:13px">— 这套预警事后到底准不准</span></h3>'
+            + _pm_summary_html(summ)
+            + '<a class="hist-btn" href="/premarket/history">📜 查看全部历史记录（列表）›</a>'
             + '</div>'
         )
 
@@ -1714,6 +1717,10 @@ b{{font-weight:700}}
 .stat span{{font-size:11px;color:#94a3b8}}
 .hitem{{border:1px solid #e8edf3;border-radius:10px;padding:10px 12px;margin-top:10px;background:#fff}}
 .hrow{{display:flex;justify-content:space-between;align-items:center;font-size:14px;margin-bottom:4px}}
+.htime{{font-size:11.5px;color:#94a3b8;font-weight:400}}
+.hist-btn{{display:block;margin-top:14px;text-align:center;background:#f1f5f9;color:#334155;
+  text-decoration:none;padding:10px;border-radius:10px;font-size:13.5px;font-weight:600}}
+.hist-btn:hover{{background:#e2e8f0}}
 .hsaid{{font-size:13px;color:#334155}}
 .htop{{font-size:12.5px;color:#b91c1c;margin-top:3px}}
 .hact{{font-size:12.5px;color:#475569;margin-top:3px}}
@@ -1727,6 +1734,66 @@ b{{font-weight:700}}
 {history_html}
 {foot_html}
 </div></body></html>"""
+        return HTMLResponse(content=html)
+
+    @app.get("/premarket/history")
+    def premarket_gate_history_page():
+        """盘前预警「全部历史」二级页 —— 列表形式，数据多也清楚（详情页/抽屉按钮跳来）。"""
+        from fastapi.responses import HTMLResponse
+
+        hp = _REPO_ROOT / "data" / "premarket_gate_history.json"
+        hist = []
+        if hp.exists():
+            try:
+                hist = json.loads(hp.read_text(encoding="utf-8"))
+            except Exception:
+                hist = []
+        hist_sorted = sorted(hist, key=lambda r: (r.get("date", ""), _pm_rec_time(r)), reverse=True)
+        from stock_research.core import premarket_gate as _pg
+        summ = _pg.summarize_history(hist)
+
+        body = (
+            '<a class="back" href="/premarket">‹ 返回今晚预警</a>'
+            '<h2>📜 盘前预警 · 全部历史记录</h2>'
+            f'<div class="card">{_pm_summary_html(summ)}</div>'
+            f'<div class="card listcard">{_pm_history_list_html(hist_sorted)}</div>'
+            '<div class="foot">每行点开看「当晚报了哪些理由」，对照「事后涨跌」即可核对准不准 · '
+            '🟢正常买 🟡小仓试 🟠先别开新仓 🔴别买只看好已有 · ⚠️ 仅供参考</div>'
+        )
+        html = f"""<!DOCTYPE html><html lang="zh"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>盘前预警 · 全部历史</title>
+<style>
+*{{box-sizing:border-box}}
+body{{margin:0;background:#f8fafc;color:#0f172a;
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+  line-height:1.6;padding:16px}}
+.wrap{{max-width:760px;margin:0 auto}}
+.back{{font-size:13px;color:#7c3aed;text-decoration:none}}
+h2{{font-size:18px;margin:8px 0 14px}}
+.card{{background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:16px 18px;margin-bottom:14px}}
+.listcard{{padding:6px 10px}}
+.stats{{display:flex;gap:10px;margin-bottom:12px}}
+.stat{{flex:1;background:#f8fafc;border-radius:10px;padding:10px 6px;text-align:center}}
+.stat b{{display:block;font-size:20px;color:#0f172a}}
+.stat span{{font-size:11px;color:#94a3b8}}
+.muted{{color:#94a3b8}}
+b{{font-weight:700}}
+.hl-head,.hl-row{{display:grid;grid-template-columns:1.5fr .9fr 1fr 1.3fr;gap:8px;align-items:center}}
+.hl-head{{font-size:11.5px;color:#94a3b8;padding:8px 6px;border-bottom:1px solid #e2e8f0}}
+.hl{{border-bottom:1px solid #f1f5f9}}
+.hl-row{{padding:10px 6px;font-size:13.5px;cursor:pointer;list-style:none}}
+.hl-row::-webkit-details-marker{{display:none}}
+.hl[open] .hl-row{{background:#f8fafc}}
+.htime{{font-size:11.5px;color:#94a3b8;font-weight:400}}
+.hl-move{{font-size:12px;color:#475569}}
+.hl-detail{{padding:4px 10px 14px;background:#f8fafc}}
+.hl-said{{font-size:13px;color:#334155;margin-bottom:4px}}
+.hl-top{{font-size:12.5px;color:#b91c1c;margin-bottom:6px}}
+.rlist{{margin:0;padding-left:2px;list-style:none}}
+.rlist li{{font-size:12.5px;color:#475569;padding:4px 0;border-bottom:1px solid #eef2f6}}
+.foot{{font-size:12px;color:#94a3b8;padding:8px 4px 30px;line-height:1.7}}
+</style></head><body><div class="wrap">{body}</div></body></html>"""
         return HTMLResponse(content=html)
 
     @app.get("/api/real-holdings/daily-verdict")
