@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from collections import defaultdict
 from datetime import datetime
@@ -18,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "scripts" / "lib"))
 
 from stock_db import DB_PATH, get_db  # noqa: E402
@@ -157,7 +159,11 @@ def _empty_stats() -> dict[str, Any]:
 
 
 def _stats(records: list[dict[str, Any]]) -> dict[str, Any]:
-    usable = [row for row in records if row.get("alpha_pct") is not None]
+    usable = [
+        row for row in records
+        if row.get("alpha_pct") is not None
+        and math.isfinite(_as_float(row.get("alpha_pct"), float("nan")))
+    ]
     if not usable:
         return _empty_stats()
     n = len(usable)
@@ -250,12 +256,38 @@ def _coverage(reviewed: int, candidates: int) -> float:
     return round(reviewed / candidates * 100.0, 2)
 
 
+def _dedup_source_last_batch(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """只保留 source_run_id ∈「每天最后一批」（stock_research.core.strategy_eval 统一口径）。
+
+    shadow 归档可能对同一天的多批 production run 各调参一次，评估时同日同票被重复计数
+    （reviewed 虚高约 2×，alpha 偏离主链路）。统一到主链路：每天只评估最后一批 production run。
+    过滤后为空（口径不匹配）时回退原 runs，避免误清空。
+    """
+    source_ids = {_source_run_id(r) for r in runs if _source_run_id(r)}
+    if not source_ids:
+        return runs
+    try:
+        from stock_research.core import strategy_eval as se
+        conn = get_db(read_only=True)
+        try:
+            last_batch = se.last_batch_run_ids(conn, strategy_version=None)
+        finally:
+            conn.close()
+    except Exception:
+        return runs
+    if not last_batch:
+        return runs
+    filtered = [r for r in runs if _source_run_id(r) in last_batch]
+    return filtered or runs
+
+
 def build_market_horizon_summary(
     runs: list[dict[str, Any]],
     outcomes: dict[tuple[str, str, str, str], dict[str, Any]],
     *,
     horizons: tuple[str, ...] = DEFAULT_HORIZONS,
 ) -> list[dict[str, Any]]:
+    runs = _dedup_source_last_batch(runs)
     counts = _candidate_counts(runs, horizons)
     records = _outcome_records(runs, outcomes, horizons)
     markets = sorted({key[0] for key in counts} | {row["market"] for row in records})
