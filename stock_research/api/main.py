@@ -126,8 +126,28 @@ def _pm_summary_html(summ: dict) -> str:
             '• 🙈 <b>从不预警</b>：假装没事的鸵鸟<br>'
             '看本闸门是不是<b>明显更会提前喊对「要跌」、又少瞎喊</b>。现在样本太少，先不下结论。</div>'
         ) + '</div>'
+
+    # ③ 顺风准不准：说「顺风」的那些天，事后真涨了吗（与防守对称）
+    tw = summ.get("tailwind") or {}
+    tw_head = ('<div style="margin-top:12px"><div style="font-size:13px;font-weight:600;margin-bottom:4px">'
+               '③ 「顺风」准不准？<span class="muted" style="font-weight:400">'
+               '（说顺风的那些天，事后真涨了吗）</span></div>')
+    if tw.get("n"):
+        avg = tw.get("avg_return")
+        avg_txt = ("—" if avg is None else (f"涨 {avg:.1f}%" if avg >= 0 else f"跌 {abs(avg):.1f}%"))
+        back = tw.get("backfired", 0)
+        tailwind_html = tw_head + (
+            '<div style="font-size:12.5px;color:#475569;padding:2px 0">'
+            f'🟢 顺风 <b>{tw["n"]}</b> 天：事后平均<b>{avg_txt}</b>，其中 {tw.get("rose", 0)} 天真涨'
+            + (f'；<span style="color:#dc2626">⚠️ {back} 天反而大跌（打脸）</span>' if back else '')
+            + '</div></div>'
+        )
+    else:
+        tailwind_html = tw_head + ('<div class="muted" style="font-size:12.5px">还没碰上「顺风」日，'
+                                   '碰上了会单独记账——看它说"顺风"的时候是不是真涨。</div></div>')
+
     dim = 'opacity:.55' if not enough else ''
-    return note + f'<div style="{dim}"><div class="stats">{stat}</div>{buckets}{baseline}</div>'
+    return note + f'<div style="{dim}"><div class="stats">{stat}</div>{buckets}{baseline}{tailwind_html}</div>'
 
 
 def _pm_history_list_html(records: list) -> str:

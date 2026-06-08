@@ -279,6 +279,25 @@ def test_summarize_empty():
     assert s["settled_days"] == 0
     assert s["precision_pct"] is None
     assert s["enough_sample"] is False
+    assert s["tailwind"]["n"] == 0
+
+
+def test_tailwind_validation_counts():
+    """顺风验证：说顺风的天里，几天真涨、几天打脸。"""
+    records = [
+        {"color": "NONE", "is_tailwind": True, "outcome": "TRUE_NEGATIVE",
+         "actual": {"spy_pct": 1.2, "nq_pct": 1.5}},   # 顺风 → 真涨
+        {"color": "NONE", "is_tailwind": True, "outcome": "TRUE_NEGATIVE",
+         "actual": {"spy_pct": 0.3, "nq_pct": 0.1}},   # 顺风 → 小涨
+        {"color": "NONE", "is_tailwind": True, "outcome": "MISS",
+         "actual": {"spy_pct": -1.5, "nq_pct": -2.0}},  # 顺风却大跌 → 打脸
+        {"color": "NONE", "is_tailwind": False, "outcome": "TRUE_NEGATIVE",
+         "actual": {"spy_pct": 0.2, "nq_pct": 0.1}},   # 普通绿灯，不算顺风
+    ]
+    tw = pg.summarize_history(records)["tailwind"]
+    assert tw["n"] == 3            # 3 个顺风日
+    assert tw["rose"] == 2         # 2 天真涨
+    assert tw["backfired"] == 1    # 1 天打脸(顺风却大跌)
 
 
 def test_enough_sample_threshold():

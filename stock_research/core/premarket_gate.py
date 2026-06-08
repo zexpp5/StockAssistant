@@ -939,6 +939,16 @@ def summarize_history(records: list[dict], min_sample: int = MIN_SAMPLE) -> dict
             "miss": vmiss,
         }
 
+    # ③ 顺风验证：说「顺风」的那些天，事后真涨了吗（与防守对称的另一半）
+    tw_days = [r for r in settled if r.get("is_tailwind")]
+    tw_rets = [_day_return(r) for r in tw_days if _day_return(r) is not None]
+    tailwind = {
+        "n": len(tw_days),
+        "rose": sum(1 for r in tw_days if (_day_return(r) or 0) > 0),   # 事后真涨
+        "backfired": sum(1 for r in tw_days if _is_bad_day(r)),         # 说顺风却反而大跌(打脸)
+        "avg_return": round(sum(tw_rets) / len(tw_rets), 2) if tw_rets else None,
+    }
+
     return {
         "settled_days": n,
         "warnings_issued": warn_total,
@@ -947,11 +957,12 @@ def summarize_history(records: list[dict], min_sample: int = MIN_SAMPLE) -> dict
         "recall_pct": recall,         # 抓真跌的能力
         "accuracy_pct": accuracy,
         "bad_days": bad_days,
-        "enough_sample": n >= min_sample,   # ③ 样本够不够（不够则 UI 灰显、仅供观察）
+        "enough_sample": n >= min_sample,   # 样本够不够（不够则 UI 灰显、仅供观察）
         "min_sample": min_sample,
         "color_buckets": buckets,
         "baseline_never_warn": base_never,
         "baseline_vix_only": base_vix,
+        "tailwind": tailwind,
     }
 
 

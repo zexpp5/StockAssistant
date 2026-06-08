@@ -132,6 +132,8 @@ def _update_history(res: pg.GateResult, now: datetime) -> None:
         rec["headline_plain"] = res.headline_plain   # 当晚结论(人话)
         rec["reasons_plain"] = res.reasons_plain      # 当晚报的全部理由(可回看验证)
         rec["coverage"] = res.coverage                # 当晚数据覆盖率(低则该降权)
+        rec["is_tailwind"] = res.is_tailwind          # 当晚是否判「顺风」(给顺风验证用)
+        rec["tailwind_score"] = res.tailwind_score
         # 🔴 当晚每类信号的结构化数值快照 —— 点位数据,过时不可恢复,必须当场存。
         # 用于将来校准:逐信号分析谁真能预测、要不要重新加权/换阈值重打分。
         rec["families"] = res.families
