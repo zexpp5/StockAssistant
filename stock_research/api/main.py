@@ -93,6 +93,93 @@ def _pm_is_stale(doc: dict, now=None) -> bool:
     return now > close_bj
 
 
+def _pm_load_history(settle: bool = True) -> list[dict]:
+    """Load premarket history and opportunistically settle expired rows."""
+    from stock_research.core import premarket_gate as _pg
+
+    p = _REPO_ROOT / "data" / "premarket_gate_history.json"
+    records: list[dict] = []
+    if p.exists():
+        try:
+            records = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            records = []
+    if settle:
+        try:
+            records, changed = _pg.settle_history_records(records)
+            if changed:
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            logger.warning("premarket history settle failed: %s", e)
+    return records
+
+
+def _pm_evidence_html(doc: dict, wrap: bool = True) -> str:
+    """Render the full premarket signal snapshot behind the headline."""
+    families = [f for f in (doc.get("families") or []) if isinstance(f, dict)]
+    if not families:
+        return ""
+
+    def tone(stress, available=True) -> tuple[str, str, str]:
+        if not available:
+            return "⚪", "#94a3b8", "缺数据"
+        try:
+            s = float(stress or 0)
+        except Exception:
+            s = 0.0
+        if s >= 2.0:
+            return "🔴", "#b91c1c", f"{s:.1f}/3"
+        if s >= 1.0:
+            return "🟠", "#c2410c", f"{s:.1f}/3"
+        if s > 0:
+            return "🟡", "#a16207", f"{s:.1f}/3"
+        return "🟢", "#16a34a", "0/3"
+
+    rows = []
+    for f in families:
+        dot, color, score = tone(f.get("stress"), bool(f.get("available", True)))
+        plain = str(f.get("plain") or "")
+        tags = set(f.get("tags") or [])
+        data = f.get("data") if isinstance(f.get("data"), dict) else {}
+        pcr = data.get("pcr_volume")
+        if f.get("key") == "vol" and "pcr_bearish" in tags and "PCR" not in plain and pcr is not None:
+            try:
+                pcr_txt = f"{float(pcr):.2f}"
+            except Exception:
+                pcr_txt = str(pcr)
+            if plain.endswith(("。", "！", "？")):
+                plain = plain[:-1]
+            plain += f"；SPY 期权 Put/Call 比 PCR {pcr_txt} 偏防守，说明有资金在买保护，作为轻微留意。"
+        rows.append(
+            '<div class="ev-row">'
+            f'<div class="ev-label" style="color:{color}">{dot} {_pm_esc(f.get("label") or f.get("key") or "")}'
+            f'<span>{_pm_esc(score)}</span></div>'
+            '<div>'
+            f'<div class="ev-head">{_pm_esc(f.get("headline") or "—")}</div>'
+            f'<div class="ev-plain">{_pm_esc(plain)}</div>'
+            '</div></div>'
+        )
+    comp = doc.get("composite", 0)
+    cov = doc.get("coverage", 0)
+    try:
+        comp_txt = f"{float(comp):.3g}/3"
+    except Exception:
+        comp_txt = f"{_pm_esc(comp)}/3"
+    try:
+        cov_txt = f"{float(cov) * 100:.0f}%"
+    except Exception:
+        cov_txt = _pm_esc(cov)
+    inner = (
+        '<div class="pm-section"><h3>依据快照 '
+        '<span class="muted" style="font-weight:400;font-size:13px">— 8 类信号实际读数</span></h3>'
+        f'<div class="ev-meta">综合压力 {comp_txt} · 数据覆盖率 {cov_txt}</div>'
+        + "".join(rows)
+        + '</div>'
+    )
+    return f'<div class="card">{inner}</div>' if wrap else inner
+
+
 def _pm_summary_html(summ: dict) -> str:
     """战绩汇总卡：统计格 + 样本量提示 + 颜色分档 + 基准对照。"""
     sd = summ.get("settled_days", 0)
@@ -1674,13 +1761,7 @@ _sys.exit(rc)
         """
         from stock_research.core import premarket_gate as _pg
 
-        p = _REPO_ROOT / "data" / "premarket_gate_history.json"
-        records: list = []
-        if p.exists():
-            try:
-                records = json.loads(p.read_text(encoding="utf-8"))
-            except Exception:
-                records = []
+        records = _pm_load_history(settle=True)
         records = sorted(records, key=lambda r: r.get("date", ""), reverse=True)
         return {
             "records": records,
@@ -1708,13 +1789,7 @@ _sys.exit(rc)
                 doc = {}
 
         # 历史台账 + 战绩
-        hp = _REPO_ROOT / "data" / "premarket_gate_history.json"
-        hist: list = []
-        if hp.exists():
-            try:
-                hist = json.loads(hp.read_text(encoding="utf-8"))
-            except Exception:
-                hist = []
+        hist = _pm_load_history(settle=True)
         hist_sorted = sorted(hist, key=lambda r: r.get("date", ""), reverse=True)
         summ = _pg.summarize_history(hist)
 
@@ -1739,63 +1814,82 @@ _sys.exit(rc)
                          '🟢正常买 🟡小仓试 🟠先别开新仓 🔴别买只看好已有 · ⚠️ 仅供参考，不是投资建议</div>')
         else:
             stale = _pm_is_stale(doc)
-            color = doc.get("color", "NONE")
             if stale:
-                # 过期：不再当有效红灯，整体灰显 + 顶部说明
-                accent, bg, border = "#64748b", "#f1f5f9", "#cbd5e1"
+                gen = esc(doc.get("generated_at", ""))[:16].replace("T", " ")
+                scan = esc(doc.get("scan_label", ""))
+                when_html = (
+                    f'<div class="when">上一场时间 {gen}' + (f" · {scan}" if scan else "") + "</div>"
+                    if gen else ""
+                )
+                body = f"""
+                <div style="background:#f1f5f9;border:1px solid #cbd5e1;border-radius:10px;
+                  padding:10px 14px;margin-bottom:12px;font-size:13px;color:#475569">
+                  ⏸ 这是<b>上一场预警，已过期</b>（美股那场已收盘）。上一场已归入历史记录；
+                  今晚新预警生成前，这里不再展示旧红灯或旧判断。
+                </div>
+                <div class="card">
+                  <h3>当前没有有效盘前预警</h3>
+                  {when_html}
+                  <div class="muted" style="font-size:14px;line-height:1.8">
+                    等今晚盘前扫描生成后，会自动替换为新的当场预警。上一场记录请从下方历史查看。
+                  </div>
+                </div>
+                """
+                foot_html = (
+                    '<div class="foot">📖 这是「美股开盘前的看天气」：开盘前帮你看一眼今晚适不适合买。'
+                    '🟢正常买 🟡小仓试 🟠先别开新仓 🔴别买只看好已有 · ⚠️ 仅供参考，不是投资建议</div>'
+                )
             else:
+                color = doc.get("color", "NONE")
                 accent, bg, border = THEME.get(color, THEME["NONE"])
-            stale_html = ('<div style="background:#f1f5f9;border:1px solid #cbd5e1;border-radius:10px;'
-                          'padding:10px 14px;margin-bottom:12px;font-size:13px;color:#475569">'
-                          '⏸ 这是<b>上一场预警，已过期</b>（美股那场已收盘）。今晚的预警要等盘前'
-                          '（北京约 20:10/20:45/21:15）才生成，届时这里会自动更新。</div>') if stale else ""
-            head = esc(doc.get("headline_plain", ""))
-            if stale:
-                head = "⏸ 上一场预警（已过期）"
-            can_buy = esc(doc.get("can_buy", ""))
-            top = doc.get("top_alarm", "")
-            top_html = (f'<div class="alarm">{esc(top)}</div>') if top else ""
-            reasons = doc.get("reasons_plain", [])
-            reasons_html = "".join(f'<li>{esc(r)}</li>' for r in reasons) or '<li class="muted">各项平稳</li>'
-            hold = doc.get("holdings_impact", [])
-            hold_html = ""
-            if hold:
-                items = "".join(
-                    f'<li><b>{esc(h.get("symbol",""))}</b>：{esc(h.get("reason",""))}</li>'
-                    for h in hold
+                head = esc(doc.get("headline_plain", ""))
+                can_buy = esc(doc.get("can_buy", ""))
+                top = doc.get("top_alarm", "")
+                top_html = (f'<div class="alarm">{esc(top)}</div>') if top else ""
+                reasons = doc.get("reasons_plain", [])
+                reasons_html = "".join(f'<li>{esc(r)}</li>' for r in reasons) or '<li class="muted">各项平稳</li>'
+                evidence_html = _pm_evidence_html(doc, wrap=False)
+                hold = doc.get("holdings_impact", [])
+                hold_html = ""
+                if hold:
+                    items = "".join(
+                        f'<li><b>{esc(h.get("symbol",""))}</b>：{esc(h.get("reason",""))}</li>'
+                        for h in hold
+                    )
+                    hold_html = (
+                        '<div class="card"><h3>💼 对你持仓的影响 '
+                        '<span class="muted" style="font-weight:400;font-size:13px">'
+                        '（只是提醒，不是叫你一定买卖）</span></h3>'
+                        f'<ul>{items}</ul></div>'
+                    )
+                srcs = "、".join(doc.get("pressure_sources", []))
+                srcs_html = f'<div class="srcs">压力源：{esc(srcs)}</div>' if srcs else ""
+                comp = doc.get("composite", 0)
+                gen = esc(doc.get("generated_at", ""))[:16].replace("T", " ")
+                scan = esc(doc.get("scan_label", ""))
+                cov = doc.get("coverage", 1)
+                when_html = (f'<div class="when">⏱ 预警时间 {gen} · {scan}</div>'
+                             if gen else "")
+                body = f"""
+                <div class="card pm-current">
+                  <div class="hero pm-hero" style="background:{bg};border-color:{border}">
+                    <div class="verdict" style="color:{accent}">{head}</div>
+                    {when_html}
+                    <div class="cb"><b>该怎么做：</b>{can_buy}</div>
+                    {srcs_html}
+                  </div>
+                  {top_html}
+                  <div class="pm-section"><h3>为什么这么判断</h3><ul class="reasons">{reasons_html}</ul></div>
+                  {evidence_html}
+                </div>
+                {hold_html}
+                """
+                foot_html = (
+                    '<div class="foot">📖 这是「美股开盘前的看天气」：开盘前帮你看一眼今晚适不适合买。'
+                    '🟢正常买 🟡小仓试 🟠先别开新仓 🔴别买只看好已有 · '
+                    f'风险打分 {comp:.1f}/3（越高越危险）· 覆盖率 {int(cov*100)}% · '
+                    f'生成 {gen}（{scan}）· ⚠️ 仅供参考，不是投资建议</div>'
                 )
-                hold_html = (
-                    '<div class="card"><h3>💼 对你持仓的影响 '
-                    '<span class="muted" style="font-weight:400;font-size:13px">'
-                    '（只是提醒，不是叫你一定买卖）</span></h3>'
-                    f'<ul>{items}</ul></div>'
-                )
-            srcs = "、".join(doc.get("pressure_sources", []))
-            srcs_html = f'<div class="srcs">压力源：{esc(srcs)}</div>' if srcs else ""
-            comp = doc.get("composite", 0)
-            gen = esc(doc.get("generated_at", ""))[:16].replace("T", " ")
-            scan = esc(doc.get("scan_label", ""))
-            cov = doc.get("coverage", 1)
-            when_html = (f'<div class="when">⏱ 预警时间 {gen} · {scan}</div>'
-                         if gen else "")
-            body = f"""
-            {stale_html}
-            <div class="hero" style="background:{bg};border-color:{border}">
-              <div class="verdict" style="color:{accent}">{head}</div>
-              {when_html}
-              <div class="cb"><b>该怎么做：</b>{can_buy}</div>
-              {srcs_html}
-            </div>
-            {top_html}
-            <div class="card"><h3>为什么这么判断</h3><ul class="reasons">{reasons_html}</ul></div>
-            {hold_html}
-            """
-            foot_html = (
-                '<div class="foot">📖 这是「美股开盘前的看天气」：开盘前帮你看一眼今晚适不适合买。'
-                '🟢正常买 🟡小仓试 🟠先别开新仓 🔴别买只看好已有 · '
-                f'风险打分 {comp:.1f}/3（越高越危险）· 覆盖率 {int(cov*100)}% · '
-                f'生成 {gen}（{scan}）· ⚠️ 仅供参考，不是投资建议</div>'
-            )
 
         # ── 战绩回溯板块：汇总卡 + 跳「全部历史」二级列表页的按钮 ──
         history_html = (
@@ -1826,6 +1920,11 @@ body{{margin:0;background:#f8fafc;color:#0f172a;
   margin-bottom:14px;font-size:15.5px;font-weight:700;color:#b91c1c}}
 .card{{background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:16px 18px;margin-bottom:14px}}
 .card h3{{margin:0 0 10px;font-size:15px}}
+.pm-current{{padding:14px}}
+.pm-current .hero{{margin-bottom:0}}
+.pm-current .alarm{{margin-top:14px;margin-bottom:0}}
+.pm-section{{border-top:1px solid #e8eef5;margin-top:14px;padding-top:14px}}
+.pm-section:first-child{{border-top:none;margin-top:0;padding-top:0}}
 ul{{margin:0;padding-left:4px;list-style:none}}
 .reasons li,.card li{{padding:7px 0;border-bottom:1px solid #f1f5f9;font-size:14.5px}}
 .reasons li:last-child,.card li:last-child{{border-bottom:none}}
@@ -1849,6 +1948,14 @@ b{{font-weight:700}}
 .hitem summary{{font-size:12.5px;color:#7c3aed;cursor:pointer}}
 .rlist{{margin:6px 0 2px;padding-left:2px}}
 .rlist li{{font-size:12.5px;color:#475569;padding:4px 0;border-bottom:1px solid #f5f7fa;list-style:none}}
+.ev-meta{{font-size:12.5px;color:#64748b;margin-bottom:8px}}
+.ev-row{{display:grid;grid-template-columns:118px 1fr;gap:10px;padding:8px 0;border-bottom:1px solid #f1f5f9}}
+.ev-row:last-child{{border-bottom:none}}
+.ev-label{{font-size:13px;font-weight:700}}
+.ev-label span{{display:block;font-size:11px;color:#94a3b8;font-weight:500;margin-top:1px}}
+.ev-head{{font-size:13.5px;font-weight:650;color:#0f172a}}
+.ev-plain{{font-size:12.5px;color:#64748b;margin-top:2px;line-height:1.55}}
+@media (max-width:480px){{.ev-row{{grid-template-columns:1fr}}}}
 </style></head><body><div class="wrap">
 <div class="title"><span>🚦 美股开盘前 · 今晚能不能买</span><span class="muted">每5分钟自动刷新</span></div>
 {body}
@@ -1862,13 +1969,7 @@ b{{font-weight:700}}
         """盘前预警「全部历史」二级页 —— 列表形式，数据多也清楚（详情页/抽屉按钮跳来）。"""
         from fastapi.responses import HTMLResponse
 
-        hp = _REPO_ROOT / "data" / "premarket_gate_history.json"
-        hist = []
-        if hp.exists():
-            try:
-                hist = json.loads(hp.read_text(encoding="utf-8"))
-            except Exception:
-                hist = []
+        hist = _pm_load_history(settle=True)
         hist_sorted = sorted(hist, key=lambda r: (r.get("date", ""), _pm_rec_time(r)), reverse=True)
         from stock_research.core import premarket_gate as _pg
         summ = _pg.summarize_history(hist)

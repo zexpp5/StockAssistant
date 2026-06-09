@@ -111,15 +111,14 @@ def _update_history(res: pg.GateResult, now: datetime) -> None:
     today = now.date().isoformat()
 
     # 1) 回填过去未结算的日期（用真实 SPY/QQQ 涨跌判对错）
+    before = {r.get("date"): r.get("outcome") for r in records}
+    records, _ = pg.settle_history_records(records, now=now)
     for r in records:
-        if r.get("date", "") < today and not r.get("outcome"):
-            mv = pg.fetch_realized_move(r["date"])
-            if mv.get("spy_pct") is not None or mv.get("nq_pct") is not None:
-                r["actual"] = mv
-                r["outcome"] = pg.score_outcome(r.get("color", "NONE"),
-                                                mv.get("spy_pct"), mv.get("nq_pct"))
-                logger.info("结算 %s: %s → %s（SPY %s%% / NQ %s%%）", r["date"],
-                            r.get("color"), r["outcome"], mv.get("spy_pct"), mv.get("nq_pct"))
+        if before.get(r.get("date")) or not r.get("outcome"):
+            continue
+        mv = r.get("actual") or {}
+        logger.info("结算 %s: %s → %s（SPY %s%% / NQ %s%%）", r["date"],
+                    r.get("color"), r["outcome"], mv.get("spy_pct"), mv.get("nq_pct"))
 
     # 2) upsert 今天（取当天最严重档）
     rec = next((r for r in records if r.get("date") == today), None)

@@ -240,6 +240,16 @@ def test_megacap_accepts_enough_explicit_premarket_quotes():
     assert sig.stress >= 2.0
 
 
+def test_vol_plain_mentions_bearish_pcr(monkeypatch):
+    """PCR 偏防守时，人话理由必须点出来，不能只说 VIX 平稳。"""
+    from stock_research.core import options_signals
+
+    monkeypatch.setattr(options_signals, "diagnose", lambda: {"pcr_volume": 1.26})
+    sig = pg._sig_vol({"VIX": _q(last=18.1, prev=18.9)})
+    assert "PCR 1.26" in sig.plain
+    assert "买保护" in sig.plain
+
+
 # ──────────────────────────────────────────────────
 # 宏观日历
 # ──────────────────────────────────────────────────
@@ -370,6 +380,51 @@ def test_score_outcome_unsettled_when_no_data():
 def test_score_outcome_nq_threshold_alone_triggers_bad():
     """只有纳指跌穿门槛(标普还好)也算真跌。"""
     assert pg.score_outcome("HIGH", spy_pct=-0.3, nq_pct=-1.5) == "TRUE_POSITIVE"
+
+
+def test_settle_history_records_backfills_expired_rows_only():
+    records = [
+        {"date": "2026-06-08", "color": "LOW"},
+        {"date": "2026-06-09", "color": "CRITICAL"},
+    ]
+
+    def fake_fetch(date_iso: str) -> dict:
+        assert date_iso == "2026-06-08"
+        return {"spy_pct": 0.6, "nq_pct": 0.8, "settled_at": "test"}
+
+    settled, changed = pg.settle_history_records(
+        records,
+        now=datetime(2026, 6, 9, 8, 0),
+        fetcher=fake_fetch,
+    )
+    assert changed is True
+    assert settled[0]["outcome"] == "TRUE_NEGATIVE"
+    assert settled[0]["actual"]["spy_pct"] == 0.6
+    assert "outcome" not in settled[1]
+
+
+def test_settle_history_records_completes_missing_benchmark_move():
+    records = [
+        {
+            "date": "2026-06-08",
+            "color": "LOW",
+            "outcome": "TRUE_NEGATIVE",
+            "actual": {"spy_pct": 0.2, "nq_pct": None, "settled_at": "old"},
+        },
+    ]
+
+    def fake_fetch(date_iso: str) -> dict:
+        assert date_iso == "2026-06-08"
+        return {"spy_pct": 0.2, "nq_pct": -1.6, "settled_at": "new", "source": "test"}
+
+    settled, changed = pg.settle_history_records(
+        records,
+        now=datetime(2026, 6, 9, 8, 0),
+        fetcher=fake_fetch,
+    )
+    assert changed is True
+    assert settled[0]["actual"]["nq_pct"] == -1.6
+    assert settled[0]["outcome"] == "MISS"
 
 
 def test_summarize_history_counts_and_rates():

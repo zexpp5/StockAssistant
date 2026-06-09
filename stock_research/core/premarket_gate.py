@@ -449,6 +449,7 @@ def _sig_vol(quotes: dict) -> FamilySignal:
         sig.stress = min(3.0, sig.stress + 0.5)
         sig.tags.append("vix_jump")
     sig.headline = f"VIX {vix:.1f}" + (f" ({chg:+.0f}%)" if chg is not None else "")
+    pcr = None
     # 期权 PCR（best-effort，网络可能失败）
     try:
         from stock_research.core import options_signals
@@ -463,12 +464,19 @@ def _sig_vol(quotes: dict) -> FamilySignal:
     except Exception as e:
         logger.debug("PCR 跳过: %s", str(e)[:60])
     chg_txt = f"，一天跳了 {chg:.0f}%" if chg is not None and chg >= 15 else ""
+    pcr_txt = (
+        f"但 SPY 期权 Put/Call 比 PCR {pcr:.2f} 偏防守，说明有资金在买保护，作为轻微留意。"
+        if pcr is not None and pcr >= 1.2
+        else ""
+    )
     if vix >= 30:
-        sig.plain = f"市场「恐慌指数」VIX 冲到 {vix:.0f}（很高）{chg_txt}，说明投资者在恐慌抛售。"
+        sig.plain = f"市场「恐慌指数」VIX 冲到 {vix:.0f}（很高）{chg_txt}，说明投资者在恐慌抛售。{pcr_txt}"
     elif vix >= 20:
-        sig.plain = f"市场「恐慌指数」VIX 到 {vix:.0f}{chg_txt}，情绪偏紧张。"
+        sig.plain = f"市场「恐慌指数」VIX 到 {vix:.0f}{chg_txt}，情绪偏紧张。{pcr_txt}"
     elif chg is not None and chg >= 15:
-        sig.plain = f"市场「恐慌指数」VIX 虽不高（{vix:.0f}）但{chg_txt[1:]}，紧张在升温。"
+        sig.plain = f"市场「恐慌指数」VIX 虽不高（{vix:.0f}）但{chg_txt[1:]}，紧张在升温。{pcr_txt}"
+    elif pcr_txt:
+        sig.plain = f"VIX {vix:.0f} 不高、没有恐慌升温；{pcr_txt}"
     else:
         sig.plain = f"市场情绪平稳（恐慌指数 VIX {vix:.0f}，不高）。"
     return sig
@@ -1181,6 +1189,9 @@ def fetch_realized_move(date_iso: str) -> dict[str, Any]:
     用于回填历史预警的"事后结果"。该日非交易日 / 数据未出 → 返回 None。
     """
     out: dict[str, Any] = {"spy_pct": None, "nq_pct": None, "settled_at": None}
+    local = _fetch_realized_move_local(date_iso)
+    if local.get("spy_pct") is not None or local.get("nq_pct") is not None:
+        return local
     try:
         import yfinance as yf
     except Exception:
@@ -1209,6 +1220,146 @@ def fetch_realized_move(date_iso: str) -> dict[str, Any]:
     if out["spy_pct"] is not None or out["nq_pct"] is not None:
         out["settled_at"] = datetime.now().isoformat(timespec="seconds")
     return out
+
+
+def _fetch_realized_move_local(date_iso: str) -> dict[str, Any]:
+    """Read realized SPY/QQQ moves from local snapshots or price_daily."""
+    out: dict[str, Any] = {"spy_pct": None, "nq_pct": None, "settled_at": None}
+    snap = _fetch_realized_move_from_price_snapshots(date_iso)
+    if snap.get("spy_pct") is not None or snap.get("nq_pct") is not None:
+        return snap
+    db = _fetch_realized_move_from_price_daily(date_iso)
+    if db.get("spy_pct") is not None or db.get("nq_pct") is not None:
+        return db
+    return out
+
+
+def _fetch_realized_move_from_price_snapshots(date_iso: str) -> dict[str, Any]:
+    out: dict[str, Any] = {"spy_pct": None, "nq_pct": None, "settled_at": None}
+    snap_dir = _REPO_ROOT_PG / "data" / "snapshots" / "prices"
+    if not snap_dir.exists():
+        return out
+    code_to_key = {"SPY": "spy_pct", "QQQ": "nq_pct"}
+    try:
+        files = sorted(snap_dir.glob("prices_*.json"), reverse=True)
+    except Exception:
+        return out
+    for p in files:
+        try:
+            rows = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(rows, list):
+            continue
+        changed = False
+        for r in rows:
+            if not isinstance(r, dict) or str(r.get("bar_date", "")) != date_iso:
+                continue
+            code = str(r.get("code") or r.get("symbol") or r.get("yf_ticker") or "").upper()
+            key = code_to_key.get(code)
+            if not key:
+                continue
+            try:
+                price = float(r["price"])
+                prev = float(r["prev_close"])
+            except Exception:
+                continue
+            if prev <= 0:
+                continue
+            out[key] = round((price / prev - 1.0) * 100.0, 2)
+            changed = True
+        if changed:
+            out["settled_at"] = datetime.now().isoformat(timespec="seconds")
+            out["source"] = f"price_snapshot:{p.name}"
+            return out
+    return out
+
+
+def _fetch_realized_move_from_price_daily(date_iso: str) -> dict[str, Any]:
+    out: dict[str, Any] = {"spy_pct": None, "nq_pct": None, "settled_at": None}
+    try:
+        import os
+        import duckdb
+    except Exception:
+        return out
+    db_path = Path(os.environ.get("STOCK_DB_PATH") or (_REPO_ROOT_PG / "stock_history_v2.duckdb"))
+    if not db_path.exists():
+        return out
+    try:
+        con = duckdb.connect(str(db_path), read_only=True)
+        tables = {str(r[0]) for r in con.execute("SHOW TABLES").fetchall()}
+        if "price_daily" not in tables:
+            con.close()
+            return out
+        for key, sym in (("spy_pct", "SPY"), ("nq_pct", "QQQ")):
+            rows = con.execute(
+                """
+                SELECT trade_date, close
+                FROM price_daily
+                WHERE upper(symbol)=? AND trade_date <= ?
+                ORDER BY trade_date DESC
+                LIMIT 2
+                """,
+                [sym, date_iso],
+            ).fetchall()
+            if len(rows) < 2 or str(rows[0][0]) != date_iso:
+                continue
+            prev = float(rows[1][1])
+            if prev > 0:
+                out[key] = round((float(rows[0][1]) / prev - 1.0) * 100.0, 2)
+        con.close()
+    except Exception as e:
+        logger.debug("price_daily realized fallback failed: %s", str(e)[:80])
+        return {"spy_pct": None, "nq_pct": None, "settled_at": None}
+    if out["spy_pct"] is not None or out["nq_pct"] is not None:
+        out["settled_at"] = datetime.now().isoformat(timespec="seconds")
+        out["source"] = "price_daily"
+    return out
+
+
+def settle_history_records(
+    records: list[dict],
+    now: datetime | None = None,
+    fetcher=fetch_realized_move,
+) -> tuple[list[dict], bool]:
+    """Backfill outcomes for expired premarket history records.
+
+    The premarket job originally settled old rows only when the next scan ran.
+    History/API readers also need this, otherwise an expired alert can sit in
+    "待验证" after the US session has already closed.
+    """
+    now = now or datetime.now()
+    today = now.date().isoformat()
+    changed = False
+    for r in records:
+        date_iso = str(r.get("date", ""))
+        actual = r.get("actual") if isinstance(r.get("actual"), dict) else {}
+        needs_outcome = not r.get("outcome")
+        needs_more_actual = bool(r.get("outcome")) and (
+            actual.get("spy_pct") is None or actual.get("nq_pct") is None
+        )
+        if not date_iso or date_iso >= today or not (needs_outcome or needs_more_actual):
+            continue
+        mv = fetcher(date_iso)
+        if mv.get("spy_pct") is None and mv.get("nq_pct") is None:
+            continue
+        merged = dict(actual)
+        for key in ("spy_pct", "nq_pct"):
+            if mv.get(key) is not None:
+                merged[key] = mv.get(key)
+        for key in ("settled_at", "source"):
+            if mv.get(key):
+                merged[key] = mv.get(key)
+        outcome = score_outcome(r.get("color", "NONE"), merged.get("spy_pct"), merged.get("nq_pct"))
+        if not outcome:
+            continue
+        if r.get("actual") != merged:
+            r["actual"] = merged
+            changed = True
+        if r.get("outcome") != outcome:
+            changed = True
+        r["outcome"] = outcome
+    return records, changed
 
 
 def score_outcome(color: str, spy_pct: float | None, nq_pct: float | None) -> str | None:
