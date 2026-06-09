@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Ingest benchmark index closes (SPY / ^HSI / 000300.SS) into price_daily.
+"""Ingest benchmark index closes (SPY / QQQ / ^HSI / 000300.SS) into price_daily.
 
 evaluate_v2_picks 算 alpha 时需要每个 market 的同窗口 benchmark close。原实现
 在线走 yfinance，跑批环境 import / 网络失败就静默吞，导致 alpha_pct 全 NULL。
-本脚本把基准提前灌进 price_daily（market=US/HK/CN, symbol=SPY/^HSI/000300.SS），
+本脚本把基准提前灌进 price_daily（market=US/HK/CN, symbol=SPY/QQQ/^HSI/000300.SS），
 evaluate 只读本地。
 
 调度：daily_refresh.sh 在 evaluate_v2_picks (step 23a) 之前跑一次。
@@ -24,6 +24,7 @@ import duckdb  # noqa: E402
 BENCHMARKS = [
     # (market, symbol stored in price_daily, currency)
     ("US", "SPY", "USD"),
+    ("US", "QQQ", "USD"),
     ("HK", "^HSI", "HKD"),
     ("CN", "000300.SS", "CNY"),
 ]
