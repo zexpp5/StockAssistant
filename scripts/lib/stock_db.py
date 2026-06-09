@@ -1239,6 +1239,8 @@ def fetch_latest_recommendation_picks(
     返回字段：market, symbol, code(=symbol), name, rank, rating, signal,
     total_score, factor_scores(dict from factor_scores_json), entry_price,
     universe_scope, run_id, run_date, strategy_version, model_version。
+    新字段存在时也会返回 eligibility/action/evidence_status/primary_layer，
+    旧库没有这些列时返回 None，保持历史兼容。
     无最新 run 时返回 []。
     """
     own = conn is None
@@ -1257,10 +1259,22 @@ def fetch_latest_recommendation_picks(
             conn.close()
         return []
     run_id, run_date, strategy_version, model_version = row
+    base_cols = [
+        "market", "symbol", "name", "rank", "rating", "signal", "total_score",
+        "factor_scores_json", "entry_price", "universe_scope",
+    ]
+    optional_cols = [
+        "eligibility", "action", "evidence_status", "eligibility_migration_status",
+        "primary_layer", "secondary_layers_json", "ai_relevance_level",
+        "classification_version", "risk_flags_json",
+    ]
+    select_cols = base_cols + [
+        col if _table_has_column(conn, "recommendation_picks", col) else f"NULL AS {col}"
+        for col in optional_cols
+    ]
     rows = conn.execute(
-        """
-        SELECT market, symbol, name, rank, rating, signal, total_score,
-               factor_scores_json, entry_price, universe_scope
+        f"""
+        SELECT {', '.join(select_cols)}
         FROM recommendation_picks
         WHERE run_id = ?
         ORDER BY rank
@@ -1269,24 +1283,38 @@ def fetch_latest_recommendation_picks(
     ).fetchall()
     import json as _json
     out = []
+    cols = base_cols + optional_cols
     for r in rows:
-        market, symbol, name, rank, rating, signal, total_score, fs_json, entry_price, scope = r
+        rec = dict(zip(cols, r))
         try:
-            fs = _json.loads(fs_json) if fs_json else {}
+            fs = _json.loads(rec.get("factor_scores_json")) if rec.get("factor_scores_json") else {}
         except Exception:
             fs = {}
+        try:
+            risks = _json.loads(rec.get("risk_flags_json")) if rec.get("risk_flags_json") else []
+        except Exception:
+            risks = []
         out.append({
-            "market": market,
-            "symbol": symbol,
-            "code": symbol,
-            "name": name,
-            "rank": rank,
-            "rating": rating,
-            "signal": signal,
-            "total_score": total_score,
+            "market": rec.get("market"),
+            "symbol": rec.get("symbol"),
+            "code": rec.get("symbol"),
+            "name": rec.get("name"),
+            "rank": rec.get("rank"),
+            "rating": rec.get("rating"),
+            "signal": rec.get("signal"),
+            "total_score": rec.get("total_score"),
             "factor_scores": fs,
-            "entry_price": entry_price,
-            "universe_scope": scope,
+            "risk_flags": risks,
+            "entry_price": rec.get("entry_price"),
+            "universe_scope": rec.get("universe_scope"),
+            "eligibility": rec.get("eligibility"),
+            "action": rec.get("action"),
+            "evidence_status": rec.get("evidence_status"),
+            "eligibility_migration_status": rec.get("eligibility_migration_status"),
+            "primary_layer": rec.get("primary_layer"),
+            "secondary_layers_json": rec.get("secondary_layers_json"),
+            "ai_relevance_level": rec.get("ai_relevance_level"),
+            "classification_version": rec.get("classification_version"),
             "run_id": run_id,
             "run_date": run_date,
             "strategy_version": strategy_version,
@@ -1360,10 +1388,22 @@ def fetch_recommendation_picks_for_run(
     if own:
         conn = get_db(read_only=True)
     params: list[Any] = [run_id]
+    base_cols = [
+        "market", "symbol", "name", "rank", "rating", "signal", "total_score",
+        "factor_scores_json", "entry_price", "universe_scope", "source_origin",
+    ]
+    optional_cols = [
+        "eligibility", "action", "evidence_status", "eligibility_migration_status",
+        "primary_layer", "secondary_layers_json", "ai_relevance_level",
+        "classification_version",
+    ]
+    select_cols = base_cols + [
+        col if _table_has_column(conn, "recommendation_picks", col) else f"NULL AS {col}"
+        for col in optional_cols
+    ]
     if per_market_top_n is not None and per_market_top_n > 0:
-        sql = """
-            SELECT market, symbol, name, rank, rating, signal, total_score,
-                   factor_scores_json, entry_price, universe_scope, source_origin
+        sql = f"""
+            SELECT {', '.join(select_cols)}
             FROM recommendation_picks
             WHERE run_id = ?
             QUALIFY ROW_NUMBER() OVER (PARTITION BY market ORDER BY rank) <= ?
@@ -1371,9 +1411,8 @@ def fetch_recommendation_picks_for_run(
         """
         params.append(int(per_market_top_n))
     else:
-        sql = """
-            SELECT market, symbol, name, rank, rating, signal, total_score,
-                   factor_scores_json, entry_price, universe_scope, source_origin
+        sql = f"""
+            SELECT {', '.join(select_cols)}
             FROM recommendation_picks
             WHERE run_id = ?
             ORDER BY rank
@@ -1384,25 +1423,34 @@ def fetch_recommendation_picks_for_run(
     rows = conn.execute(sql, params).fetchall()
     import json as _json
     out = []
+    cols = base_cols + optional_cols
     for r in rows:
-        market, symbol, name, rank, rating, signal, total_score, fs_json, entry_price, scope, origin = r
+        rec = dict(zip(cols, r))
         try:
-            fs = _json.loads(fs_json) if fs_json else {}
+            fs = _json.loads(rec.get("factor_scores_json")) if rec.get("factor_scores_json") else {}
         except Exception:
             fs = {}
         out.append({
-            "market": market,
-            "symbol": symbol,
-            "code": symbol,
-            "name": name,
-            "rank": rank,
-            "rating": rating,
-            "signal": signal,
-            "total_score": total_score,
+            "market": rec.get("market"),
+            "symbol": rec.get("symbol"),
+            "code": rec.get("symbol"),
+            "name": rec.get("name"),
+            "rank": rec.get("rank"),
+            "rating": rec.get("rating"),
+            "signal": rec.get("signal"),
+            "total_score": rec.get("total_score"),
             "factor_scores": fs,
-            "entry_price": entry_price,
-            "universe_scope": scope,
-            "source_origin": origin,
+            "entry_price": rec.get("entry_price"),
+            "universe_scope": rec.get("universe_scope"),
+            "source_origin": rec.get("source_origin"),
+            "eligibility": rec.get("eligibility"),
+            "action": rec.get("action"),
+            "evidence_status": rec.get("evidence_status"),
+            "eligibility_migration_status": rec.get("eligibility_migration_status"),
+            "primary_layer": rec.get("primary_layer"),
+            "secondary_layers_json": rec.get("secondary_layers_json"),
+            "ai_relevance_level": rec.get("ai_relevance_level"),
+            "classification_version": rec.get("classification_version"),
             "run_id": run_id,
         })
     if own:

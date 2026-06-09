@@ -264,6 +264,30 @@ def _step_aggregate_tags() -> dict:
         return {"step": "tags_aggregate", "status": "error", "error": str(e), "trace": traceback.format_exc()}
 
 
+def _step_p0_tech_growth_evidence_seed() -> dict:
+    """Seed P0 tech-growth company evidence before tag aggregation.
+
+    This is a conservative, auditable baseline for the recommendation gate. It
+    does not make any stock buyable by itself; aggregate_tags still requires two
+    independent A-source rows before evidence_status can become confirmed.
+    """
+    try:
+        from stock_research.jobs.seed_p0_tech_growth_evidence import seed_p0_tech_growth_evidence
+
+        con = get_db()
+        try:
+            return seed_p0_tech_growth_evidence(con)
+        finally:
+            con.close()
+    except Exception as e:
+        return {
+            "step": "p0_tech_growth_evidence_seed",
+            "status": "error",
+            "error": str(e),
+            "trace": traceback.format_exc(),
+        }
+
+
 def _watchlist_count() -> int:
     return _query_one("SELECT COUNT(*) FROM manual_watchlist")[0]
 
@@ -288,25 +312,28 @@ def main() -> int:
     started_at = datetime.now()
     results = []
 
-    print("\n[Step 1/7] 数据源健康检查")
+    print("\n[Step 1/8] 数据源健康检查")
     r = _step_seed_sources(); results.append(r); print(f"  → {r['status']} · ok={r.get('n_ok')}/{r.get('n_total')}")
 
-    print("\n[Step 2/7] ETF 持仓刷新")
+    print("\n[Step 2/8] ETF 持仓刷新")
     r = _step_refresh_etf(args.refresh_etf); results.append(r); print(f"  → {r['status']} · {r.get('action')}")
 
-    print("\n[Step 3/7] SEC 公司证据扫描 + stale 规则")
+    print("\n[Step 3/8] SEC 公司证据扫描 + stale 规则")
     r = _step_sec_scan(args.scan_sec); results.append(r); print(f"  → {r['status']} · {r.get('error') or r.get('action')}")
 
-    print("\n[Step 3b/7] 第 3 类 A 源 fetcher (WNA/USGS/DOE)")
+    print("\n[Step 4/8] 第 3 类 A 源 fetcher (WNA/USGS/DOE)")
     r = _step_third_party_a_source(); results.append(r); print(f"  → {r['status']} · {r.get('by_source_id')}")
 
-    print("\n[Step 4/7] 宏观指标新鲜度审计")
+    print("\n[Step 5/8] 宏观指标新鲜度审计")
     r = _step_topic_metrics(); results.append(r); print(f"  → {r['status']}")
 
-    print("\n[Step 5/7] 公司标签聚合")
+    print("\n[Step 6/8] P0 科技成长证据基线")
+    r = _step_p0_tech_growth_evidence_seed(); results.append(r); print(f"  → {r['status']} · symbols={r.get('n_symbols')}")
+
+    print("\n[Step 7/8] 公司标签聚合")
     r = _step_aggregate_tags(); results.append(r); print(f"  → {r['status']} · tags={r.get('n_tags')} · {r.get('by_status')}")
 
-    print("\n[Step 6/7] 覆盖率审计")
+    print("\n[Step 8/8] 覆盖率审计")
     r = _step_coverage_audit(); results.append(r); print(f"  → {r['status']} · issues={r.get('n_total_issues')} · counts={r.get('counts')}")
 
     wl_after = _watchlist_count()

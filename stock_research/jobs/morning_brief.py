@@ -131,11 +131,21 @@ def _plan_weight_source(plan: dict | None) -> dict[str, Any]:
     engine = str(risk_aware.get("engine") or "")
     use_legacy_mc = bool(constraints.get("use_legacy_mc"))
     stages = risk_aware.get("stages") if isinstance(risk_aware.get("stages"), list) else []
+    small_sample_mode = bool(risk_aware.get("small_sample_mode") or constraints.get("small_sample_mode"))
     stage_errors = [
         f"{s.get('label')}: {s.get('error')}"
         for s in stages
         if isinstance(s, dict) and s.get("error")
     ]
+    if small_sample_mode:
+        return {
+            "kind": "risk_aware",
+            "label": "仓位来源=risk-aware 小样本保守模式",
+            "detail": "P0 新资格闸通过候选少于 3 只，未做满仓优化，剩余额度保留现金",
+            "engine": engine or "risk_aware_optimize",
+            "stage_errors": stage_errors[:4],
+            "is_fallback": False,
+        }
     fallback = use_legacy_mc or "fallback" in engine.lower() or "legacy_monte_carlo" in engine.lower()
     if fallback:
         return {
@@ -193,6 +203,8 @@ def _plan_cash_breakdown(plan: dict | None) -> dict[str, Any]:
     target_cash = cons.get("cash_pct")
     if isinstance(target_cash, (int, float)) and abs(float(target_cash) - float(cash)) > 0.02:
         pieces.append(f"目标现金 {float(target_cash)*100:.0f}%，实际 {float(cash)*100:.1f}% 被约束器抬高")
+    if ra.get("small_sample_mode") or cons.get("small_sample_mode"):
+        pieces.append("P0 新资格闸通过候选少于 3 只，未放入的额度留现金")
     max_w = cons.get("max_weight")
     if isinstance(max_w, (int, float)):
         pieces.append(f"单股上限 {float(max_w)*100:.0f}%")

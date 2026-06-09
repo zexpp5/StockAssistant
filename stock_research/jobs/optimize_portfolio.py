@@ -383,19 +383,30 @@ def _load_factor_scores(market_scope: str = "US") -> dict | None:
         logger.error("加载 stock_db 失败: %s", e)
         return None
     latest_picks = fetch_latest_recommendation_picks()
+
+    def _is_actionable_pick(p: dict) -> bool:
+        if str(p.get("signal") or "").lower() != "buy":
+            return False
+        eligibility = p.get("eligibility")
+        action = p.get("action")
+        # 历史 run 没有 P0 字段时保持旧口径；新 run 必须通过新资格闸。
+        if eligibility is None and action is None:
+            return True
+        return eligibility == "buyable" and action == "focus_research"
+
     non_buy_in_scope = [
         p for p in latest_picks
         if _in_scope(str(p.get("symbol") or ""), str(p.get("market") or ""))
-        and str(p.get("signal") or "").lower() != "buy"
+        and not _is_actionable_pick(p)
     ]
     picks = [
         p for p in latest_picks
         if _in_scope(str(p.get("symbol") or ""), str(p.get("market") or ""))
-        and str(p.get("signal") or "").lower() == "buy"
+        and _is_actionable_pick(p)
     ]
     if non_buy_in_scope:
         logger.info(
-            "AI 组合候选池 %s：过滤非 buy 推荐 %d 只（组合方案只接受 actionable picks）",
+            "AI 组合候选池 %s：过滤非 actionable 推荐 %d 只（组合方案只接受 buyable/focus_research）",
             market_scope, len(non_buy_in_scope),
         )
     if not picks:
@@ -803,7 +814,141 @@ def run(capital: float = DEFAULT_CAPITAL,
             print(f"  ❌ {tk:<8} 数据获取失败")
 
     if len(returns_dict) < 3:
-        return {"error": "可用样本不足"}
+        if not returns_dict:
+            return {"error": "可用样本不足"}
+        print("  ⚠️ 通过 P0 新资格闸的候选少于 3 只：启用小样本保守 fallback，不做满仓优化。")
+        selected_small = [t for t in tickers if t in returns_dict][:max(1, max_positions)]
+        deployed = min(max(0.0, 1.0 - cash_pct), max_weight * len(selected_small))
+        per_weight = deployed / max(1, len(selected_small))
+        target_w = {t: per_weight for t in selected_small}
+        capped = dict(target_w)
+        min_len = min(len(returns_dict[t]) for t in selected_small)
+        aligned_small = {t: returns_dict[t][-min_len:] for t in selected_small}
+        matrix_small = np.array([aligned_small[t] for t in selected_small])
+        cov_small = np.atleast_2d(np.cov(matrix_small))
+        if cov_small.shape != (len(selected_small), len(selected_small)):
+            cov_small = np.array([[float(np.var(matrix_small[0]))]])
+        mean_ret_map = {t: float(np.mean(aligned_small[t])) for t in selected_small}
+        cov_df = pd.DataFrame(cov_small, index=selected_small, columns=selected_small)
+        annual_ret, annual_vol, annual_sharpe = _portfolio_stats_for_weights(
+            capped,
+            mean_ret_map,
+            cov_df,
+        )
+        prev_w: dict[str, float] = {}
+        cost = pc.apply_transaction_cost(
+            capped,
+            prev_w,
+            capital,
+            adv_dollars=adv_dict,
+            cost_bps=cost_bps,
+            impact_bps_per_pct_adv=impact_bps_per_pct_adv,
+        )
+        net_alpha_pct = pc.alpha_after_cost(annual_ret * 100, cost["total_cost_bps_of_portfolio"])
+        df_lookup = {str(r.get("ticker")): r for r in df.to_dict("records")}
+        plan = []
+        plan_v5 = []
+        print(f"\n[4/5] 小样本 fallback：只配置 {len(selected_small)} 只，gross={sum(capped.values()):.1%}")
+        print(f"  {'股票':<10}{'目标w':>9}{'金额':>12}{'ADV(M)':>10}")
+        print("  " + "-" * 43)
+        for tk in selected_small:
+            v = capped.get(tk, 0.0)
+            amount = v * capital
+            adv_m = adv_dict.get(tk, 0) / 1e6
+            print(f"  {tk:<10}{v*100:>+8.1f}%{amount:>11,.0f}{adv_m:>9.1f}")
+            info = df_lookup.get(tk, {})
+            composite = _safe_float(info.get("composite_neutral"), _safe_float(info.get("composite"), 0.0))
+            entry = {
+                "ticker": tk,
+                "target_weight": _safe_float(v, 0.0),
+                "capped_weight": _safe_float(v, 0.0),
+                "amount": round(_safe_float(amount, 0.0), 2),
+                "amount_rmb": round(_safe_float(amount, 0.0), 2),
+                "adv_dollars": _safe_float(adv_dict.get(tk), 0.0),
+                "f_score": _safe_float(info.get("f_score")),
+                "composite_z": composite,
+                "composite_neutral": _safe_float(info.get("composite_neutral")),
+            }
+            plan.append(entry)
+            plan_v5.append({
+                **entry,
+                "v5_weight": _safe_float(v, 0.0),
+                "v6_weight": _safe_float(v, 0.0),
+                "current_weight": 0.0,
+            })
+        actual_cash = capital * (1.0 - sum(capped.values()))
+        print(f"  {'现金':<10}{actual_cash/capital*100:>+8.1f}%{actual_cash:>11,.0f}")
+        result = {
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "method": "v6+: risk_aware_optimize conservative small-sample mode after P0 eligibility gate",
+            "capital": capital,
+            "constraints": {
+                "market_scope": market_scope,
+                "max_weight": max_weight,
+                "min_weight": min_weight,
+                "cash_pct": cash_pct,
+                "cash_pct_effective": round(actual_cash / capital, 6) if capital else cash_pct,
+                "gross_exposure_effective": round(sum(capped.values()), 6),
+                "cost_bps": cost_bps,
+                "impact_bps_per_pct_adv": impact_bps_per_pct_adv,
+                "neutralize": False,
+                "max_corr": max_corr,
+                "kelly_fraction": kelly_fraction,
+                "vol_target_annual": vol_target_annual,
+                "max_positions": max_positions,
+                "use_legacy_mc": False,
+                "factor_weights_used": factor_weights,
+                "small_sample_mode": True,
+                "cash_reason": "P0 eligibility gate left fewer than 3 actionable candidates; keep unused capital in cash",
+            },
+            "factor_ic_gate": {
+                "passed": None,
+                "reason": "small_sample_conservative_mode_after_p0_gate",
+                "healthy_factors": None,
+                "inverted_factors": None,
+                "fallback_run_id": cached.get("fallback_run_id"),
+            },
+            "kelly_clipped": [],
+            "cash_redistribution": {"skipped": "small_sample_conservative_mode"},
+            "vol_target": None,
+            "portfolio_metrics": {
+                "annual_sharpe": round(annual_sharpe, 2),
+                "annual_return_pct": round(annual_ret * 100, 2),
+                "annual_vol_pct": round(annual_vol * 100, 2),
+                "gross_alpha_pct": round(annual_ret * 100, 2),
+                "total_cost_bps": round(cost["total_cost_bps_of_portfolio"], 2),
+                "net_alpha_pct": round(net_alpha_pct, 2),
+                "turnover": round(cost["turnover"], 4),
+            },
+            "risk_aware": {
+                "engine": "risk_aware_optimize",
+                "small_sample_mode": True,
+                "reason": "less_than_3_actionable_candidates_after_p0_gate",
+                "selected_tickers": selected_small,
+                "effective_cash_pct": round(actual_cash / capital, 6) if capital else None,
+                "max_positions": max_positions,
+            },
+            "candidate_universe": {
+                "source": "v2_recommendation_picks",
+                "run_id": cached.get("v2_universe_run_id"),
+                "run_date": cached.get("v2_universe_run_date"),
+                "market_scope": market_scope,
+                "count": cached.get("v2_universe_count"),
+                "mode": "small_sample_conservative",
+            },
+            "plan_v5": plan_v5,
+            "plan_v6": plan,
+            "plan": plan,
+            "adv_warnings": [],
+        }
+        store.save_json(result, config.AUDIT_DIR.parent / "optimize", "plan_v6")
+        result["portfolio_plan_sync"] = _sync_risk_aware_plan_to_duckdb(
+            result,
+            cached.get("fallback_run_id"),
+        )
+        _write_latest_plan(result)
+        print("\n✅ 小样本组合已保存并同步 DuckDB")
+        return result
 
     # 对齐
     min_len = min(len(r) for r in returns_dict.values())

@@ -18,7 +18,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +28,11 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
 from stock_research import config  # noqa: E402
+from stock_research.core.tech_growth_layers import (  # noqa: E402
+    CLASSIFICATION_VERSION,
+    classify_tech_growth_layer,
+    is_buyable_layer,
+)
 
 
 def _clip(value: float, lo: float = 0.0, hi: float = 100.0) -> float:
@@ -42,6 +47,22 @@ _STALE_SOURCE_DAYS = 10
 STRATEGY_VERSION = "tech_ai_v2_usable_data_gate"
 MODEL_VERSION = "v2_rule_factor_2026_06_usable_data_gate"
 DATA_USABILITY_AUDIT_PATH = REPO / "data" / "latest" / "recommendation_data_usability_audit.json"
+
+EVIDENCE_STATUSES = {"confirmed", "needs_review", "candidate", "stale", "missing"}
+BUYABLE_EVIDENCE_STATUS = "confirmed"
+P0_US_MARKET = "US"
+BLOCKING_RISK_CODES = {
+    "DATA_USABILITY_REVIEW_GATE",
+    "STRUCTURAL_DOWNTREND_REVIEW_GATE",
+    "PRICE_ACTION_REVIEW_GATE",
+}
+WAIT_ENTRY_RISK_CODES = {
+    "ACUTE_PRICE_PULLBACK",
+    "OVERHEATED_1Y",
+}
+MARKET_PHASE_ID = "ai_infra_buildout_to_inference"
+MARKET_PHASE_NAME = "AI 数据中心建设后半段 + 推理/Agent/企业集成前半段"
+MARKET_PHASE_SCOPE = "US/global_tech"
 
 
 def _score_lower_better(value: Any, good: float, bad: float, missing: float = 30.0) -> float:
@@ -476,6 +497,334 @@ def _risk_codes(flags: list[dict[str, Any]]) -> set[str]:
     return out
 
 
+def _normalize_evidence_status(value: Any) -> str:
+    status = str(value or "").strip().lower()
+    return status if status in EVIDENCE_STATUSES else "missing"
+
+
+def _is_etf_only_source(row: dict[str, Any]) -> bool:
+    source = str(row.get("universe_source") or row.get("membership_source") or row.get("source") or "")
+    reason = str(row.get("discovery_reason") or "")
+    return source.startswith("etf_theme:") or "theme_etf_holdings" in reason
+
+
+def _derive_recommendation_policy(row: dict[str, Any]) -> dict[str, Any]:
+    """Apply the P0 identity/evidence/action gate without changing old factor score."""
+    layer = classify_tech_growth_layer(
+        market=row.get("market"),
+        symbol=str(row.get("symbol") or ""),
+        source=row.get("universe_source") or row.get("membership_source") or row.get("source"),
+        theme=row.get("theme"),
+        industry=row.get("industry"),
+        name=row.get("name"),
+    )
+    layer_info = layer.as_dict()
+    evidence_status = _normalize_evidence_status(row.get("evidence_status"))
+    market = str(row.get("market") or "").upper()
+    codes = _risk_codes(row.get("risk_flags") or [])
+    signal = str(row.get("signal") or "").lower()
+
+    policy = {
+        "eligibility": "research_only",
+        "action": "research_only",
+        "evidence_status": evidence_status,
+        "eligibility_migration_status": "p0_us",
+        "primary_layer": layer.primary_layer,
+        "secondary_layers": layer_info["secondary_layers"],
+        "secondary_layers_json": json.dumps(layer_info["secondary_layers"], ensure_ascii=False),
+        "ai_relevance_level": layer.ai_relevance_level,
+        "layer_confidence": layer.layer_confidence,
+        "classification_version": layer.classification_version,
+        "classification_rationale": layer.rationale,
+    }
+
+    if market != P0_US_MARKET:
+        policy["eligibility_migration_status"] = "legacy"
+        return policy
+
+    if layer.primary_layer == "excluded":
+        policy.update({
+            "eligibility": "excluded",
+            "action": "exclude",
+            "eligibility_migration_status": "excluded_identity",
+        })
+        return policy
+
+    if _is_etf_only_source(row) and evidence_status != BUYABLE_EVIDENCE_STATUS:
+        policy.update({
+            "eligibility": "watch_only",
+            "action": "watch_only",
+            "eligibility_migration_status": "etf_only_needs_company_evidence",
+        })
+        return policy
+
+    if "DATA_USABILITY_REVIEW_GATE" in codes:
+        policy.update({
+            "eligibility": "research_only",
+            "action": "research_only",
+            "eligibility_migration_status": "data_usability_gate",
+        })
+        return policy
+
+    if not is_buyable_layer(layer.primary_layer):
+        policy.update({
+            "eligibility": "research_only" if evidence_status == BUYABLE_EVIDENCE_STATUS else "watch_only",
+            "action": "research_only" if evidence_status == BUYABLE_EVIDENCE_STATUS else "watch_only",
+            "eligibility_migration_status": "layer_not_buyable",
+        })
+        return policy
+
+    if evidence_status != BUYABLE_EVIDENCE_STATUS:
+        policy.update({
+            "eligibility": "research_only",
+            "action": "research_only",
+            "eligibility_migration_status": "needs_company_evidence",
+        })
+        return policy
+
+    policy["eligibility"] = "buyable"
+    if codes & BLOCKING_RISK_CODES:
+        policy.update({
+            "action": "blocked",
+            "eligibility_migration_status": "risk_gate",
+        })
+    elif codes & WAIT_ENTRY_RISK_CODES or signal != "buy":
+        policy.update({
+            "action": "wait_entry",
+            "eligibility_migration_status": "wait_entry",
+        })
+    else:
+        policy.update({
+            "action": "focus_research",
+            "eligibility_migration_status": "passed_p0_gate",
+        })
+    return policy
+
+
+def _table_columns(conn: duckdb.DuckDBPyConnection, table: str) -> set[str]:
+    try:
+        rows = conn.execute(f"PRAGMA table_info('{table}')").fetchall()
+        return {str(r[1]) for r in rows}
+    except Exception:
+        return set()
+
+
+def _ensure_p0_columns(conn: duckdb.DuckDBPyConnection) -> None:
+    for sql in (
+        """
+        CREATE TABLE IF NOT EXISTS market_phase_snapshot (
+            snapshot_id   VARCHAR PRIMARY KEY,
+            as_of_date    DATE NOT NULL,
+            phase_id      VARCHAR NOT NULL,
+            phase_name    VARCHAR NOT NULL,
+            scope         VARCHAR NOT NULL,
+            confidence    VARCHAR NOT NULL,
+            evidence_json VARCHAR,
+            review_cycle  VARCHAR,
+            next_review_at DATE,
+            owner         VARCHAR,
+            status        VARCHAR NOT NULL DEFAULT 'active',
+            created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        "ALTER TABLE system_universe ADD COLUMN IF NOT EXISTS primary_layer VARCHAR",
+        "ALTER TABLE system_universe ADD COLUMN IF NOT EXISTS secondary_layers_json VARCHAR",
+        "ALTER TABLE system_universe ADD COLUMN IF NOT EXISTS ai_relevance_level VARCHAR",
+        "ALTER TABLE system_universe ADD COLUMN IF NOT EXISTS layer_confidence VARCHAR",
+        "ALTER TABLE system_universe ADD COLUMN IF NOT EXISTS classification_version VARCHAR",
+        "ALTER TABLE system_universe ADD COLUMN IF NOT EXISTS classification_rationale VARCHAR",
+        "ALTER TABLE recommendation_runs ADD COLUMN IF NOT EXISTS market_phase_snapshot_id VARCHAR",
+        "ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS eligibility VARCHAR",
+        "ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS action VARCHAR",
+        "ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS evidence_status VARCHAR",
+        "ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS eligibility_migration_status VARCHAR",
+        "ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS primary_layer VARCHAR",
+        "ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS secondary_layers_json VARCHAR",
+        "ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS ai_relevance_level VARCHAR",
+        "ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS layer_confidence VARCHAR",
+        "ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS classification_version VARCHAR",
+        "ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS classification_rationale VARCHAR",
+        "ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS market_phase_snapshot_id VARCHAR",
+        "ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS short_term_view_json VARCHAR",
+        "ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS six_month_view_json VARCHAR",
+        "ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS long_term_view_json VARCHAR",
+    ):
+        conn.execute(sql)
+
+
+def _ensure_market_phase_snapshot(conn: duckdb.DuckDBPyConnection, now: datetime) -> str:
+    snapshot_id = f"phase_{now.strftime('%Y%m%d')}_{MARKET_PHASE_ID}"
+    evidence = [
+        "大厂 CapEx 仍高，数据中心建设仍在主线内",
+        "AI 核心芯片、网络和云平台收入仍在兑现，但估值与拥挤交易需要单独拦截",
+        "数据中心电力、散热和电网基础设施需求继续上行",
+        "推理、Agent 和企业软件集成进入前半段，软件股需要单独观察兑现节奏",
+    ]
+    conn.execute(
+        """
+        INSERT INTO market_phase_snapshot (
+            snapshot_id, as_of_date, phase_id, phase_name, scope, confidence,
+            evidence_json, review_cycle, next_review_at, owner, status,
+            created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 'medium', ?, 'weekly', ?, 'human_review_required', 'active', ?, ?)
+        ON CONFLICT (snapshot_id) DO UPDATE SET
+            as_of_date=excluded.as_of_date,
+            phase_id=excluded.phase_id,
+            phase_name=excluded.phase_name,
+            scope=excluded.scope,
+            confidence=excluded.confidence,
+            evidence_json=excluded.evidence_json,
+            review_cycle=excluded.review_cycle,
+            next_review_at=excluded.next_review_at,
+            owner=excluded.owner,
+            status=excluded.status,
+            updated_at=excluded.updated_at
+        """,
+        [
+            snapshot_id,
+            now.date(),
+            MARKET_PHASE_ID,
+            MARKET_PHASE_NAME,
+            MARKET_PHASE_SCOPE,
+            json.dumps(evidence, ensure_ascii=False),
+            now.date() + timedelta(days=7),
+            now,
+            now,
+        ],
+    )
+    return snapshot_id
+
+
+def _backfill_system_universe_layers(conn: duckdb.DuckDBPyConnection) -> dict[str, int]:
+    rows = conn.execute(
+        """
+        SELECT pool_id, market, symbol, source, theme, industry, name
+        FROM system_universe
+        WHERE active = TRUE
+        """
+    ).fetchall()
+    counts: dict[str, int] = {}
+    for pool_id, market, symbol, source, theme, industry, name in rows:
+        layer = classify_tech_growth_layer(
+            market=market,
+            symbol=str(symbol or ""),
+            source=source,
+            theme=theme,
+            industry=industry,
+            name=name,
+        )
+        info = layer.as_dict()
+        counts[layer.primary_layer] = counts.get(layer.primary_layer, 0) + 1
+        conn.execute(
+            """
+            UPDATE system_universe
+            SET primary_layer = ?,
+                secondary_layers_json = ?,
+                ai_relevance_level = ?,
+                layer_confidence = ?,
+                classification_version = ?,
+                classification_rationale = ?,
+                last_seen_at = CURRENT_TIMESTAMP
+            WHERE pool_id = ? AND market = ? AND symbol = ?
+            """,
+            [
+                layer.primary_layer,
+                json.dumps(info["secondary_layers"], ensure_ascii=False),
+                layer.ai_relevance_level,
+                layer.layer_confidence,
+                layer.classification_version,
+                layer.rationale,
+                pool_id,
+                market,
+                symbol,
+            ],
+        )
+    return counts
+
+
+def _risk_flag_messages(row: dict[str, Any], limit: int = 3) -> list[str]:
+    out: list[str] = []
+    for flag in row.get("risk_flags") or []:
+        if isinstance(flag, dict):
+            msg = str(flag.get("message") or flag.get("code") or "").strip()
+            if msg:
+                out.append(msg)
+    return out[:limit]
+
+
+def _build_period_views(row: dict[str, Any], *, market_phase_snapshot_id: str) -> dict[str, str]:
+    factors = row.get("factor_scores") if isinstance(row.get("factor_scores"), dict) else {}
+    risk_messages = _risk_flag_messages(row)
+    eligibility = row.get("eligibility") or "research_only"
+    action = row.get("action") or "research_only"
+    layer = row.get("primary_layer") or "theme_watch"
+    evidence = row.get("evidence_status") or "missing"
+    valuation = _as_float(factors.get("valuation"))
+    momentum = _as_float(factors.get("momentum"))
+    reversal = _as_float(factors.get("reversal"))
+
+    can_buy_today = eligibility == "buyable" and action == "focus_research"
+    short_reasons = []
+    if not can_buy_today:
+        short_reasons.append(f"动作={action}，资格={eligibility}")
+    if risk_messages:
+        short_reasons.extend(risk_messages)
+    if evidence != BUYABLE_EVIDENCE_STATUS:
+        short_reasons.append(f"公司级证据={evidence}，不能直接进可买候选")
+    if not short_reasons:
+        short_reasons.append("通过 P0 身份/证据/数据/风险闸，仍需买前研究确认")
+
+    six_month_status = "主线候选" if layer in {"ai_core", "ai_infrastructure", "power_datacenter"} else "观察兑现"
+    if evidence != BUYABLE_EVIDENCE_STATUS:
+        six_month_status = "证据待补"
+    if valuation is not None and valuation < 45:
+        six_month_status = "估值压力"
+
+    long_term_status = "长期跟踪"
+    if layer == "excluded":
+        long_term_status = "不纳入科技成长主线"
+    elif layer == "theme_watch":
+        long_term_status = "主题观察，等证据增强"
+
+    payloads = {
+        "short_term_view_json": {
+            "scope": "1d-8w",
+            "can_buy_today": can_buy_today,
+            "action": action,
+            "eligibility": eligibility,
+            "risk_scope": "short",
+            "reasons": short_reasons[:4],
+            "factor_hint": {
+                "momentum": momentum,
+                "reversal": reversal,
+            },
+            "market_phase_snapshot_id": market_phase_snapshot_id,
+        },
+        "six_month_view_json": {
+            "scope": "3m-12m",
+            "status": six_month_status,
+            "primary_layer": layer,
+            "evidence_status": evidence,
+            "valuation_score": valuation,
+            "mainline": layer in {"ai_core", "ai_infrastructure", "power_datacenter", "tech_software", "internet_platform"},
+            "market_phase_snapshot_id": market_phase_snapshot_id,
+        },
+        "long_term_view_json": {
+            "scope": "1y-5y",
+            "status": long_term_status,
+            "primary_layer": layer,
+            "ai_relevance_level": row.get("ai_relevance_level"),
+            "classification_rationale": row.get("classification_rationale"),
+            "market_phase_snapshot_id": market_phase_snapshot_id,
+        },
+    }
+    return {
+        key: json.dumps(value, ensure_ascii=False, default=str)
+        for key, value in payloads.items()
+    }
+
+
 def _audit_row(row: dict[str, Any], selected_rank: int | None, reasons: list[str]) -> dict[str, Any]:
     scores = row.get("factor_scores") or {}
     coverage = _as_float(scores.get("coverage"))
@@ -690,8 +1039,55 @@ def _reason(row: dict[str, Any]) -> str:
 
 
 def _load_candidates(conn: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
-    rows = conn.execute(
+    tables = {str(r[0]) for r in conn.execute("SHOW TABLES").fetchall()}
+    evidence_cte = ""
+    evidence_join = ""
+    evidence_select = """
+            'missing' AS evidence_status,
+            NULL AS ai_evidence_score,
+            NULL AS ai_evidence_latest_source_date,
+            NULL AS ai_evidence_rationale,
         """
+    if "ai_theme_company_tags" in tables:
+        evidence_cte = """
+        ,
+        latest_theme_tags AS (
+            SELECT *
+            FROM (
+                SELECT
+                    market, symbol, evidence_status, evidence_score,
+                    latest_source_date, rationale, updated_at,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY market, symbol
+                        ORDER BY
+                            CASE LOWER(COALESCE(evidence_status, 'missing'))
+                                WHEN 'confirmed' THEN 1
+                                WHEN 'needs_review' THEN 2
+                                WHEN 'candidate' THEN 3
+                                WHEN 'stale' THEN 4
+                                ELSE 5
+                            END,
+                            COALESCE(evidence_score, 0) DESC,
+                            latest_source_date DESC NULLS LAST,
+                            updated_at DESC NULLS LAST
+                    ) AS rn
+                FROM ai_theme_company_tags
+            )
+            WHERE rn = 1
+        )
+        """
+        evidence_join = """
+        LEFT JOIN latest_theme_tags tt
+          ON tt.market = m.market AND tt.symbol = m.symbol
+        """
+        evidence_select = """
+            COALESCE(tt.evidence_status, 'missing') AS evidence_status,
+            tt.evidence_score AS ai_evidence_score,
+            tt.latest_source_date AS ai_evidence_latest_source_date,
+            tt.rationale AS ai_evidence_rationale,
+        """
+    rows = conn.execute(
+        f"""
         WITH latest AS (
             SELECT market, symbol, MAX(trade_date) AS trade_date
             FROM price_daily
@@ -739,6 +1135,7 @@ def _load_candidates(conn: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
             )
             WHERE rn = 1
         )
+        {evidence_cte}
         SELECT
             m.pool_id, m.market, m.symbol, u.name, u.theme, u.industry,
             p.trade_date, p.close, p.prev_close, p.currency,
@@ -750,7 +1147,15 @@ def _load_candidates(conn: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
             COALESCE(p.one_week_pct, mo.one_week_pct) AS one_week_pct,
             COALESCE(p.one_month_pct, mo.one_month_pct) AS one_month_pct,
             COALESCE(p.one_year_pct, mo.one_year_pct) AS one_year_pct,
-            p.source, p.fetched_at,
+            p.source, m.source AS membership_source, u.source AS universe_source,
+            u.primary_layer AS universe_primary_layer,
+            u.secondary_layers_json AS universe_secondary_layers_json,
+            u.ai_relevance_level AS universe_ai_relevance_level,
+            u.layer_confidence AS universe_layer_confidence,
+            u.classification_version AS universe_classification_version,
+            u.classification_rationale AS universe_classification_rationale,
+            {evidence_select}
+            p.fetched_at,
             mo.trade_date AS momentum_trade_date,
             mo.source AS momentum_source,
             f.trade_date AS fundamentals_trade_date,
@@ -768,6 +1173,7 @@ def _load_candidates(conn: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
           ON u.pool_id = m.pool_id AND u.market = m.market AND u.symbol = m.symbol
         LEFT JOIN factor_metadata fm
           ON fm.market = m.market AND fm.symbol = m.symbol
+        {evidence_join}
         WHERE m.active = TRUE
           AND m.pool_type = 'system_tech_universe'
         """
@@ -777,7 +1183,12 @@ def _load_candidates(conn: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
         "trade_date", "close", "prev_close", "currency", "market_cap",
         "forward_pe", "trailing_pe", "peg_ratio", "ytd_pct",
         "one_week_pct", "one_month_pct", "one_year_pct", "source",
-        "fetched_at", "momentum_trade_date", "momentum_source",
+        "membership_source", "universe_source", "universe_primary_layer",
+        "universe_secondary_layers_json", "universe_ai_relevance_level",
+        "universe_layer_confidence", "universe_classification_version",
+        "universe_classification_rationale", "evidence_status",
+        "ai_evidence_score", "ai_evidence_latest_source_date",
+        "ai_evidence_rationale", "fetched_at", "momentum_trade_date", "momentum_source",
         "fundamentals_trade_date", "fundamentals_source",
         "_factor_meta_f_score", "_factor_meta_quality_score",
     ]
@@ -792,13 +1203,27 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
     if missing:
         conn.close()
         raise RuntimeError(f"当前 DB 缺少 v2 推荐表: {missing}")
+    now = datetime.now()
+    layer_counts: dict[str, int] = {}
+    evidence_seed_summary: dict[str, Any] | None = None
+    market_phase_snapshot_id: str | None = None
+    if not dry_run:
+        _ensure_p0_columns(conn)
+        layer_counts = _backfill_system_universe_layers(conn)
+        market_phase_snapshot_id = _ensure_market_phase_snapshot(conn, now)
+        from stock_research.jobs.aggregate_theme_tags import aggregate_tags
+        from stock_research.jobs.seed_p0_tech_growth_evidence import seed_p0_tech_growth_evidence
+
+        evidence_seed_summary = seed_p0_tech_growth_evidence(conn, now=now)
+        evidence_seed_summary["tags_aggregate"] = aggregate_tags(conn)
 
     pool_membership_count = int(conn.execute(
         "SELECT COUNT(*) FROM pool_membership WHERE active = TRUE AND pool_type = 'system_tech_universe'"
     ).fetchone()[0])
     price_daily_count = int(conn.execute("SELECT COUNT(*) FROM price_daily").fetchone()[0])
     candidates = _load_candidates(conn)
-    now = datetime.now()
+    if market_phase_snapshot_id is None:
+        market_phase_snapshot_id = f"phase_{now.strftime('%Y%m%d')}_{MARKET_PHASE_ID}"
     run_id = f"rec_{now.strftime('%Y%m%d_%H%M%S')}_system_tech"
     strategy_version = STRATEGY_VERSION
     model_version = MODEL_VERSION
@@ -810,14 +1235,23 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
             price_action_flags = _price_action_warning_flags(row)
         data_usability_flags = _apply_data_usability_gate(row, scores)
         total = scores["total"]
-        scored.append({
+        scored_row = {
             **row,
             "total_score": total,
             "factor_scores": scores,
             "risk_flags": data_usability_flags + price_action_flags + _quality_flags(row),
             "rating": _rating(total),
             "signal": _signal(total),
-        })
+        }
+        policy = _derive_recommendation_policy(scored_row)
+        scored_row.update(policy)
+        period_views = _build_period_views(scored_row, market_phase_snapshot_id=market_phase_snapshot_id)
+        scored_row.update(period_views)
+        scores["eligibility"] = policy["eligibility"]
+        scores["action"] = policy["action"]
+        scores["primary_layer"] = policy["primary_layer"]
+        scores["evidence_status"] = policy["evidence_status"]
+        scored.append(scored_row)
 
     selected: list[dict[str, Any]] = []
     for market in ("US", "HK", "CN"):
@@ -848,8 +1282,21 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
                 "selected_attention_count": data_usability_audit["selected_attention_count"],
                 "summary_by_market": data_usability_audit["summary_by_market"],
             },
+            "market_phase_snapshot_id": market_phase_snapshot_id,
+            "layer_counts": layer_counts,
+            "evidence_seed_summary": evidence_seed_summary,
             "selected": [
-                {"market": r["market"], "symbol": r["symbol"], "name": r["name"], "score": r["total_score"], "signal": r["signal"]}
+                {
+                    "market": r["market"],
+                    "symbol": r["symbol"],
+                    "name": r["name"],
+                    "score": r["total_score"],
+                    "signal": r["signal"],
+                    "eligibility": r["eligibility"],
+                    "action": r["action"],
+                    "primary_layer": r["primary_layer"],
+                    "evidence_status": r["evidence_status"],
+                }
                 for r in selected
             ],
         }
@@ -878,6 +1325,13 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
                 "data_usability_min_buy_score": _DATA_USABILITY_MIN_BUY_SCORE,
                 "stale_source_days": _STALE_SOURCE_DAYS,
                 "invalid_valuation_ratio_score": _NEGATIVE_VALUATION_SCORE,
+                "tech_growth_layer_version": CLASSIFICATION_VERSION,
+                "p0_evidence_seed": evidence_seed_summary,
+                "p0_us_eligibility_gate": (
+                    "old score stays as baseline; US action requires identity layer + confirmed evidence "
+                    "+ usable data + risk-scope gate"
+                ),
+                "market_phase_snapshot_id": market_phase_snapshot_id,
                 "structural_repair_requires": "one_month>=+5%, one_week>=0%, latest_day>-3%",
                 "formula": (
                     "total=0.15*momentum+(0.65-reversal_w)*valuation+"
@@ -893,21 +1347,25 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
         """
         INSERT INTO recommendation_runs (
             run_id, run_date, strategy_version, model_version, universe_scope,
-            data_cutoff_at, generated_at, status, notes
-        ) VALUES (?, ?, ?, ?, 'system_tech_universe', ?, ?, 'generated', ?)
+            market_phase_snapshot_id, data_cutoff_at, generated_at, status, notes
+        ) VALUES (?, ?, ?, ?, 'system_tech_universe', ?, ?, ?, 'generated', ?)
         """,
         [
             run_id,
             now.date(),
             strategy_version,
             model_version,
+            market_phase_snapshot_id,
             now,
             now,
             (
                 f"candidate_count={len(candidates)}; selected_count={len(selected)}; "
                 f"pool_membership={pool_membership_count}; price_daily={price_daily_count}; "
+                f"market_phase_snapshot_id={market_phase_snapshot_id}; "
+                f"p0_evidence_seed_symbols={(evidence_seed_summary or {}).get('n_symbols')}; "
                 "scoring_change=usable_data_gate+price_action_review_gate+"
-                "structural_downtrend_gate+invalid_zero_valuation_guard"
+                "structural_downtrend_gate+invalid_zero_valuation_guard; "
+                "p0_gate=identity_layer+company_evidence+action"
             ),
         ],
     )
@@ -917,9 +1375,13 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
             INSERT INTO recommendation_picks (
                 run_id, market, symbol, name, rank, rating, signal,
                 total_score, factor_scores_json, recommendation_reason,
-                risk_flags_json, entry_price, entry_currency, universe_scope,
-                source_origin, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'system_tech_universe', 'system_pool', ?)
+                risk_flags_json, eligibility, action, evidence_status,
+                eligibility_migration_status, primary_layer, secondary_layers_json,
+                ai_relevance_level, layer_confidence, classification_version,
+                classification_rationale, market_phase_snapshot_id,
+                short_term_view_json, six_month_view_json, long_term_view_json,
+                entry_price, entry_currency, universe_scope, source_origin, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'system_tech_universe', 'system_pool', ?)
             """,
             [
                 run_id,
@@ -933,13 +1395,32 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
                 json.dumps(row["factor_scores"], ensure_ascii=False),
                 _reason(row),
                 json.dumps(row["risk_flags"], ensure_ascii=False),
+                row["eligibility"],
+                row["action"],
+                row["evidence_status"],
+                row["eligibility_migration_status"],
+                row["primary_layer"],
+                row["secondary_layers_json"],
+                row["ai_relevance_level"],
+                row["layer_confidence"],
+                row["classification_version"],
+                row["classification_rationale"],
+                market_phase_snapshot_id,
+                row["short_term_view_json"],
+                row["six_month_view_json"],
+                row["long_term_view_json"],
                 row["close"],
                 row["currency"],
                 now,
             ],
         )
 
-    buy_rows = [r for r in selected if r["signal"] == "buy"]
+    buy_rows = [
+        r for r in selected
+        if r["signal"] == "buy"
+        and r.get("eligibility") == "buyable"
+        and r.get("action") == "focus_research"
+    ]
     buy_rows.sort(key=lambda x: x["total_score"], reverse=True)
     portfolio_rows = buy_rows[:portfolio_size]
     target_weight = round(1.0 / len(portfolio_rows), 6) if portfolio_rows else 0.0
@@ -999,6 +1480,9 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
         "portfolio_count": len(portfolio_rows),
         "data_usability_blocked_count": data_usability_audit["blocked_count"],
         "data_usability_attention_count": data_usability_audit["attention_count"],
+        "market_phase_snapshot_id": market_phase_snapshot_id,
+        "layer_counts": layer_counts,
+        "evidence_seed_summary": evidence_seed_summary,
     }
 
 

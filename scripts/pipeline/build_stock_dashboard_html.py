@@ -483,6 +483,37 @@ window.echarts = window.echarts || {
     st+='</div>'+btn;
     return card(st);
   }
+  function pmEvidence(d, wrap){
+    var fam=(d&&d.families)||[];
+    if(!fam.length) return "";
+    function tone(stress, available){
+      if(available===false) return {dot:"⚪", color:"#94a3b8", txt:"缺数据"};
+      var s=Number(stress||0);
+      if(s>=2) return {dot:"🔴", color:"#b91c1c", txt:s.toFixed(1)+"/3"};
+      if(s>=1) return {dot:"🟠", color:"#c2410c", txt:s.toFixed(1)+"/3"};
+      if(s>0) return {dot:"🟡", color:"#a16207", txt:s.toFixed(1)+"/3"};
+      return {dot:"🟢", color:"#16a34a", txt:"0/3"};
+    }
+    var comp=Number(d.composite||0), cov=Number(d.coverage||0);
+    var h=(wrap===false?'<div style="border-top:1px solid #e8eef5;margin-top:14px;padding-top:14px">':'')+'<h4 style="margin:0 0 8px;font-size:14px">依据快照 <span style="font-weight:400;color:#94a3b8;font-size:12px">— 8 类信号实际读数</span></h4>';
+    h+='<div style="font-size:12.5px;color:#64748b;margin-bottom:8px">综合压力 '+(isFinite(comp)?comp.toFixed(3):esc(d.composite))+'/3 · 数据覆盖率 '+(isFinite(cov)?Math.round(cov*100)+"%":esc(d.coverage))+'</div>';
+    fam.forEach(function(f){
+      var t=tone(f.stress, f.available);
+      var plain=String(f.plain||"");
+      var tags=f.tags||[], data=f.data||{};
+      if((f.key==="vol") && tags.indexOf("pcr_bearish")>=0 && plain.indexOf("PCR")<0 && data.pcr_volume!=null){
+        var pcr=Number(data.pcr_volume);
+        if(/[。！？]$/.test(plain)) plain=plain.slice(0,-1);
+        plain+='；SPY 期权 Put/Call 比 PCR '+(isFinite(pcr)?pcr.toFixed(2):esc(data.pcr_volume))+' 偏防守，说明有资金在买保护，作为轻微留意。';
+      }
+      h+='<div style="display:grid;grid-template-columns:104px 1fr;gap:8px;padding:7px 0;border-bottom:1px solid #f1f5f9">';
+      h+='<div style="font-size:12.5px;font-weight:700;color:'+t.color+'">'+t.dot+' '+esc(f.label||f.key||"")+'<div style="font-size:11px;color:#94a3b8;font-weight:500">'+t.txt+'</div></div>';
+      h+='<div><div style="font-size:13px;font-weight:650;color:#0f172a">'+esc(f.headline||"—")+'</div><div style="font-size:12px;color:#64748b;line-height:1.55;margin-top:2px">'+esc(plain)+'</div></div>';
+      h+='</div>';
+    });
+    if(wrap===false) h+='</div>';
+    return wrap===false?h:card(h);
+  }
   function renderDetail(hist){
     var d=_gate, body=document.getElementById("pm-drawer-body");
     if(!body) return;
@@ -502,16 +533,26 @@ window.echarts = window.echarts || {
     var sc=d.scan_label||"";
     var h='<div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:15px">🚦 美股盘前 · 今晚能不能买</b>'+x+'</div>';
     h+='<div style="font-size:12px;color:#94a3b8;margin:2px 0 12px">⏱ 预警时间 '+(gen||"—")+(sc?' · '+sc:'')+'</div>';
-    if(stale) h+='<div style="background:#f1f5f9;border:1px solid #cbd5e1;border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:#475569">⏸ 这是<b>上一场预警，已过期</b>（美股那场已收盘）。今晚的预警要等盘前生成，届时自动更新。</div>';
-    h+='<div style="background:'+hbg+';border:1px solid '+hbd+';border-radius:14px;padding:16px"><div style="color:'+ac+';font-size:18px;font-weight:800">'+(stale?"⏸ 上一场预警（已过期）":esc(d.headline_plain))+'</div><div style="margin-top:8px;font-size:14px"><b>该怎么做：</b>'+esc(d.can_buy)+'</div>';
-    if(d.pressure_sources&&d.pressure_sources.length) h+='<div style="margin-top:6px;font-size:12.5px;color:#475569">压力源：'+esc(d.pressure_sources.join("、"))+'</div>';
-    h+='</div>';
-    if(d.top_alarm) h+='<div style="background:#fff;border:2px solid #dc2626;border-radius:12px;padding:12px;margin-top:12px;font-weight:700;color:#b91c1c;font-size:14px">'+esc(d.top_alarm)+'</div>';
-    if(d.reasons_plain&&d.reasons_plain.length){
-      var rr='<h4 style="margin:0 0 8px;font-size:14px">为什么这么判断</h4>';
-      d.reasons_plain.forEach(function(r){rr+='<div style="padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:13.5px">'+esc(r)+'</div>';});
-      h+=card(rr);
+    if(stale){
+      h+='<div style="background:#f1f5f9;border:1px solid #cbd5e1;border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:#475569">⏸ 这是<b>上一场预警，已过期</b>（美股那场已收盘）。上一场已归入历史记录；今晚新预警生成前，这里不再展示旧红灯或旧判断。</div>';
+      h+=card('<h4 style="margin:0 0 8px;font-size:14px;color:#475569">当前没有有效盘前预警</h4><div style="font-size:13px;color:#64748b;line-height:1.7">等今晚盘前扫描生成后，会自动替换为新的当场预警。上一场记录请从下方历史查看。</div>');
+      h+=pmHistory(hist);
+      h+='<div style="font-size:11px;color:#94a3b8;padding:12px 2px 30px">🟢正常买 🟡小仓试 🟠先别开新仓 🔴别买只看好已有 · ⚠️ 仅供参考，不是投资建议</div>';
+      body.innerHTML=h;
+      document.getElementById("pm-x").onclick=closeDrawer; return;
     }
+    var pm='<div style="background:'+hbg+';border:1px solid '+hbd+';border-radius:14px;padding:16px"><div style="color:'+ac+';font-size:18px;font-weight:800">'+(stale?"⏸ 上一场预警（已过期）":esc(d.headline_plain))+'</div><div style="margin-top:8px;font-size:14px"><b>该怎么做：</b>'+esc(d.can_buy)+'</div>';
+    if(d.pressure_sources&&d.pressure_sources.length) pm+='<div style="margin-top:6px;font-size:12.5px;color:#475569">压力源：'+esc(d.pressure_sources.join("、"))+'</div>';
+    pm+='</div>';
+    if(d.top_alarm) pm+='<div style="background:#fff;border:2px solid #dc2626;border-radius:12px;padding:12px;margin-top:14px;font-weight:700;color:#b91c1c;font-size:14px">'+esc(d.top_alarm)+'</div>';
+    if(d.reasons_plain&&d.reasons_plain.length){
+      var rr='<div style="border-top:1px solid #e8eef5;margin-top:14px;padding-top:14px"><h4 style="margin:0 0 8px;font-size:14px">为什么这么判断</h4>';
+      d.reasons_plain.forEach(function(r){rr+='<div style="padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:13.5px">'+esc(r)+'</div>';});
+      rr+='</div>';
+      pm+=rr;
+    }
+    pm+=pmEvidence(d,false);
+    h+=card(pm);
     if(d.holdings_impact&&d.holdings_impact.length){
       var hh='<h4 style="margin:0 0 8px;font-size:14px">💼 对你持仓的影响 <span style="font-weight:400;color:#94a3b8;font-size:12px">（只是提醒，不是叫你一定买卖）</span></h4>';
       d.holdings_impact.forEach(function(o){hh+='<div style="padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:13.5px"><b>'+esc(o.symbol)+'</b>：'+esc(o.reason)+'</div>';});
@@ -1125,6 +1166,8 @@ window.echarts = window.echarts || {
   <!-- 分市场策略验证进度: US 单独走 验证中→可小仓试探→正式可用; CN/HK 冻结 research-only。
        数据源: shadow_tuning_evidence.json(服务端派生,只读) -->
   {US_VALIDATION_PROGRESS}
+  <!-- P0 新规则验证: 严格 PIT 样本 + 历史覆盖参考，服务端只读，不输出今日买入清单。 -->
+  {P0_POLICY_VALIDATION_PANEL}
   <!-- 全量 US 推荐规则快速体检: 聚合质量闸门/生产验收/US 样本/组合硬锁。 -->
   {RECOMMENDATION_READINESS_PANEL}
   <!-- US 严筛试运行: 只读 overlay，从正式推荐里筛出买前研究队列，不改公式/持仓。 -->
@@ -1153,6 +1196,7 @@ window.echarts = window.echarts || {
     </div>
     <div id="discovery-count-explain" class="hidden mb-4 rounded-lg border border-violet-200 bg-white px-4 py-3 text-sm text-slate-700"></div>
     <div id="discovery-market-tabs" class="hidden mb-4 flex flex-wrap gap-2"></div>
+    <div id="discovery-policy-sort-explain" class="hidden mb-4"></div>
     <div id="discovery-data-health" class="hidden mb-4"></div>
     <style>
       /* AI 推荐表：横向滚动时固定股票身份列，避免滑到右侧后不知道是哪家公司。 */
@@ -1207,6 +1251,7 @@ window.echarts = window.echarts || {
             <th class="disc-sticky-code px-2 py-1 text-left">代码</th>
             <th class="disc-sticky-name px-2 py-1 text-left">名称</th>
             <th class="px-2 py-1 text-left">信号</th>
+            <th class="px-2 py-1 text-left" title="P0 新规则根据身份、证据、数据和风险给出的动作；不覆盖原始总分。">新规则动作</th>
             <th class="px-2 py-1 text-left">市场</th>
             <th class="px-2 py-1 text-left">主题</th>
             <th class="px-2 py-1 text-right">综合分</th>
@@ -2191,10 +2236,10 @@ function openDiscoveryHistoryFromRadar(event) {
               title="所有已经拉回数据库的股票">🌍 全部 <span id="db-filter-cnt-all">-</span></button>
       <button onclick="setDbExplorerFilter('star3')" id="db-filter-btn-star3"
               class="db-filter-btn px-2.5 py-1 rounded-full border bg-white border-slate-300 text-slate-600 hover:bg-violet-50"
-              title="强烈推荐（V2: strong_buy / V1: ⭐⭐⭐）">🔥 强买 <span id="db-filter-cnt-star3">-</span></button>
+              title="高分研究（V2: strong_buy / V1: ⭐⭐⭐），不是直接买入指令">🔥 高分研究 <span id="db-filter-cnt-star3">-</span></button>
       <button onclick="setDbExplorerFilter('star_any')" id="db-filter-btn-star_any"
               class="db-filter-btn px-2.5 py-1 rounded-full border bg-white border-slate-300 text-slate-600 hover:bg-violet-50"
-              title="有评级（V2: strong_buy/buy / V1: 任何含 ⭐），排除无评级">⭐ 有评级 <span id="db-filter-cnt-star_any">-</span></button>
+              title="有研究评级（V2: strong_buy/buy / V1: 任何含 ⭐），排除无评级">⭐ 有研究评级 <span id="db-filter-cnt-star_any">-</span></button>
       <button onclick="setDbExplorerFilter('ai_strong')" id="db-filter-btn-ai_strong"
               class="db-filter-btn px-2.5 py-1 rounded-full border bg-white border-slate-300 text-slate-600 hover:bg-violet-50"
               title="高分推荐（V2: pick_total_score ≥ 80 / V1: AI 关联=强/极强）">💎 高分 ≥80 <span id="db-filter-cnt-ai_strong">-</span></button>
@@ -3637,8 +3682,8 @@ function _heldBadge(code) {
 }
 
 // 自选股 AI 评级 badge — V2 路径 (recommendation_picks.rating)
-//   strong_buy → ✅ 强买  · 推荐分 ≥ 75
-//   buy        → 👍 买入  · 推荐分 60-75
+//   strong_buy → ✅ 高分研究  · 推荐分 ≥ 75
+//   buy        → 👍 买前研究  · 推荐分 60-75
 //   watch      → ⚠️ 观察  · 推荐分 50-60
 //   avoid      → ❌ 不建议 · 推荐分 < 50
 //   不在 picks → 评级中（后台跑着）/ 未评级（无 job 在跑）
@@ -3667,10 +3712,10 @@ function _wlRatingBadge(code) {
   const tip = `${_esc(r)}${score}`;
   // V2 rating 枚举值优先
   if (r === "strong_buy") {
-    return `<span class="inline-flex px-2 py-0.5 rounded text-xs font-bold bg-emerald-100 text-emerald-700" title="${tip}">✅ 强买${score}</span>`;
+    return `<span class="inline-flex px-2 py-0.5 rounded text-xs font-bold bg-emerald-100 text-emerald-700" title="${tip}">✅ 高分研究${score}</span>`;
   }
   if (r === "buy") {
-    return `<span class="inline-flex px-2 py-0.5 rounded text-xs font-bold bg-green-100 text-green-700" title="${tip}">👍 买入${score}</span>`;
+    return `<span class="inline-flex px-2 py-0.5 rounded text-xs font-bold bg-green-100 text-green-700" title="${tip}">👍 买前研究${score}</span>`;
   }
   if (r === "watch") {
     return `<span class="inline-flex px-2 py-0.5 rounded text-xs bg-amber-100 text-amber-700" title="${tip}">⚠️ 观察${score}</span>`;
@@ -4031,7 +4076,7 @@ function _watchlistDailyItem(row) {
     priority += 15;
     if (!isHeld && action === "观察") {
       action = "候补研究";
-      hint = "分数在强买区间";
+      hint = "分数在高分研究区间";
       tone = "emerald";
     }
     why.push(`AI 分 ${score.toFixed(1)}`);
@@ -12180,8 +12225,55 @@ function _signalBadge(row) {
   if (key.includes("watch")) {
     return `<span class="inline-flex px-2 py-0.5 rounded-full border border-amber-200 bg-amber-50 text-amber-700 text-[11px] font-semibold">观察</span>`;
   }
-  const label = rating === "strong_buy" ? "强买" : "买入";
+  const label = rating === "strong_buy" ? "高分研究" : "买前研究";
   return `<span class="inline-flex px-2 py-0.5 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700 text-[11px] font-semibold">${label}</span>`;
+}
+
+function _policyActionLabel(row) {
+  const action = String((row && row.action) || "").toLowerCase();
+  const eligibility = String((row && row.eligibility) || "").toLowerCase();
+  if (action === "focus_research") return "重点研究";
+  if (action === "wait_entry") return "等买点";
+  if (action === "blocked") return "红旗拦截";
+  if (action === "exclude" || eligibility === "excluded") return "剔除";
+  if (action === "watch_only" || eligibility === "watch_only") return "只观察";
+  if (action === "research_only" || eligibility === "research_only") return "只研究";
+  return "旧规则";
+}
+
+function _policyActionTone(row) {
+  const action = String((row && row.action) || "").toLowerCase();
+  const eligibility = String((row && row.eligibility) || "").toLowerCase();
+  if (action === "focus_research") return "border-emerald-300 bg-emerald-50 text-emerald-800";
+  if (action === "wait_entry") return "border-amber-300 bg-amber-50 text-amber-800";
+  if (action === "blocked") return "border-rose-300 bg-rose-50 text-rose-800";
+  if (action === "exclude" || eligibility === "excluded") return "border-rose-300 bg-rose-50 text-rose-800";
+  if (action === "watch_only" || eligibility === "watch_only") return "border-slate-300 bg-slate-50 text-slate-700";
+  if (action === "research_only" || eligibility === "research_only") return "border-sky-300 bg-sky-50 text-sky-800";
+  return "border-slate-200 bg-white text-slate-500";
+}
+
+function _policyActionPriority(row) {
+  const action = String((row && row.action) || "").toLowerCase();
+  const eligibility = String((row && row.eligibility) || "").toLowerCase();
+  if (action === "focus_research") return 0;
+  if (action === "wait_entry") return 1;
+  if (action === "research_only" || eligibility === "research_only") return 2;
+  if (action === "watch_only" || eligibility === "watch_only") return 3;
+  if (action === "blocked") return 4;
+  if (action === "exclude" || eligibility === "excluded") return 5;
+  return 6;
+}
+
+function _policyActionBadge(row) {
+  const label = _policyActionLabel(row);
+  const cls = _policyActionTone(row);
+  const layer = row && row.primary_layer ? `层级：${row.primary_layer}` : "";
+  const ev = row && row.evidence_status ? `证据：${row.evidence_status}` : "";
+  const eligibility = row && row.eligibility ? `资格：${row.eligibility}` : "";
+  const action = row && row.action ? `动作：${row.action}` : "";
+  const title = [action, eligibility, layer, ev, "这是新规则 gate，不是原始总分"].filter(Boolean).join(" · ");
+  return `<span class="inline-flex px-2 py-0.5 rounded-full border text-[11px] font-semibold whitespace-nowrap ${cls}" title="${_esc(title)}">${_esc(label)}</span>`;
 }
 
 // 🆕 第一次推荐 badge
@@ -12423,6 +12515,7 @@ function _reasonSummaryHtml(row) {
   const historyEl = document.getElementById("discovery-history-list");
   const countExplainEl = document.getElementById("discovery-count-explain");
   const marketTabsEl = document.getElementById("discovery-market-tabs");
+  const policySortEl = document.getElementById("discovery-policy-sort-explain");
   const dataHealthEl = document.getElementById("discovery-data-health");
   const cands = (DISCOVERY && DISCOVERY.candidates) || [];
 
@@ -12467,8 +12560,8 @@ function _reasonSummaryHtml(row) {
 
     function _ratingLabelCN(r) {
       const k = String(r || "").toLowerCase();
-      if (k === "strong_buy") return "强买";
-      if (k === "buy") return "买入";
+      if (k === "strong_buy") return "高分研究";
+      if (k === "buy") return "买前研究";
       if (k === "watch") return "观察";
       if (k === "avoid") return "回避";
       return r || "";
@@ -12671,6 +12764,90 @@ function _reasonSummaryHtml(row) {
     if (!window._activeDiscoveryMarket || !_marketCounts[window._activeDiscoveryMarket]) {
       window._activeDiscoveryMarket = _availableMarkets[0] || "US";
     }
+    if (!window._discoverySortMode) {
+      window._discoverySortMode = "policy";
+    }
+
+    function _policyStats(rows) {
+      const stats = {focus_research: 0, wait_entry: 0, research_only: 0, watch_only: 0, blocked: 0, exclude: 0, other: 0};
+      (rows || []).forEach(r => {
+        const action = String((r && r.action) || "").toLowerCase();
+        const eligibility = String((r && r.eligibility) || "").toLowerCase();
+        if (action === "focus_research") stats.focus_research += 1;
+        else if (action === "wait_entry") stats.wait_entry += 1;
+        else if (action === "blocked") stats.blocked += 1;
+        else if (action === "exclude" || eligibility === "excluded") stats.exclude += 1;
+        else if (action === "watch_only" || eligibility === "watch_only") stats.watch_only += 1;
+        else if (action === "research_only" || eligibility === "research_only") stats.research_only += 1;
+        else stats.other += 1;
+      });
+      return stats;
+    }
+
+    function _renderDiscoveryPolicySortExplain() {
+      if (!policySortEl) return;
+      const activeMarket = window._activeDiscoveryMarket || "US";
+      const rows = cands.filter(c => _candidateMarketCode(c) === activeMarket);
+      const stats = _policyStats(rows);
+      const audit = (DISCOVERY && DISCOVERY.data_usability_audit) || {};
+      const summary = audit.summary_by_market || {};
+      const marketSummary = summary[activeMarket] || {};
+      const blockedTotal = Number(audit.blocked_count || 0);
+      const attentionTotal = Number(audit.attention_count || 0);
+      const marketBlocked = Number(marketSummary.blocked || 0);
+      const marketAttention = Number(marketSummary.attention || 0);
+      const repairHtml = audit && audit.generated_at && (blockedTotal > 0 || attentionTotal > 0)
+        ? `<div class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            <div class="flex items-start justify-between gap-3 flex-col md:flex-row">
+              <div>
+                <div class="font-bold">排序可能被数据缺口影响：先补数据，再看新规则排序</div>
+                <div class="mt-0.5">
+                  全池硬拦截 <b>${blockedTotal}</b> 只、数据提醒 <b>${attentionTotal}</b> 只；
+                  当前${_marketLabel(activeMarket)}硬拦截 <b>${marketBlocked}</b> 只、数据提醒 <b>${marketAttention}</b> 只。
+                  小公司/早期股更容易因为行情、估值或动量字段不全被挡住。
+                </div>
+              </div>
+              <div class="flex items-center gap-2 whitespace-nowrap">
+                <button onclick="triggerDataUsabilityRepair('', this)"
+                        class="px-3 py-1.5 rounded-md bg-amber-600 hover:bg-amber-700 disabled:bg-amber-300 text-white text-xs font-bold"
+                        title="刷新整个系统科技/AI 股票池的行情、估值、动量数据，然后重算推荐和看板">补数据并重算</button>
+                <button onclick="copyDataUsabilityRepairCommand('', this)"
+                        class="px-3 py-1.5 rounded-md bg-white hover:bg-amber-50 border border-amber-300 text-amber-800 text-xs font-semibold"
+                        title="如果 API 没跑起来，复制命令到终端执行">复制命令</button>
+              </div>
+            </div>
+          </div>`
+        : "";
+      const mode = window._discoverySortMode || "policy";
+      const btnCls = isActive => isActive
+        ? "bg-slate-900 text-white border-slate-900"
+        : "bg-white text-slate-700 border-slate-200 hover:border-slate-400";
+      policySortEl.classList.remove("hidden");
+      policySortEl.innerHTML = `<div class="rounded-xl border border-slate-200 bg-white px-4 py-3">
+        <div class="flex items-start justify-between gap-3 flex-col lg:flex-row">
+          <div>
+            <div class="text-sm font-bold text-slate-900">怎么看新规则：它先做筛选/降级，不直接改旧总分</div>
+            <div class="text-xs text-slate-600 mt-1">
+              当前主表仍保留老 <span class="font-mono">rank/total_score</span>，方便后续验证新旧规则谁更好；
+              切到「新规则优先」时，只是页面排序把「重点研究」放前面。
+            </div>
+            <div class="flex flex-wrap gap-1.5 mt-2 text-[11px]">
+              <span class="px-2 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-emerald-800">重点研究 ${stats.focus_research}</span>
+              <span class="px-2 py-0.5 rounded border border-amber-200 bg-amber-50 text-amber-800">等买点 ${stats.wait_entry}</span>
+              <span class="px-2 py-0.5 rounded border border-sky-200 bg-sky-50 text-sky-800">只研究 ${stats.research_only}</span>
+              <span class="px-2 py-0.5 rounded border border-slate-200 bg-slate-50 text-slate-700">只观察 ${stats.watch_only}</span>
+              <span class="px-2 py-0.5 rounded border border-rose-200 bg-rose-50 text-rose-800">拦截/剔除 ${stats.blocked + stats.exclude}</span>
+            </div>
+            ${repairHtml}
+          </div>
+          <div class="flex items-center gap-2 whitespace-nowrap">
+            <span class="text-xs text-slate-500">视图排序</span>
+            <button onclick="setDiscoverySortMode('policy')" class="px-3 py-1.5 rounded-md border text-xs font-semibold ${btnCls(mode === "policy")}">新规则优先</button>
+            <button onclick="setDiscoverySortMode('rank')" class="px-3 py-1.5 rounded-md border text-xs font-semibold ${btnCls(mode === "rank")}">原始分数排序</button>
+          </div>
+        </div>
+      </div>`;
+    }
 
     function _renderDiscoveryDataHealth() {
       if (!dataHealthEl) return;
@@ -12806,9 +12983,16 @@ function _reasonSummaryHtml(row) {
     }
 
     function _visibleDiscoveryCandidates() {
-      return cands
-        .filter(c => _candidateMarketCode(c) === window._activeDiscoveryMarket)
-        .sort((a, b) => (a.rank || 9999) - (b.rank || 9999));
+      const rows = cands.filter(c => _candidateMarketCode(c) === window._activeDiscoveryMarket);
+      if ((window._discoverySortMode || "policy") === "policy") {
+        return rows.sort((a, b) => {
+          const pa = _policyActionPriority(a);
+          const pb = _policyActionPriority(b);
+          if (pa !== pb) return pa - pb;
+          return (a.rank || 9999) - (b.rank || 9999);
+        });
+      }
+      return rows.sort((a, b) => (a.rank || 9999) - (b.rank || 9999));
     }
 
     function _renderDiscoveryMarketRows() {
@@ -12859,7 +13043,7 @@ function _reasonSummaryHtml(row) {
       const stockDetailAttrs = `data-code="${tk}" data-name="${_esc(displayName)}" onclick="openStockDetail(this.dataset.code, this.dataset.name)"`;
       return `<tr class="hover:bg-slate-50">
         <td class="disc-sticky-rank px-2 py-1 font-mono text-xs text-slate-500">
-          <span title="当前市场 tab 内排名 (后端全局 rank #${c.rank})">${idx + 1}</span>
+          <span title="${window._discoverySortMode === "policy" ? "新规则视图排序；" : "原始分数排序；"}后端原始 rank #${c.rank}">${idx + 1}</span>
         </td>
         <td class="disc-sticky-code px-2 py-1 font-mono text-xs font-bold text-violet-700 cursor-pointer hover:underline"
             ${stockDetailAttrs} title="点击进入这只股票的完整详情页">${c.ticker}${_newBadge(c)}${_riseBadge(c)}${_appearanceBadge(c)}</td>
@@ -12870,6 +13054,7 @@ function _reasonSummaryHtml(row) {
           <div class="mt-0.5 inline-flex items-center gap-1 flex-wrap">${_candidateMiniTags(c)}</div>
         </td>
         <td class="px-2 py-1 text-xs whitespace-nowrap">${_signalBadge(c)}</td>
+        <td class="px-2 py-1 text-xs whitespace-nowrap">${_policyActionBadge(c)}</td>
         <td class="px-2 py-1 text-xs whitespace-nowrap">${market}</td>
         <td class="px-2 py-1 text-xs text-slate-600 whitespace-nowrap" title="${_esc(themeTitle || themeText)}">${_esc(themeText)}</td>
         <td class="px-2 py-1 text-right text-xs font-mono ${zColor}">${scoreText}</td>
@@ -12912,11 +13097,18 @@ function _reasonSummaryHtml(row) {
     window.switchDiscoveryMarket = function(market) {
       window._activeDiscoveryMarket = market;
       _renderDiscoveryMarketTabs();
+      _renderDiscoveryPolicySortExplain();
       _renderDiscoveryDataHealth();
       _renderDiscoveryMarketRows();
       if (typeof window._renderDropoutsBanner === "function") window._renderDropoutsBanner();
     };
+    window.setDiscoverySortMode = function(mode) {
+      window._discoverySortMode = mode === "rank" ? "rank" : "policy";
+      _renderDiscoveryPolicySortExplain();
+      _renderDiscoveryMarketRows();
+    };
     _renderDiscoveryMarketTabs();
+    _renderDiscoveryPolicySortExplain();
     _renderDiscoveryDataHealth();
     _renderDiscoveryMarketRows();
     // tab 初始化完后 banner 重新渲染一次，确保 activeMarket 正确
@@ -15081,6 +15273,17 @@ def _runtime_v2_recommendations(limit: int | None = None) -> list[dict]:
         if not latest:
             con.close()
             return _runtime_v2_recommendations_fallback(limit)
+        pick_cols = {str(r[1]) for r in con.execute("PRAGMA table_info('recommendation_picks')").fetchall()}
+        policy_cols = [
+            "eligibility", "action", "evidence_status", "eligibility_migration_status",
+            "primary_layer", "secondary_layers_json", "ai_relevance_level", "layer_confidence",
+            "classification_version", "classification_rationale", "market_phase_snapshot_id",
+            "short_term_view_json", "six_month_view_json", "long_term_view_json",
+        ]
+        policy_select = ", ".join(
+            f"rp.{col}" if col in pick_cols else f"NULL AS {col}"
+            for col in policy_cols
+        )
         # limit=None 时跳过 LIMIT 子句（WHERE run_id=? 已物理 cap 在 ≤100 量级，
         # 多余的 LIMIT 反而和 ORDER BY market 撞车会切掉 HK/US picks）。
         limit_sql = f"LIMIT {int(limit)}" if limit is not None else ""
@@ -15105,7 +15308,8 @@ def _runtime_v2_recommendations(limit: int | None = None) -> list[dict]:
                 SELECT rp.market, rp.symbol, rp.name, rp.rank, rp.rating, rp.signal,
                        rp.total_score, rp.factor_scores_json, rp.recommendation_reason,
                        rp.risk_flags_json, rp.entry_price, rp.entry_currency,
-                       rp.source_origin, lp.market_cap, lp.one_year_pct, lp.forward_pe,
+                       rp.source_origin, {policy_select},
+                       lp.market_cap, lp.one_year_pct, lp.forward_pe,
                        su.theme, su.industry, su.source,
                        cm.chain, cm.chain_tier, cm.chain_role, cm.layman_intro
                 FROM recommendation_picks rp
@@ -15126,7 +15330,8 @@ def _runtime_v2_recommendations(limit: int | None = None) -> list[dict]:
                 f"""
                 SELECT rp.market, rp.symbol, rp.name, rp.rank, rp.rating, rp.signal, rp.total_score,
                        rp.factor_scores_json, rp.recommendation_reason, rp.risk_flags_json,
-                       rp.entry_price, rp.entry_currency, rp.source_origin, NULL, NULL, NULL,
+                       rp.entry_price, rp.entry_currency, rp.source_origin, {policy_select},
+                       NULL, NULL, NULL,
                        su.theme, su.industry, su.source,
                        cm.chain, cm.chain_tier, cm.chain_role, cm.layman_intro
                 FROM recommendation_picks rp
@@ -15145,7 +15350,11 @@ def _runtime_v2_recommendations(limit: int | None = None) -> list[dict]:
         for (
             market, symbol, name, rank, rating, signal, total_score, factor_json,
             recommendation_reason, risk_flags_json, entry_price, entry_currency,
-            source_origin, market_cap, one_year_pct, forward_pe,
+            source_origin, eligibility, action, evidence_status, eligibility_migration_status,
+            primary_layer, secondary_layers_json, ai_relevance_level, layer_confidence,
+            classification_version, classification_rationale, market_phase_snapshot_id,
+            short_term_view_json, six_month_view_json, long_term_view_json,
+            market_cap, one_year_pct, forward_pe,
             su_theme, su_industry, su_source,
             chain, chain_tier, chain_role, layman_intro
         ) in rows:
@@ -15165,6 +15374,16 @@ def _runtime_v2_recommendations(limit: int | None = None) -> list[dict]:
                 "factor_scores": factors,
                 "recommendation_reason": recommendation_reason,
                 "risk_flags": risk_flags,
+                "eligibility": eligibility,
+                "action": action,
+                "evidence_status": evidence_status,
+                "primary_layer": primary_layer,
+                "layer_confidence": layer_confidence,
+                "classification_rationale": classification_rationale,
+                "market_phase_snapshot_id": market_phase_snapshot_id,
+                "short_term_view": _json_value(short_term_view_json, {}),
+                "six_month_view": _json_value(six_month_view_json, {}),
+                "long_term_view": _json_value(long_term_view_json, {}),
             }
             out.append({
                 "ticker": symbol,
@@ -15187,6 +15406,20 @@ def _runtime_v2_recommendations(limit: int | None = None) -> list[dict]:
                 "factor_scores": factors,
                 "recommendation_reason": recommendation_reason,
                 "risk_flags": risk_flags,
+                "eligibility": eligibility,
+                "action": action,
+                "evidence_status": evidence_status,
+                "eligibility_migration_status": eligibility_migration_status,
+                "primary_layer": primary_layer,
+                "secondary_layers_json": secondary_layers_json,
+                "ai_relevance_level": ai_relevance_level,
+                "layer_confidence": layer_confidence,
+                "classification_version": classification_version,
+                "classification_rationale": classification_rationale,
+                "market_phase_snapshot_id": market_phase_snapshot_id,
+                "short_term_view": _json_value(short_term_view_json, {}),
+                "six_month_view": _json_value(six_month_view_json, {}),
+                "long_term_view": _json_value(long_term_view_json, {}),
                 "entry_price": _js_number(entry_price),
                 "entry_currency": entry_currency,
                 "etfs": ["DB_POOL"],
@@ -16000,7 +16233,7 @@ def today_decision_panel_html() -> str:
     trade_delta = _runtime_load_json("data/latest/trade_delta.json") or _runtime_pipeline_snapshot("trade_delta")
     plan_status = "OK" if int(v2_counts.get("portfolio_plans") or 0) > 0 or plan else plan_artifact["status"]
     trade_text = "存在" if trade_delta else trade_artifact["text"]
-    plan_rows = plan.get("plan_v5") or plan.get("portfolio") or []
+    plan_rows = plan.get("plan_v6") or plan.get("plan_v5") or plan.get("plan") or plan.get("portfolio") or []
     plan_metrics = plan.get("portfolio_metrics") or {}
     plan_detail = f"{int(v2_counts.get('portfolio_plans') or 0)} 只 v2 目标组合" if int(v2_counts.get("portfolio_plans") or 0) > 0 else (
         f"{len(plan_rows)} 只目标组合" if plan_rows else "暂无目标组合产物"
@@ -16126,12 +16359,87 @@ def today_decision_panel_html() -> str:
             badges.append(factor_badge("反转", reversal, "emerald" if reversal >= 70 else ("rose" if reversal < 25 else "slate")))
         return headline, "".join(badges[:4])
 
+    def policy_label(value: str, kind: str) -> str:
+        labels = {
+            "eligibility": {
+                "buyable": "可进候选",
+                "research_only": "只研究",
+                "watch_only": "只观察",
+                "excluded": "已剔除",
+            },
+            "action": {
+                "focus_research": "重点研究",
+                "wait_entry": "等买点",
+                "watch_only": "只观察",
+                "research_only": "只研究",
+                "blocked": "红旗拦截",
+                "exclude": "剔除",
+            },
+            "layer": {
+                "ai_core": "AI核心",
+                "ai_infrastructure": "AI基建",
+                "tech_software": "科技软件",
+                "internet_platform": "互联网平台",
+                "power_datacenter": "电力/数据中心",
+                "theme_watch": "主题观察",
+                "excluded": "非科技成长",
+            },
+            "evidence": {
+                "confirmed": "证据确认",
+                "needs_review": "待复核",
+                "candidate": "线索",
+                "stale": "证据过期",
+                "missing": "缺证据",
+            },
+        }
+        return labels.get(kind, {}).get(str(value or ""), str(value or "—"))
+
+    def policy_tone(value: str) -> str:
+        v = str(value or "")
+        if v in {"buyable", "focus_research", "confirmed", "ai_core", "ai_infrastructure", "power_datacenter"}:
+            return "bg-emerald-50 text-emerald-700 border-emerald-200"
+        if v in {"wait_entry", "needs_review", "candidate", "tech_software", "internet_platform"}:
+            return "bg-amber-50 text-amber-700 border-amber-200"
+        if v in {"blocked", "exclude", "excluded", "stale", "missing"}:
+            return "bg-rose-50 text-rose-700 border-rose-200"
+        return "bg-slate-50 text-slate-600 border-slate-200"
+
+    def policy_badges(c: dict) -> str:
+        items = [
+            ("layer", c.get("primary_layer")),
+            ("evidence", c.get("evidence_status")),
+            ("eligibility", c.get("eligibility")),
+        ]
+        chips = []
+        for kind, value in items:
+            if not value:
+                continue
+            chips.append(
+                f'<span class="inline-flex px-1.5 py-0.5 rounded border text-[11px] font-semibold {policy_tone(str(value))}">'
+                f'{html_lib.escape(policy_label(str(value), kind))}</span>'
+            )
+        return "".join(chips)
+
     def candidate_action_line(c: dict, b: dict, flags: list) -> tuple[str, str, str]:
         factors = c.get("factor_scores") if isinstance(c, dict) else {}
         factors = factors if isinstance(factors, dict) else {}
         momentum = factors.get("momentum")
         reversal = factors.get("reversal")
         score = b.get("composite_z") or c.get("composite_z") or 0
+        eligibility = str(c.get("eligibility") or "")
+        action = str(c.get("action") or "")
+        if eligibility == "excluded" or action == "exclude":
+            return "剔除", "身份不属于科技成长主线，不进入买前研究。", "bg-rose-50 text-rose-800 border-rose-200"
+        if action == "blocked":
+            return "红旗拦截", "短期风险拦截，先等红旗解除。", "bg-rose-50 text-rose-800 border-rose-200"
+        if action == "wait_entry":
+            return "等买点", "逻辑仍可研究，但现在不是直接买点。", "bg-amber-50 text-amber-800 border-amber-200"
+        if action == "research_only" or eligibility == "research_only":
+            return "只研究", "证据或数据未满足可买候选，先补买前审查。", "bg-sky-50 text-sky-800 border-sky-200"
+        if action == "watch_only" or eligibility == "watch_only":
+            return "只观察", "主题相关但公司级证据不足，先不进真钱候选。", "bg-slate-50 text-slate-700 border-slate-200"
+        if action == "focus_research":
+            return "重点研究", "通过 P0 闸门，可进入买前研究，通过后再小批。", "bg-emerald-50 text-emerald-800 border-emerald-200"
         if flags:
             return "先复查", "有红旗，买前研究不过不动。", "bg-orange-50 text-orange-800 border-orange-200"
         if isinstance(reversal, (int, float)) and reversal < 25 and isinstance(momentum, (int, float)) and momentum >= 70:
@@ -16214,7 +16522,27 @@ def today_decision_panel_html() -> str:
         if str(c.get("market") or c.get("location") or "").upper() == "US"
     ]
     rec_by_ticker = {(c.get("ticker") or c.get("code") or "").upper(): c for c in us_candidates}
-    buy_rows_source = list((trade_delta or {}).get("buys") or [])
+    plan_buy_rows = []
+    for p in plan_rows:
+        if not isinstance(p, dict):
+            continue
+        ticker = p.get("ticker") or p.get("symbol") or p.get("code")
+        weight = p.get("capped_weight", p.get("target_weight", p.get("v6_weight")))
+        try:
+            active_weight = float(weight or 0)
+        except Exception:
+            active_weight = 0.0
+        if ticker and active_weight > 0:
+            plan_buy_rows.append({
+                "ticker": ticker,
+                "name": p.get("name") or ticker,
+                "v6_weight": active_weight,
+                "amount_rmb": p.get("amount_rmb") or p.get("amount"),
+                "price_local": p.get("price_local") or p.get("entry_price"),
+                "shares_estimate": p.get("shares_estimate"),
+                "composite_z": p.get("composite_z") or p.get("score"),
+            })
+    buy_rows_source = plan_buy_rows or list((trade_delta or {}).get("buys") or [])
     if not buy_rows_source:
         buy_rows_source = [
             {
@@ -16234,12 +16562,14 @@ def today_decision_panel_html() -> str:
         c = rec_by_ticker.get(ticker) or {}
         flags = c.get("risk_flags") or []
         why_line, factor_badges = candidate_factor_summary(c, b)
+        policy_html = policy_badges(c)
         action, action_detail, action_cls = candidate_action_line(c, b, flags)
         risk_html = risk_chip(flags[0], compact=True) if flags else '<span class="inline-flex px-1.5 py-0.5 rounded border text-[11px] font-semibold bg-emerald-50 text-emerald-700 border-emerald-200">暂无红旗</span>'
         shares = b.get("shares_estimate")
         shares_line = f"参考 ≤{int(shares)} 股" if shares else "参考股数待算"
         weight_line = f"模型上限 {fmt_weight(b.get('v6_weight'))}"
-        price_line = f"{fmt_num(b.get('price_local'), 2)} USD" if b.get("price_local") is not None else "价格待更新"
+        ref_price = b.get("price_local") if b.get("price_local") is not None else c.get("entry_price")
+        price_line = f"{fmt_num(ref_price, 2)} USD" if ref_price is not None else "价格待更新"
         rec_rank = c.get("rank")
         rank_line = f"AI 推荐榜 #{int(rec_rank)}" if isinstance(rec_rank, (int, float)) else "AI 推荐榜排名待同步"
         candidate_rows.append(f"""
@@ -16257,6 +16587,7 @@ def today_decision_panel_html() -> str:
             <td class="py-3 pr-3 text-xs text-slate-700 min-w-[230px]">
               <div class="font-semibold text-slate-900">{html_lib.escape(why_line)}</div>
               <div class="flex flex-wrap gap-1 mt-1">{factor_badges}</div>
+              <div class="flex flex-wrap gap-1 mt-1">{policy_html}</div>
             </td>
             <td class="py-3 pr-3 text-xs text-slate-700 min-w-[190px]">
               <span class="inline-flex px-2 py-0.5 rounded border text-xs font-semibold {action_cls}">{html_lib.escape(action)}</span>
@@ -16764,6 +17095,139 @@ def us_validation_progress_html() -> str:
         + '<div class="text-[10px] text-slate-400 mt-1">reviewed = 前瞻成熟样本；现在多为 0 = 最新几轮还没到期，属正常累积中。</div>'
         '</details>'
     )
+
+
+def p0_policy_validation_panel_html() -> str:
+    """P0 technology-growth rule validation summary.
+
+    This renders only strategy-validation facts. It does not generate today's
+    recommendations and does not write watchlist/holdings.
+    """
+    report = _runtime_load_json("data/latest/strategy_validation_report.json") or {}
+    policy = report.get("policy_validation") or {}
+    if not policy:
+        return ""
+
+    items = [item for item in (policy.get("items") or []) if isinstance(item, dict)]
+    retrospective = policy.get("retrospective_overlay") or {}
+    retro_items = [item for item in (retrospective.get("items") or []) if isinstance(item, dict)]
+    current_n = sum(int(((item.get("overall") or {}).get("n")) or 0) for item in items)
+    retro_n = sum(int(((item.get("overall") or {}).get("n")) or 0) for item in retro_items)
+
+    def _esc(value: object) -> str:
+        return html_lib.escape(str(value if value is not None and value != "" else "—"))
+
+    def _pct(value: object, *, signed: bool = True) -> str:
+        try:
+            n = float(value)
+        except (TypeError, ValueError):
+            return "—"
+        if not math.isfinite(n):
+            return "—"
+        return f"{n:+.2f}%" if signed else f"{n:.2f}%"
+
+    def _layer_label(value: object) -> str:
+        return {
+            "ai_core": "AI 核心",
+            "ai_infrastructure": "AI 基建",
+            "tech_software": "科技软件",
+            "internet_platform": "互联网平台",
+            "power_datacenter": "电力/数据中心",
+            "theme_watch": "主题观察",
+            "excluded": "剔除",
+            "unknown": "未知",
+        }.get(str(value or ""), str(value or "未知"))
+
+    def _gate_badge(gate: object) -> str:
+        key = str(gate or "DISPLAY_ONLY")
+        palette = {
+            "POSITIVE_WATCH": "bg-emerald-100 text-emerald-700 border-emerald-200",
+            "REVIEW": "bg-rose-100 text-rose-700 border-rose-200",
+            "OBSERVE_EXTREME_WINNER": "bg-amber-100 text-amber-800 border-amber-200",
+            "OBSERVE": "bg-sky-100 text-sky-700 border-sky-200",
+            "DISPLAY_ONLY": "bg-slate-100 text-slate-600 border-slate-200",
+        }.get(key, "bg-slate-100 text-slate-600 border-slate-200")
+        label = {
+            "POSITIVE_WATCH": "正向观察",
+            "REVIEW": "需复核",
+            "OBSERVE_EXTREME_WINNER": "防极端赢家",
+            "OBSERVE": "观察",
+            "DISPLAY_ONLY": "只展示",
+        }.get(key, key)
+        return f'<span class="inline-flex px-2 py-0.5 rounded-full border text-[11px] font-semibold {palette}">{_esc(label)}</span>'
+
+    us_1d = next(
+        (item for item in retro_items if item.get("market") == "US" and item.get("horizon") == "1d"),
+        None,
+    )
+    if not us_1d and items:
+        us_1d = next((item for item in items if item.get("market") == "US" and item.get("horizon") == "1d"), None)
+
+    slices_html = '<div class="text-xs text-slate-500">暂无美股 1D 历史覆盖样本。</div>'
+    layers_html = ""
+    if us_1d:
+        slice_rows = []
+        wanted = {"全部旧 buy 信号", "Top1-5", "严筛：Top1-5 + momentum<80 + 无过热红旗"}
+        for row in (us_1d.get("slices") or []):
+            if row.get("name") not in wanted:
+                continue
+            row_name = str(row.get("name") or "").replace("momentum", "动量")
+            slice_rows.append(
+                '<tr class="border-t border-slate-100">'
+                f'<td class="py-1.5 pr-3 font-semibold text-slate-800">{_esc(row_name)}</td>'
+                f'<td class="py-1.5 pr-3 font-mono text-right">{_esc(row.get("n"))}</td>'
+                f'<td class="py-1.5 pr-3 font-mono text-right">{_pct(row.get("median_alpha_pct"))}</td>'
+                f'<td class="py-1.5 pr-3 font-mono text-right">{_pct(row.get("win_rate_pct"), signed=False)}</td>'
+                f'<td class="py-1.5">{_gate_badge(row.get("validation_gate"))}</td>'
+                '</tr>'
+            )
+        if slice_rows:
+            slices_html = (
+                '<div class="overflow-x-auto"><table class="w-full text-xs text-left">'
+                '<thead class="text-slate-500"><tr>'
+                '<th class="pb-1.5 pr-3">口径</th><th class="pb-1.5 pr-3 text-right">n</th>'
+                '<th class="pb-1.5 pr-3 text-right">中位 alpha</th><th class="pb-1.5 pr-3 text-right">胜率</th><th class="pb-1.5">判断</th>'
+                '</tr></thead><tbody>'
+                + "".join(slice_rows)
+                + '</tbody></table></div>'
+            )
+
+        layer_rows = []
+        groups = (((us_1d.get("by_field") or {}).get("primary_layer") or {}).get("groups") or [])
+        for row in groups[:5]:
+            layer_rows.append(
+                f'<span class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px]">'
+                f'<b class="text-slate-800">{_esc(_layer_label(row.get("value")))}</b>'
+                f'<span class="font-mono text-slate-600">n={_esc(row.get("n"))}</span>'
+                f'<span class="font-mono text-slate-600">中位 {_pct(row.get("median_alpha_pct"))}</span>'
+                f'{_gate_badge(row.get("validation_gate"))}'
+                '</span>'
+            )
+        if layer_rows:
+            layers_html = '<div class="mt-2 flex flex-wrap gap-1.5">' + "".join(layer_rows) + '</div>'
+
+    strict_label = "严格 PIT 样本已开始累积" if current_n else "严格 PIT 样本 0：新规则刚上线"
+    retro_label = "历史覆盖参考可看" if retro_n else "暂无历史覆盖参考"
+    generated = str(report.get("generated_at") or "")[:19].replace("T", " ")
+    warning = (retrospective.get("warning") or "历史覆盖只用于排雷，不作为策略升级依据。") if retro_items else ""
+
+    return f"""
+  <details class="mb-3 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3">
+    <summary class="cursor-pointer select-none">
+      <div class="inline-flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3">
+        <span class="text-sm font-bold text-slate-900">P0 新规则验证</span>
+        <span class="text-xs text-indigo-800">{_esc(strict_label)}</span>
+        <span class="text-xs text-slate-500">{_esc(retro_label)} · {_esc(generated)}</span>
+      </div>
+    </summary>
+    <div class="mt-2 text-[11px] text-indigo-900 leading-relaxed">
+      当前新规则只在有 PIT 成熟样本后才允许说“变好”；历史覆盖只是把旧推荐结果套今天身份分层，用来发现坏口径和排雷。
+    </div>
+    <div class="mt-3">{slices_html}</div>
+    {layers_html}
+    <div class="mt-2 text-[10px] text-indigo-700">{_esc(warning)}</div>
+  </details>
+"""
 
 
 def recommendation_readiness_panel_html(*, compact: bool = False) -> str:
@@ -19069,8 +19533,8 @@ def _load_v2_watchlist_picks() -> tuple[list[dict], dict[str, dict]]:
     # V2 评级 → V1 风格星标文本：前端 _ratingScore 看 "⭐⭐⭐/⭐⭐/⭐" 前缀派生 0-3 档，
     # 让现有 _ratingBadge / _pickReasons 逻辑直接复用，不动 JS。
     rating_label = {
-        "strong_buy": "⭐⭐⭐ 强买",
-        "buy":        "⭐⭐ 买入",
+        "strong_buy": "⭐⭐⭐ 高分研究",
+        "buy":        "⭐⭐ 买前研究",
         "watch":      "⭐ 观察",
         "avoid":      "⛔ 不建议",
     }
@@ -19751,6 +20215,7 @@ def build():
     html = html.replace("{RUNTIME_STATUS_PANEL}", runtime_status_panel_html())
     html = html.replace("{STRATEGY_MARKET_ADVISORY}", strategy_market_advisory_html())
     html = html.replace("{US_VALIDATION_PROGRESS}", us_validation_progress_html())
+    html = html.replace("{P0_POLICY_VALIDATION_PANEL}", p0_policy_validation_panel_html())
     html = html.replace("{RECOMMENDATION_READINESS_PANEL}", recommendation_readiness_panel_html(compact=True))
     html = html.replace("{US_STRICT_TRIAL_SECTION}", us_strict_trial_section_html())
     early_growth_radar = _runtime_load_json("data/latest/early_growth_radar.json") or {}

@@ -435,6 +435,13 @@ def _check_v1_tables_gone(conn: duckdb.DuckDBPyConnection) -> list[str]:
     return sorted(v1_tables & existing)
 
 
+def _table_columns(conn: duckdb.DuckDBPyConnection, table: str) -> set[str]:
+    try:
+        return {str(r[1]) for r in conn.execute(f"PRAGMA table_info('{table}')").fetchall()}
+    except Exception:
+        return set()
+
+
 def _latest_json_checks(
     issues: list[dict[str, Any]],
     rel_paths: tuple[str, ...],
@@ -789,12 +796,18 @@ def _surface_artifact_checks(
             summary["cash_pct_target"] = float(cash_target) if isinstance(cash_target, (int, float)) else None
             brief_text = brief.read_text(encoding="utf-8") if brief.exists() else ""
             cash_explained = "组合现金" in brief_text and "约束器" in brief_text
+            risk_aware = plan_a.get("risk_aware") if isinstance(plan_a.get("risk_aware"), dict) else {}
+            small_sample_mode = bool(risk_aware.get("small_sample_mode") or cons.get("small_sample_mode"))
             details = {
                 "cash_pct_effective": round(float(cash_eff), 4),
                 "cash_pct_target": float(cash_target) if isinstance(cash_target, (int, float)) else None,
                 "explained_in_brief": cash_explained,
+                "small_sample_mode": small_sample_mode,
             }
-            if float(cash_eff) > 0.70:
+            if float(cash_eff) > 0.70 and small_sample_mode:
+                issues.append(_issue("WARN", "plan_cash_extreme_small_sample",
+                    f"组合现金 {float(cash_eff)*100:.1f}% > 70%；P0 新资格闸通过候选太少，已按小样本保守模式留现金", details))
+            elif float(cash_eff) > 0.70:
                 issues.append(_issue("FAIL", "plan_cash_extreme",
                     f"组合现金 {float(cash_eff)*100:.1f}% > 70%（接近全空），检查约束/优化器", details))
             elif float(cash_eff) > 0.50:
@@ -994,6 +1007,7 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
         "system_universe", "pool_membership",
         "price_daily", "recommendation_runs", "recommendation_picks",
         "portfolio_plans", "strategy_versions", "strategy_review_reports",
+        "market_phase_snapshot",
         "pipeline_runs", "pipeline_steps", "source_fetch_log",
         "data_quality_checks", "source_raw_snapshots",
     }
@@ -1028,6 +1042,108 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
                 issues.append(_issue("FAIL", "v2_system_universe_empty", "v2 system_universe 为空"))
             if "pool_membership" in db_tables and summary.get("pool_membership_count", 0) <= 0:
                 issues.append(_issue("FAIL", "v2_pool_membership_empty", "v2 pool_membership 为空"))
+            if "system_universe" in db_tables:
+                su_cols = _table_columns(conn, "system_universe")
+                required_su_cols = {
+                    "primary_layer", "secondary_layers_json", "ai_relevance_level",
+                    "layer_confidence", "classification_version", "classification_rationale",
+                }
+                missing_su_cols = sorted(required_su_cols - su_cols)
+                if missing_su_cols:
+                    issues.append(_issue(
+                        "FAIL",
+                        "v2_system_universe_layer_columns_missing",
+                        "system_universe 缺少科技成长分层字段",
+                        missing_su_cols,
+                    ))
+                elif summary.get("system_universe_count", 0) > 0:
+                    layer_rows = conn.execute(
+                        """
+                        SELECT
+                          COUNT(*) AS total,
+                          COUNT(primary_layer) AS with_layer,
+                          SUM(CASE WHEN COALESCE(primary_layer, '') = '' THEN 1 ELSE 0 END) AS blank_layer
+                        FROM system_universe
+                        WHERE active = TRUE
+                        """
+                    ).fetchone()
+                    total = int(layer_rows[0] or 0)
+                    with_layer = int(layer_rows[1] or 0)
+                    blank_layer = int(layer_rows[2] or 0)
+                    layer_by_market = {
+                        str(market): {"total": int(total_n), "with_layer": int(with_n)}
+                        for market, total_n, with_n in conn.execute(
+                            """
+                            SELECT market, COUNT(*), COUNT(primary_layer)
+                            FROM system_universe
+                            WHERE active = TRUE
+                            GROUP BY market
+                            ORDER BY market
+                            """
+                        ).fetchall()
+                    }
+                    summary["tech_growth_layer_coverage"] = {
+                        "total": total,
+                        "with_layer": with_layer,
+                        "blank_layer": blank_layer,
+                        "by_market": layer_by_market,
+                    }
+                    if blank_layer:
+                        issues.append(_issue(
+                            "FAIL",
+                            "v2_system_universe_layer_incomplete",
+                            f"system_universe 仍有 {blank_layer} 条 active 标的没有 primary_layer",
+                            summary["tech_growth_layer_coverage"],
+                        ))
+                    sample_expectations = {
+                        ("US", "VIPS"): "excluded",
+                        ("US", "NVDA"): "ai_core",
+                        ("US", "VST"): "power_datacenter",
+                    }
+                    bad_samples: list[dict[str, Any]] = []
+                    for (market, symbol), expected_layer in sample_expectations.items():
+                        row = conn.execute(
+                            """
+                            SELECT primary_layer
+                            FROM system_universe
+                            WHERE market = ? AND symbol = ? AND active = TRUE
+                            LIMIT 1
+                            """,
+                            [market, symbol],
+                        ).fetchone()
+                        if row and str(row[0] or "") != expected_layer:
+                            bad_samples.append({
+                                "market": market,
+                                "symbol": symbol,
+                                "expected": expected_layer,
+                                "actual": row[0],
+                            })
+                    if bad_samples:
+                        issues.append(_issue(
+                            "FAIL",
+                            "v2_layer_sample_expectation_failed",
+                            "科技成长分层验收样本不符合规则文档",
+                            bad_samples,
+                        ))
+            if "pool_membership" in db_tables:
+                bad_pool_types = conn.execute(
+                    """
+                    SELECT DISTINCT pool_type
+                    FROM pool_membership
+                    WHERE pool_type IN (
+                      'ai_core', 'ai_infrastructure', 'tech_software',
+                      'internet_platform', 'power_datacenter', 'theme_watch', 'excluded'
+                    )
+                    ORDER BY pool_type
+                    """
+                ).fetchall()
+                if bad_pool_types:
+                    issues.append(_issue(
+                        "FAIL",
+                        "v2_pool_type_polluted_by_layers",
+                        "pool_membership.pool_type 被科技分层污染；分层只能落 system_universe/growth_layer",
+                        [r[0] for r in bad_pool_types],
+                    ))
             if "price_daily" in db_tables and summary.get("price_daily_count", 0) <= 0:
                 issues.append(_issue("FAIL", "v2_price_daily_empty", "v2 还没有从新数据源拉取行情"))
             if summary.get("holdings_count", 0) > 0:
@@ -1082,6 +1198,27 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
                     "v2 策略验证报告尚未生成；不阻断今日推荐，但不能证明策略有效性",
                 ))
             if "recommendation_picks" in db_tables and summary.get("recommendation_picks_count", 0) > 0:
+                run_cols = _table_columns(conn, "recommendation_runs")
+                pick_cols = _table_columns(conn, "recommendation_picks")
+                required_run_cols = {"market_phase_snapshot_id"}
+                required_pick_cols = {
+                    "eligibility", "action", "evidence_status", "eligibility_migration_status",
+                    "primary_layer", "secondary_layers_json", "ai_relevance_level",
+                    "layer_confidence", "classification_version", "classification_rationale",
+                    "market_phase_snapshot_id", "short_term_view_json",
+                    "six_month_view_json", "long_term_view_json",
+                }
+                missing_policy_cols = {
+                    "recommendation_runs": sorted(required_run_cols - run_cols),
+                    "recommendation_picks": sorted(required_pick_cols - pick_cols),
+                }
+                if missing_policy_cols["recommendation_runs"] or missing_policy_cols["recommendation_picks"]:
+                    issues.append(_issue(
+                        "FAIL",
+                        "v2_policy_columns_missing",
+                        "推荐表缺少 2026-06-09 科技成长规则字段",
+                        missing_policy_cols,
+                    ))
                 latest_run = conn.execute(
                     "SELECT run_id FROM recommendation_runs ORDER BY generated_at DESC LIMIT 1"
                 ).fetchone()
@@ -1177,6 +1314,122 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
                             {"low_markets": low_f_markets, "by_market": f_score_by_market},
                         ))
                 if latest_run_id:
+                    if "market_phase_snapshot_id" in run_cols:
+                        phase_row = conn.execute(
+                            """
+                            SELECT market_phase_snapshot_id
+                            FROM recommendation_runs
+                            WHERE run_id = ?
+                            """,
+                            [latest_run_id],
+                        ).fetchone()
+                        phase_id = str(phase_row[0] or "") if phase_row else ""
+                        summary["latest_market_phase_snapshot_id"] = phase_id or None
+                        if not phase_id:
+                            issues.append(_issue(
+                                "FAIL",
+                                "v2_latest_run_missing_market_phase",
+                                "最新 recommendation_run 没有关联 market_phase_snapshot_id",
+                            ))
+                        elif "market_phase_snapshot" in db_tables:
+                            phase_exists = conn.execute(
+                                "SELECT COUNT(*) FROM market_phase_snapshot WHERE snapshot_id = ?",
+                                [phase_id],
+                            ).fetchone()[0]
+                            if int(phase_exists or 0) <= 0:
+                                issues.append(_issue(
+                                    "FAIL",
+                                    "v2_market_phase_snapshot_missing",
+                                    "latest run 引用的阶段快照不存在",
+                                    {"market_phase_snapshot_id": phase_id},
+                                ))
+                    if not (required_pick_cols - pick_cols):
+                        policy_rows = conn.execute(
+                            """
+                            SELECT
+                              eligibility, action, evidence_status, eligibility_migration_status,
+                              COUNT(*)
+                            FROM recommendation_picks
+                            WHERE run_id = ?
+                            GROUP BY eligibility, action, evidence_status, eligibility_migration_status
+                            ORDER BY COUNT(*) DESC
+                            """,
+                            [latest_run_id],
+                        ).fetchall()
+                        summary["latest_policy_distribution"] = [
+                            {
+                                "eligibility": r[0],
+                                "action": r[1],
+                                "evidence_status": r[2],
+                                "migration_status": r[3],
+                                "count": int(r[4]),
+                            }
+                            for r in policy_rows
+                        ]
+                        bad_policy = conn.execute(
+                            """
+                            SELECT market, symbol, eligibility, action, evidence_status
+                            FROM recommendation_picks
+                            WHERE run_id = ?
+                              AND (
+                                COALESCE(eligibility, '') NOT IN ('buyable', 'research_only', 'watch_only', 'excluded')
+                                OR COALESCE(action, '') NOT IN ('focus_research', 'wait_entry', 'watch_only', 'research_only', 'blocked', 'exclude')
+                                OR COALESCE(evidence_status, '') NOT IN ('confirmed', 'needs_review', 'candidate', 'stale', 'missing')
+                              )
+                            LIMIT 30
+                            """,
+                            [latest_run_id],
+                        ).fetchall()
+                        if bad_policy:
+                            issues.append(_issue(
+                                "FAIL",
+                                "v2_policy_enum_invalid",
+                                "最新推荐存在非法 eligibility/action/evidence_status 枚举",
+                                [
+                                    {"market": r[0], "symbol": r[1], "eligibility": r[2], "action": r[3], "evidence_status": r[4]}
+                                    for r in bad_policy
+                                ],
+                            ))
+                        missing_views = conn.execute(
+                            """
+                            SELECT market, symbol
+                            FROM recommendation_picks
+                            WHERE run_id = ?
+                              AND (
+                                COALESCE(short_term_view_json, '') = ''
+                                OR COALESCE(six_month_view_json, '') = ''
+                                OR COALESCE(long_term_view_json, '') = ''
+                                OR COALESCE(market_phase_snapshot_id, '') = ''
+                              )
+                            LIMIT 30
+                            """,
+                            [latest_run_id],
+                        ).fetchall()
+                        if missing_views:
+                            issues.append(_issue(
+                                "FAIL",
+                                "v2_period_views_missing",
+                                "最新推荐缺少短/中/长期视角或阶段快照，不能满足规则文档 PIT 要求",
+                                [{"market": r[0], "symbol": r[1]} for r in missing_views],
+                            ))
+                        legacy_bad = conn.execute(
+                            """
+                            SELECT market, symbol, eligibility_migration_status
+                            FROM recommendation_picks
+                            WHERE run_id = ?
+                              AND market <> 'US'
+                              AND COALESCE(eligibility_migration_status, '') <> 'legacy'
+                            LIMIT 30
+                            """,
+                            [latest_run_id],
+                        ).fetchall()
+                        if legacy_bad:
+                            issues.append(_issue(
+                                "FAIL",
+                                "v2_non_us_migration_status_not_legacy",
+                                "P0 只迁移 US；CN/HK 推荐必须标 legacy，避免误用美股阈值",
+                                [{"market": r[0], "symbol": r[1], "status": r[2]} for r in legacy_bad],
+                            ))
                     bad_scope = conn.execute(
                         """
                         SELECT market, symbol, universe_scope, source_origin
@@ -1527,12 +1780,18 @@ def run_check(max_age_days: int = 1, allow_a_share_disabled: bool = False) -> di
             brief2 = REPO / "morning_brief.md"
             brief_text2 = brief2.read_text(encoding="utf-8") if brief2.exists() else ""
             cash_explained2 = "组合现金" in brief_text2 and "约束器" in brief_text2
+            risk_aware2 = plan_a.get("risk_aware") if isinstance(plan_a.get("risk_aware"), dict) else {}
+            small_sample_mode2 = bool(risk_aware2.get("small_sample_mode") or cons2.get("small_sample_mode"))
             details2 = {
                 "cash_pct_effective": round(float(cash_eff2), 4),
                 "cash_pct_target": float(cash_target2) if isinstance(cash_target2, (int, float)) else None,
                 "explained_in_brief": cash_explained2,
+                "small_sample_mode": small_sample_mode2,
             }
-            if float(cash_eff2) > 0.70:
+            if float(cash_eff2) > 0.70 and small_sample_mode2:
+                issues.append(_issue("WARN", "plan_cash_extreme_small_sample",
+                    f"组合现金 {float(cash_eff2)*100:.1f}% > 70%；P0 新资格闸通过候选太少，已按小样本保守模式留现金", details2))
+            elif float(cash_eff2) > 0.70:
                 issues.append(_issue("FAIL", "plan_cash_extreme",
                     f"组合现金 {float(cash_eff2)*100:.1f}% > 70%（接近全空），检查约束/优化器", details2))
             elif float(cash_eff2) > 0.50:

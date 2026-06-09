@@ -311,6 +311,130 @@ class DataUsabilityGateTest(unittest.TestCase):
         self.assertTrue(audit["attention"][0]["in_recommendation_list"])
 
 
+class TechGrowthEligibilityGateTest(unittest.TestCase):
+    def _base_row(self, *, symbol: str = "MRVL", market: str = "US") -> dict:
+        return {
+            "market": market,
+            "symbol": symbol,
+            "name": "Marvell Technology",
+            "theme": "AI connectivity",
+            "industry": "Semiconductors",
+            "universe_source": "us_ai_connectivity",
+            "membership_source": "us_ai_connectivity",
+            "source": "yfinance",
+            "evidence_status": "confirmed",
+            "risk_flags": [],
+            "signal": "buy",
+        }
+
+    def test_vips_is_excluded_even_if_old_score_is_buy(self):
+        row = {
+            **self._base_row(symbol="VIPS"),
+            "name": "Vipshop",
+            "theme": "中概互联网 + AI",
+            "industry": "Internet Retail",
+            "evidence_status": "confirmed",
+        }
+
+        policy = build_v2._derive_recommendation_policy(row)
+
+        self.assertEqual(policy["primary_layer"], "excluded")
+        self.assertEqual(policy["eligibility"], "excluded")
+        self.assertEqual(policy["action"], "exclude")
+
+    def test_confirmed_core_stock_can_enter_focus_research(self):
+        policy = build_v2._derive_recommendation_policy(self._base_row())
+
+        self.assertEqual(policy["primary_layer"], "ai_core")
+        self.assertEqual(policy["eligibility"], "buyable")
+        self.assertEqual(policy["action"], "focus_research")
+        self.assertEqual(policy["evidence_status"], "confirmed")
+
+    def test_missing_company_evidence_stays_research_only(self):
+        row = {**self._base_row(), "evidence_status": "missing"}
+
+        policy = build_v2._derive_recommendation_policy(row)
+
+        self.assertEqual(policy["eligibility"], "research_only")
+        self.assertEqual(policy["action"], "research_only")
+        self.assertEqual(policy["eligibility_migration_status"], "needs_company_evidence")
+
+    def test_etf_only_source_without_company_evidence_is_watch_only(self):
+        row = {
+            **self._base_row(symbol="UNKNOWN"),
+            "universe_source": "etf_theme:KWEB",
+            "membership_source": "etf_theme:KWEB",
+            "evidence_status": "missing",
+        }
+
+        policy = build_v2._derive_recommendation_policy(row)
+
+        self.assertEqual(policy["eligibility"], "watch_only")
+        self.assertEqual(policy["action"], "watch_only")
+        self.assertEqual(policy["eligibility_migration_status"], "etf_only_needs_company_evidence")
+
+    def test_data_usability_gate_blocks_buyability(self):
+        row = {
+            **self._base_row(),
+            "risk_flags": [{"code": "DATA_USABILITY_REVIEW_GATE", "severity": "high"}],
+        }
+
+        policy = build_v2._derive_recommendation_policy(row)
+
+        self.assertEqual(policy["eligibility"], "research_only")
+        self.assertEqual(policy["action"], "research_only")
+        self.assertEqual(policy["eligibility_migration_status"], "data_usability_gate")
+
+    def test_overheated_stock_waits_for_entry(self):
+        row = {
+            **self._base_row(symbol="AVGO"),
+            "risk_flags": [{"code": "OVERHEATED_1Y", "severity": "medium"}],
+        }
+
+        policy = build_v2._derive_recommendation_policy(row)
+
+        self.assertEqual(policy["eligibility"], "buyable")
+        self.assertEqual(policy["action"], "wait_entry")
+
+    def test_non_us_market_keeps_legacy_research_only(self):
+        row = {
+            **self._base_row(symbol="00700.HK", market="HK"),
+            "name": "Tencent",
+        }
+
+        policy = build_v2._derive_recommendation_policy(row)
+
+        self.assertEqual(policy["eligibility"], "research_only")
+        self.assertEqual(policy["action"], "research_only")
+        self.assertEqual(policy["eligibility_migration_status"], "legacy")
+
+    def test_layer_samples_match_rule_document(self):
+        samples = {
+            "VIPS": "excluded",
+            "NVDA": "ai_core",
+            "VST": "power_datacenter",
+        }
+        for symbol, expected in samples.items():
+            with self.subTest(symbol=symbol):
+                policy = build_v2._derive_recommendation_policy(self._base_row(symbol=symbol))
+                self.assertEqual(policy["primary_layer"], expected)
+
+    def test_period_views_are_plain_json_and_bind_phase_snapshot(self):
+        row = {
+            **self._base_row(symbol="MRVL"),
+            **build_v2._derive_recommendation_policy(self._base_row(symbol="MRVL")),
+            "factor_scores": {"valuation": 80.0, "momentum": 55.0, "reversal": 60.0},
+            "risk_flags": [],
+        }
+
+        views = build_v2._build_period_views(row, market_phase_snapshot_id="phase_x")
+
+        self.assertIn("short_term_view_json", views)
+        self.assertIn("six_month_view_json", views)
+        self.assertIn("long_term_view_json", views)
+        self.assertIn("phase_x", views["short_term_view_json"])
+
+
 class PortfolioCandidateFilterTest(unittest.TestCase):
     def test_optimizer_filters_non_buy_recommendation_picks(self):
         from stock_research.jobs import optimize_portfolio
@@ -328,7 +452,12 @@ class PortfolioCandidateFilterTest(unittest.TestCase):
                 "run_date": "2026-06-01",
             },
             {
-                "market": "US", "symbol": "AVOID", "name": "Avoid", "rank": 3,
+                "market": "US", "symbol": "WAIT", "name": "Wait", "rank": 3,
+                "signal": "buy", "total_score": 78.0, "run_id": "r1",
+                "run_date": "2026-06-01", "eligibility": "buyable", "action": "wait_entry",
+            },
+            {
+                "market": "US", "symbol": "AVOID", "name": "Avoid", "rank": 4,
                 "signal": "avoid", "total_score": 49.0, "run_id": "r1",
                 "run_date": "2026-06-01",
             },

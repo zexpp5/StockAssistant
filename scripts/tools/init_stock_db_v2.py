@@ -21,6 +21,8 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "scripts" / "lib"))
 
+from stock_research.core.tech_growth_layers import classify_tech_growth_layer  # noqa: E402
+
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -177,11 +179,23 @@ CREATE TABLE IF NOT EXISTS system_universe (
     theme         VARCHAR,
     industry      VARCHAR,
     source        VARCHAR NOT NULL,
+    primary_layer VARCHAR,
+    secondary_layers_json VARCHAR,
+    ai_relevance_level VARCHAR,
+    layer_confidence VARCHAR,
+    classification_version VARCHAR,
+    classification_rationale VARCHAR,
     active        BOOLEAN NOT NULL DEFAULT TRUE,
     first_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_seen_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (pool_id, market, symbol)
 );
+ALTER TABLE system_universe ADD COLUMN IF NOT EXISTS primary_layer VARCHAR;
+ALTER TABLE system_universe ADD COLUMN IF NOT EXISTS secondary_layers_json VARCHAR;
+ALTER TABLE system_universe ADD COLUMN IF NOT EXISTS ai_relevance_level VARCHAR;
+ALTER TABLE system_universe ADD COLUMN IF NOT EXISTS layer_confidence VARCHAR;
+ALTER TABLE system_universe ADD COLUMN IF NOT EXISTS classification_version VARCHAR;
+ALTER TABLE system_universe ADD COLUMN IF NOT EXISTS classification_rationale VARCHAR;
 
 CREATE TABLE IF NOT EXISTS pool_membership (
     pool_id       VARCHAR NOT NULL,
@@ -256,17 +270,35 @@ CREATE TABLE IF NOT EXISTS strategy_versions (
     activated_at     TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS market_phase_snapshot (
+    snapshot_id   VARCHAR PRIMARY KEY,
+    as_of_date    DATE NOT NULL,
+    phase_id      VARCHAR NOT NULL,
+    phase_name    VARCHAR NOT NULL,
+    scope         VARCHAR NOT NULL,
+    confidence    VARCHAR NOT NULL,
+    evidence_json VARCHAR,
+    review_cycle  VARCHAR,
+    next_review_at DATE,
+    owner         VARCHAR,
+    status        VARCHAR NOT NULL DEFAULT 'active',
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS recommendation_runs (
     run_id            VARCHAR PRIMARY KEY,
     run_date          DATE NOT NULL,
     strategy_version  VARCHAR NOT NULL,
     model_version     VARCHAR NOT NULL,
     universe_scope    VARCHAR NOT NULL,
+    market_phase_snapshot_id VARCHAR,
     data_cutoff_at    TIMESTAMP NOT NULL,
     generated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     status            VARCHAR NOT NULL DEFAULT 'generated',
     notes             VARCHAR
 );
+ALTER TABLE recommendation_runs ADD COLUMN IF NOT EXISTS market_phase_snapshot_id VARCHAR;
 
 CREATE TABLE IF NOT EXISTS recommendation_picks (
     run_id            VARCHAR NOT NULL,
@@ -280,6 +312,20 @@ CREATE TABLE IF NOT EXISTS recommendation_picks (
     factor_scores_json VARCHAR,
     recommendation_reason VARCHAR,
     risk_flags_json   VARCHAR,
+    eligibility       VARCHAR,
+    action            VARCHAR,
+    evidence_status   VARCHAR,
+    eligibility_migration_status VARCHAR,
+    primary_layer     VARCHAR,
+    secondary_layers_json VARCHAR,
+    ai_relevance_level VARCHAR,
+    layer_confidence  VARCHAR,
+    classification_version VARCHAR,
+    classification_rationale VARCHAR,
+    market_phase_snapshot_id VARCHAR,
+    short_term_view_json VARCHAR,
+    six_month_view_json VARCHAR,
+    long_term_view_json VARCHAR,
     entry_price       DOUBLE,
     entry_currency    VARCHAR,
     universe_scope    VARCHAR NOT NULL,
@@ -287,6 +333,20 @@ CREATE TABLE IF NOT EXISTS recommendation_picks (
     created_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (run_id, market, symbol)
 );
+ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS eligibility VARCHAR;
+ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS action VARCHAR;
+ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS evidence_status VARCHAR;
+ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS eligibility_migration_status VARCHAR;
+ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS primary_layer VARCHAR;
+ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS secondary_layers_json VARCHAR;
+ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS ai_relevance_level VARCHAR;
+ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS layer_confidence VARCHAR;
+ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS classification_version VARCHAR;
+ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS classification_rationale VARCHAR;
+ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS market_phase_snapshot_id VARCHAR;
+ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS short_term_view_json VARCHAR;
+ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS six_month_view_json VARCHAR;
+ALTER TABLE recommendation_picks ADD COLUMN IF NOT EXISTS long_term_view_json VARCHAR;
 
 CREATE TABLE IF NOT EXISTS portfolio_plans (
     run_id             VARCHAR NOT NULL,
@@ -656,13 +716,24 @@ def _seed_universe(conn: duckdb.DuckDBPyConnection) -> int:
         key = (row["market"], row["symbol"])
         dedup[key] = row
     for row in dedup.values():
+        layer = classify_tech_growth_layer(
+            market=row["market"],
+            symbol=row["symbol"],
+            source=row.get("source"),
+            theme=row.get("theme"),
+            industry=row.get("industry"),
+            name=row.get("name"),
+        )
+        layer_info = layer.as_dict()
         conn.execute(
             """
             INSERT INTO system_universe (
                 pool_id, pool_name, market, symbol, raw_symbol, name, theme,
-                industry, source, active, first_seen_at, last_seen_at
+                industry, source, primary_layer, secondary_layers_json,
+                ai_relevance_level, layer_confidence, classification_version,
+                classification_rationale, active, first_seen_at, last_seen_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?)
             ON CONFLICT (pool_id, market, symbol) DO UPDATE SET
                 pool_name=excluded.pool_name,
                 raw_symbol=excluded.raw_symbol,
@@ -670,13 +741,27 @@ def _seed_universe(conn: duckdb.DuckDBPyConnection) -> int:
                 theme=excluded.theme,
                 industry=excluded.industry,
                 source=excluded.source,
+                primary_layer=excluded.primary_layer,
+                secondary_layers_json=excluded.secondary_layers_json,
+                ai_relevance_level=excluded.ai_relevance_level,
+                layer_confidence=excluded.layer_confidence,
+                classification_version=excluded.classification_version,
+                classification_rationale=excluded.classification_rationale,
                 active=TRUE,
                 last_seen_at=excluded.last_seen_at
             """,
             [
                 row["pool_id"], row["pool_name"], row["market"], row["symbol"],
                 row["raw_symbol"], row["name"], row["theme"], row["industry"],
-                row["source"], now, now,
+                row["source"],
+                layer.primary_layer,
+                json.dumps(layer_info["secondary_layers"], ensure_ascii=False),
+                layer.ai_relevance_level,
+                layer.layer_confidence,
+                layer.classification_version,
+                layer.rationale,
+                now,
+                now,
             ],
         )
         conn.execute(
