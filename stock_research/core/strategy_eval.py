@@ -26,6 +26,21 @@ import duckdb
 DEFAULT_UNIVERSE = "system_tech_universe"
 BUY_SIGNALS = ("buy", "strong_buy")
 DEFAULT_BLOCKED_FLAGS = ("OVERHEATED_1Y",)
+POLICY_COLUMNS = (
+    "eligibility",
+    "action",
+    "evidence_status",
+    "eligibility_migration_status",
+    "primary_layer",
+    "secondary_layers_json",
+    "ai_relevance_level",
+    "layer_confidence",
+    "classification_version",
+    "market_phase_snapshot_id",
+    "short_term_view_json",
+    "six_month_view_json",
+    "long_term_view_json",
+)
 
 
 # ────────────────────────────────────────────────────────
@@ -72,6 +87,25 @@ def _risk_codes(risk_flags_json: Any) -> list[str]:
         elif item not in (None, "", "None"):
             codes.append(str(item))
     return codes
+
+
+def _table_columns(conn: duckdb.DuckDBPyConnection, table: str) -> set[str]:
+    try:
+        rows = conn.execute(f"PRAGMA table_info('{table}')").fetchall()
+    except Exception:
+        return set()
+    return {str(row[1]) for row in rows}
+
+
+def _optional_pick_expr(columns: set[str], column: str) -> str:
+    if column in columns:
+        return f"rp.{column} AS {column}"
+    return f"NULL AS {column}"
+
+
+def _safe_list(value: Any) -> list[Any]:
+    obj = _safe_obj(value, [])
+    return obj if isinstance(obj, list) else []
 
 
 # ────────────────────────────────────────────────────────
@@ -136,10 +170,16 @@ def mature_samples(conn: duckdb.DuckDBPyConnection, *,
     if not run_ids:
         return []
     placeholders = ",".join(["?"] * len(run_ids))
+    columns = _table_columns(conn, "recommendation_picks")
+    optional_selects = ",\n                   ".join(
+        _optional_pick_expr(columns, column) for column in POLICY_COLUMNS
+    )
+    optional_final_selects = ", ".join(f"p.{column}" for column in POLICY_COLUMNS)
     sql = f"""
         WITH picks AS (
             SELECT rp.run_id, CAST(rr.run_date AS VARCHAR) AS run_date, rp.symbol,
                    rp.factor_scores_json, rp.risk_flags_json,
+                   {optional_selects},
                    ROW_NUMBER() OVER (
                        PARTITION BY rp.run_id
                        ORDER BY rp.total_score DESC NULLS LAST, rp.symbol ASC
@@ -151,7 +191,8 @@ def mature_samples(conn: duckdb.DuckDBPyConnection, *,
               AND LOWER(COALESCE(rp.signal, rp.rating, '')) IN ('buy', 'strong_buy')
         )
         SELECT p.run_date, p.symbol, p.market_rank, p.factor_scores_json, p.risk_flags_json,
-               po.alpha_pct, po.is_success, po.return_pct
+               {optional_final_selects},
+               po.horizon, po.alpha_pct, po.is_success, po.return_pct
         FROM picks p
         JOIN pick_outcomes po
           ON po.run_id = p.run_id AND po.market = ? AND po.symbol = p.symbol AND po.horizon = ?
@@ -161,21 +202,29 @@ def mature_samples(conn: duckdb.DuckDBPyConnection, *,
     params = list(run_ids) + [market, market, horizon]
     seen: set[tuple[str, str]] = set()
     out: list[dict[str, Any]] = []
-    for rd, sym, mr, fj, rj, alpha, succ, ret in conn.execute(sql, params).fetchall():
+    for row in conn.execute(sql, params).fetchall():
+        rd, sym, mr, fj, rj = row[:5]
+        policy_values = row[5:5 + len(POLICY_COLUMNS)]
+        horizon_value, alpha, succ, ret = row[5 + len(POLICY_COLUMNS):]
         key = (str(rd), str(sym))
         if key in seen:  # (推荐日,股票) 去重（每天最后一批已基本唯一，双保险）
             continue
         seen.add(key)
-        out.append({
+        sample = {
             "run_date": str(rd),
+            "market": market,
             "symbol": str(sym),
+            "horizon": str(horizon_value),
             "market_rank": int(mr),
             "momentum": _momentum(fj),
             "risk_codes": _risk_codes(rj),
             "alpha_pct": float(alpha) if alpha is not None else None,
             "is_success": bool(succ),
             "return_pct": float(ret) if ret is not None else None,
-        })
+        }
+        sample.update(dict(zip(POLICY_COLUMNS, policy_values)))
+        sample["secondary_layers"] = _safe_list(sample.get("secondary_layers_json"))
+        out.append(sample)
     return out
 
 
@@ -201,13 +250,100 @@ def is_strict(sample: dict[str, Any], *,
 
 def summarize(samples: list[dict[str, Any]]) -> dict[str, Any]:
     """对一组样本算 n / 平均 alpha / 命中率（alpha>0 占比）。"""
+    return summarize_distribution(samples)
+
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2
+
+
+def sample_power(n: int) -> dict[str, Any]:
+    """样本量等级。n<20 只能展示，不能作为升级/调参依据。"""
+    if n < 20:
+        key = "display_only"
+        label = "只展示：样本不足 20，不能作为升级依据"
+    elif n < 50:
+        key = "weak_reference"
+        label = "弱参考：样本 20-49，只能辅助观察"
+    elif n < 100:
+        key = "initial_reference"
+        label = "初步参考：样本 50-99，可用于复核方向"
+    else:
+        key = "upgrade_evidence"
+        label = "可验证：样本 >=100，才可讨论升级"
+    return {
+        "sample_power": key,
+        "sample_power_label": label,
+        "sample_floor_pass": n >= 20,
+    }
+
+
+def summarize_distribution(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    """验证用分布统计：中位数、胜率、最大亏损、去极端赢家。
+
+    平均 alpha 容易被一两个大赢家拉高；用户侧判断优先看
+    median_alpha_pct / win_rate_pct / avg_without_best_alpha_pct。
+    """
     alphas = [s["alpha_pct"] for s in samples
               if s.get("alpha_pct") is not None and math.isfinite(s["alpha_pct"])]
     if not alphas:
-        return {"n": 0, "avg_alpha_pct": None, "win_rate_pct": None}
+        out = {
+            "n": 0,
+            "wins": 0,
+            "losses": 0,
+            "avg_alpha_pct": None,
+            "median_alpha_pct": None,
+            "win_rate_pct": None,
+            "best_alpha_pct": None,
+            "worst_alpha_pct": None,
+            "max_loss_pct": None,
+            "avg_without_best_alpha_pct": None,
+            "median_without_best_alpha_pct": None,
+            "extreme_winner_dependency": False,
+        }
+        out.update(sample_power(0))
+        return out
     wins = sum(1 for a in alphas if a > 0)
-    return {
+    losses = sum(1 for a in alphas if a < 0)
+    best = max(alphas)
+    worst = min(alphas)
+    without_best = list(alphas)
+    without_best.remove(best)
+    avg = sum(alphas) / len(alphas)
+    avg_without_best = (sum(without_best) / len(without_best)) if without_best else None
+    median = _median(alphas)
+    median_without_best = _median(without_best)
+    extreme_winner_dependency = (
+        len(alphas) >= 5
+        and avg > 0
+        and (
+            (median is not None and median <= 0)
+            or (avg_without_best is not None and avg_without_best <= 0)
+        )
+    )
+    out = {
         "n": len(alphas),
-        "avg_alpha_pct": round(sum(alphas) / len(alphas), 4),
+        "wins": wins,
+        "losses": losses,
+        "avg_alpha_pct": round(avg, 4),
+        "median_alpha_pct": round(median, 4) if median is not None else None,
         "win_rate_pct": round(wins / len(alphas) * 100, 2),
+        "best_alpha_pct": round(best, 4),
+        "worst_alpha_pct": round(worst, 4),
+        "max_loss_pct": round(min(0.0, worst), 4),
+        "avg_without_best_alpha_pct": round(avg_without_best, 4) if avg_without_best is not None else None,
+        "median_without_best_alpha_pct": (
+            round(median_without_best, 4) if median_without_best is not None else None
+        ),
+        "extreme_winner_dependency": extreme_winner_dependency,
+    }
+    out.update(sample_power(len(alphas)))
+    return {
+        **out,
     }

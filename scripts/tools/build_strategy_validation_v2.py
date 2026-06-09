@@ -35,9 +35,17 @@ sys.path.insert(0, str(REPO / "scripts" / "lib"))
 
 from stock_db import DB_PATH  # noqa: E402
 from stock_research.core import strategy_eval as se  # noqa: E402
+from stock_research.core.tech_growth_layers import classify_tech_growth_layer  # noqa: E402
 
 OUT_PATH = REPO / "data" / "latest" / "strategy_validation_report.json"
 FACTORS = ("valuation", "momentum", "reversal", "data_quality", "coverage")
+POLICY_HORIZONS = ("1d", "5d", "20d")
+POLICY_GROUP_FIELDS = (
+    ("primary_layer", "身份层"),
+    ("eligibility", "资格"),
+    ("action", "动作"),
+    ("evidence_status", "证据状态"),
+)
 PRODUCTION_METRICS_START_DATE = os.environ.get("STOCK_ASSISTANT_METRICS_START_DATE", "2026-05-25")
 DEFAULT_STRATEGY_VERSION = os.environ.get("STOCK_ASSISTANT_STRATEGY_VERSION", "latest")
 
@@ -130,6 +138,240 @@ def _validation_status_from_reports(reports: list[dict[str, Any]]) -> tuple[str,
             "不应把 validation PASS 理解为策略有效。",
         )
     return "PASS", "strategy_positive_alpha_available"
+
+
+def _policy_gate(summary: dict[str, Any]) -> str:
+    n = int(summary.get("n") or 0)
+    if n < 20:
+        return "DISPLAY_ONLY"
+    if summary.get("extreme_winner_dependency"):
+        return "OBSERVE_EXTREME_WINNER"
+    median_alpha = summary.get("median_alpha_pct")
+    win_rate = summary.get("win_rate_pct")
+    if median_alpha is not None and median_alpha > 0 and (win_rate or 0) >= 52:
+        return "POSITIVE_WATCH"
+    if (median_alpha is not None and median_alpha < 0) or (win_rate is not None and win_rate < 45):
+        return "REVIEW"
+    return "OBSERVE"
+
+
+def _named_summary(name: str, samples: list[dict[str, Any]]) -> dict[str, Any]:
+    summary = se.summarize_distribution(samples)
+    return {
+        "name": name,
+        "validation_gate": _policy_gate(summary),
+        **summary,
+    }
+
+
+def _has_any_risk(sample: dict[str, Any], flags: tuple[str, ...]) -> bool:
+    return bool(set(sample.get("risk_codes") or []) & set(flags))
+
+
+def _policy_slices(samples: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    top_1_5 = [row for row in samples if se.is_top(row, 5)]
+    top_1_5_momentum = [
+        row for row in top_1_5
+        if row.get("momentum") is not None and float(row["momentum"]) < 80
+    ]
+    strict_overlay = [row for row in top_1_5_momentum if se.is_strict(row)]
+    actionable = [
+        row for row in samples
+        if str(row.get("eligibility") or "") == "buyable"
+        and str(row.get("action") or "") == "focus_research"
+    ]
+    overheated = [row for row in samples if _has_any_risk(row, se.DEFAULT_BLOCKED_FLAGS)]
+    return [
+        _named_summary("全部旧 buy 信号", samples),
+        _named_summary("Top1-5", top_1_5),
+        _named_summary("Top1-5 且 momentum<80", top_1_5_momentum),
+        _named_summary("严筛：Top1-5 + momentum<80 + 无过热红旗", strict_overlay),
+        _named_summary("新规则可进候选：buyable + focus_research", actionable),
+        _named_summary("过热红旗样本", overheated),
+    ]
+
+
+def _group_policy_samples(samples: list[dict[str, Any]], field: str) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for sample in samples:
+        value = sample.get(field)
+        key = str(value).strip() if value not in (None, "") else "unknown"
+        grouped[key].append(sample)
+    rows = []
+    for value, items in grouped.items():
+        rows.append({
+            "field": field,
+            "value": value,
+            "validation_gate": _policy_gate(se.summarize_distribution(items)),
+            **se.summarize_distribution(items),
+        })
+    rows.sort(key=lambda row: (-int(row.get("n") or 0), str(row.get("value") or "")))
+    return rows
+
+
+def _policy_sample_markets(conn: duckdb.DuckDBPyConnection, strategy_version: str | None) -> list[str]:
+    run_ids = se.last_batch_run_ids(
+        conn, strategy_version=strategy_version, metrics_start=PRODUCTION_METRICS_START_DATE)
+    if not run_ids:
+        return []
+    placeholders = ",".join(["?"] * len(run_ids))
+    rows = conn.execute(
+        f"""
+        SELECT DISTINCT po.market
+        FROM pick_outcomes po
+        WHERE po.run_id IN ({placeholders})
+          AND po.alpha_pct IS NOT NULL
+          AND isfinite(po.alpha_pct)
+        ORDER BY po.market
+        """,
+        list(run_ids),
+    ).fetchall()
+    return [str(row[0]) for row in rows]
+
+
+def _current_layer_lookup(conn: duckdb.DuckDBPyConnection) -> dict[tuple[str, str], dict[str, Any]]:
+    if "system_universe" not in _tables(conn):
+        return {}
+    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info('system_universe')").fetchall()}
+    if "primary_layer" not in columns:
+        return {}
+    rows = conn.execute(
+        """
+        SELECT market, symbol, name, theme, industry, source,
+               primary_layer, secondary_layers_json, ai_relevance_level,
+               layer_confidence, classification_version
+        FROM system_universe
+        WHERE active = TRUE
+        """
+    ).fetchall()
+    lookup: dict[tuple[str, str], dict[str, Any]] = {}
+    for market, symbol, name, theme, industry, source, primary_layer, secondary_layers, level, confidence, version in rows:
+        key = (str(market), str(symbol).upper())
+        if primary_layer:
+            lookup[key] = {
+                "name": name,
+                "theme": theme,
+                "industry": industry,
+                "source": source,
+                "primary_layer": primary_layer,
+                "secondary_layers_json": secondary_layers,
+                "ai_relevance_level": level,
+                "layer_confidence": confidence,
+                "classification_version": version,
+            }
+    return lookup
+
+
+def _apply_retrospective_layer_overlay(
+    conn: duckdb.DuckDBPyConnection,
+    samples: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Fill missing P0 labels from today's layer table for hypothesis testing only.
+
+    This is deliberately not PIT-clean because old recommendation snapshots did
+    not save P0 identity fields. The caller must label the result advisory-only.
+    """
+    lookup = _current_layer_lookup(conn)
+    out: list[dict[str, Any]] = []
+    for sample in samples:
+        item = dict(sample)
+        market = str(item.get("market") or "")
+        symbol = str(item.get("symbol") or "").upper()
+        meta = lookup.get((market, symbol))
+        if not meta:
+            layer = classify_tech_growth_layer(market=market, symbol=symbol)
+            meta = layer.as_dict()
+            meta["secondary_layers_json"] = json.dumps(meta.get("secondary_layers") or [], ensure_ascii=False)
+        if not item.get("primary_layer"):
+            item["primary_layer"] = meta.get("primary_layer")
+        if not item.get("secondary_layers_json"):
+            item["secondary_layers_json"] = meta.get("secondary_layers_json")
+        if not item.get("ai_relevance_level"):
+            item["ai_relevance_level"] = meta.get("ai_relevance_level")
+        if not item.get("layer_confidence"):
+            item["layer_confidence"] = meta.get("layer_confidence")
+        if not item.get("classification_version"):
+            item["classification_version"] = meta.get("classification_version")
+        item["secondary_layers"] = se._safe_obj(item.get("secondary_layers_json"), [])
+        item["retrospective_overlay"] = True
+        if not item.get("eligibility"):
+            item["eligibility"] = "historical_unlabeled"
+        if not item.get("action"):
+            item["action"] = "historical_buy_signal"
+        if not item.get("evidence_status"):
+            item["evidence_status"] = "historical_unlabeled"
+        out.append(item)
+    return out
+
+
+def _build_policy_validation_items(
+    conn: duckdb.DuckDBPyConnection,
+    strategy_version: str | None,
+    *,
+    retrospective_overlay: bool = False,
+) -> list[dict[str, Any]]:
+    markets = _policy_sample_markets(conn, strategy_version)
+    items: list[dict[str, Any]] = []
+    for market in markets:
+        for horizon in POLICY_HORIZONS:
+            samples = se.mature_samples(
+                conn,
+                market=market,
+                horizon=horizon,
+                strategy_version=strategy_version,
+                metrics_start=PRODUCTION_METRICS_START_DATE,
+            )
+            if retrospective_overlay:
+                samples = _apply_retrospective_layer_overlay(conn, samples)
+            overall = se.summarize_distribution(samples)
+            items.append({
+                "sample_mode": "retrospective_overlay_current_layer" if retrospective_overlay else "pit_saved_policy",
+                "market": market,
+                "horizon": horizon,
+                "validation_gate": _policy_gate(overall),
+                "overall": overall,
+                "slices": _policy_slices(samples),
+                "by_field": {
+                    field: {
+                        "display_name": display_name,
+                        "groups": _group_policy_samples(samples, field),
+                    }
+                    for field, display_name in POLICY_GROUP_FIELDS
+                },
+            })
+    return items
+
+
+def _build_policy_validation(conn: duckdb.DuckDBPyConnection, strategy_version: str | None) -> dict[str, Any]:
+    items = _build_policy_validation_items(conn, strategy_version)
+    has_pit_samples = any(int(item.get("overall", {}).get("n") or 0) > 0 for item in items)
+    retrospective_items: list[dict[str, Any]] = []
+    if not has_pit_samples:
+        retrospective_items = _build_policy_validation_items(conn, None, retrospective_overlay=True)
+    return {
+        "schema_version": "p0_policy_validation_v1",
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "sample_rule": (
+            "Only mature historical outcomes are evaluated. This section never outputs today's buy list. "
+            "It uses strategy_eval single-source caliber: latest/current strategy version, last batch per day, "
+            "and one sample per recommendation date + symbol."
+        ),
+        "sample_power_rule": {
+            "display_only": "n<20，只展示，不作为升级依据",
+            "weak_reference": "20<=n<50，弱参考",
+            "initial_reference": "50<=n<100，初步参考",
+            "upgrade_evidence": "n>=100，才可讨论升级",
+        },
+        "items": items,
+        "retrospective_overlay": {
+            "enabled": bool(retrospective_items),
+            "warning": (
+                "当前新策略还没有成熟 PIT 样本时，才输出这一段。它用历史推荐结果套用今天的身份分层，"
+                "只能判断方向和排雷，不能作为策略升级或真钱放大的依据。"
+            ),
+            "items": retrospective_items,
+        },
+    }
 
 
 def _load_outcome_summary(conn: duckdb.DuckDBPyConnection, strategy_version: str | None) -> tuple[dict, dict]:
@@ -460,6 +702,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         reports = _write_strategy_reports(conn, grouped)
         attribution = _write_factor_attribution(conn, strategy_version)
         portfolio = _write_portfolio_performance(conn, strategy_version)
+        policy_validation = _build_policy_validation(conn, strategy_version)
         validation_status, status_reason = _validation_status_from_reports(reports)
         portfolio_status = "PASS" if portfolio else "WARN"
         payload = {
@@ -480,9 +723,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "strategy_review_reports_written": len(reports),
                 "factor_attribution_rows_written": len(attribution),
                 "portfolio_performance_rows_written": len(portfolio),
+                "policy_validation_items": len(policy_validation.get("items") or []),
                 "markets": market_totals,
             },
             "reports": reports,
+            "policy_validation": policy_validation,
             "factor_attribution": attribution,
             "portfolio_performance": portfolio,
         }

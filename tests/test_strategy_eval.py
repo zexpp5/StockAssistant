@@ -62,12 +62,36 @@ class StrategyEvalTest(unittest.TestCase):
         self.assertEqual(out["n"], 3)
         self.assertAlmostEqual(out["avg_alpha_pct"], 1.3333, places=3)
         self.assertAlmostEqual(out["win_rate_pct"], 66.67, places=1)
+        self.assertEqual(out["median_alpha_pct"], 2.0)
+        self.assertEqual(out["max_loss_pct"], -1.0)
 
     def test_summarize_empty(self):
         out = se.summarize([{"alpha_pct": None}])
         self.assertEqual(out["n"], 0)
         self.assertIsNone(out["avg_alpha_pct"])
         self.assertIsNone(out["win_rate_pct"])
+        self.assertEqual(out["sample_power"], "display_only")
+
+    def test_summarize_distribution_marks_extreme_winner_dependency(self):
+        samples = [
+            {"alpha_pct": -1.0},
+            {"alpha_pct": -0.5},
+            {"alpha_pct": -0.2},
+            {"alpha_pct": 0.1},
+            {"alpha_pct": 8.0},
+        ]
+        out = se.summarize_distribution(samples)
+        self.assertEqual(out["n"], 5)
+        self.assertGreater(out["avg_alpha_pct"], 0)
+        self.assertLessEqual(out["median_alpha_pct"], 0)
+        self.assertTrue(out["extreme_winner_dependency"])
+        self.assertEqual(out["sample_power"], "display_only")
+
+    def test_sample_power_thresholds(self):
+        self.assertEqual(se.sample_power(19)["sample_power"], "display_only")
+        self.assertEqual(se.sample_power(20)["sample_power"], "weak_reference")
+        self.assertEqual(se.sample_power(50)["sample_power"], "initial_reference")
+        self.assertEqual(se.sample_power(100)["sample_power"], "upgrade_evidence")
 
 
 if __name__ == "__main__":
