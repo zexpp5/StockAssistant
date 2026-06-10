@@ -12980,28 +12980,9 @@ function _reasonSummaryHtml(row) {
       const attentionTotal = Number(audit.attention_count || 0);
       const marketBlocked = Number(marketSummary.blocked || 0);
       const marketAttention = Number(marketSummary.attention || 0);
-      const repairHtml = audit && audit.generated_at && (blockedTotal > 0 || attentionTotal > 0)
-        ? `<div class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-            <div class="flex items-start justify-between gap-3 flex-col md:flex-row">
-              <div>
-                <div class="font-bold">排序可能被数据缺口影响：先补数据，再看新规则排序</div>
-                <div class="mt-0.5">
-                  全池硬拦截 <b>${blockedTotal}</b> 只、数据提醒 <b>${attentionTotal}</b> 只；
-                  当前${_marketLabel(activeMarket)}硬拦截 <b>${marketBlocked}</b> 只、数据提醒 <b>${marketAttention}</b> 只。
-                  小公司/早期股更容易因为行情、估值或动量字段不全被挡住。
-                </div>
-              </div>
-              <div class="flex items-center gap-2 whitespace-nowrap">
-                <button onclick="triggerDataUsabilityRepair('', this)"
-                        class="px-3 py-1.5 rounded-md bg-amber-600 hover:bg-amber-700 disabled:bg-amber-300 text-white text-xs font-bold"
-                        title="刷新整个系统科技/AI 股票池的行情、估值、动量数据，然后重算推荐和看板">补数据并重算</button>
-                <button onclick="copyDataUsabilityRepairCommand('', this)"
-                        class="px-3 py-1.5 rounded-md bg-white hover:bg-amber-50 border border-amber-300 text-amber-800 text-xs font-semibold"
-                        title="如果 API 没跑起来，复制命令到终端执行">复制命令</button>
-              </div>
-            </div>
-          </div>`
-        : "";
+      // 2026-06-11 去重：此处「排序可能被数据缺口影响」sub-note 与下方「数据够不够用」面板
+      // 展示的是同一组数据缺口数字 + 同款补数据按钮，重复。统一保留下方更完整的那块，这里不再渲染。
+      const repairHtml = "";
       const mode = window._discoverySortMode || "policy";
       const btnCls = isActive => isActive
         ? "bg-slate-900 text-white border-slate-900"
