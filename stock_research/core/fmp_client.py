@@ -11,7 +11,9 @@
 """
 from __future__ import annotations
 import logging
+import os
 import re
+import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -33,6 +35,26 @@ FMP_API_KEY = config.__dict__.get("FMP_API_KEY") or __import__("os").environ.get
 _FORCE_REFRESH_ENV = __import__("os").environ.get("FMP_FORCE_REFRESH", "").lower() in ("1", "true", "yes", "on")
 _FMP_DISABLED_REASON: str | None = None
 _FMP_EVENTS: list[dict[str, Any]] = []
+
+# 请求节流 + 429 退避（2026-06-11 加）：批量抓价连发上百次会撞 FMP per-minute 限流，
+#   旧逻辑一次 429 就全局禁用 → 全量只 12/133 走 FMP、其余退 yfinance。节流拉开请求间隔
+#   把命中率拉满，429 时指数退避重试而非立刻放弃；可用环境变量调：
+#   FMP_MIN_INTERVAL_SEC（请求最小间隔）/ FMP_MAX_ATTEMPTS（重试次数）/ FMP_RETRY_BACKOFF_SEC（退避基数）
+_FMP_MIN_INTERVAL = float(os.environ.get("FMP_MIN_INTERVAL_SEC", "0.45"))
+_FMP_MAX_ATTEMPTS = int(os.environ.get("FMP_MAX_ATTEMPTS", "3"))
+_FMP_RETRY_BACKOFF = float(os.environ.get("FMP_RETRY_BACKOFF_SEC", "2.0"))
+_FMP_LAST_REQUEST_AT = 0.0
+_FMP_THROTTLE_LOCK = threading.Lock()
+
+
+def _throttle() -> None:
+    """保证两次 FMP HTTP 请求之间至少隔 _FMP_MIN_INTERVAL 秒（避免连发触发限流）。"""
+    global _FMP_LAST_REQUEST_AT
+    with _FMP_THROTTLE_LOCK:
+        wait = _FMP_MIN_INTERVAL - (time.monotonic() - _FMP_LAST_REQUEST_AT)
+        if wait > 0:
+            time.sleep(wait)
+        _FMP_LAST_REQUEST_AT = time.monotonic()
 
 
 def _redact(text: str) -> str:
@@ -131,27 +153,42 @@ def _get(path: str, params: dict | None = None, force_refresh: bool = False) -> 
         return None
     p = dict(params or {})
     p["apikey"] = FMP_API_KEY
-    try:
-        r = requests.get(f"{FMP_BASE}{path}", params=p, timeout=20)
+    for attempt in range(1, _FMP_MAX_ATTEMPTS + 1):
+        _throttle()  # 全局最小请求间隔，避免连发触发 per-minute 限流
+        try:
+            r = requests.get(f"{FMP_BASE}{path}", params=p, timeout=20)
+        except Exception as e:
+            _record_event("WARN", "request_exception", path, str(e))
+            logger.warning("FMP %s failed: %s", path, _redact(str(e)))
+            return None
+        # 429 = per-minute 限流；402 = FMP 对历史端点的突发超限（措辞像"需升级订阅"，
+        # 但实测会自行恢复，本质是短窗口限流）。两者都退避重试，给限流窗口恢复机会，不一次放弃。
+        if r.status_code in (429, 402):
+            _record_event("WARN", f"throttled_{r.status_code}_attempt_{attempt}", path, r.text)
+            if attempt < _FMP_MAX_ATTEMPTS:
+                time.sleep(_FMP_RETRY_BACKOFF * attempt)  # 线性退避，给限流窗口恢复
+                continue
+            # 重试耗尽仍被限：软禁用本批剩余（避免继续撞墙），调用方退 yfinance 兜底
+            _FMP_DISABLED_REASON = f"throttled_{r.status_code}"
+            logger.warning("FMP %s 限流(%d)重试 %d 次仍失败，本批剩余跳过退兜底", path, r.status_code, _FMP_MAX_ATTEMPTS)
+            return None
         if r.status_code != 200:
-            if r.status_code == 429:
-                _FMP_DISABLED_REASON = "rate_limited_429"
-                _record_event("WARN", "rate_limited_429", path, r.text)
-            else:
-                _record_event("WARN", f"http_{r.status_code}", path, r.text)
+            _record_event("WARN", f"http_{r.status_code}", path, r.text)
             logger.warning("FMP %s -> %d: %s", path, r.status_code, _redact(r.text[:200]))
             return None
-        data = r.json()
+        try:
+            data = r.json()
+        except Exception as e:
+            _record_event("WARN", "json_decode", path, str(e))
+            logger.warning("FMP %s json 解析失败: %s", path, _redact(str(e)))
+            return None
         # FMP 错误时返回 {"Error Message": "..."}
         if isinstance(data, dict) and "Error Message" in data:
             logger.debug("FMP error for %s: %s", path, data.get("Error Message"))
             return None
         fmp_cache.save(path, params, data)
         return data
-    except Exception as e:
-        _record_event("WARN", "request_exception", path, str(e))
-        logger.warning("FMP %s failed: %s", path, _redact(str(e)))
-        return None
+    return None
 
 
 # ────────────────────────────────────────────────────────
