@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -152,6 +152,49 @@ def _get(path: str, params: dict | None = None, force_refresh: bool = False) -> 
         _record_event("WARN", "request_exception", path, str(e))
         logger.warning("FMP %s failed: %s", path, _redact(str(e)))
         return None
+
+
+# ────────────────────────────────────────────────────────
+# 行情：实时报价 + 日线历史（2026-06-10 加 · 美股抓价主源，替代不稳定的 yfinance）
+#   背景：yfinance 抓 Yahoo 公开数据、无 SLA，会整批限流返回空历史 → 大票动量断档。
+#   FMP /stable 行情接口稳定，付费源，已是系统美股主源（FMP=美股付费主源的分工延续）。
+# ────────────────────────────────────────────────────────
+
+def fetch_quote(ticker: str, *, force_refresh: bool = True) -> dict[str, Any] | None:
+    """实时报价：价格 / 涨跌幅 / 52 周高低 / 市值 / 均线。价格是快变量，默认不吃缓存。"""
+    raw = _get("/quote", {"symbol": ticker}, force_refresh=force_refresh)
+    if not raw or not isinstance(raw, list) or not raw:
+        return None
+    r = raw[0]
+    return {
+        "ticker": ticker,
+        "price": r.get("price"),
+        "previous_close": r.get("previousClose"),
+        "change_pct": r.get("changePercentage"),
+        "day_low": r.get("dayLow"),
+        "day_high": r.get("dayHigh"),
+        "year_high": r.get("yearHigh"),
+        "year_low": r.get("yearLow"),
+        "market_cap": r.get("marketCap"),
+        "price_avg_50": r.get("priceAvg50"),
+        "price_avg_200": r.get("priceAvg200"),
+        "volume": r.get("volume"),
+        "exchange": r.get("exchange"),
+        "source": "FMP/stable/quote",
+    }
+
+
+def fetch_historical_eod(ticker: str, *, days: int = 420, force_refresh: bool = True) -> list[dict[str, Any]] | None:
+    """日线收盘历史（新→旧）。默认拉最近 ~14 个月，够算 YTD / 1M / 1W / 1Y 动量。
+
+    返回 [{date, open, high, low, close, volume, change, changePercent, vwap}]。
+    价格是快变量，默认 force_refresh=True 不吃 24h 缓存（每天要最新收盘）。
+    """
+    frm = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    raw = _get("/historical-price-eod/full", {"symbol": ticker, "from": frm}, force_refresh=force_refresh)
+    if not raw or not isinstance(raw, list):
+        return None
+    return raw
 
 
 # ────────────────────────────────────────────────────────

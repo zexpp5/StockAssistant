@@ -25,6 +25,7 @@ from datetime import datetime, timedelta
 import duckdb  # noqa: E402
 from stock_db import DB_PATH, fetch_manual_watchlist  # V2 manual_watchlist
 from stock_research.core import akshare_client  # noqa: E402
+from stock_research.core import fmp_client  # noqa: E402 美股行情主源（替代不稳定的 yfinance）
 from stock_research.core.hk_universe import fetch_hk_tech_universe  # noqa: E402
 from stock_research.core.us_universe import fetch_us_ai_tech_universe  # noqa: E402
 
@@ -437,8 +438,36 @@ def _fetch_info_fields(yf_ticker: str) -> dict:
     return fields
 
 
-def _download_history_batch(yf_tickers: list[str]) -> dict[str, pd.DataFrame]:
-    """一次下载 1 年历史价，替代每只股票单独 history(period='1y')。"""
+def _is_us_ticker(yf_ticker: str) -> bool:
+    """美股 ticker = 纯字母/连字符、无市场后缀（港股 .HK / A股 .SS/.SZ/.BJ / 韩股 .KS 都带点）。"""
+    s = str(yf_ticker or "").upper()
+    return bool(s) and "." not in s
+
+
+def _fmp_history_df(yf_ticker: str) -> "pd.DataFrame | None":
+    """用 FMP /stable 日线历史拼一个和 yfinance 同形的 DataFrame（DatetimeIndex + 'Close' 列）。
+
+    只取 Close —— 下游 _history_metrics 仅用 Close 算 YTD/1M/1W/1Y 动量和 trade_date。
+    升序返回（iloc[0]=最早, iloc[-1]=最新），与 yfinance period='1y' 行为一致；
+    末尾今天的盘中 partial bar 由下游 _trailing_unsettled_count 统一裁掉，不在此处特判。
+    """
+    try:
+        rows = fmp_client.fetch_historical_eod(yf_ticker, days=420)
+        if not rows:
+            return None
+        df = pd.DataFrame(rows)
+        if "date" not in df.columns or "close" not in df.columns:
+            return None
+        df = df[["date", "close"]].copy()
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.dropna(subset=["close"]).set_index("date").sort_index()
+        return df.rename(columns={"close": "Close"})
+    except Exception:
+        return None
+
+
+def _download_history_batch_yf(yf_tickers: list[str]) -> dict[str, pd.DataFrame]:
+    """yfinance 批量历史价（非美股 + FMP 失败的美股兜底走这里）。"""
     if not yf_tickers:
         return {}
     unique = sorted(set(yf_tickers))
@@ -467,6 +496,41 @@ def _download_history_batch(yf_tickers: list[str]) -> dict[str, pd.DataFrame]:
                     out[tk] = sub
     elif len(unique) == 1:
         out[unique[0]] = df.dropna(how="all")
+    return out
+
+
+def _download_history_batch(yf_tickers: list[str]) -> dict[str, pd.DataFrame]:
+    """历史价分发：美股优先走 FMP（稳定），FMP 失败的美股 + 非美股退回 yfinance。
+
+    2026-06-10：yfinance 整批限流返回空历史导致大票（NVDA/GOOGL/META…）动量断档，
+    改用付费的 FMP /stable 作美股主源；FMP 不可用或个别拉空时仍退回 yfinance，
+    保证不比改造前差。港股/A 股不动（FMP 覆盖差，仍走 yfinance + akshare 兜底）。
+    """
+    if not yf_tickers:
+        return {}
+    unique = sorted(set(yf_tickers))
+    out: dict[str, pd.DataFrame] = {}
+    us = [t for t in unique if _is_us_ticker(t)]
+    fmp_failed: list[str] = []
+    if us and fmp_client.is_available():
+        ok = 0
+        for tk in us:
+            df = _fmp_history_df(tk)
+            if df is not None and not df.empty:
+                out[tk] = df
+                ok += 1
+            else:
+                fmp_failed.append(tk)
+        msg = f"  FMP 历史价：{ok}/{len(us)} 美股 ticker 成功"
+        if fmp_failed:
+            msg += f"，{len(fmp_failed)} 只退 yfinance"
+        print(msg)
+    else:
+        fmp_failed = list(us)  # FMP 不可用 → 美股全退 yfinance
+
+    yf_targets = [t for t in unique if not _is_us_ticker(t)] + fmp_failed
+    if yf_targets:
+        out.update(_download_history_batch_yf(yf_targets))
     return out
 
 
