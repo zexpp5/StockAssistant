@@ -12292,20 +12292,58 @@ function _policyReasonZh(row) {
   return map[m] || "";
 }
 
+// 分层名 / 证据状态 / 资格 翻成中文（悬停框用）
+function _layerNameZh(v) {
+  const m = String(v || "").toLowerCase();
+  return ({
+    "ai_core": "AI 核心", "ai_infrastructure": "AI 基建", "tech_software": "科技软件",
+    "internet_platform": "互联网平台", "power_datacenter": "电力/数据中心",
+    "theme_watch": "主题观察", "excluded": "剔除（身份不符）",
+  })[m] || (v || "—");
+}
+function _evidenceZh(v) {
+  const m = String(v || "").toLowerCase();
+  return ({
+    "confirmed": "已确认", "needs_review": "待复核", "candidate": "候选线索",
+    "stale": "已过期", "missing": "无公司级证据",
+  })[m] || (v || "—");
+}
+function _eligibilityZh(v) {
+  const m = String(v || "").toLowerCase();
+  return ({
+    "buyable": "可买", "research_only": "只研究", "watch_only": "只观察", "excluded": "剔除",
+  })[m] || (v || "—");
+}
+
 function _policyActionBadge(row) {
   const label = _policyActionLabel(row);
   const cls = _policyActionTone(row);
-  const reason = _policyReasonZh(row);
-  const rationale = String((row && row.classification_rationale) || "").trim();
-  const layer = row && row.primary_layer ? `层级：${row.primary_layer}` : "";
-  const ev = row && row.evidence_status ? `证据：${row.evidence_status}` : "";
-  const parts = [];
-  if (reason) parts.push(`为什么：${reason}`);
-  if (rationale) parts.push(`分层依据：${rationale}`);
-  if (layer) parts.push(layer);
-  if (ev) parts.push(ev);
-  parts.push("这是新规则筛选/降级，不改原始总分");
-  const title = parts.join(" · ");
+  const mig = String((row && row.eligibility_migration_status) || "").toLowerCase();
+  let title;
+  if (mig === "legacy") {
+    title = "非美股，仍按老规则（未迁移到新规则）。\n新规则目前只在美股试点，A 股 / 港股后续单独迁移。";
+  } else {
+    const layerZh = _layerNameZh(row && row.primary_layer);
+    const evZh = _evidenceZh(row && row.evidence_status);
+    const eligZh = _eligibilityZh(row && row.eligibility);
+    const reason = _policyReasonZh(row);
+    const rationale = String((row && row.classification_rationale) || "").trim();
+    const lines = [
+      "这只票的新规则判定 · 共 4 层（从上往下，命中即停）：",
+      "",
+      "① 身份分层 → " + layerZh,
+      "② 业务证据 → " + evZh,
+      "③ 推荐资格 → " + eligZh,
+      "④ 最终动作 → " + label + (reason ? "（" + reason + "）" : ""),
+    ];
+    if (rationale) {
+      lines.push("");
+      lines.push("分层依据：" + rationale);
+    }
+    lines.push("");
+    lines.push("注：新规则只做筛选 / 降级，不改原始总分");
+    title = lines.join("\n");
+  }
   // ⓘ 图标 + cursor-help：明确告诉用户「这里可以鼠标悬停看为什么」
   return `<span class="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full border text-[11px] font-semibold whitespace-nowrap cursor-help ${cls}" title="${_esc(title)}">${_esc(label)}<span class="opacity-50 text-[10px] leading-none">ⓘ</span></span>`;
 }
