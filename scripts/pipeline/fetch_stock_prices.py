@@ -466,15 +466,15 @@ def _fmp_history_df(yf_ticker: str) -> "pd.DataFrame | None":
         return None
 
 
-def _download_history_batch_yf(yf_tickers: list[str]) -> dict[str, pd.DataFrame]:
-    """yfinance 批量历史价（非美股 + FMP 失败的美股兜底走这里）。"""
+def _download_history_batch_yf(yf_tickers: list[str], period: str = "1y") -> dict[str, pd.DataFrame]:
+    """yfinance 批量历史价（非美股 + 本地缺失兜底 + 美股增量补最新都走这里）。"""
     if not yf_tickers:
         return {}
     unique = sorted(set(yf_tickers))
     try:
         df = yf.download(
             " ".join(unique),
-            period="1y",
+            period=period,
             progress=False,
             group_by="ticker",
             threads=True,
@@ -499,39 +499,93 @@ def _download_history_batch_yf(yf_tickers: list[str]) -> dict[str, pd.DataFrame]
     return out
 
 
-def _download_history_batch(yf_tickers: list[str]) -> dict[str, pd.DataFrame]:
-    """历史价分发：美股优先走 FMP（稳定），FMP 失败的美股 + 非美股退回 yfinance。
+def _history_df_from_db(symbol: str, db_path: str = DB_PATH, lookback_days: int = 430) -> "pd.DataFrame | None":
+    """从 price_daily 本地历史库读完整 close 序列，拼成与下载同形的 DataFrame
+    （DatetimeIndex + 'Close'）。回填后动量改从这里算，不必每天下载全序列。"""
+    cutoff = datetime.now().date() - timedelta(days=lookback_days)
+    try:
+        con = duckdb.connect(db_path, read_only=True)
+        try:
+            rows = con.execute(
+                "SELECT trade_date, close FROM price_daily "
+                "WHERE symbol=? AND interval='1d' AND close IS NOT NULL AND trade_date>=? "
+                "ORDER BY trade_date",
+                [str(symbol).upper(), cutoff],
+            ).fetchall()
+        finally:
+            con.close()
+    except Exception:
+        return None
+    if not rows:
+        return None
+    df = pd.DataFrame(rows, columns=["date", "Close"])
+    df["date"] = pd.to_datetime(df["date"])
+    return df.set_index("date").sort_index()[["Close"]]
 
-    2026-06-10：yfinance 整批限流返回空历史导致大票（NVDA/GOOGL/META…）动量断档，
-    改用付费的 FMP /stable 作美股主源；FMP 不可用或个别拉空时仍退回 yfinance，
-    保证不比改造前差。港股/A 股不动（FMP 覆盖差，仍走 yfinance + akshare 兜底）。
+
+def _incremental_update_price_daily(us_tickers: list[str], db_path: str = DB_PATH, days: int = 15) -> int:
+    """用 yfinance 短周期批量补 price_daily 最新几根，让本地序列前进到最新结算日。
+    1 次批量请求、轻量、不撞 FMP 限额；ON CONFLICT DO NOTHING 不覆盖已有行（保留动量字段）。"""
+    recent = _download_history_batch_yf(us_tickers, period=f"{days}d")
+    if not recent:
+        return 0
+    now = datetime.now()
+    written = 0
+    try:
+        con = duckdb.connect(db_path)
+    except Exception:
+        return 0
+    try:
+        for tk, df in recent.items():
+            if df is None or df.empty or "Close" not in df:
+                continue
+            close = df["Close"].dropna()
+            drop = _trailing_unsettled_count(close.index, tk)  # 裁今天未结算 partial
+            if drop:
+                close = close.iloc[:-drop]
+            rows = []
+            prev = None
+            for ts, c in close.items():
+                try:
+                    d = ts.date()
+                except Exception:
+                    continue
+                rows.append((
+                    "US", str(tk).upper(), d, "1d", float(c),
+                    float(prev) if prev is not None else None, "USD",
+                    None, None, None, None, None, None, None, None,
+                    "yfinance_incremental", now, now,
+                ))
+                prev = float(c)
+            if rows:
+                con.executemany(
+                    """INSERT INTO price_daily (
+                        market, symbol, trade_date, interval, close, prev_close, currency,
+                        market_cap, forward_pe, trailing_pe, peg_ratio, ytd_pct,
+                        one_week_pct, one_month_pct, one_year_pct, source,
+                        source_updated_at, fetched_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT (market, symbol, trade_date, interval) DO NOTHING""",
+                    rows,
+                )
+                written += 1
+    finally:
+        con.close()
+    return written
+
+
+def _download_history_batch(yf_tickers: list[str], db_path: str = DB_PATH) -> dict[str, pd.DataFrame]:
+    """历史价：yfinance 批量下载 1 年序列（全市场统一口径）。
+
+    2026-06-11 教训（一致性验证挡下的坑）：动量 _history_metrics 按**序列位置**算
+    （iloc[-5]=1周前、iloc[-22]=1月前、iloc[0]=1年前），依赖固定 1 年窗口。
+    试过改从 price_daily 本地序列 / FMP 420 天算，验证发现 1M/1Y 偏差大（序列长度&
+    交易日不对齐；YTD/1W 不受影响），会污染推荐排序，故动量仍用 yfinance 下载的 1 年
+    序列保证口径一致、不动推荐。price_daily 已回填 2 年历史，留作未来"把动量改成按
+    日历日期算"之后的本地数据源 + 兜底（_history_df_from_db / _incremental_update_price_daily
+    为此预留，当前未接入主路径；_fmp_history_df / _is_us_ticker 同）。
     """
-    if not yf_tickers:
-        return {}
-    unique = sorted(set(yf_tickers))
-    out: dict[str, pd.DataFrame] = {}
-    us = [t for t in unique if _is_us_ticker(t)]
-    fmp_failed: list[str] = []
-    if us and fmp_client.is_available():
-        ok = 0
-        for tk in us:
-            df = _fmp_history_df(tk)
-            if df is not None and not df.empty:
-                out[tk] = df
-                ok += 1
-            else:
-                fmp_failed.append(tk)
-        msg = f"  FMP 历史价：{ok}/{len(us)} 美股 ticker 成功"
-        if fmp_failed:
-            msg += f"，{len(fmp_failed)} 只退 yfinance"
-        print(msg)
-    else:
-        fmp_failed = list(us)  # FMP 不可用 → 美股全退 yfinance
-
-    yf_targets = [t for t in unique if not _is_us_ticker(t)] + fmp_failed
-    if yf_targets:
-        out.update(_download_history_batch_yf(yf_targets))
-    return out
+    return _download_history_batch_yf(yf_tickers, period="1y")
 
 
 def _market_session_close(yf_ticker: str) -> tuple[str, int]:
