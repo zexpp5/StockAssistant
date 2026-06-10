@@ -4002,7 +4002,8 @@ function _watchlistSourceLabel(row) {
   if (notes.includes("auto-sync from real_holdings")) return "持仓同步";
   if (notes.includes("早期关注推荐")) return "早发现";
   if (notes.includes("AI 推荐")) return "AI推荐";
-  if (notes.includes("IPO") || notes.includes("次新")) return "次新来源";
+  // 只认显式标记;泛匹配 "IPO"/"次新" 会误伤普通备注(如 GDS 的 "DayOne IPO" 催化说明)
+  if (notes.includes("次新雷达") || notes.startsWith("次新")) return "次新来源";
   return "手动关注";
 }
 
@@ -4266,7 +4267,7 @@ function _watchlistSourceBadge(row) {
   if (notes.includes("早期关注推荐")) {
     return `<span class="ml-1 inline-flex px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-sans font-semibold align-middle" title="${_esc(notes)}">早期关注</span>`;
   }
-  if (notes.includes("次新") || notes.includes("IPO")) {
+  if (notes.includes("次新雷达") || notes.startsWith("次新")) {
     return `<span class="ml-1 inline-flex px-1.5 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-200 text-[10px] font-sans font-semibold align-middle" title="${_esc(notes)}">次新来源</span>`;
   }
   if (notes.includes("AI 推荐")) {
