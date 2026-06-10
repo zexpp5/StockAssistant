@@ -1205,6 +1205,7 @@ window.echarts = window.echarts || {
       #discovery-table-wrap .disc-sticky-rank,
       #discovery-table-wrap .disc-sticky-code,
       #discovery-table-wrap .disc-sticky-name,
+      #discovery-table-wrap .disc-sticky-policy,
       .discovery-history-table-wrap .disc-sticky-rank,
       .discovery-history-table-wrap .disc-sticky-code,
       .discovery-history-table-wrap .disc-sticky-name {
@@ -1216,6 +1217,7 @@ window.echarts = window.echarts || {
       #discovery-table-wrap thead .disc-sticky-rank,
       #discovery-table-wrap thead .disc-sticky-code,
       #discovery-table-wrap thead .disc-sticky-name,
+      #discovery-table-wrap thead .disc-sticky-policy,
       .discovery-history-table-wrap thead .disc-sticky-rank,
       .discovery-history-table-wrap thead .disc-sticky-code,
       .discovery-history-table-wrap thead .disc-sticky-name {
@@ -1232,11 +1234,18 @@ window.echarts = window.echarts || {
         min-width: 240px;
         width: 240px;
         max-width: 240px;
+      }
+      /* 新规则动作列也固定，横滚时永远可见（这是新规则给出的动作） */
+      #discovery-table-wrap .disc-sticky-policy {
+        left: 422px;
+        min-width: 112px;
+        width: 112px;
         box-shadow: 1px 0 0 rgba(15, 23, 42, 0.08);
       }
       #discovery-table-wrap tbody tr:hover .disc-sticky-rank,
       #discovery-table-wrap tbody tr:hover .disc-sticky-code,
       #discovery-table-wrap tbody tr:hover .disc-sticky-name,
+      #discovery-table-wrap tbody tr:hover .disc-sticky-policy,
       .discovery-history-table-wrap tbody tr:hover .disc-sticky-rank,
       .discovery-history-table-wrap tbody tr:hover .disc-sticky-code,
       .discovery-history-table-wrap tbody tr:hover .disc-sticky-name { background: #f8fafc; }
@@ -1250,8 +1259,8 @@ window.echarts = window.echarts || {
             <th class="disc-sticky-rank px-2 py-1 text-left">排名</th>
             <th class="disc-sticky-code px-2 py-1 text-left">代码</th>
             <th class="disc-sticky-name px-2 py-1 text-left">名称</th>
+            <th class="disc-sticky-policy px-2 py-1 text-left" title="P0 新规则根据身份、证据、数据和风险给出的动作；不覆盖原始总分。鼠标放到标签上看每只票的具体理由。">新规则动作 ⓘ</th>
             <th class="px-2 py-1 text-left">信号</th>
-            <th class="px-2 py-1 text-left" title="P0 新规则根据身份、证据、数据和风险给出的动作；不覆盖原始总分。">新规则动作</th>
             <th class="px-2 py-1 text-left">市场</th>
             <th class="px-2 py-1 text-left">主题</th>
             <th class="px-2 py-1 text-right">综合分</th>
@@ -12297,7 +12306,8 @@ function _policyActionBadge(row) {
   if (ev) parts.push(ev);
   parts.push("这是新规则筛选/降级，不改原始总分");
   const title = parts.join(" · ");
-  return `<span class="inline-flex px-2 py-0.5 rounded-full border text-[11px] font-semibold whitespace-nowrap ${cls}" title="${_esc(title)}">${_esc(label)}</span>`;
+  // ⓘ 图标 + cursor-help：明确告诉用户「这里可以鼠标悬停看为什么」
+  return `<span class="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full border text-[11px] font-semibold whitespace-nowrap cursor-help ${cls}" title="${_esc(title)}">${_esc(label)}<span class="opacity-50 text-[10px] leading-none">ⓘ</span></span>`;
 }
 
 // 🆕 第一次推荐 badge
@@ -13098,8 +13108,8 @@ function _reasonSummaryHtml(row) {
           ${c.quality_tag ? `<div class="mt-0.5">${_qualityTagHtml(c.quality_tag)}</div>` : ""}
           <div class="mt-0.5 inline-flex items-center gap-1 flex-wrap">${_candidateMiniTags(c)}</div>
         </td>
+        <td class="disc-sticky-policy px-2 py-1 text-xs whitespace-nowrap">${_policyActionBadge(c)}</td>
         <td class="px-2 py-1 text-xs whitespace-nowrap">${_signalBadge(c)}</td>
-        <td class="px-2 py-1 text-xs whitespace-nowrap">${_policyActionBadge(c)}</td>
         <td class="px-2 py-1 text-xs whitespace-nowrap">${market}</td>
         <td class="px-2 py-1 text-xs text-slate-600 whitespace-nowrap" title="${_esc(themeTitle || themeText)}">${_esc(themeText)}</td>
         <td class="px-2 py-1 text-right text-xs font-mono ${zColor}">${scoreText}</td>
