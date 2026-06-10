@@ -124,11 +124,11 @@ def _holding_intraday_alerts() -> list[dict]:
               FROM price_daily
               WHERE symbol IN ({placeholders}) AND interval = '1d'
             )
-            SELECT symbol, close, prev_close FROM ranked WHERE rn = 1
+            SELECT symbol, close, prev_close, trade_date FROM ranked WHERE rn = 1
             """,
             symbols,
         ).fetchall()
-        px = {str(r[0]): (r[1], r[2]) for r in rows}
+        px = {str(r[0]): (r[1], r[2], str(r[3])[:10] if r[3] is not None else None) for r in rows}
 
         total_val = 0.0
         weighted_chg = 0.0
@@ -137,7 +137,7 @@ def _holding_intraday_alerts() -> list[dict]:
             shares = float(h.get("shares") or 0)
             if shares <= 0 or sym not in px:
                 continue
-            close, prev = px[sym]
+            close, prev = px[sym][0], px[sym][1]
             if close is None or prev is None or prev <= 0:
                 continue
             day_pct = (float(close) / float(prev) - 1.0) * 100.0
@@ -164,8 +164,53 @@ def _holding_intraday_alerts() -> list[dict]:
                     "trigger": f"持仓组合加权日内约 {port_pct:+.1f}%",
                     "suggested_action": "整体偏逆风，新开仓宜谨慎（advisory）",
                 })
+        alerts.extend(_discipline_line_alerts(stock_db, holdings, px))
     finally:
         conn.close()
+    return alerts
+
+
+def _discipline_line_alerts(stock_db, holdings: list[dict], px: dict) -> list[dict]:
+    """活跃纪律计划的价位线触发告警（与 -5% 闪崩告警互补，慢跌触线也能推）。
+
+    fingerprint 走 symbol+trigger，trigger 文案只含线位+交易日，
+    同一条线同一交易日只推一次；价格放在 suggested_action 里不参与去重。
+    """
+    alerts: list[dict] = []
+    try:
+        plans = stock_db.fetch_real_holding_discipline_plans(status="active")
+    except Exception as exc:
+        logger.warning("纪律线检查跳过: %s", str(exc)[:120])
+        return alerts
+    holding_by_id = {int(h["id"]): h for h in holdings if h.get("id") is not None}
+    for plan in plans:
+        hid = plan.get("holding_id")
+        holding = holding_by_id.get(int(hid)) if hid is not None else None
+        if not holding:
+            continue
+        sym = str(holding.get("symbol") or holding.get("code") or "")
+        if sym not in px:
+            continue
+        close, _prev, tdate = px[sym]
+        if close is None:
+            continue
+        try:
+            ev = stock_db.evaluate_real_holding_discipline_plan(
+                plan, current_price=close, price_trade_date=tdate,
+            )
+        except Exception as exc:
+            logger.warning("纪律线评估失败 %s: %s", sym, str(exc)[:120])
+            continue
+        if not ev.get("triggered"):
+            continue
+        sev = str(ev.get("severity") or "info").lower()
+        alerts.append({
+            "type": "discipline_line",
+            "severity": "HIGH" if sev in {"critical", "high"} else "MEDIUM",
+            "symbol": sym,
+            "trigger": f"纪律线 {ev.get('threshold_text')} 触发 · {tdate or '最近收盘'}",
+            "suggested_action": f"{ev.get('action_label') or '按计划执行'} · 现价 {float(close):.2f}（advisory）",
+        })
     return alerts
 
 
@@ -196,7 +241,7 @@ def _build_holding_alert_card(alerts: list[dict]) -> dict:
                 {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}},
                 {"tag": "note", "elements": [{
                     "tag": "plain_text",
-                    "content": "单票 ≤-5% 或组合加权 ≤-1.5% 触发；与大盘橙卡分开读",
+                    "content": "单票 ≤-5% / 组合加权 ≤-1.5% / 纪律计划价位线 触发；与大盘橙卡分开读",
                 }]},
             ],
         },
