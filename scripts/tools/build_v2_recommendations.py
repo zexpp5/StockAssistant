@@ -51,6 +51,10 @@ DATA_USABILITY_AUDIT_PATH = REPO / "data" / "latest" / "recommendation_data_usab
 EVIDENCE_STATUSES = {"confirmed", "needs_review", "candidate", "stale", "missing"}
 BUYABLE_EVIDENCE_STATUS = "confirmed"
 P0_US_MARKET = "US"
+# P0 身份/资格闸：进入 AI 推荐名单(recommendation_picks)的美股只允许这两档。
+# excluded（身份不符，如 VIPS）与 watch_only（仅 ETF/主题、无公司级证据）记入审计 gated_out，
+# 不进推荐名单。这是 filter/tag 层的过滤，不改打分公式，也不改 rating(strong_buy/buy) 阈值。
+RECOMMENDABLE_US_ELIGIBILITY = {"buyable", "research_only"}
 BLOCKING_RISK_CODES = {
     "DATA_USABILITY_REVIEW_GATE",
     "STRUCTURAL_DOWNTREND_REVIEW_GATE",
@@ -932,6 +936,54 @@ def _build_data_usability_audit(
     }
 
 
+def _eligibility_counts(rows: list[dict[str, Any]], key: str) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for r in rows:
+        k = str(r.get(key) or "unknown")
+        out[k] = out.get(k, 0) + 1
+    return out
+
+
+def _build_p0_eligibility_gate_summary(
+    selected: list[dict[str, Any]],
+    us_gated_out: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """P0 身份/资格闸的审计（对应规则文档 §18 第 ④ 项）。
+
+    记录被挡在 AI 推荐名单外的美股，并用 eligibility_migration_status 区分排除原因
+    （身份不符 / 仅 ETF 无证据 / 数据缺失 / 分层不可买 / 证据不足 / 风险），
+    避免"靠运气漏掉"被误读成"系统识别了风险"。旧 rating 一并记录，证明
+    "分数高也会被身份/证据闸挡掉"（如 VIPS strong_buy 仍被 excluded）。
+    """
+    us_selected = [r for r in selected if str(r.get("market") or "") == P0_US_MARKET]
+    gated = sorted(us_gated_out, key=lambda r: -(_as_float(r.get("total_score")) or 0.0))
+    return {
+        "market": P0_US_MARKET,
+        "recommendable_eligibility": sorted(RECOMMENDABLE_US_ELIGIBILITY),
+        "us_selected_count": len(us_selected),
+        "us_selected_eligibility": _eligibility_counts(us_selected, "eligibility"),
+        "us_gated_out_count": len(us_gated_out),
+        "gated_out_reason_breakdown": _eligibility_counts(us_gated_out, "eligibility_migration_status"),
+        "gated_out": [
+            {
+                "symbol": r.get("symbol"),
+                "name": r.get("name"),
+                "total_score": r.get("total_score"),
+                "rating": r.get("rating"),
+                "signal": r.get("signal"),
+                "primary_layer": r.get("primary_layer"),
+                "eligibility": r.get("eligibility"),
+                "exclusion_reason": r.get("eligibility_migration_status"),
+            }
+            for r in gated[:80]
+        ],
+        "note": (
+            "AI 推荐名单仅含 buyable/research_only；下列美股分数可能达标但因身份/证据/数据/风险被挡，"
+            "不进名单（rating 仅为历史打分，不代表推荐）。排除原因见 exclusion_reason。"
+        ),
+    }
+
+
 def _write_data_usability_audit(payload: dict[str, Any]) -> None:
     DATA_USABILITY_AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(DATA_USABILITY_AUDIT_PATH, "w", encoding="utf-8") as f:
@@ -1254,8 +1306,16 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
         scored.append(scored_row)
 
     selected: list[dict[str, Any]] = []
+    us_gated_out: list[dict[str, Any]] = []
     for market in ("US", "HK", "CN"):
         market_rows = [r for r in scored if r["market"] == market]
+        if market == P0_US_MARKET:
+            # P0 身份/资格闸：AI 推荐名单只收 buyable / research_only。
+            # excluded（身份不符，如 VIPS）与 watch_only（仅 ETF/主题、无公司级证据）
+            # 不进名单，但记入 us_gated_out 供审计与「红旗拦截/只观察」区使用。
+            # 这是 filter 层，不改打分公式与 rating 阈值；CN/HK 维持 legacy 不过滤。
+            us_gated_out = [r for r in market_rows if r.get("eligibility") not in RECOMMENDABLE_US_ELIGIBILITY]
+            market_rows = [r for r in market_rows if r.get("eligibility") in RECOMMENDABLE_US_ELIGIBILITY]
         market_rows.sort(key=lambda x: (-x["total_score"], x["symbol"]))
         selected.extend(market_rows[:top_per_market])
     selected.sort(key=lambda x: (x["market"], -x["total_score"], x["symbol"]))
@@ -1265,6 +1325,7 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
         run_id=run_id,
         generated_at=now,
     )
+    data_usability_audit["p0_eligibility_gate"] = _build_p0_eligibility_gate_summary(selected, us_gated_out)
 
     if dry_run:
         conn.close()
@@ -1282,6 +1343,7 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
                 "selected_attention_count": data_usability_audit["selected_attention_count"],
                 "summary_by_market": data_usability_audit["summary_by_market"],
             },
+            "p0_eligibility_gate": data_usability_audit["p0_eligibility_gate"],
             "market_phase_snapshot_id": market_phase_snapshot_id,
             "layer_counts": layer_counts,
             "evidence_seed_summary": evidence_seed_summary,
@@ -1480,6 +1542,8 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
         "portfolio_count": len(portfolio_rows),
         "data_usability_blocked_count": data_usability_audit["blocked_count"],
         "data_usability_attention_count": data_usability_audit["attention_count"],
+        "p0_us_gated_out_count": data_usability_audit["p0_eligibility_gate"]["us_gated_out_count"],
+        "p0_gated_out_reason_breakdown": data_usability_audit["p0_eligibility_gate"]["gated_out_reason_breakdown"],
         "market_phase_snapshot_id": market_phase_snapshot_id,
         "layer_counts": layer_counts,
         "evidence_seed_summary": evidence_seed_summary,
