@@ -12788,9 +12788,7 @@ function _reasonSummaryHtml(row) {
       const dropoutTitle = allFromMarketTop
         ? `${_marketLabel(activeMarket)} 上批次在本市场 Top ${marketTopLimit}，本批次跌出`
         : `${_marketLabel(activeMarket)} 上批候选，本批未入推荐`;
-      const dropoutExplain = allFromMarketTop
-        ? `这些票上次（${filtered[0].prev_date || "上批次"}）还在${_marketLabel(activeMarket)}推荐 Top ${marketTopLimit} 里，本批被新候选顶下去。`
-        : `这些票上次（${filtered[0].prev_date || "上批次"}）还在完整推荐批次里，本批没有进入当前完整推荐。`;
+      const dropoutExplain = `这些票上次（${filtered[0].prev_date || "上批次"}）还在${_marketLabel(activeMarket)}推荐里，本批没有入选当前推荐。<strong>原因见每行标注</strong>——多数是被今天的身份/证据/数据闸过滤掉的，不一定是排名被新候选顶下。`;
       const rows = sorted.map(d => {
         const tk = String(d.ticker || "");
         const tkUpper = tk.toUpperCase();
@@ -12806,10 +12804,16 @@ function _reasonSummaryHtml(row) {
           ? `<span class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-200 text-amber-900 align-middle ml-1">⚠️ 你持仓</span>`
           : "";
         const rowBg = isHeld ? "bg-amber-50 border-l-2 border-amber-400" : "";
+        const reasonLabel = String(d.dropout_reason_label || "");
+        const reasonIsIdentity = String(d.dropout_reason || "") === "excluded_identity";
+        const reasonChip = reasonLabel
+          ? `<span class="text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap ${reasonIsIdentity ? "bg-rose-200 text-rose-900 font-bold" : "bg-slate-200 text-slate-700"}" title="本批跌出的真实原因">${reasonLabel}</span>`
+          : "";
         return `<li class="flex items-center gap-3 px-4 py-1.5 ${rowBg}">
           <span class="text-[11px] text-slate-500 min-w-[112px]" title="${rankTitle}">${rank}</span>
           <span class="font-mono text-xs font-bold text-slate-900">${tk}</span>
           <span class="text-xs text-slate-600">${name}${heldBadge}</span>
+          ${reasonChip}
           <span class="ml-auto text-[11px] text-slate-500 font-mono">上次 综合 ${score} / ${rating}</span>
         </li>`;
       }).join("");
@@ -14822,6 +14826,46 @@ def _build_appearance_index(strategy_version: str | None = None) -> dict:
         return {"_meta": {"total_runs": 0}}
 
 
+_GATED_OUT_REASON_LABELS = {
+    "excluded_identity": "🚫 身份不符（非科技成长）",
+    "etf_only_needs_company_evidence": "仅 ETF 来源·缺公司级证据",
+    "layer_not_buyable": "分层判定·暂不可买",
+    "data_usability_gate": "数据缺失·暂不可买",
+    "needs_company_evidence": "缺公司级 AI 证据",
+    "wait_entry": "买点未到·等回调",
+    "risk_gate": "触发风险红旗",
+}
+
+
+def _load_gated_out_reasons() -> dict[tuple[str, str], dict]:
+    """读 ④ 排除审计(recommendation_data_usability_audit.json 的 p0_eligibility_gate)，
+    返回 {(market, SYMBOL): {reason, label}}。供跌出 banner 标注每只的真实原因。
+
+    P0 闸目前仅美股；命中说明是被身份/证据/数据/分层闸过滤，而非排名竞争跌出。
+    """
+    try:
+        path = os.path.join(_REPO, "data", "latest", "recommendation_data_usability_audit.json")
+        if not os.path.exists(path):
+            return {}
+        with open(path, encoding="utf-8") as f:
+            audit = json.load(f)
+        gate = audit.get("p0_eligibility_gate") or {}
+        out: dict[tuple[str, str], dict] = {}
+        for row in gate.get("gated_out") or []:
+            sym = str(row.get("symbol") or "").upper()
+            if not sym:
+                continue
+            reason = str(row.get("exclusion_reason") or "")
+            out[("US", sym)] = {
+                "reason": reason,
+                "label": _GATED_OUT_REASON_LABELS.get(reason, "已被新规则闸过滤"),
+            }
+        return out
+    except Exception as e:
+        print(f"  ⚠️ 读 gated_out 原因失败: {e}")
+        return {}
+
+
 def _build_dropouts(strategy_version: str | None = None) -> list[dict]:
     """📉 上批次在 picks、本批次跌出 → 列出供 dashboard 顶部 banner 显示。
 
@@ -14877,9 +14921,13 @@ def _build_dropouts(strategy_version: str | None = None) -> list[dict]:
             ).fetchall()
         finally:
             con.close()
+        # 2026-06-11: 跌出真实原因 — 多数票是被身份/证据/数据闸过滤掉的，不是"被新候选顶下去"。
+        # 从 ④ 排除审计(p0_eligibility_gate.gated_out)取每只的真实原因，附到每条跌出上。
+        gated_reason = _load_gated_out_reasons()
         out = []
         for market, symbol, name, rank, market_rank, score, rating, run_date in rows:
             market = str(market or "").upper()
+            info = gated_reason.get((market, str(symbol or "").upper()))
             out.append({
                 "ticker": symbol,
                 "name": _display_stock_name(market, name),
@@ -14890,6 +14938,9 @@ def _build_dropouts(strategy_version: str | None = None) -> list[dict]:
                 "prev_score": round(float(score), 2) if score is not None else None,
                 "prev_rating": rating or "",
                 "prev_date": run_date,
+                # gated_out 命中 → 是被闸过滤；未命中 → 真·排名跌出
+                "dropout_reason": (info or {}).get("reason") or "ranked_out",
+                "dropout_reason_label": (info or {}).get("label") or "排名跌出（被新候选顶下）",
             })
         return out
     except Exception as e:
