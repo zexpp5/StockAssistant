@@ -1162,17 +1162,30 @@ window.echarts = window.echarts || {
 <section id="discovery" class="max-w-7xl mx-auto px-6 pt-6 pb-8 bg-gradient-to-br from-sky-50 to-indigo-50 rounded-2xl my-3" style="display:none">
   <!-- 分市场研究观察 advisory：哪些市场被策略诊断判为 degraded/research_only(早期实测 alpha 偏弱)。
        数据源: strategy_tuning_proposal.json market_actions(shadow 诊断,服务端渲染,只读)。 -->
+  <!-- 2026-06-11 顶部减负：一句话人话摘要(含关键风险) + 技术自检面板折叠，避免新手被术语墙劝退。
+       纯展示调整，不改任何数据/逻辑；想看数字点开 details 即可。 -->
+  <div class="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-slate-800">
+    <div class="font-bold text-slate-900 mb-1">📋 这页是什么 · 一句话</div>
+    <div class="leading-relaxed">
+      系统每天从全池里按规则挑出<b>候选股票</b>（美股 / A股 / 港股各最多 20 只），先过「身份 → 证据 → 数据 → 风险」四道闸，再分档：<b>重点研究 / 等买点 / 仅研究 / 只观察</b>。
+      <span class="text-rose-700 font-semibold">⚠️ 这套推荐还在验证期、最近样本外是亏的，只能当研究线索，别照着直接下单。</span>
+      下面就是名单；系统自检/验证的数字细节已折叠，想看点开即可。
+    </div>
+  </div>
   {STRATEGY_MARKET_ADVISORY}
-  <!-- 分市场策略验证进度: US 单独走 验证中→可小仓试探→正式可用; CN/HK 冻结 research-only。
-       数据源: shadow_tuning_evidence.json(服务端派生,只读) -->
-  {US_VALIDATION_PROGRESS}
-  <!-- P0 新规则验证: 严格 PIT 样本 + 历史覆盖参考，服务端只读，不输出今日买入清单。 -->
-  {P0_POLICY_VALIDATION_PANEL}
-  <!-- 全量 US 推荐规则快速体检: 聚合质量闸门/生产验收/US 样本/组合硬锁。 -->
-  {RECOMMENDATION_READINESS_PANEL}
-  <!-- US 严筛试运行: 只读 overlay，从正式推荐里筛出买前研究队列，不改公式/持仓。 -->
-  {US_STRICT_TRIAL_SECTION}
-  <!-- 早发现雷达: 服务端静态渲染，避免浏览器缓存/JS 加载导致页面顶部看不见。只读研究提醒。 -->
+  <!-- 把 4 块技术自检面板折叠：策略验证进度 / P0验证 / 规则体检 / 严筛试运行。数据源不变，仅默认收起。 -->
+  <details class="mb-4 rounded-xl border border-slate-200 bg-white">
+    <summary class="cursor-pointer select-none px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 rounded-xl">
+      🔧 系统自检与验证细节（点开看 · 不看也行）
+    </summary>
+    <div class="px-3 pb-3 pt-1 space-y-3">
+      {US_VALIDATION_PROGRESS}
+      {P0_POLICY_VALIDATION_PANEL}
+      {RECOMMENDATION_READINESS_PANEL}
+      {US_STRICT_TRIAL_SECTION}
+    </div>
+  </details>
+  <!-- 早发现雷达: 本身默认折叠，保留在外。 -->
   {EARLY_GROWTH_RADAR_SECTION}
   <!-- 2026-05-26: 移除 discovery-meta + discovery-accuracy 两条系统信息行 (用户反馈无用); JS 仍可安全空操作 -->
 
@@ -2705,6 +2718,9 @@ function openDiscoveryHistoryFromRadar(event) {
     <input id="wl-filter-keyword" oninput="loadWatchlistTable()" type="text" placeholder="搜代码/名称/一句话…" class="px-2 py-1 border border-slate-300 rounded w-48">
   </div>
 
+  <!-- 状态统计行:点任一组只看该组,再点取消 -->
+  <div id="wl-stats-bar" class="flex items-center gap-2 mb-3 flex-wrap text-xs"></div>
+
   <!-- 主表格 -->
   <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
     <table class="w-full min-w-[1100px] text-sm">
@@ -2715,6 +2731,7 @@ function openDiscoveryHistoryFromRadar(event) {
           <th class="px-3 py-2 text-left">关键数据</th>
           <th class="px-3 py-2 text-left">为什么关注</th>
           <th class="px-3 py-2 text-left">定位</th>
+          <th class="px-3 py-2 text-left">资料</th>
           <th class="px-3 py-2 text-left">加入/来源</th>
           <th class="px-3 py-2 text-right">操作</th>
         </tr>
@@ -4022,9 +4039,12 @@ function _watchlistMetricsHtml(item) {
   const oneMonth = r.one_month_pct != null ? _watchPct(r.one_month_pct) : (r.price_one_month_pct != null ? _watchPct(r.price_one_month_pct) : "—");
   const pnl = review && review.pnl_pct != null ? `${Number(review.pnl_pct) >= 0 ? "+" : ""}${Number(review.pnl_pct).toFixed(2)}%` : "";
   const weight = review && review.current_weight != null ? `${(Number(review.current_weight) * 100).toFixed(1)}%仓位` : "";
+  const scoreNum = score !== "—" ? Number(score) : null;
+  const scoreDot = scoreNum == null ? "" : scoreNum >= 80 ? '<span class="text-emerald-600">●</span>' : scoreNum >= 75 ? '<span class="text-amber-500">●</span>' : '<span class="text-slate-400">●</span>';
+  const pctSpan = (s) => s === "—" ? '<span class="text-slate-400">—</span>' : `<span class="${String(s).startsWith("-") ? "text-rose-600" : "text-emerald-700"}">${_esc(s)}</span>`;
   return `<div class="space-y-0.5 leading-tight">
     <div class="font-mono text-xs text-slate-800">${_esc(price)}${tradeDate ? ` <span class="text-slate-400">${_esc(String(tradeDate).slice(5, 10))}</span>` : ""}</div>
-    <div class="text-[11px] text-slate-600">分 ${_esc(score)} · 1月 ${_esc(oneMonth)} · YTD ${_esc(ytd)}</div>
+    <div class="text-[11px] text-slate-600">分 ${scoreDot}${_esc(score)} · 1月 ${pctSpan(oneMonth)} · YTD ${pctSpan(ytd)}</div>
     ${(pnl || weight) ? `<div class="text-[11px] ${pnl && pnl.startsWith("-") ? "text-rose-700" : "text-emerald-700"}">${_esc([pnl, weight].filter(Boolean).join(" · "))}</div>` : ""}
   </div>`;
 }
@@ -4151,6 +4171,34 @@ function _watchActionBadge(item) {
   </div>`;
 }
 
+// 2026-06-11: 自选页分组视图 —— 持仓 > 研究池 > 观察 > 不适用/缺资料
+let __wlGroupFilter = "";
+
+function _watchlistGroup(item) {
+  if (!item) return {key: "watch", order: 2, icon: "⚪", label: "观察"};
+  if (item.isHeld) return {key: "held", order: 0, icon: "🔴", label: "持仓 · 按紧急度"};
+  if (item.action === "不适用" || item.action === "补资料") return {key: "meta", order: 3, icon: "◽", label: "不适用 / 缺资料"};
+  if (item.action === "买前研究" || item.action === "候补研究" || item.action === "早发现跟踪" || item.action === "先复查") {
+    return {key: "research", order: 1, icon: "🟢", label: "研究池 · 按AI分"};
+  }
+  return {key: "watch", order: 2, icon: "⚪", label: "观察"};
+}
+
+function _setWlGroupFilter(key) {
+  __wlGroupFilter = (__wlGroupFilter === key) ? "" : key;
+  loadWatchlistTable();
+}
+
+function _watchlistDataHealthHtml(item) {
+  if (item.isEtf) return '<span class="text-[11px] text-slate-400 cursor-help" title="ETF/指数工具：链条与因子不适用，只做价格跟踪">N/A·ETF</span>';
+  if (item.notInUniverse) return '<span class="text-[11px] text-slate-400 cursor-help" title="非科技标的：AI 模型不评分，链条不适用">N/A·非科技</span>';
+  const miss = item.missingFields || [];
+  if (!miss.length) return '<span class="text-emerald-600 text-xs" title="链条/层级/角色/一句话/行业 五项齐全">✅ 齐</span>';
+  const nameMap = {chain: "链条", chain_tier: "层级", chain_role: "角色", layman_intro: "一句话", industry: "行业"};
+  const detail = miss.map(k => nameMap[k] || k).join("、");
+  return `<span class="text-amber-600 text-xs cursor-help" title="缺：${_esc(detail)}">⚠️ 缺${miss.length}项</span>`;
+}
+
 function _watchlistLocationHtml(row) {
   const bits = [];
   const chain = _chainBadges(row.chain);
@@ -4183,7 +4231,7 @@ async function loadWatchlistTable() {
     const msg = apiSt.reason === "db_busy"
       ? "API 已启动，DuckDB 正被 daily_refresh 等脚本占用，请几分钟后再点「刷新」。"
       : "无法连接本地 API；登录后应由 launchd 自动启动，或执行 launchctl kickstart -k gui/$(id -u)/com.linearview.stockassistant.api";
-    tbody.innerHTML = `<tr><td colspan="7" class="px-3 py-8 text-center text-amber-800 text-sm">⚠️ ${_esc(msg)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" class="px-3 py-8 text-center text-amber-800 text-sm">⚠️ ${_esc(msg)}</td></tr>`;
     countEl.textContent = "";
     return;
   }
@@ -4217,6 +4265,7 @@ async function loadWatchlistTable() {
       if (fChain && !(r.chain || "").split(",").map(s => s.trim()).includes(fChain)) return false;
       if (fTier  && r.chain_tier !== fTier) return false;
       if (fRole  && r.chain_role !== fRole) return false;
+      if (__wlGroupFilter && _watchlistGroup(dailyByCode.get(_watchlistKey(r))).key !== __wlGroupFilter) return false;
       if (fKw) {
         const item = dailyByCode.get(_watchlistKey(r));
         const hay = [r.code, r.name, r.layman_intro, r.industry, r.notes, ...(item ? item.why : [])].map(x => (x || "").toLowerCase()).join(" ");
@@ -4224,28 +4273,66 @@ async function loadWatchlistTable() {
       }
       return true;
     });
+    // 2026-06-11: 旧排序按加入时间倒序,新加的票霸占顶部、触发纪律的持仓被压到中间;
+    // 改为 分组(持仓>研究>观察>资料) → 组内动作优先级 → AI 分 → 代码。
     filtered.sort((a, b) => {
-      const ac = _watchlistTs(a, "created_at") || _watchlistTs(a, "updated_at");
-      const bc = _watchlistTs(b, "created_at") || _watchlistTs(b, "updated_at");
-      if (bc !== ac) return bc - ac;
-      const au = _watchlistTs(a, "updated_at");
-      const bu = _watchlistTs(b, "updated_at");
-      if (bu !== au) return bu - au;
+      const ia = dailyByCode.get(_watchlistKey(a));
+      const ib = dailyByCode.get(_watchlistKey(b));
+      const go = _watchlistGroup(ia).order - _watchlistGroup(ib).order;
+      if (go !== 0) return go;
+      const pa = (ia && ia.priority) || 0, pb = (ib && ib.priority) || 0;
+      if (pb !== pa) return pb - pa;
+      const sa = ia && ia.score != null ? ia.score : -1;
+      const sb = ib && ib.score != null ? ib.score : -1;
+      if (sb !== sa) return sb - sa;
       return _watchlistKey(a).localeCompare(_watchlistKey(b));
     });
+    const statsEl = document.getElementById("wl-stats-bar");
+    if (statsEl) {
+      const allCounts = {};
+      let disciplineN = 0;
+      dailyItems.forEach(it => {
+        const g = _watchlistGroup(it);
+        allCounts[g.key] = (allCounts[g.key] || 0) + 1;
+        if (it.action === "先看纪律") disciplineN++;
+      });
+      const seg = (key, icon, label) => {
+        const on = __wlGroupFilter === key;
+        return `<button onclick="_setWlGroupFilter('${key}')" title="点击只看这一组，再点取消" class="px-2 py-1 rounded border ${on ? "bg-violet-100 border-violet-300 text-violet-800 font-semibold" : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"}">${icon} ${label} ${allCounts[key] || 0}</button>`;
+      };
+      statsEl.innerHTML = [
+        seg("held", "🔴", "持仓"),
+        disciplineN ? `<span class="px-2 py-1 rounded border bg-rose-50 border-rose-200 text-rose-700 font-semibold">⚠️ 触发纪律 ${disciplineN}</span>` : "",
+        seg("research", "🟢", "研究池"),
+        seg("watch", "⚪", "观察"),
+        seg("meta", "◽", "不适用/缺资料"),
+      ].filter(Boolean).join("");
+    }
     countEl.textContent = duplicateN > 0
       ? `${filtered.length} / ${displayRows.length} 只 · 已合并 ${duplicateN} 条重复`
       : `${filtered.length} / ${displayRows.length} 只`;
     if (filtered.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="7" class="px-3 py-8 text-center text-slate-500 text-sm">没有匹配的记录</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="8" class="px-3 py-8 text-center text-slate-500 text-sm">没有匹配的记录</td></tr>`;
       return;
     }
+    const groupSeen = {};
+    filtered.forEach(r => {
+      const g = _watchlistGroup(dailyByCode.get(_watchlistKey(r)));
+      groupSeen[g.key] = (groupSeen[g.key] || 0) + 1;
+    });
+    let lastGroupKey = "";
     tbody.innerHTML = filtered.map(r => {
       const code = _watchlistKey(r);
       const item = dailyByCode.get(code) || _watchlistDailyItem(r);
       const why = item.why.map(w => _shortWatchText(w, 62)).slice(0, 3);
       const intro = r.layman_intro || r.industry || r.business || "";
-      return `
+      const grp = _watchlistGroup(item);
+      let groupHead = "";
+      if (grp.key !== lastGroupKey) {
+        lastGroupKey = grp.key;
+        groupHead = `<tr class="bg-slate-100/80"><td colspan="8" class="px-3 py-1.5 text-[11px] font-bold text-slate-500 tracking-wider">${grp.icon} ${grp.label}（${groupSeen[grp.key] || 0}）</td></tr>`;
+      }
+      return groupHead + `
       <tr class="hover:bg-slate-50 align-top">
         <td class="px-3 py-3 min-w-[180px]">
           <div class="font-mono text-xs font-bold text-slate-900 whitespace-nowrap">${_esc(code || r.code)}${_heldBadge(code)}${_watchlistSourceBadge(r)}${_watchlistDuplicateBadge(r)}</div>
@@ -4259,6 +4346,7 @@ async function loadWatchlistTable() {
           ${intro ? `<div class="text-[11px] text-slate-500 mt-1">${_esc(_shortWatchText(intro, 74))}</div>` : ""}
         </td>
         <td class="px-3 py-3 min-w-[150px]">${_watchlistLocationHtml(r)}</td>
+        <td class="px-3 py-3 min-w-[70px]">${_watchlistDataHealthHtml(item)}</td>
         <td class="px-3 py-3 min-w-[120px]">${_watchlistSourceHtml(r)}</td>
         <td class="px-3 py-3 text-right space-x-1 whitespace-nowrap">
           <button onclick="openWatchlistEditor('${_esc(code || r.code)}')" class="text-xs px-2 py-1 bg-slate-100 hover:bg-violet-100 text-slate-700 rounded" title="编辑自选股">✏️</button>
@@ -4267,7 +4355,7 @@ async function loadWatchlistTable() {
       </tr>`;
     }).join("");
   } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="7" class="px-3 py-8 text-center text-rose-700 text-sm">加载失败：${_esc(e.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" class="px-3 py-8 text-center text-rose-700 text-sm">加载失败：${_esc(e.message)}</td></tr>`;
   }
 }
 async function forceReloadWatchlist() { _watchlistCache = []; await loadWatchlistTable(); }
@@ -12843,12 +12931,10 @@ function _reasonSummaryHtml(row) {
         + `数据源 ${(DISCOVERY.etf_sources || []).join(" / ")} · `
         + `市值门槛 $${((DISCOVERY.min_market_cap_usd || 0) / 1e9).toFixed(0)}B`;
     }
+    // 2026-06-11 用户反馈「留着没用」：移除「今天完整推荐 N 只」说明横幅，保持隐藏。
     if (countExplainEl) {
-      countExplainEl.classList.remove("hidden");
-      countExplainEl.innerHTML = `<div class="flex flex-col md:flex-row md:items-center gap-2 md:gap-4">
-           <div class="font-semibold text-slate-900">今天完整推荐 ${_batchTotal || cands.length} 只，下面按市场切换查看。</div>
-           <div class="text-slate-600">${_marketBreakdown || "美股 / A股 / 港股"}；每个市场最多 20 只。</div>
-         </div>`;
+      countExplainEl.classList.add("hidden");
+      countExplainEl.innerHTML = "";
     }
     // 整批 candidates 是同一次 build_pool_recommendations.py 跑出来的，时间相同；算一次复用
     const _discoveryTs = _fmtTs(DISCOVERY.generated_at);
@@ -19803,6 +19889,19 @@ def _load_latest_pick_dates_by_market() -> dict[str, str | None]:
     return out
 
 
+_LEGACY_FLAG_REPR_RE = re.compile(
+    r"\{'code':\s*'[^']*',\s*'severity':\s*'[^']*',\s*'message':\s*'([^}]*?)'\}"
+)
+
+
+def _sanitize_legacy_flag_text(text: str) -> str:
+    """旧版 enrich 把 V2 risk_flag dict 直接 str() 进文本;source_raw_snapshots
+    是审计表不改写历史,读取端兜底把 repr 翻译回 message。"""
+    if not text or "{'code':" not in text:
+        return text
+    return _LEGACY_FLAG_REPR_RE.sub(r"\1", text)
+
+
 def _runtime_v2_enrichment_map(con, tables: set[str]) -> dict[str, dict]:
     """Latest v2 system-universe enrichment keyed by symbol and market:symbol."""
     if "source_raw_snapshots" not in tables:
@@ -19838,7 +19937,7 @@ def _runtime_v2_enrichment_map(con, tables: set[str]) -> dict[str, dict]:
         row = {
             "earnings": payload.get("earnings") or "",
             "conclusion": payload.get("conclusion") or "",
-            "risks": payload.get("risks") or "",
+            "risks": _sanitize_legacy_flag_text(payload.get("risks") or ""),
             "info_breakdown": payload.get("info_breakdown") or "",
             "notes": payload.get("notes") or "",
             "verification": payload.get("source_text") or "",
@@ -19994,8 +20093,16 @@ def _runtime_db_explorer_snapshot() -> dict:
             if pick_row.get("risk_flags_json") and not merged.get("risks"):
                 try:
                     flags = json.loads(pick_row.get("risk_flags_json"))
-                    if flags:
-                        merged["risks"] = "\n".join(f"- {flag}" for flag in flags)
+                    # V2 flag 是 {code,severity,message} 结构,message 已是中文句子;
+                    # 不允许 dict 直接进 f-string 变成 repr 文本。
+                    texts = [
+                        str(f.get("message") or f.get("text") or f.get("flag") or f.get("code") or "")
+                        if isinstance(f, dict) else str(f)
+                        for f in (flags or [])
+                    ]
+                    texts = [t for t in texts if t]
+                    if texts:
+                        merged["risks"] = "\n".join(f"- {t}" for t in texts)
                 except Exception:
                     pass
             if latest_run:
