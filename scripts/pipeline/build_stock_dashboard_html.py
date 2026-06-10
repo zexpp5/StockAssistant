@@ -4040,7 +4040,9 @@ function _watchlistDailyItem(row) {
   const isHeld = !!review || (_holdingsCache || []).some(h => String(h.code || h.symbol || "").toUpperCase() === code && (h.source || "manual") === "manual");
   const isPlan = (_holdingsCache || []).some(h => String(h.code || h.symbol || "").toUpperCase() === code && h.source === "ai_plan");
   const score = rating && rating.total_score != null ? Number(rating.total_score) : (review && review.score != null ? Number(review.score) : null);
-  const missingPosition = !(row.chain || row.chain_tier || row.chain_role || row.layman_intro || row.industry);
+  const missingFields = ["chain", "chain_tier", "chain_role", "layman_intro", "industry"].filter(k => !row[k]);
+  const missingPosition = missingFields.length === 5;
+  const isEtf = String(row.name || "").toUpperCase().includes("ETF");
   let priority = 0;
   let action = "观察";
   let hint = "普通关注，暂不优先";
@@ -4112,7 +4114,14 @@ function _watchlistDailyItem(row) {
   if (!rating && cov === "not_in_universe") {
     why.push("非科技/模型不评");
   }
-  if (missingPosition) {
+  if (isEtf && !isHeld && action === "观察") {
+    // ETF/指数工具:链条与因子本来就不适用,标 N/A 而不是误导性的「补资料」
+    action = "不适用";
+    hint = "ETF/指数工具，因子与链条不适用";
+    tone = "slate";
+    why.push("ETF·仅价格跟踪");
+  }
+  if (missingPosition && !isEtf) {
     priority += 3;
     if (!isHeld && action === "观察") {
       action = "补资料";
@@ -4123,7 +4132,8 @@ function _watchlistDailyItem(row) {
   }
   if (!why.length) why.push(row.layman_intro || row.industry || "仅保留观察");
 
-  return {row, code, rating, review, record, action, hint, tone, priority, why: why.filter(Boolean), isHeld, isPlan, score};
+  return {row, code, rating, review, record, action, hint, tone, priority, why: why.filter(Boolean), isHeld, isPlan, score,
+          isEtf, missingFields, notInUniverse: (!rating && cov === "not_in_universe")};
 }
 
 function _watchActionBadge(item) {
