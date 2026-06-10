@@ -18,6 +18,7 @@ sys.path.insert(0, _REPO)
 sys.path.insert(0, os.path.join(_REPO, "scripts", "lib"))  # 2026-05-11 lib 迁移
 import json
 import argparse
+import time
 import zoneinfo
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
@@ -466,10 +467,16 @@ def _fmp_history_df(yf_ticker: str) -> "pd.DataFrame | None":
         return None
 
 
-def _download_history_batch_yf(yf_tickers: list[str], period: str = "1y") -> dict[str, pd.DataFrame]:
-    """yfinance 批量历史价（非美股 + 本地缺失兜底 + 美股增量补最新都走这里）。"""
-    if not yf_tickers:
-        return {}
+# yfinance 历史下载并发/重试（2026-06-11）：抓 Yahoo 公开接口、瞬时高并发易被反爬限流
+# （静默返回空）。降并发把请求摊平、对返回空的票退避后只重试它们，比一股脑全并发更稳。
+# 可用环境变量调：STOCK_ASSISTANT_YF_WORKERS / _YF_RETRIES / _YF_RETRY_WAIT。
+_YF_WORKERS = int(os.getenv("STOCK_ASSISTANT_YF_WORKERS", "4"))
+_YF_MAX_RETRIES = int(os.getenv("STOCK_ASSISTANT_YF_RETRIES", "2"))
+_YF_RETRY_WAIT = float(os.getenv("STOCK_ASSISTANT_YF_RETRY_WAIT", "8"))
+
+
+def _yf_download_once(yf_tickers: list[str], period: str, workers: int) -> dict[str, pd.DataFrame]:
+    """一次 yfinance 批量下载（限并发 workers），拆成 {ticker: DataFrame}。"""
     unique = sorted(set(yf_tickers))
     try:
         df = yf.download(
@@ -477,15 +484,14 @@ def _download_history_batch_yf(yf_tickers: list[str], period: str = "1y") -> dic
             period=period,
             progress=False,
             group_by="ticker",
-            threads=True,
+            threads=workers,        # 限并发：摊平瞬时请求，降低 Yahoo 反爬限流概率
             auto_adjust=False,
         )
     except Exception as e:
-        print(f"  ⚠️ 批量历史价失败，将退化为空历史：{e}")
+        print(f"  ⚠️ 批量历史价失败：{e}")
         return {}
     if df is None or df.empty:
         return {}
-
     out: dict[str, pd.DataFrame] = {}
     if isinstance(df.columns, pd.MultiIndex):
         level0 = set(df.columns.get_level_values(0))
@@ -496,6 +502,31 @@ def _download_history_batch_yf(yf_tickers: list[str], period: str = "1y") -> dic
                     out[tk] = sub
     elif len(unique) == 1:
         out[unique[0]] = df.dropna(how="all")
+    return out
+
+
+def _download_history_batch_yf(yf_tickers: list[str], period: str = "1y") -> dict[str, pd.DataFrame]:
+    """yfinance 批量历史价：限并发 + 对空/限流的票退避重试（只碰拉取方式，不动动量算法）。"""
+    if not yf_tickers:
+        return {}
+    unique = sorted(set(yf_tickers))
+    out: dict[str, pd.DataFrame] = {}
+    pending = list(unique)
+    for attempt in range(_YF_MAX_RETRIES + 1):
+        if not pending:
+            break
+        got = _yf_download_once(pending, period, _YF_WORKERS)
+        for tk, df in got.items():
+            if df is not None and not df.empty:
+                out[tk] = df
+        pending = [tk for tk in unique if tk not in out]
+        if pending and attempt < _YF_MAX_RETRIES:
+            wait = _YF_RETRY_WAIT * (attempt + 1)
+            print(f"  yfinance {len(pending)} 只返回空（疑似限流），退避 {wait:.0f}s 后只重试这些...")
+            time.sleep(wait)
+    if pending:
+        tail = "..." if len(pending) > 8 else ""
+        print(f"  yfinance 重试后仍 {len(pending)} 只无历史：{', '.join(pending[:8])}{tail}")
     return out
 
 
