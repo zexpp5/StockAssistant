@@ -3034,33 +3034,8 @@ def evaluate_real_holding_discipline_plan(
     if str(plan.get("status") or "active") != "active":
         return {**base, "status": "inactive", "message": "纪律计划未启用"}
     price = _as_float_or_none(current_price)
-    if price is None:
-        return {
-            **base,
-            "status": "missing_price",
-            "action_label": "先刷新行情",
-            "data_blocked": True,
-            "message": f"{symbol or '该持仓'} 暂无可用行情，纪律规则不触发",
-        }
-    base["current_price"] = price
-    if price_is_stale:
-        return {
-            **base,
-            "status": "stale_price",
-            "action_label": "先刷新行情",
-            "data_blocked": True,
-            "message": f"{symbol or '该持仓'} 行情停留在 {base['price_trade_date'] or '上一交易日'}，先刷新，暂不触发纪律规则",
-        }
-
     triggers = list(plan.get("triggers") or [])
-    ordered_next = sorted(
-        triggers,
-        key=lambda t: (
-            _discipline_trigger_distance(t, price),
-            int(t.get("priority") or 99),
-            str(t.get("trigger_id") or ""),
-        ),
-    )
+    # 行情缺失/过期时也要把纪律线带给前端展示（规则可见，但 data_blocked 不触发）
     all_triggers = [
         {
             "trigger_id": t.get("trigger_id"),
@@ -3070,10 +3045,38 @@ def evaluate_real_holding_discipline_plan(
             "suggested_size_text": t.get("suggested_size_text"),
             "severity": t.get("severity"),
             "priority": int(t.get("priority") or 99),
-            "distance": _discipline_trigger_distance(t, price),
+            "distance": _discipline_trigger_distance(t, price) if price is not None else None,
         }
         for t in triggers
     ]
+    if price is None:
+        return {
+            **base,
+            "status": "missing_price",
+            "action_label": "先刷新行情",
+            "data_blocked": True,
+            "message": f"{symbol or '该持仓'} 暂无可用行情，纪律规则不触发",
+            "all_triggers": all_triggers,
+        }
+    base["current_price"] = price
+    if price_is_stale:
+        return {
+            **base,
+            "status": "stale_price",
+            "action_label": "先刷新行情",
+            "data_blocked": True,
+            "message": f"{symbol or '该持仓'} 行情停留在 {base['price_trade_date'] or '上一交易日'}，先刷新，暂不触发纪律规则",
+            "all_triggers": all_triggers,
+        }
+
+    ordered_next = sorted(
+        triggers,
+        key=lambda t: (
+            _discipline_trigger_distance(t, price),
+            int(t.get("priority") or 99),
+            str(t.get("trigger_id") or ""),
+        ),
+    )
     next_triggers = [
         {
             "trigger_id": t.get("trigger_id"),

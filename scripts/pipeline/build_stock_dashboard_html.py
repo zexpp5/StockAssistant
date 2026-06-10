@@ -8309,9 +8309,24 @@ function _disciplineCell(item) {
   ].filter(Boolean);
   const title = titleLines.join("\n");
   if (status === "stale_price" || status === "missing_price") {
+    const ruleLines = allTriggers
+      .slice()
+      .sort((a, b) => ((Number(a.priority) || 99) - (Number(b.priority) || 99)))
+      .slice(0, 4)
+      .map(t => {
+        const s = splitTrigger(t);
+        const label = String((t && t.action_label) || "").trim();
+        if (!s.range && !label) return "";
+        const sev = String((t && t.severity) || "info").toLowerCase();
+        const cls = sev === "critical" || sev === "high" ? "text-rose-700" : sev === "warning" || sev === "medium" ? "text-amber-700" : "text-slate-600";
+        const text = /\d/.test(label) ? label : (s.range ? `${s.range} · ${label || s.action}` : label);
+        return `<div class="text-[10px] ${cls}">${_esc(text)}</div>`;
+      })
+      .filter(Boolean)
+      .join("");
     return `<td class="px-3 py-2 text-left whitespace-normal cursor-help leading-snug" title="${_esc(title)}">
-      <div class="text-[12px] font-semibold text-amber-800">先刷新行情</div>
-      <div class="text-[11px] text-amber-700">${status === "stale_price" ? "旧价格不触发规则" : "缺价格不触发规则"}</div>
+      <div class="text-[11px] font-semibold text-amber-800">先刷新行情 · ${status === "stale_price" ? "旧价不触发" : "缺价不触发"}</div>
+      ${ruleLines || `<div class="text-[11px] text-amber-700">${status === "stale_price" ? "旧价格不触发规则" : "缺价格不触发规则"}</div>`}
     </td>`;
   }
   if (status === "triggered") {
