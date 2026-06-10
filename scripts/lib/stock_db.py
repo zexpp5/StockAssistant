@@ -642,6 +642,23 @@ def _infer_signal_from_rating(rating: str | None) -> str:
     return "buy"
 
 
+_LEGACY_FLAG_REPR_RE = None  # 延迟编译,见 _sanitize_legacy_flag_repr
+
+
+def _sanitize_legacy_flag_repr(text):
+    """旧版 enrich 曾把 V2 risk_flag dict 直接 str() 写进 source_raw_snapshots 的
+    risks 字段;快照是审计表不改写历史,读取端把 repr 翻译回 message。"""
+    if not text or "{'code':" not in str(text):
+        return text
+    global _LEGACY_FLAG_REPR_RE
+    if _LEGACY_FLAG_REPR_RE is None:
+        import re as _re
+        _LEGACY_FLAG_REPR_RE = _re.compile(
+            r"\{'code':\s*'[^']*',\s*'severity':\s*'[^']*',\s*'message':\s*'([^}]*?)'\}"
+        )
+    return _LEGACY_FLAG_REPR_RE.sub(r"\1", str(text))
+
+
 def fetch_research_records_v2(*, conn: duckdb.DuckDBPyConnection | None = None) -> list[dict]:
     """V2 路径：从 system_universe + price_daily + 最新 recommendation_picks 拼出
     给「个股研究 / 产业链地图 / 买前审查」的展示用 records。
@@ -743,6 +760,9 @@ def fetch_research_records_v2(*, conn: duckdb.DuckDBPyConnection | None = None) 
         "pick_rating", "pick_signal", "pick_total_score", "pick_factor_scores_json",
     ]
     out = [dict(zip(cols, r)) for r in rows]
+    for r in out:
+        if r.get("risks"):
+            r["risks"] = _sanitize_legacy_flag_repr(r["risks"])
     # chain/chain_tier/chain_role/layman_intro 已在 SQL 里 JOIN chain_metadata 拿到（2026-05-21 V2 表）
     # 若 chain_metadata 没记录则用 watchlist_enrich._infer_chain 兜底
     import logging as _lg

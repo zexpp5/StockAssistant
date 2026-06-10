@@ -433,8 +433,16 @@ def _analysis_text(target: dict[str, Any], recommendation: dict[str, Any]) -> tu
         + (f"。核心依据：{reason}" if reason else "。")
     )
     risk_flags = recommendation.get("risk_flags") or []
-    if risk_flags:
-        risks = "\n".join(f"- {flag}" for flag in risk_flags)
+    # V2 flag 是 {code,severity,message} 结构;dict 直接进 f-string 会变成
+    # repr 文本写进库并最终漏到 dashboard,统一取 message。
+    flag_texts = [
+        str(f.get("message") or f.get("text") or f.get("flag") or f.get("code") or "")
+        if isinstance(f, dict) else str(f)
+        for f in risk_flags
+    ]
+    flag_texts = [t for t in flag_texts if t]
+    if flag_texts:
+        risks = "\n".join(f"- {t}" for t in flag_texts)
     else:
         risks = "V2 当前未命中结构化风险 flags；仍需结合估值、财报、流动性和买前审查复核。"
     return conclusion, risks
