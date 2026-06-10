@@ -12265,14 +12265,38 @@ function _policyActionPriority(row) {
   return 6;
 }
 
+// 把后端的 eligibility_migration_status 翻成「为什么是这个动作」的大白话
+function _policyReasonZh(row) {
+  const m = String((row && row.eligibility_migration_status) || "").toLowerCase();
+  const map = {
+    "excluded_identity": "身份不符（非科技成长主线），已剔除",
+    "etf_only_needs_company_evidence": "仅 ETF 来源、缺公司级证据，先只观察",
+    "data_usability_gate": "核心数据不足，被数据闸拦住，先只研究",
+    "layer_not_buyable": "不在可买分层（主题/观察池），先研究/观察",
+    "needs_company_evidence": "公司级证据未确认，先补买前审查",
+    "risk_gate": "触发风险红旗，今晚先别动",
+    "wait_entry": "逻辑成立但买点未到，等回调/确认",
+    "passed_p0_gate": "通过 P0 闸门，可进入买前研究",
+    "legacy": "非美股，仍沿用老规则（未迁移到新规则）",
+    "p0_us": "已进入新规则（美股）",
+  };
+  return map[m] || "";
+}
+
 function _policyActionBadge(row) {
   const label = _policyActionLabel(row);
   const cls = _policyActionTone(row);
+  const reason = _policyReasonZh(row);
+  const rationale = String((row && row.classification_rationale) || "").trim();
   const layer = row && row.primary_layer ? `层级：${row.primary_layer}` : "";
   const ev = row && row.evidence_status ? `证据：${row.evidence_status}` : "";
-  const eligibility = row && row.eligibility ? `资格：${row.eligibility}` : "";
-  const action = row && row.action ? `动作：${row.action}` : "";
-  const title = [action, eligibility, layer, ev, "这是新规则 gate，不是原始总分"].filter(Boolean).join(" · ");
+  const parts = [];
+  if (reason) parts.push(`为什么：${reason}`);
+  if (rationale) parts.push(`分层依据：${rationale}`);
+  if (layer) parts.push(layer);
+  if (ev) parts.push(ev);
+  parts.push("这是新规则筛选/降级，不改原始总分");
+  const title = parts.join(" · ");
   return `<span class="inline-flex px-2 py-0.5 rounded-full border text-[11px] font-semibold whitespace-nowrap ${cls}" title="${_esc(title)}">${_esc(label)}</span>`;
 }
 
@@ -12838,6 +12862,27 @@ function _reasonSummaryHtml(row) {
               <span class="px-2 py-0.5 rounded border border-slate-200 bg-slate-50 text-slate-700">只观察 ${stats.watch_only}</span>
               <span class="px-2 py-0.5 rounded border border-rose-200 bg-rose-50 text-rose-800">拦截/剔除 ${stats.blocked + stats.exclude}</span>
             </div>
+            <details class="mt-2 text-xs">
+              <summary class="cursor-pointer text-slate-700 font-medium select-none">▸ 判定顺序（点开看这套新规则怎么判，从上往下，命中即停）</summary>
+              <ol class="mt-1.5 ml-4 list-decimal space-y-0.5 text-slate-600 leading-relaxed">
+                <li>身份不符（非科技成长主线 / 数据明显错）→ <span class="text-rose-700 font-medium">剔除</span></li>
+                <li>只有 ETF 主题来源、没有公司级证据 → <span class="text-slate-700 font-medium">只观察</span></li>
+                <li>核心数据不足（被数据可用性闸拦住）→ <span class="text-sky-700 font-medium">只研究</span></li>
+                <li>不在「可买分层」（如主题观察池）→ <span class="text-sky-700 font-medium">只研究 / 只观察</span></li>
+                <li>公司级证据未确认（证据非 confirmed）→ <span class="text-sky-700 font-medium">只研究</span></li>
+                <li>证据已确认 + 在可买分层 → <span class="text-emerald-700 font-medium">可买</span>，再看风险：
+                  <ul class="ml-3 list-disc">
+                    <li>触发盘前 / 全期限红旗 → <span class="text-rose-700 font-medium">红旗拦截</span>（今晚先别动）</li>
+                    <li>回调或买点确认没到 → <span class="text-amber-700 font-medium">等买点</span></li>
+                    <li>买点成立 → <span class="text-emerald-700 font-medium">重点研究</span></li>
+                  </ul>
+                </li>
+              </ol>
+              <div class="mt-1.5 ml-1 text-[11px] text-slate-500">
+                说明：当前只有<b>美股</b>走这套新规则；A 股 / 港股仍按老规则（标 legacy），后续单独迁移。
+                这套规则<b>只做筛选和降级，不改原始总分</b>。每只票的具体理由，把鼠标放到表里「新规则动作」那个标签上就能看到。
+              </div>
+            </details>
             ${repairHtml}
           </div>
           <div class="flex items-center gap-2 whitespace-nowrap">
