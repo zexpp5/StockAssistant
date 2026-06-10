@@ -64,6 +64,13 @@ WAIT_ENTRY_RISK_CODES = {
     "ACUTE_PRICE_PULLBACK",
     "OVERHEATED_1Y",
 }
+OVERHEATED_FLAG_CODE = "OVERHEATED_1Y"
+# ② 过热护栏·动作闸开关（2026-06-11，规则文档 §18.7）：
+#   shadow（默认）= OVERHEATED_1Y 仍计算并作为警示展示，但不下调 recommendation 的 action，
+#                   等 strategy_eval 历史回算追认其有效后再开（守"先验证再上"红线）；
+#   active        = 过热把 buyable 下调为 wait_entry（同伙原行为）。
+# 真钱安全网：无论哪种模式，AI 组合方案(portfolio_plans)始终硬排除过热票，避免抛物线顶部进自动组合。
+OVERHEATED_ACTION_GATE_MODE = (os.environ.get("OVERHEATED_ACTION_GATE_MODE") or "shadow").strip().lower()
 MARKET_PHASE_ID = "ai_infra_buildout_to_inference"
 MARKET_PHASE_NAME = "AI 数据中心建设后半段 + 推理/Agent/企业集成前半段"
 MARKET_PHASE_SCOPE = "US/global_tech"
@@ -587,12 +594,18 @@ def _derive_recommendation_policy(row: dict[str, Any]) -> dict[str, Any]:
         return policy
 
     policy["eligibility"] = "buyable"
+    # ② 过热动作闸：shadow 模式下，OVERHEATED_1Y 只作警示、不下调 action（仍记录在 risk_flags 与 overheated_shadow）。
+    wait_codes = set(WAIT_ENTRY_RISK_CODES)
+    if OVERHEATED_ACTION_GATE_MODE != "active":
+        wait_codes.discard(OVERHEATED_FLAG_CODE)
+        if OVERHEATED_FLAG_CODE in codes:
+            policy["overheated_shadow"] = True
     if codes & BLOCKING_RISK_CODES:
         policy.update({
             "action": "blocked",
             "eligibility_migration_status": "risk_gate",
         })
-    elif codes & WAIT_ENTRY_RISK_CODES or signal != "buy":
+    elif codes & wait_codes or signal != "buy":
         policy.update({
             "action": "wait_entry",
             "eligibility_migration_status": "wait_entry",
@@ -1394,6 +1407,11 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
                     "+ usable data + risk-scope gate"
                 ),
                 "market_phase_snapshot_id": market_phase_snapshot_id,
+                "overheated_action_gate_mode": OVERHEATED_ACTION_GATE_MODE,
+                "overheated_action_gate_note": (
+                    "shadow=OVERHEATED_1Y 仅警示不下调 action（默认，待 strategy_eval 追认）；"
+                    "active=过热下调 buyable→wait_entry。两种模式下组合方案均硬排除过热票。"
+                ),
                 "structural_repair_requires": "one_month>=+5%, one_week>=0%, latest_day>-3%",
                 "formula": (
                     "total=0.15*momentum+(0.65-reversal_w)*valuation+"
@@ -1482,6 +1500,8 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
         if r["signal"] == "buy"
         and r.get("eligibility") == "buyable"
         and r.get("action") == "focus_research"
+        # 真钱安全网：过热票永不进 AI 组合方案，即便 ② 动作闸处于 shadow（避免抛物线顶部入自动组合）
+        and OVERHEATED_FLAG_CODE not in _risk_codes(r.get("risk_flags") or [])
     ]
     buy_rows.sort(key=lambda x: x["total_score"], reverse=True)
     portfolio_rows = buy_rows[:portfolio_size]
