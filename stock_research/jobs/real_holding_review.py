@@ -887,9 +887,14 @@ def _build_item(
         elif isinstance(flag, dict):
             # V2 结构是 {code, severity, message}（message 已是中文句子）；
             # 任何情况下都不允许 str(dict) 的 repr 文本漏进展示层。
+            # severity=low 是数据质量脚注（如动量字段回退快照），归 data_flags，
+            # 不挤占前端「为什么关注」的风险位。
             txt = flag.get("message") or flag.get("text") or flag.get("flag") or flag.get("code")
             if txt:
-                risk_flags.append(str(txt))
+                if str(flag.get("severity") or "").lower() == "low":
+                    data_flags.append(str(txt))
+                else:
+                    risk_flags.append(str(txt))
     if current_weight is not None and current_weight >= 0.25:
         risk_flags.append("单一持仓超过总资产 25%")
     if pnl_pct is not None and pnl_pct <= float(rules["loss_review_pct"]):
