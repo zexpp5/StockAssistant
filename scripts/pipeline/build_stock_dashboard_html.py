@@ -2700,10 +2700,11 @@ function openDiscoveryHistoryFromRadar(event) {
     </select>
     <select id="wl-filter-tier" onchange="loadWatchlistTable()" class="px-2 py-1 border border-slate-300 rounded">
       <option value="">全部层级</option>
-      <option value="核心">核心</option>
-      <option value="一线">一线</option>
-      <option value="二线">二线</option>
-      <option value="三线">三线</option>
+      <!-- 2026-06-11: 与 chain_metadata.chain_tier 实际枚举对齐(旧的 核心/一线/二线 从未匹配过任何行) -->
+      <option value="上游">上游</option>
+      <option value="中游">中游</option>
+      <option value="下游">下游</option>
+      <option value="基础设施">基础设施</option>
       <option value="N/A">N/A</option>
     </select>
     <select id="wl-filter-role" onchange="loadWatchlistTable()" class="px-2 py-1 border border-slate-300 rounded">
