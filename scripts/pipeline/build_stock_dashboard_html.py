@@ -1493,6 +1493,9 @@ function openDiscoveryHistoryFromRadar(event) {
     </div>
   </div>
 
+  <!-- 2026-06-11: 配置体检卡 — 你现在 vs「指数打底+小仓AI」框架(规则文档 §19.3),advisory 只读 -->
+  {ALLOCATION_FRAMEWORK_CARD}
+
   <div id="real-holdings-summary" class="mb-3"></div>
   <div id="real-asset-summary" class="hidden"></div>
 
@@ -17251,6 +17254,109 @@ def trust_verdict_panel_html() -> str:
     )
 
 
+def allocation_framework_card_html() -> str:
+    """🧭 配置体检：你现在 vs「指数打底 + 小仓 AI」稳健框架（规则文档 §19.3）。
+
+    只读 real_holding_review.json，按【现值】把持仓分 指数ETF / AI科技个股 / 非AI分散，
+    对照框架给 advisory（建议复查，不下买卖指令、不碰持仓表）。
+    分类用 tech_growth_layers 单一来源；非美股/消费等归非AI。"""
+    rev = _runtime_load_json("data/latest/real_holding_review.json") or {}
+    items = rev.get("items") or []
+    if not items:
+        return ""
+    try:
+        sys.path.insert(0, _REPO)
+        from stock_research.core.tech_growth_layers import classify_tech_growth_layer
+        _TECH = {"ai_core", "ai_infrastructure", "tech_software", "internet_platform", "power_datacenter"}
+
+        def _is_ai(mk: str, sym: str) -> bool:
+            try:
+                lyr = classify_tech_growth_layer(market=mk, symbol=sym, source=None, theme=None, industry=None, name=None)
+                return lyr.primary_layer in _TECH
+            except Exception:
+                return False
+    except Exception:
+        _AI_FALLBACK = {"GOOGL", "NVDA", "TSM", "AAPL", "MRVL", "META", "AMZN", "MSFT", "AVGO", "AMD", "MU", "ADSK", "NXPI", "ADI"}
+
+        def _is_ai(mk: str, sym: str) -> bool:
+            return str(sym).split(".")[0].upper() in _AI_FALLBACK
+
+    _ETF = {"QQQ", "SPY", "VOO", "VTI", "GLD", "TLT", "KWEB", "SOXX", "SMH", "510300", "159915", "513050", "510500"}
+    buckets = {"index": 0.0, "ai": 0.0, "nonai": 0.0}
+    detail: list[tuple[str, float, str]] = []
+    total = 0.0
+    largest = ("", 0.0)
+    for it in items:
+        try:
+            v = float(it.get("current_value_rmb") or 0.0)
+        except Exception:
+            v = 0.0
+        if v <= 0:
+            continue
+        sym = str(it.get("symbol") or it.get("code") or "")
+        mk = str(it.get("market") or "")
+        base = sym.split(".")[0].upper()
+        name = str(it.get("name") or "")
+        if base in _ETF or "ETF" in name.upper():
+            b, label = "index", "指数ETF"
+        elif _is_ai(mk, sym):
+            b, label = "ai", "AI/科技个股"
+        else:
+            b, label = "nonai", "非AI/分散"
+        buckets[b] += v
+        total += v
+        if v > largest[1]:
+            largest = (sym, v)
+        detail.append((sym, v, label))
+    if total <= 0:
+        return ""
+    pct = lambda x: x / total * 100.0
+    idx_p, ai_p, non_p = pct(buckets["index"]), pct(buckets["ai"]), pct(buckets["nonai"])
+    big_sym, big_p = largest[0], pct(largest[1])
+
+    def _row(label: str, cur: float, target: str, ok: bool, warn: str) -> str:
+        mark = "✅" if ok else "⚠️"
+        return (f'<tr class="border-t border-slate-100"><td class="py-1.5 pr-3 font-medium text-slate-700">{label}</td>'
+                f'<td class="py-1.5 px-3 text-right font-mono font-bold {"text-rose-700" if not ok else "text-slate-700"}">{cur:.0f}%</td>'
+                f'<td class="py-1.5 px-3 text-slate-500">{target}</td>'
+                f'<td class="py-1.5 pl-3 text-[12px] text-slate-600">{mark} {warn}</td></tr>')
+
+    advisories: list[str] = []
+    if idx_p < 40:
+        advisories.append(f"<b>建个指数打底</b>：你现在指数 {idx_p:.0f}%、框架 ~70% —— 这是稳稳吃市场/AI beta、不用你操心的核心仓。")
+    if ai_p > 30:
+        advisories.append(f"<b>AI 个股 {ai_p:.0f}% 超配</b>（框架卫星 ≤30%），且这套策略<b>还没验证</b>（顶部红绿灯 🔴）—— 考虑收敛到小仓。")
+    if big_p > 25:
+        advisories.append(f"<b>单只 {big_sym} {big_p:.0f}% 过重</b>（建议单只 &lt;20-25%）—— 一只票一个坏消息就能掀翻整个账户。")
+    if not advisories:
+        advisories.append("当前配置基本贴合框架，继续保持分散与小仓纪律即可。")
+
+    rows = (
+        _row("指数打底", idx_p, "~70%", idx_p >= 40, "没有底仓" if idx_p < 40 else "够"),
+        _row("AI/科技个股", ai_p, "≤30%(卫星)", ai_p <= 30, "超配、且策略未验证" if ai_p > 30 else "在小仓范围"),
+        _row("非AI/分散", non_p, "留一块", non_p >= 10, "你目前唯一的真分散" if non_p >= 10 else "偏少"),
+    )
+    detail.sort(key=lambda x: -x[1])
+    detail_txt = "、".join(f"{s.split('.')[0]} {pct(v):.0f}%（{lab[:5]}）" for s, v, lab in detail[:8])
+    return (
+        '<div class="mb-4 rounded-xl border border-violet-300 bg-violet-50 px-4 py-3">'
+        '<div class="text-base font-bold text-slate-900">🧭 配置体检 · 你现在 vs 稳健框架「指数打底 + 小仓 AI」</div>'
+        '<div class="text-[12px] text-slate-500 mt-0.5 mb-2">持仓内占比（不含现金）· advisory：建议复查，不下买卖指令、不碰你的持仓。</div>'
+        '<table class="w-full text-sm"><thead><tr class="text-[12px] text-slate-500">'
+        '<th class="text-left font-normal pb-1">类别</th><th class="text-right font-normal pb-1 px-3">你现在</th>'
+        '<th class="text-left font-normal pb-1 px-3">框架建议</th><th class="text-left font-normal pb-1 pl-3">体检</th></tr></thead>'
+        f'<tbody>{"".join(rows)}</tbody></table>'
+        f'<div class="mt-2 text-sm {"text-rose-700 font-semibold" if big_p > 25 else "text-slate-700"}">'
+        f'🔎 最大单只：<b>{big_sym} {big_p:.0f}%</b>（框架建议单只 &lt;20-25%）</div>'
+        '<div class="mt-2 text-sm text-slate-800 leading-relaxed"><b>建议复查方向</b>（你决定，不是必须卖）：'
+        '<ul class="list-disc pl-5 mt-1 space-y-0.5 text-[13px]">'
+        + "".join(f"<li>{a}</li>" for a in advisories)
+        + '</ul></div>'
+        f'<div class="text-[11px] text-slate-500 mt-2">分类明细：{detail_txt}。框架与口径见规则文档 §19.3；这是教育性框架提示，不构成买卖指令。</div>'
+        '</div>'
+    )
+
+
 def strategy_market_advisory_html() -> str:
     """分市场研究观察 advisory —— 按「只有 US 在验证轨道」策略,列出冻结的非 US 市场(CN/HK)
     及其真实实测 alpha/命中,防止被误读成可买。数据源 shadow_tuning_evidence.json(只读)。
@@ -20514,6 +20620,7 @@ def build():
     html = html.replace("{TODAY_DECISION_PANEL}", today_decision_panel_html())
     html = html.replace("{RUNTIME_STATUS_PANEL}", runtime_status_panel_html())
     html = html.replace("{STRATEGY_MARKET_ADVISORY}", strategy_market_advisory_html())
+    html = html.replace("{ALLOCATION_FRAMEWORK_CARD}", allocation_framework_card_html())
     html = html.replace("{TRUST_VERDICT_PANEL}", trust_verdict_panel_html())
     html = html.replace("{US_VALIDATION_PROGRESS}", us_validation_progress_html())
     html = html.replace("{P0_POLICY_VALIDATION_PANEL}", p0_policy_validation_panel_html())
