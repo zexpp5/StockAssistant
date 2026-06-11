@@ -281,8 +281,14 @@ _V2_FACTOR_LABELS = {
     "analyst": "分析师",
     "insider": "内部人",
 }
-# 不应作为"因子"展示的统计字段（picks JSON 里混在 factor_scores 中的元信息）
-_V2_FACTOR_META = {"total", "rank", "score"}
+# 不应作为"因子"展示的统计/状态字段（picks JSON 里混在 factor_scores 中的元信息）
+# data_usability / field_coverage_quality 是数据卫生度量，eligibility / action /
+# primary_layer / evidence_status 是分层状态 — 列进段标题只会变成中英混杂的长串噪声
+_V2_FACTOR_META = {
+    "total", "rank", "score",
+    "data_usability", "field_coverage_quality",
+    "eligibility", "action", "primary_layer", "evidence_status",
+}
 
 
 def _parse_factor_scores(raw: Any) -> dict:
@@ -1383,9 +1389,7 @@ def section_regime(defense: dict | None,
         "#### 1. 今天能不能动手？（防御 + 质量闸门 + 生产验收 · 取最严）",
         f"{icon} **{severity}** — 防御 {defense_sev} · 质量闸门 {_badge(qgate_status)} · 生产验收 {_badge(accept_status)}",
         advice,
-        "",
-        "📖 灯色规则（取最严）：🟢 三道全绿 ｜ 🟡 任一 WARN ｜ 🟠 任一 FAIL 或防御 HIGH ｜ 🔴 防御 CRITICAL",
-        "🛡️ 防御：VIX / 200MA / 单股止损 ｜ 质量闸门：picks/factor 完整性 ｜ 生产验收：今日 pipeline 是否真跑通",
+        "📖 灯色 = 三道闸门取最严（防御=VIX/200MA/止损 · 质量=数据完整 · 验收=pipeline 跑通）：🟢 全绿 → 🟡 WARN → 🟠 FAIL/防御 HIGH → 🔴 崩盘",
     ]
     if reasons:
         lines.append("")
@@ -1618,8 +1622,10 @@ from stock_research.core.catalyst import get_catalyst as _catalyst_sentence
 def _build_catalyst(ticker: str, lookback_days: int = 60) -> str | None:
     """morning_brief 端 catalyst wrapper：返回缩进 + 📰 + 句子的完整行。
     无可用催化返回 None。
+    早报不要 8-K 英文原文摘录（截断后是半句噪声），只留中文标签 + 日期；
+    想看原文去 dashboard。
     """
-    s = _catalyst_sentence(ticker, lookback_days=lookback_days)
+    s = _catalyst_sentence(ticker, lookback_days=lookback_days, include_summary=False)
     return f"  📰 {s}" if s else None
 
 
@@ -1678,6 +1684,33 @@ def _build_rise_signal(ticker: str) -> str | None:
     return f"  📈 {' · '.join(parts)}" if parts else None
 
 
+def _rise_marker(ticker: str) -> str:
+    """compact 主行的行内异动标：" 🆕" 首次 / " 📈" 跃升 / ""。门槛同 _build_rise_signal。"""
+    ap = _load_appearance()
+    if int(ap.get("total_runs") or 0) < 2:
+        return ""
+    info = (ap.get("tickers") or {}).get((ticker or "").upper()) or {}
+    if int(info.get("count") or 0) == 1:
+        return " 🆕"
+    rank_up = info.get("rank_up")
+    score_up = info.get("score_up")
+    if (isinstance(rank_up, (int, float)) and rank_up >= 3) or \
+       (isinstance(score_up, (int, float)) and score_up >= 2.0):
+        return " 📈"
+    return ""
+
+
+# ⭐ 重点详解条数 — 与 dashboard Top5 折叠视图同口径
+DETAIL_TOP_N = 5
+
+
+def _star_weight_tickers(plan: list[dict], top_n: int = DETAIL_TOP_N) -> set[str]:
+    """⭐ 重点 = 按仓位 top_n（看下注最重的，不看打分名次）。"""
+    ranked = sorted(plan, key=lambda e: (e.get("v5_weight") or e.get("weight") or 0),
+                    reverse=True)
+    return {(e.get("ticker") or "").upper() for e in ranked[:top_n]}
+
+
 def _signal_quality_tag(
     ticker: str,
     composite: float | None,
@@ -1711,7 +1744,7 @@ def section_dropouts() -> str:
         m = (d.get("market") or "").upper()
         if m in by_market:
             by_market[m].append(d)
-    parts = ["#### 3.5 📉 上批次在 Top、本批次跌出"]
+    parts = ["#### 2.4 📉 上批次在 Top、本批次跌出"]
     parts.append(f"_总 {len(drops)} 只 · 跌出 ≠ 退出科技 universe，可能只是排名滑出前 20。若手上有，建议复查持有理由。_")
     for m_key, m_label in [("CN", "🇨🇳 A 股"), ("HK", "🇭🇰 港股"), ("US", "🇺🇸 美股")]:
         rows = by_market.get(m_key) or []
@@ -1732,39 +1765,12 @@ def section_dropouts() -> str:
 
 
 def _humanize_picks(plan: list[dict], a_share: bool, history: dict | None = None,
-                    factor_scores: dict | None = None) -> list[str]:
-    """把 plan_v5 entry 排成一句话/只 + 推荐理由行（扁平 list，每只股 1-4 行）。"""
-    factors_map, signals_map = _factor_scores_index(factor_scores)
-    out = []
-    for entry in plan:
-        ticker = entry.get("ticker", "?")
-        if a_share and not _is_a_share(ticker):
-            continue
-        if not a_share and _is_a_share(ticker):
-            continue
-        weight = entry.get("v5_weight") or entry.get("weight") or 0
-        f_score = _format_f_score(_entry_f_score(entry))
-        z = entry.get("composite_z", entry.get("composite", 0))
-        spark, pct60 = _ticker_sparkline(history or {}, ticker)
-        spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
-        # F-Score 缺失时不在主行展示「F-Score 缺失」噪声；section header 已说明基本面未覆盖
-        f_str = f" · F-Score {f_score}" if f_score != "缺失" else ""
-        out.append(
-            f"• **{ticker}** {weight*100:.1f}%{f_str} · 综合 {z:+.2f}{spark_str}"
-        )
-        out.extend(_ticker_signal_lines(ticker))
-        if not a_share:
-            qtag = _signal_quality_tag(ticker, z, pct60, history, mode="z_score")
-            if qtag:
-                out.append(qtag)
-            pros, cons = _build_us_reasons(ticker, factors_map, signals_map)
-            out.extend(_format_reason_lines(pros, cons))
-    return out
+                    factor_scores: dict | None = None, compact: bool = False) -> list[str]:
+    """把 plan_v5 entry 排成一句话/只 + 推荐理由行（扁平 list，每只股 1-4 行）。
 
-
-def _humanize_picks_grouped(plan: list[dict], a_share: bool, history: dict | None = None,
-                            factor_scores: dict | None = None) -> list[str]:
-    """每只股聚合成 1 个多行 markdown 块（含 ticker 主行 + 缩进 reasons）。供飞书卡片 2 列拆分用。"""
+    compact=True：只出主行 + 行内 🆕/📈 异动标（🆕 追加一行催化保证 why-now），
+    供「其余 N 只速览」用，完整理由看 dashboard。
+    """
     factors_map, signals_map = _factor_scores_index(factor_scores)
     out = []
     for entry in plan:
@@ -1781,7 +1787,58 @@ def _humanize_picks_grouped(plan: list[dict], a_share: bool, history: dict | Non
         # F-Score 缺失时不在主行展示「F-Score 缺失」噪声；section header 已说明基本面未覆盖
         f_str = f" · F-Score {f_score}" if f_score != "缺失" else ""
         head = f"• **{ticker}** {weight*100:.1f}%{f_str} · 综合 {z:+.2f}{spark_str}"
-        block_lines: list[str] = [head]
+        if compact:
+            marker = _rise_marker(ticker)
+            out.append(head + marker)
+            if marker == " 🆕":
+                cat = _build_catalyst(ticker)
+                if cat:
+                    out.append(cat)
+            continue
+        out.append(head)
+        out.extend(_ticker_signal_lines(ticker))
+        if not a_share:
+            qtag = _signal_quality_tag(ticker, z, pct60, history, mode="z_score")
+            if qtag:
+                out.append(qtag)
+            pros, cons = _build_us_reasons(ticker, factors_map, signals_map)
+            out.extend(_format_reason_lines(pros, cons))
+    return out
+
+
+def _humanize_picks_grouped(plan: list[dict], a_share: bool, history: dict | None = None,
+                            factor_scores: dict | None = None,
+                            compact: bool = False) -> list[str]:
+    """每只股聚合成 1 个多行 markdown 块（含 ticker 主行 + 缩进 reasons）。供飞书卡片 2 列拆分用。
+
+    compact=True 同 _humanize_picks：每块只剩主行（🆕 多一行催化）。
+    """
+    factors_map, signals_map = _factor_scores_index(factor_scores)
+    out = []
+    for entry in plan:
+        ticker = entry.get("ticker", "?")
+        if a_share and not _is_a_share(ticker):
+            continue
+        if not a_share and _is_a_share(ticker):
+            continue
+        weight = entry.get("v5_weight") or entry.get("weight") or 0
+        f_score = _format_f_score(_entry_f_score(entry))
+        z = entry.get("composite_z", entry.get("composite", 0))
+        spark, pct60 = _ticker_sparkline(history or {}, ticker)
+        spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
+        # F-Score 缺失时不在主行展示「F-Score 缺失」噪声；section header 已说明基本面未覆盖
+        f_str = f" · F-Score {f_score}" if f_score != "缺失" else ""
+        head = f"• **{ticker}** {weight*100:.1f}%{f_str} · 综合 {z:+.2f}{spark_str}"
+        if compact:
+            marker = _rise_marker(ticker)
+            block_lines = [head + marker]
+            if marker == " 🆕":
+                cat = _build_catalyst(ticker)
+                if cat:
+                    block_lines.append(cat)
+            out.append("\n".join(block_lines))
+            continue
+        block_lines = [head]
         block_lines.extend(_ticker_signal_lines(ticker))
         if not a_share:
             qtag = _signal_quality_tag(ticker, z, pct60, history, mode="z_score")
@@ -1791,6 +1848,41 @@ def _humanize_picks_grouped(plan: list[dict], a_share: bool, history: dict | Non
             block_lines.extend(_format_reason_lines(pros, cons))
         out.append("\n".join(block_lines))
     return out
+
+
+def _v2_entry_block(entry: dict, history: dict | None, market: str,
+                    compact: bool = False) -> str:
+    """港股/A 股 selected entry → 多行 markdown 块（markdown brief 与飞书卡片共用）。
+
+    market: "hk" / "cn"，决定理由构造器与 quality_tag 口径。
+    compact=True 只出主行 + 行内 🆕/📈 异动标（🆕 追加一行催化）。
+    F-Score 缺失不逐行展示，整批缺失由 section 头说明一次。
+    """
+    ticker = entry.get("ticker") or entry.get("code") or "?"
+    name = entry.get("name", "")
+    score = entry.get("composite", 0)
+    spark, pct60 = _ticker_sparkline(history or {}, ticker)
+    spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
+    f_fmt = _format_f_score(_entry_f_score(entry))
+    f_str = f" · F-Score {f_fmt}" if f_fmt != "缺失" else ""
+    head = f"• **{ticker}** {name} · 综合 {score:.2f}{f_str}{spark_str}"
+    if compact:
+        marker = _rise_marker(ticker)
+        lines = [head + marker]
+        if marker == " 🆕":
+            cat = _build_catalyst(ticker)
+            if cat:
+                lines.append(cat)
+        return "\n".join(lines)
+    lines = [head]
+    lines.extend(_ticker_signal_lines(ticker))
+    qtag = _signal_quality_tag(ticker, score, pct60, history)
+    if qtag:
+        lines.append(qtag)
+    build_reasons = _build_hk_reasons if market == "hk" else _build_a_share_reasons
+    pros, cons = build_reasons(entry)
+    lines.extend(_format_reason_lines(pros, cons))
+    return "\n".join(lines)
 
 
 def section_picks(plan: dict | None, a_share_picks: dict | None,
@@ -1808,7 +1900,7 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
             "⚠️ 美股/港股/A 股三套数据源全部缺失 — 检查 daily_refresh.sh 是否跑完。\n"
         )
 
-    head = "#### 2. 🔝 AI 推荐与模型组合（三线独立 · 每只股附 ✅ 推荐理由 + ⚠️ 风险点）"
+    head = f"#### 2. 🔝 AI 推荐与模型组合（三线独立 · ⭐ 重点 {DETAIL_TOP_N} 只详解 + 其余一行速览）"
     if read_only:
         head += "\n🔴 **质量闸门 FAIL：以下只读观察，不作为买入/加仓清单。**"
     if plan:
@@ -1826,14 +1918,13 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
     # 🇺🇸 美股（plan_v5 兼容字段 · v6 risk-aware optimize）
     if plan:
         plan_v5 = plan.get("plan_v5") or []
-        us_lines = _humanize_picks(plan_v5, a_share=False, history=history, factor_scores=factor_scores)
-        if us_lines:
-            n_us = sum(1 for l in us_lines if l.startswith("•"))
+        us_entries = [e for e in plan_v5 if not _is_a_share(e.get("ticker", ""))]
+        if us_entries:
+            n_us = len(us_entries)
             ts_us = _fmt_ts(plan.get("generated_at"))
             weight_src = _plan_weight_source(plan)
             # 检测本批次 F-Score 是否全部缺失，用以调整 section header 文案
-            us_plan_v5 = plan.get("plan_v5") or []
-            us_f_present = any(_entry_f_score(e) is not None for e in us_plan_v5)
+            us_f_present = any(_entry_f_score(e) is not None for e in us_entries)
             factor_label = "动量 + 估值 + 数据覆盖" + ("" if us_f_present else "（基本面 Piotroski 暂未覆盖）")
             lines.append(f"**🇺🇸 美股 ({n_us} 只 · {factor_label} · {weight_src['label']})** · {ts_us}")
             if weight_src.get("is_fallback"):
@@ -1850,7 +1941,21 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
                 lines.append(head_line)
                 if cash_info.get("explain"):
                     lines.append(f"• 现金不是看空，是约束器把放不下的额度推回：{cash_info['explain']}")
-            lines.extend(us_lines)
+            # 票数多时只详解 ⭐ 仓位 top5，其余一行速览（完整理由看 dashboard）
+            split = n_us > DETAIL_TOP_N + 2
+            if split:
+                star = _star_weight_tickers(us_entries)
+                detail_entries = [e for e in us_entries if (e.get("ticker") or "").upper() in star]
+                rest_entries = [e for e in us_entries if (e.get("ticker") or "").upper() not in star]
+                lines.append(f"⭐ **重点 {len(detail_entries)} 只（按仓位）**")
+                lines.extend(_humanize_picks(detail_entries, a_share=False, history=history,
+                                             factor_scores=factor_scores))
+                lines.append(f"**其余 {len(rest_entries)} 只 · 一行速览**（完整理由见 dashboard）")
+                lines.extend(_humanize_picks(rest_entries, a_share=False, history=history,
+                                             factor_scores=factor_scores, compact=True))
+            else:
+                lines.extend(_humanize_picks(us_entries, a_share=False, history=history,
+                                             factor_scores=factor_scores))
         else:
             lines.append("**🇺🇸 美股** — _plan_v5 为空_")
 
@@ -1859,23 +1964,15 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
         sel = hk_picks["selected"][:10]
         ts_hk = _fmt_ts(hk_picks.get("generated_at"))
         hk_factor_label = _label_v2_factor_set(sel)
-        lines.append(f"**🇭🇰 港股 ({len(sel)} 只 · {hk_factor_label})** · {ts_hk}")
-        for entry in sel:
-            ticker = entry.get("code", "?")
-            name = entry.get("name", "")
-            score = entry.get("composite", 0)
-            f_score = _entry_f_score(entry)
-            f_fmt = _format_f_score(f_score)
-            f_str = f" · F-Score {f_fmt}" if f_fmt != "缺失" else ""
-            spark, pct60 = _ticker_sparkline(history or {}, ticker)
-            spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
-            lines.append(f"• **{ticker}** {name} · 综合 {score:.3f}{f_str}{spark_str}")
-            lines.extend(_ticker_signal_lines(ticker))
-            qtag = _signal_quality_tag(ticker, score, pct60, history)
-            if qtag:
-                lines.append(qtag)
-            pros, cons = _build_hk_reasons(entry)
-            lines.extend(_format_reason_lines(pros, cons))
+        f_note = "" if any(_entry_f_score(e) is not None for e in sel) else " · 个股 F-Score 值暂缺"
+        lines.append(f"**🇭🇰 港股 ({len(sel)} 只 · {hk_factor_label}{f_note})** · {ts_hk}")
+        for entry in sel[:DETAIL_TOP_N]:
+            lines.append(_v2_entry_block(entry, history, "hk"))
+        hk_rest = sel[DETAIL_TOP_N:]
+        if hk_rest:
+            lines.append(f"**其余 {len(hk_rest)} 只 · 一行速览**")
+            for entry in hk_rest:
+                lines.append(_v2_entry_block(entry, history, "hk", compact=True))
     else:
         lines.append("**🇭🇰 港股** — _hk_picks.json 缺失，跑 `python3 -m scripts.pipeline.hk_picks`_")
 
@@ -1889,23 +1986,15 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
         sel = a_share_picks["selected"][:10]
         ts_cn = _fmt_ts(a_share_picks.get("generated_at"))
         cn_factor_label = _label_v2_factor_set(sel)
-        lines.append(f"**🇨🇳 A 股 ({len(sel)} 只 · {cn_factor_label})** · {ts_cn}")
-        for entry in sel:
-            ticker = entry.get("ticker", entry.get("code", "?"))
-            name = entry.get("name", "")
-            score = entry.get("composite", 0)
-            f_score = _entry_f_score(entry)
-            f_fmt = _format_f_score(f_score)
-            f_str = f" · F-Score {f_fmt}" if f_fmt != "缺失" else ""
-            spark, pct60 = _ticker_sparkline(history or {}, ticker)
-            spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
-            lines.append(f"• **{ticker}** {name} · 综合 {score:.3f}{f_str}{spark_str}")
-            lines.extend(_ticker_signal_lines(ticker))
-            qtag = _signal_quality_tag(ticker, score, pct60, history)
-            if qtag:
-                lines.append(qtag)
-            pros, cons = _build_a_share_reasons(entry)
-            lines.extend(_format_reason_lines(pros, cons))
+        f_note = "" if any(_entry_f_score(e) is not None for e in sel) else " · 个股 F-Score 值暂缺"
+        lines.append(f"**🇨🇳 A 股 ({len(sel)} 只 · {cn_factor_label}{f_note})** · {ts_cn}")
+        for entry in sel[:DETAIL_TOP_N]:
+            lines.append(_v2_entry_block(entry, history, "cn"))
+        cn_rest = sel[DETAIL_TOP_N:]
+        if cn_rest:
+            lines.append(f"**其余 {len(cn_rest)} 只 · 一行速览**")
+            for entry in cn_rest:
+                lines.append(_v2_entry_block(entry, history, "cn", compact=True))
     elif plan:
         # fallback: 盘前 a_share_picks 没出，用 plan_v5 里残留的 A 股代号兜底
         plan_v5 = plan.get("plan_v5") or []
@@ -2776,7 +2865,9 @@ def _build_card_payload() -> dict:
     events = _load_json(REPO / "data" / "event_calendar.json")
     policy_events = _load_json(REPO / "data" / "policy_events.json")
     a_share_picks = _load_a_share_picks()
-    hk_picks = _load_json(REPO / "data" / "latest" / "hk_picks.json")
+    # 与 build_brief 同源：V2 DuckDB 优先 + JSON 兜底，否则卡片会在 hk_picks.json
+    # 过期/为空时整段丢失港股（markdown 版却有 — 两套引擎漂移）
+    hk_picks = _load_hk_picks()
     defense = _latest_defense_snapshot()
     history = _load_history()
     qgate_payload = _quality_gate_payload()
@@ -2844,9 +2935,6 @@ def _build_card_payload() -> dict:
         f"{severity_icon} **regime = {severity}** — {advice}",
         "",
         f"**三道闸门状态**：防御 {defense_sev} · 质量闸门 {_status_badge(qgate_status)} · 生产验收 {_status_badge(accept_status)}",
-        "",
-        "📖 **灯色规则（取最严）**：🟢 三道全绿 ｜ 🟡 任一 WARN ｜ 🟠 任一 FAIL 或防御 HIGH ｜ 🔴 防御 CRITICAL",
-        "🛡️ **三道闸门含义**：防御=VIX/200MA/单股止损 ｜ 质量闸门=picks/factor 完整性 ｜ 生产验收=今日 pipeline 是否真跑通",
     ]
     if regime_reasons:
         sec1_lines.append("")
@@ -2854,6 +2942,13 @@ def _build_card_payload() -> dict:
         for r in regime_reasons:
             sec1_lines.append(f"• {r}")
     blocks.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(sec1_lines)}})
+    # 固定说明降级成灰色小字注脚，不每天占正文
+    blocks.append({"tag": "note", "elements": [
+        {"tag": "plain_text", "content": (
+            "📖 灯色 = 三道闸门取最严（防御=VIX/200MA/止损 · 质量=数据完整 · 验收=pipeline 跑通）："
+            "🟢 全绿 → 🟡 WARN → 🟠 FAIL/防御 HIGH → 🔴 崩盘"
+        )}
+    ]})
     blocks.append({"tag": "hr"})
 
     # 质量闸门完整 issues（reasons 已在上面摘要，这里只在 FAIL 时再单列建议）
@@ -2888,17 +2983,26 @@ def _build_card_payload() -> dict:
                     ("仓位来源", weight_src["kind"]),
                 ]))
 
-        # 🇺🇸 美股 — 每只股聚合多行 (ticker + ✅/⚠️ reason)，再 2 列拆分
+        # 🇺🇸 美股 — ⭐ 仓位 top5 详解（2 列），其余一行速览
         plan_v5 = (plan or {}).get("plan_v5") or []
-        us_blocks = _humanize_picks_grouped(plan_v5, a_share=False, history=history,
-                                            factor_scores=factor_scores) if plan else []
-        if us_blocks:
+        us_entries = [e for e in plan_v5 if not _is_a_share(e.get("ticker", ""))] if plan else []
+        if us_entries:
+            split = len(us_entries) > DETAIL_TOP_N + 2
+            if split:
+                star = _star_weight_tickers(us_entries)
+                us_detail = [e for e in us_entries if (e.get("ticker") or "").upper() in star]
+                us_rest = [e for e in us_entries if (e.get("ticker") or "").upper() not in star]
+            else:
+                us_detail, us_rest = us_entries, []
+            us_blocks = _humanize_picks_grouped(us_detail, a_share=False, history=history,
+                                                factor_scores=factor_scores)
             ts_us = _fmt_ts((plan or {}).get("generated_at"))
             weight_src = _plan_weight_source(plan)
             section2.append({"tag": "div", "text": {"tag": "lark_md",
                 "content": (
-                    f"**🇺🇸 美股 ({len(us_blocks)} 只 · {weight_src['label']})** · {ts_us}\n"
-                    "_每只股附 ✅ 推荐理由 + ⚠️ 风险点_"
+                    f"**🇺🇸 美股 ({len(us_entries)} 只 · {weight_src['label']})** · {ts_us}\n"
+                    + (f"_⭐ 重点 {len(us_detail)} 只（按仓位）详解；其余一行速览，完整理由见 dashboard_"
+                       if split else "_每只股附 ✅ 推荐理由 + ⚠️ 风险点_")
                     + (f"\n⚠️ {weight_src['detail']}。这些百分比不是新鲜 risk-aware optimizer 输出。"
                        if weight_src.get("is_fallback") else "")
                 )}})
@@ -2908,25 +3012,23 @@ def _build_card_payload() -> dict:
                 ["\n".join(["", b]) if i > 0 else b for i, b in enumerate(us_blocks[:half])],
                 ["\n".join(["", b]) if i > 0 else b for i, b in enumerate(us_blocks[half:])],
             ))
+            if us_rest:
+                rest_blocks = _humanize_picks_grouped(us_rest, a_share=False, history=history,
+                                                      factor_scores=factor_scores, compact=True)
+                section2.append({"tag": "div", "text": {"tag": "lark_md",
+                    "content": f"**其余 {len(us_rest)} 只 · 一行速览**"}})
+                half_r = (len(rest_blocks) + 1) // 2
+                section2.append(_two_col_lines(rest_blocks[:half_r], rest_blocks[half_r:]))
 
-        # 🇭🇰 港股 — 每只股聚合 ticker + reasons
+        # 🇭🇰 港股 — 前 5 详解 + 其余一行速览
         if hk_picks and hk_picks.get("selected"):
             hk_sel = hk_picks["selected"][:10]
-            hk_blocks: list[str] = []
-            for e in hk_sel:
-                t = e.get("code", "?")
-                spark, pct60 = _ticker_sparkline(history or {}, t)
-                spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
-                f_score = _entry_f_score(e)
-                f_str = f" · F-Score {_format_f_score(f_score)}"
-                head = f"• **{t}** {e.get('name','')} · {e.get('composite', 0):.2f}{f_str}{spark_str}"
-                pros, cons = _build_hk_reasons(e)
-                rl = _format_reason_lines(pros, cons)
-                block_parts = [head] + _ticker_signal_lines(t) + rl
-                hk_blocks.append("\n".join(block_parts))
+            hk_blocks = [_v2_entry_block(e, history, "hk") for e in hk_sel[:DETAIL_TOP_N]]
+            hk_rest = hk_sel[DETAIL_TOP_N:]
             ts_hk = _fmt_ts(hk_picks.get("generated_at"))
+            f_note = "" if any(_entry_f_score(e) is not None for e in hk_sel) else " · 个股 F-Score 值暂缺"
             section2.append({"tag": "div", "text": {"tag": "lark_md",
-                "content": f"**🇭🇰 港股 ({len(hk_sel)} 只)** · {ts_hk}\n_每只股附 ✅ 推荐理由 + ⚠️ 风险点_"}})
+                "content": f"**🇭🇰 港股 ({len(hk_sel)} 只{f_note})** · {ts_hk}"}})
             if len(hk_blocks) >= 4:
                 half_h = (len(hk_blocks) + 1) // 2
                 section2.append(_two_col_lines(
@@ -2936,6 +3038,10 @@ def _build_card_payload() -> dict:
             else:
                 section2.append({"tag": "div", "text": {"tag": "lark_md",
                     "content": "\n\n".join(hk_blocks)}})
+            if hk_rest:
+                rest_md = "\n".join(_v2_entry_block(e, history, "hk", compact=True) for e in hk_rest)
+                section2.append({"tag": "div", "text": {"tag": "lark_md",
+                    "content": f"**其余 {len(hk_rest)} 只 · 一行速览**\n{rest_md}"}})
 
         # 🇨🇳 A 股 — 每只股聚合 ticker + reasons
         if not _a_share_enabled():
@@ -2946,21 +3052,12 @@ def _build_card_payload() -> dict:
                 )}})
         elif a_share_picks and a_share_picks.get("selected"):
             sel = a_share_picks["selected"][:10]
-            a_blocks: list[str] = []
-            for e in sel:
-                t = e.get("ticker", e.get("code", "?"))
-                spark, pct60 = _ticker_sparkline(history or {}, t)
-                spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
-                f_score = _entry_f_score(e)
-                f_str = f" · F-Score {_format_f_score(f_score)}"
-                head = f"• **{t}** {e.get('name','')} · {e.get('composite', 0):.2f}{f_str}{spark_str}"
-                pros, cons = _build_a_share_reasons(e)
-                rl = _format_reason_lines(pros, cons)
-                block_parts = [head] + _ticker_signal_lines(t) + rl
-                a_blocks.append("\n".join(block_parts))
+            a_blocks = [_v2_entry_block(e, history, "cn") for e in sel[:DETAIL_TOP_N]]
+            a_rest = sel[DETAIL_TOP_N:]
             ts_cn = _fmt_ts(a_share_picks.get("generated_at"))
+            f_note = "" if any(_entry_f_score(e) is not None for e in sel) else " · 个股 F-Score 值暂缺"
             section2.append({"tag": "div", "text": {"tag": "lark_md",
-                "content": f"**🇨🇳 A 股 ({len(sel)} 只)** · {ts_cn}\n_每只股附 ✅ 推荐理由 + ⚠️ 风险点_"}})
+                "content": f"**🇨🇳 A 股 ({len(sel)} 只{f_note})** · {ts_cn}"}})
             if len(a_blocks) >= 4:
                 half_a = (len(a_blocks) + 1) // 2
                 section2.append(_two_col_lines(
@@ -2970,6 +3067,10 @@ def _build_card_payload() -> dict:
             else:
                 section2.append({"tag": "div", "text": {"tag": "lark_md",
                     "content": "\n\n".join(a_blocks)}})
+            if a_rest:
+                rest_md = "\n".join(_v2_entry_block(e, history, "cn", compact=True) for e in a_rest)
+                section2.append({"tag": "div", "text": {"tag": "lark_md",
+                    "content": f"**其余 {len(a_rest)} 只 · 一行速览**\n{rest_md}"}})
         elif plan:
             a_blocks_pre = _humanize_picks_grouped(plan_v5, a_share=True, history=history)
             if a_blocks_pre:

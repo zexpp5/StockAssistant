@@ -157,8 +157,12 @@ def _is_a_share(ticker: str) -> bool:
     return t.endswith(".SH") or t.endswith(".SS") or t.endswith(".SZ") or t.endswith(".BJ")
 
 
-def get_catalyst(ticker: str, *, lookback_days: int = LOOKBACK_DAYS, today: date | None = None) -> str | None:
+def get_catalyst(ticker: str, *, lookback_days: int = LOOKBACK_DAYS, today: date | None = None,
+                 include_summary: bool = True) -> str | None:
     """返回单只 ticker 的最强催化句（**不带 📰 前缀**）；无可用催化返回 None。
+
+    include_summary=False 时美股 8-K 不拼英文原文摘录段，只留中文标签 + 日期
+    （早报卡片用：原文摘录截断后是半句英文噪声；dashboard 保持默认 True）。
 
     例子：
       `get_catalyst("0992.HK")` → `"5/21 EPS 实际 0.04 / 估 0.03，超预期 +58.0%（4d 前）"`
@@ -190,7 +194,8 @@ def get_catalyst(ticker: str, *, lookback_days: int = LOOKBACK_DAYS, today: date
 
     # 美股（裸 ticker）— 四段优先级链
     # 1. SEC 强催化 (max_priority=2) — 含 13D/13G + 8-K 强 Items (1.01 重大协议 / 5.02 高管变动 / 1.03 破产 / 2.01 收购 / 3.01 退市)
-    strong = _catalyst_from_sec(_events_us_sec().get(tk_upper) or [], today, lookback_days, max_priority=2)
+    strong = _catalyst_from_sec(_events_us_sec().get(tk_upper) or [], today, lookback_days,
+                                max_priority=2, include_summary=include_summary)
     if strong:
         return strong
     # 2. Form 4 内部人净买入/卖出（已经按 |净额|≥$1M 过滤）
@@ -202,7 +207,8 @@ def get_catalyst(ticker: str, *, lookback_days: int = LOOKBACK_DAYS, today: date
     if eps:
         return eps
     # 4. SEC 弱催化兜底（8-K 弱 Item priority 3-5 / DEF 14A）
-    return _catalyst_from_sec(_events_us_sec().get(tk_upper) or [], today, lookback_days, max_priority=9)
+    return _catalyst_from_sec(_events_us_sec().get(tk_upper) or [], today, lookback_days,
+                              max_priority=9, include_summary=include_summary)
 
 
 def _catalyst_from_hkex(events: list[dict], today: date, lookback_days: int, max_priority: int = 9) -> str | None:
@@ -291,7 +297,8 @@ def _catalyst_from_form4(events: list[dict], today: date, lookback_days: int) ->
     return f"{ed.strftime('%-m/%-d')} 🔴 内部人净卖出 ${abs_m:.1f}M（60d 累计，最新申报 {days_ago}d 前）"
 
 
-def _catalyst_from_sec(events: list[dict], today: date, lookback_days: int, max_priority: int = 9) -> str | None:
+def _catalyst_from_sec(events: list[dict], today: date, lookback_days: int, max_priority: int = 9,
+                       include_summary: bool = True) -> str | None:
     """SEC EDGAR filings → 催化句。按 event_type 优先级 + 日期新近度。
     8-K 用 item_priority 覆盖 form-level priority（item 解析后能精确分级）。
     """
@@ -335,7 +342,7 @@ def _catalyst_from_sec(events: list[dict], today: date, lookback_days: int, max_
         label = label_map.get(etype, f"📄 {form}")
     # 8-K 有 item_summaries 时拼一段摘要（取主标 item 对应的段落）
     summary = ""
-    if etype == "material_event" and isinstance(e.get("item_summaries"), dict):
+    if include_summary and etype == "material_event" and isinstance(e.get("item_summaries"), dict):
         sums = e["item_summaries"]
         primary_item = e.get("primary_item") or ""
         # 优先取主标对应段落，没有则按 priority 顺序回退
