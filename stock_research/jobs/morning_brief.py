@@ -364,7 +364,7 @@ def _load_hk_picks() -> dict | None:
             sys.path.insert(0, lib_path)
         from stock_db import get_db
 
-        conn = get_db(read_only=True)
+        conn = get_db(force_read_only=True)
         v2_run = conn.execute(
             """
             SELECT run_id, run_date, generated_at FROM recommendation_runs
@@ -423,7 +423,7 @@ def _load_a_share_picks() -> dict | None:
             sys.path.insert(0, lib_path)
         from stock_db import get_db
 
-        conn = get_db(read_only=True)
+        conn = get_db(force_read_only=True)
         # ── V2 优先 ──
         v2_run = conn.execute(
             """
@@ -2155,7 +2155,7 @@ def section_weekly_hitrate(today: date | None = None) -> str:
     except Exception:
         return ""
     try:
-        conn = stock_db.get_db(read_only=True)
+        conn = stock_db.get_db(force_read_only=True)
     except Exception:
         return ""
     lines = ["#### 🧪 上周回顾 · AI 准不准（周一专属 · V2 pick_outcomes）"]
@@ -2818,7 +2818,7 @@ def _hitrate_card_lines(today: date) -> list[str]:
         _repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         sys.path.insert(0, os.path.join(_repo, "scripts", "lib"))
         import stock_db
-        conn = stock_db.get_db(read_only=True)
+        conn = stock_db.get_db(force_read_only=True)
     except Exception:
         return []
     lines: list[str] = []
