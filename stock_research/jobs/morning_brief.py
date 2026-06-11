@@ -67,6 +67,11 @@ def _a_share_enabled() -> bool:
     return bool(config.A_SHARE_PRODUCTION_ENABLED)
 
 
+def _brief_show_a_share() -> bool:
+    """早报是否展示 A 股内容 — 纯展示偏好，≠ _a_share_enabled() 的生产语义。"""
+    return bool(getattr(config, "BRIEF_INCLUDE_A_SHARE", True))
+
+
 def _parse_ts(value: Any) -> datetime | None:
     if not value:
         return None
@@ -815,8 +820,9 @@ def section_calendar(plan: dict | None) -> str:
     today = date.today()
     horizon = today + timedelta(days=3)
 
+    # event_calendar.json 是 A 股事件日历；A 股不看时只保留政策事件
     held_codes: set[str] = set()
-    if plan:
+    if plan and _brief_show_a_share():
         for e in (plan.get("plan_v5") or []):
             t = e.get("ticker", "")
             if _is_a_share(t):
@@ -1733,6 +1739,8 @@ def section_dropouts() -> str:
     """跌出 Top section — 上批次在 picks、本批次不在的票（含持仓警示）。"""
     ap = _load_appearance()
     drops = ap.get("dropouts") or []
+    if not _brief_show_a_share():
+        drops = [d for d in drops if (d.get("market") or "").upper() != "CN"]
     if not drops:
         return ""
     # 持仓 set
@@ -1900,7 +1908,8 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
             "⚠️ 美股/港股/A 股三套数据源全部缺失 — 检查 daily_refresh.sh 是否跑完。\n"
         )
 
-    head = f"#### 2. 🔝 AI 推荐与模型组合（三线独立 · ⭐ 重点 {DETAIL_TOP_N} 只详解 + 其余一行速览）"
+    scope_label = "三线独立" if _brief_show_a_share() else "美股 + 港股"
+    head = f"#### 2. 🔝 AI 推荐与模型组合（{scope_label} · ⭐ 重点 {DETAIL_TOP_N} 只详解 + 其余一行速览）"
     if read_only:
         head += "\n🔴 **质量闸门 FAIL：以下只读观察，不作为买入/加仓清单。**"
     if plan:
@@ -1976,8 +1985,10 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
     else:
         lines.append("**🇭🇰 港股** — _hk_picks.json 缺失，跑 `python3 -m scripts.pipeline.hk_picks`_")
 
-    # 🇨🇳 A 股（a_share_picks · 6 因子）
-    if not _a_share_enabled():
+    # 🇨🇳 A 股（a_share_picks · 6 因子）— A 股不看时整段隐藏
+    if not _brief_show_a_share():
+        pass
+    elif not _a_share_enabled():
         lines.append(
             "**🇨🇳 A 股** — _生产推荐未启用：缺少已验证的 A 股 IC 校准权重；"
             "当前只保留研究观察，不进入调仓清单_"
@@ -2024,7 +2035,7 @@ def _rejected_a_share_entries(a_share_picks: dict | None, top_n: int = 20) -> li
     覆盖三类：硬拦截（tradable=False，含 block_reasons）/ 软拒（recommended=False，分数不够）/
     sector cap 跳过的（notes 里有 sector_cap）。
     """
-    if not a_share_picks:
+    if not a_share_picks or not _brief_show_a_share():
         return []
     all_e = a_share_picks.get("all_entries") or []
     sel = a_share_picks.get("selected") or []
@@ -2413,7 +2424,8 @@ def section_junior_radar(top_n: int = 5) -> str:
         return ""
     markets = radar.get("markets") or {}
     sections = []
-    for mk, label in [("us", "🇺🇸 美股"), ("cn", "🇨🇳 A 股")]:
+    market_keys = [("us", "🇺🇸 美股")] + ([("cn", "🇨🇳 A 股")] if _brief_show_a_share() else [])
+    for mk, label in market_keys:
         pool = (markets.get(mk) or {}).get("junior_pool") or []
         actionable = [x for x in pool if x.get("tier") in ("可小仓试探", "可研究")]
         actionable.sort(key=lambda x: (
@@ -2887,9 +2899,10 @@ def _build_card_payload() -> dict:
     blocks: list[dict] = []
 
     # ─── Section 0: 今天 / 3 天内会发生什么（持仓 earnings + 高相关政策）───
+    # event_calendar.json 是 A 股事件日历；A 股不看时只保留政策事件
     horizon = today + timedelta(days=3)
     held_codes: set[str] = set()
-    if plan:
+    if plan and _brief_show_a_share():
         for e in (plan.get("plan_v5") or []):
             t = e.get("ticker", "")
             if _is_a_share(t):
@@ -2967,9 +2980,10 @@ def _build_card_payload() -> dict:
 
     # ─── Section 2: 🔝 AI 推荐与模型组合（三线独立 · 白底）───
     if plan or hk_picks or a_share_picks:
+        scope_label = "三线独立" if _brief_show_a_share() else "美股 + 港股"
         section2: list[dict] = [
             {"tag": "div", "text": {"tag": "lark_md", "content":
-                "**🔝 AI 推荐与模型组合（三线独立）**\n"
+                f"**🔝 AI 推荐与模型组合（{scope_label}）**\n"
                 "_系统科技/AI 股票池推荐；自选股池不自动混入_"
                 + ("\n🔴 **质量闸门 FAIL：本区只读观察，不作为买入/加仓清单。**" if trade_blocked else "")}}
         ]
@@ -3043,8 +3057,10 @@ def _build_card_payload() -> dict:
                 section2.append({"tag": "div", "text": {"tag": "lark_md",
                     "content": f"**其余 {len(hk_rest)} 只 · 一行速览**\n{rest_md}"}})
 
-        # 🇨🇳 A 股 — 每只股聚合 ticker + reasons
-        if not _a_share_enabled():
+        # 🇨🇳 A 股 — A 股不看时整段隐藏
+        if not _brief_show_a_share():
+            pass
+        elif not _a_share_enabled():
             section2.append({"tag": "div", "text": {"tag": "lark_md",
                 "content": (
                     "**🇨🇳 A 股** — 生产推荐未启用：缺少已验证的 A 股 IC 校准权重；"

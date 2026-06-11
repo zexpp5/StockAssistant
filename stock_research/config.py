@@ -88,6 +88,13 @@ elif A_SHARE_PRODUCTION_MODE in {"on", "1", "true", "yes"}:
 else:
     A_SHARE_PRODUCTION_ENABLED = _valid_a_share_calibration(A_SHARE_CALIBRATION_PATH)
 
+# ─────────── 早报展示范围 ───────────
+# 展示偏好，与 A_SHARE_PRODUCTION_ENABLED（生产推荐/调仓单语义）无关。
+# 用户 2026-06-12 明确「A 股不看」：早报（markdown + 飞书卡片）默认隐藏 A 股段
+# （AI 推荐 A 股 / A 股被拒 / 跌出列表 CN 组 / 次新雷达 CN 组 / A 股持仓事件日历）。
+# A 股数据管线与 dashboard 不受影响；要恢复显示设 BRIEF_INCLUDE_A_SHARE=1。
+BRIEF_INCLUDE_A_SHARE = _env_flag("BRIEF_INCLUDE_A_SHARE", "0")
+
 # ─────────── 跟踪机构（13F 监控）───────────
 INVESTORS_13F = {
     "Berkshire Hathaway (Buffett)":   "0001067983",
