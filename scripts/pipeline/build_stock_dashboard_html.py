@@ -2131,7 +2131,8 @@ function openDiscoveryHistoryFromRadar(event) {
           展开完整组合（其余 <span id="today-plan-extra-cnt">—</span> 只）▾
         </button>
         <p class="text-[11px] text-slate-400 mt-1.5 leading-relaxed">
-          ⭐ = AI 下注最重的 5 只,先重点盯这几只学;组合仍按 15 只分散配置,展开可看全部。
+          ⭐ = <strong>你手动操作就持有这 8 只</strong>（AI 下注最重的 8 只）—— 实测 6-8 只已拿到 AI 内大部分分散、且管得过来；
+          下方完整组合那 15 只是<strong>测策略用的「量筒」，不是叫你全买</strong>。能不能真买，看页面顶部的红绿灯。
         </p>
       </div>
       <p id="today-plan-empty" class="hidden text-sm text-slate-500 py-6 text-center">
@@ -10979,10 +10980,12 @@ function renderTodayPlan() {
     return c.recommendation_reason || '';
   };
 
-  // 2026-06-01: 「重点观察 Top5」层 —— 组合仍 15 只保持分散,但默认只展开下注最重的 5 只,
+  // 2026-06-01→06-11: 「重点观察 Top8」层 —— 宽篮子 15 只是测策略量筒,你手动只持有下注最重的 8 只,
   // 让新手把注意力收敛到看得过来的范围;剩余仓位折叠,「展开完整组合」随时可看全。
-  // 纯展示层:Top5 = 已按 capped_weight 降序后的前 5 行,不改打分/不改策略/不破坏锁定回测。
-  const TOP_N_WATCH = 5;
+  // 纯展示层:Top8 = 已按 capped_weight 降序后的前 8 行,不改打分/不改策略/不破坏锁定回测。
+  // 2026-06-11 5→8：用真实相关性实测,AI 内 6-8 只已拿到大部分分散(头 5 只砍掉波动大头,
+  // 9-14 只仅再降 ~4 个点),且手动可管。详见规则文档 §19 / 集中度分析。
+  const TOP_N_WATCH = 8;
   tbody.innerHTML = sortedRows.map((r, i) => {
     const ticker = (r.ticker || '').toUpperCase();
     const cand = discoveryLookup[ticker] || {};

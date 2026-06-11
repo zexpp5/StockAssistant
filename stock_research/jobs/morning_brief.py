@@ -1706,8 +1706,9 @@ def _rise_marker(ticker: str) -> str:
     return ""
 
 
-# ⭐ 重点详解条数 — 与 dashboard Top5 折叠视图同口径
-DETAIL_TOP_N = 5
+# ⭐ 重点详解条数 — 与 dashboard ⭐ 折叠视图同口径（TOP_N_WATCH）
+# 2026-06-11 5→8：实测 AI 内 6-8 只已拿到大部分分散且手动可管（规则文档 §19）。
+DETAIL_TOP_N = 8
 
 
 def _star_weight_tickers(plan: list[dict], top_n: int = DETAIL_TOP_N) -> set[str]:
