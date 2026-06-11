@@ -473,6 +473,9 @@ def _fmp_history_df(yf_ticker: str) -> "pd.DataFrame | None":
 _YF_WORKERS = int(os.getenv("STOCK_ASSISTANT_YF_WORKERS", "4"))
 _YF_MAX_RETRIES = int(os.getenv("STOCK_ASSISTANT_YF_RETRIES", "2"))
 _YF_RETRY_WAIT = float(os.getenv("STOCK_ASSISTANT_YF_RETRY_WAIT", "8"))
+# 涓流模式(2026-06-11 用户提议"一个一个查"):批量+重试后仍漏的票,逐只串行慢拉,
+# 每只间隔 _YF_SERIAL_WAIT 秒——单票小请求几乎不会触发 Yahoo 突发限流,慢但稳。
+_YF_SERIAL_WAIT = float(os.getenv("STOCK_ASSISTANT_YF_SERIAL_WAIT", "1.5"))
 
 
 def _yf_download_once(yf_tickers: list[str], period: str, workers: int) -> dict[str, pd.DataFrame]:
@@ -525,8 +528,24 @@ def _download_history_batch_yf(yf_tickers: list[str], period: str = "1y") -> dic
             print(f"  yfinance {len(pending)} 只返回空（疑似限流），退避 {wait:.0f}s 后只重试这些...")
             time.sleep(wait)
     if pending:
+        # 第三层兜底·涓流模式:整单批量是 Yahoo 突发限流的主要触发器,
+        # 漏网票改逐只串行小请求补拉(workers=1 + 固定间隔),慢但几乎必中。
+        n0 = len(pending)
+        print(f"  批量+重试后仍 {n0} 只无历史，转涓流模式逐只补拉（间隔 {_YF_SERIAL_WAIT:.1f}s）...")
+        survivors: list[str] = []
+        for i, tk in enumerate(pending, 1):
+            got = _yf_download_once([tk], period, 1)
+            df = got.get(tk)
+            if df is not None and not df.empty:
+                out[tk] = df
+            else:
+                survivors.append(tk)
+            if i < n0:
+                time.sleep(_YF_SERIAL_WAIT)
+        pending = survivors
+    if pending:
         tail = "..." if len(pending) > 8 else ""
-        print(f"  yfinance 重试后仍 {len(pending)} 只无历史：{', '.join(pending[:8])}{tail}")
+        print(f"  yfinance 涓流后仍 {len(pending)} 只无历史：{', '.join(pending[:8])}{tail}")
     return out
 
 
