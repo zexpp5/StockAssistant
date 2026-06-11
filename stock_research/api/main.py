@@ -437,10 +437,30 @@ def create_app():
     # ────────── Manual Watchlist (V2 单源真相 · 2026-05-21 V1 cutover) ──────────
     @app.get("/api/watchlist")
     def list_watchlist() -> list[dict[str, Any]]:
-        """读 V2 manual_watchlist 全表（用户在 dashboard 手动加的自选股）。"""
+        """读 V2 manual_watchlist 全表（用户在 dashboard 手动加的自选股）。
+
+        2026-06-11: 合并 fetch_manual_watchlist_enriched 的价格/动量字段
+        （latest_price/ytd_pct/one_month_pct/…）——池外票（ETF/非科技）不在
+        RECORDS 里，自选页此前对它们只能显示「—」。
+        """
         import stock_db
         rows = stock_db.fetch_manual_watchlist()
+        price_keys = (
+            "latest_price", "ytd_pct", "one_year_pct", "one_month_pct",
+            "one_week_pct", "forward_pe", "peg", "currency", "market_cap",
+        )
+        try:
+            enriched = {
+                str(e.get("code") or "").upper(): e
+                for e in stock_db.fetch_manual_watchlist_enriched()
+            }
+        except Exception:
+            enriched = {}
         for r in rows:
+            e = enriched.get(str(r.get("symbol") or "").upper()) or {}
+            for k in price_keys:
+                if r.get(k) is None and e.get(k) is not None:
+                    r[k] = e[k]
             for k in ("created_at", "updated_at"):
                 v = r.get(k)
                 if v is not None and hasattr(v, "isoformat"):

@@ -4018,12 +4018,14 @@ function _watchlistSourceLabel(row) {
 }
 
 function _watchlistMetricsHtml(item) {
-  const r = item.record || {};
+  // 池外票(ETF/非科技)不在 RECORDS;/api/watchlist 行自带价格字段(2026-06-11)做兜底
+  const r = Object.assign({}, item.row || {});
+  for (const [k, v] of Object.entries(item.record || {})) { if (v != null) r[k] = v; }
   const review = item.review;
   const rating = item.rating;
   const price = review && review.current_price != null
     ? _watchlistMoney(review.current_price, review.current_currency)
-    : _watchlistMoney(r.latest_price || r.price_close || r.price_price, r.price_currency || "");
+    : _watchlistMoney(r.latest_price || r.price_close || r.price_price, r.price_currency || r.currency || "");
   const tradeDate = review ? review.price_trade_date : (r.price_date || r.price_trade_date || "");
   const score = rating && rating.total_score != null
     ? Number(rating.total_score).toFixed(1)
