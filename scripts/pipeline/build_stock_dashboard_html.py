@@ -2095,6 +2095,12 @@ function openDiscoveryHistoryFromRadar(event) {
         <div id="today-plan-lock-status" class="text-sm font-medium text-amber-700 mt-0.5">—</div>
       </div>
     </header>
+    <!-- 2026-06-11: 说明本页排序口径,避免和「AI 推荐」页按分排序对不上被误以为出错。 -->
+    <div class="mx-5 mt-3 rounded-lg bg-violet-50 border border-violet-200 px-3 py-2 text-[12px] text-slate-700 leading-relaxed">
+      📌 本页按<strong>「仓位%」</strong>排序（<strong>该押多少注</strong>），不是按分数。
+      <strong>高分 ≠ 重仓</strong>——高波动的票（如 NVDA）会被风险优化器压小仓、稳的票放大仓；
+      想看"谁分最高"请去左侧「AI 推荐」页（那页按综合分排）。
+    </div>
     <!-- 证据不足 gate (2026-06-01): 当前策略成熟样本不足时,顶部强制"仅研究观察"横幅,
          防止下方 PASS / 回测 Sharpe / 回测年化 被误读成"可以照着买"。
          数据源: recommendation_evidence.json 的 evidence_grade + review_coverage(后端已算好,前端只渲染) -->
