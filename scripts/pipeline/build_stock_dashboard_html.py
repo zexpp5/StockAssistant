@@ -1162,16 +1162,9 @@ window.echarts = window.echarts || {
 <section id="discovery" class="max-w-7xl mx-auto px-6 pt-6 pb-8 bg-gradient-to-br from-sky-50 to-indigo-50 rounded-2xl my-3" style="display:none">
   <!-- 分市场研究观察 advisory：哪些市场被策略诊断判为 degraded/research_only(早期实测 alpha 偏弱)。
        数据源: strategy_tuning_proposal.json market_actions(shadow 诊断,服务端渲染,只读)。 -->
-  <!-- 2026-06-11 顶部减负：一句话人话摘要(含关键风险) + 技术自检面板折叠，避免新手被术语墙劝退。
-       纯展示调整，不改任何数据/逻辑；想看数字点开 details 即可。 -->
-  <div class="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-slate-800">
-    <div class="font-bold text-slate-900 mb-1">📋 这页是什么 · 一句话</div>
-    <div class="leading-relaxed">
-      系统每天从全池里按规则挑出<b>候选股票</b>（美股 / A股 / 港股各最多 20 只），先过「身份 → 证据 → 数据 → 风险」四道闸，再分档：<b>重点研究 / 等买点 / 仅研究 / 只观察</b>。
-      <span class="text-rose-700 font-semibold">⚠️ 这套推荐还在验证期、最近样本外是亏的，只能当研究线索，别照着直接下单。</span>
-      下面就是名单；系统自检/验证的数字细节已折叠，想看点开即可。
-    </div>
-  </div>
+  <!-- 2026-06-11 顶部减负 + 信任红绿灯：最上面用大白话回答"能不能照着买"(数据驱动红/黄/绿)，
+       技术自检面板折叠。纯展示，不改数据/逻辑。 -->
+  {TRUST_VERDICT_PANEL}
   {STRATEGY_MARKET_ADVISORY}
   <!-- 把 4 块技术自检面板折叠：策略验证进度 / P0验证 / 规则体检 / 严筛试运行。数据源不变，仅默认收起。 -->
   <details class="mb-4 rounded-xl border border-slate-200 bg-white">
@@ -3697,12 +3690,12 @@ function _heldBadge(code) {
   if (manual.length > 0) {
     const n = manual.reduce((a, b) => a + (b.shares || 0), 0);
     const li = manual.length > 1 ? `（${manual.length} 笔）` : "";
-    badges.push(`<span class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-700 align-middle" title="你已持仓 ${n} 股${li}（来自 real_holdings 真实持仓表）">💼 持仓</span>`);
+    badges.push(`<span class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-700 align-middle" title="你已持仓 ${n} 股${li}（来自 real_holdings 真实持仓表）">持仓</span>`);
   }
   if (aiPlan.length > 0) {
     const n = aiPlan.reduce((a, b) => a + (b.shares || 0), 0);
     const li = aiPlan.length > 1 ? `（${aiPlan.length} 笔）` : "";
-    badges.push(`<span class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold bg-violet-50 text-violet-600 ring-1 ring-violet-200 align-middle" title="AI 跟踪持仓 ${n} 股${li} — 不是你真买的（来自 model_sim_holdings，可在模拟仓页清理）">📋 方案</span>`);
+    badges.push(`<span class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold bg-violet-50 text-violet-600 ring-1 ring-violet-200 align-middle" title="AI 跟踪持仓 ${n} 股${li} — 不是你真买的（来自 model_sim_holdings，可在模拟仓页清理）">方案</span>`);
   }
   return badges.length ? " " + badges.join(" ") : "";
 }
@@ -3723,13 +3716,13 @@ function _wlRatingBadge(code) {
     // 2026-05-25: 按 coverage 区分"为什么没评级"，避免让用户猜机制
     const cov = WATCHLIST_COVERAGE[code];
     if (cov === "in_universe") {
-      return '<span class="inline-flex px-2 py-0.5 rounded text-xs bg-slate-100 text-slate-600" title="AI 每天只给打分最高的前 20 名出评级。这只今天排在 20 名外，所以暂无评级 — 不是没分析，是没截入。明天重新打分可能上榜。">📊 今日未入选 Top20</span>';
+      return '<span class="inline-flex px-2 py-0.5 rounded text-xs bg-slate-100 text-slate-500" title="AI 每天只给打分最高的前 20 名出评级。这只今天排在 20 名外，所以暂无评级 — 不是没分析，是没截入。明天重新打分可能上榜。">今日未入选 Top20</span>';
     }
     if (cov === "dropped_from_universe") {
-      return '<span class="inline-flex px-2 py-0.5 rounded text-xs bg-orange-50 text-orange-700" title="曾在科技池里，最近一次 universe 重建时被剔除（可能因子表现退化 / 行情归类调整）— 你加的自选股仍保留，但模型不再为它打分">📉 已下池</span>';
+      return '<span class="inline-flex px-2 py-0.5 rounded text-xs bg-orange-50 text-orange-700" title="曾在科技池里，最近一次 universe 重建时被剔除（可能因子表现退化 / 行情归类调整）— 你加的自选股仍保留，但模型不再为它打分">已下池</span>';
     }
     if (cov === "not_in_universe") {
-      return '<span class="inline-flex px-2 py-0.5 rounded text-xs bg-amber-50 text-amber-700" title="模型 universe 是科技/AI 股池；这只属于消费 / ETF / 防御 / 港股非科技龙头等，因子模型不适用 — 不评是诚实的，不是 bug">📦 不评 · 非科技</span>';
+      return '<span class="inline-flex px-2 py-0.5 rounded text-xs bg-slate-100 text-slate-500" title="模型 universe 是科技/AI 股池；这只属于消费 / ETF / 防御 / 港股非科技龙头等，因子模型不适用 — 不评是诚实的，不是 bug">不评 · 非科技</span>';
     }
     return '<span class="text-slate-400 text-xs" title="今天还没跑过 picks — 点刷新或加一只新股自动触发评级">— 未评级</span>';
   }
@@ -4074,7 +4067,6 @@ function _watchlistDailyItem(row) {
     action = "持仓复查";
     tone = "blue";
     hint = "真实持仓，先看纪律和仓位";
-    why.push("真实持仓");
   }
   if (review && review.discipline && review.discipline.triggered) {
     priority += 45;
@@ -4096,6 +4088,8 @@ function _watchlistDailyItem(row) {
     }
     why.push(reviewRisks[0] || riskFromRating);
   }
+  // 2026-06-11 降噪:分数/持仓/池子状态等已有独立列或分组表达,不再重复塞进
+  // 「为什么关注」;该列只留 纪律/风险/一句话定位 这类真正要读的内容。
   if (score != null && score >= 80) {
     priority += 25;
     if (!isHeld && tone !== "amber") {
@@ -4103,7 +4097,6 @@ function _watchlistDailyItem(row) {
       hint = "AI 分数高，先查估值/事件";
       tone = "emerald";
     }
-    why.push(`AI 分 ${score.toFixed(1)}`);
   } else if (score != null && score >= 75) {
     priority += 15;
     if (!isHeld && action === "观察") {
@@ -4111,7 +4104,6 @@ function _watchlistDailyItem(row) {
       hint = "分数在高分研究区间";
       tone = "emerald";
     }
-    why.push(`AI 分 ${score.toFixed(1)}`);
   }
   if (notes.includes("早期关注推荐")) {
     priority += 18;
@@ -4120,26 +4112,19 @@ function _watchlistDailyItem(row) {
       hint = "等订单/财报/放量确认";
       tone = "sky";
     }
-    why.push("早发现池");
   }
   if (isPlan) {
     priority += 8;
-    why.push("AI 方案跟踪");
   }
   const cov = WATCHLIST_COVERAGE[code];
   if (!rating && cov === "in_universe") {
     priority += 6;
-    why.push("今天未入选 Top20");
-  }
-  if (!rating && cov === "not_in_universe") {
-    why.push("非科技/模型不评");
   }
   if (isEtf && !isHeld && action === "观察") {
     // ETF/指数工具:链条与因子本来就不适用,标 N/A 而不是误导性的「补资料」
     action = "不适用";
     hint = "ETF/指数工具，因子与链条不适用";
     tone = "slate";
-    why.push("ETF·仅价格跟踪");
   }
   if (missingPosition && !isEtf) {
     priority += 3;
@@ -4148,7 +4133,6 @@ function _watchlistDailyItem(row) {
       hint = "缺链条/一句话说明";
       tone = "slate";
     }
-    why.push("资料缺口");
   }
   if (!why.length) why.push(row.layman_intro || row.industry || "仅保留观察");
 
@@ -4165,23 +4149,21 @@ function _watchActionBadge(item) {
     blue: "bg-blue-50 text-blue-800 border-blue-200",
     slate: "bg-slate-50 text-slate-700 border-slate-200",
   }[item.tone || "slate"];
-  return `<div class="space-y-1">
-    <span class="inline-flex px-2 py-0.5 rounded-full border text-xs font-semibold ${cls}">${_esc(item.action)}</span>
-    <div class="text-[11px] text-slate-500 leading-tight">${_esc(item.hint)}</div>
-  </div>`;
+  // 降噪:提示语进 title 悬停,不再占一行
+  return `<span class="inline-flex px-2 py-0.5 rounded-full border text-xs font-semibold ${cls}" title="${_esc(item.hint)}">${_esc(item.action)}</span>`;
 }
 
 // 2026-06-11: 自选页分组视图 —— 持仓 > 研究池 > 观察 > 不适用/缺资料
 let __wlGroupFilter = "";
 
 function _watchlistGroup(item) {
-  if (!item) return {key: "watch", order: 2, icon: "⚪", label: "观察"};
-  if (item.isHeld) return {key: "held", order: 0, icon: "🔴", label: "持仓 · 按紧急度"};
-  if (item.action === "不适用" || item.action === "补资料") return {key: "meta", order: 3, icon: "◽", label: "不适用 / 缺资料"};
+  if (!item) return {key: "watch", order: 2, label: "观察"};
+  if (item.isHeld) return {key: "held", order: 0, label: "持仓 · 按紧急度"};
+  if (item.action === "不适用" || item.action === "补资料") return {key: "meta", order: 3, label: "不适用 / 缺资料"};
   if (item.action === "买前研究" || item.action === "候补研究" || item.action === "早发现跟踪" || item.action === "先复查") {
-    return {key: "research", order: 1, icon: "🟢", label: "研究池 · 按AI分"};
+    return {key: "research", order: 1, label: "研究池 · 按AI分"};
   }
-  return {key: "watch", order: 2, icon: "⚪", label: "观察"};
+  return {key: "watch", order: 2, label: "观察"};
 }
 
 function _setWlGroupFilter(key) {
@@ -4193,10 +4175,10 @@ function _watchlistDataHealthHtml(item) {
   if (item.isEtf) return '<span class="text-[11px] text-slate-400 cursor-help" title="ETF/指数工具：链条与因子不适用，只做价格跟踪">N/A·ETF</span>';
   if (item.notInUniverse) return '<span class="text-[11px] text-slate-400 cursor-help" title="非科技标的：AI 模型不评分，链条不适用">N/A·非科技</span>';
   const miss = item.missingFields || [];
-  if (!miss.length) return '<span class="text-emerald-600 text-xs" title="链条/层级/角色/一句话/行业 五项齐全">✅ 齐</span>';
+  if (!miss.length) return '<span class="text-slate-300 text-xs" title="链条/层级/角色/一句话/行业 五项齐全">齐</span>';
   const nameMap = {chain: "链条", chain_tier: "层级", chain_role: "角色", layman_intro: "一句话", industry: "行业"};
   const detail = miss.map(k => nameMap[k] || k).join("、");
-  return `<span class="text-amber-600 text-xs cursor-help" title="缺：${_esc(detail)}">⚠️ 缺${miss.length}项</span>`;
+  return `<span class="text-amber-600 text-xs cursor-help" title="缺：${_esc(detail)}">缺${miss.length}项</span>`;
 }
 
 function _watchlistLocationHtml(row) {
@@ -4213,14 +4195,8 @@ function _watchlistLocationHtml(row) {
 
 function _watchlistSourceHtml(row) {
   const label = _watchlistSourceLabel(row);
-  const cls = label === "持仓同步" ? "bg-blue-50 text-blue-700 border-blue-200"
-    : label === "早发现" ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-    : label === "AI推荐" ? "bg-violet-50 text-violet-700 border-violet-200"
-    : "bg-slate-50 text-slate-600 border-slate-200";
-  return `<div class="space-y-1">
-    <span class="inline-flex px-2 py-0.5 rounded border text-[11px] font-semibold ${cls}" title="${_esc(row.notes || "")}">${_esc(label)}</span>
-    <div class="text-[11px] text-slate-500" title="${_esc(row.created_at || "")}">${_fmtAddedAt(row.created_at)}</div>
-  </div>`;
+  // 降噪:来源是次要信息,统一素色文本,细节进悬停
+  return `<div class="text-[11px] text-slate-500 leading-tight" title="${_esc(row.notes || "")}">${_esc(label)}<br><span class="text-slate-400" title="${_esc(row.created_at || "")}">${_fmtAddedAt(row.created_at)}</span></div>`;
 }
 
 async function loadWatchlistTable() {
@@ -4296,16 +4272,16 @@ async function loadWatchlistTable() {
         allCounts[g.key] = (allCounts[g.key] || 0) + 1;
         if (it.action === "先看纪律") disciplineN++;
       });
-      const seg = (key, icon, label) => {
+      const seg = (key, label) => {
         const on = __wlGroupFilter === key;
-        return `<button onclick="_setWlGroupFilter('${key}')" title="点击只看这一组，再点取消" class="px-2 py-1 rounded border ${on ? "bg-violet-100 border-violet-300 text-violet-800 font-semibold" : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"}">${icon} ${label} ${allCounts[key] || 0}</button>`;
+        return `<button onclick="_setWlGroupFilter('${key}')" title="点击只看这一组，再点取消" class="px-2 py-1 rounded border ${on ? "bg-violet-100 border-violet-300 text-violet-800 font-semibold" : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"}">${label} ${allCounts[key] || 0}</button>`;
       };
       statsEl.innerHTML = [
-        seg("held", "🔴", "持仓"),
-        disciplineN ? `<span class="px-2 py-1 rounded border bg-rose-50 border-rose-200 text-rose-700 font-semibold">⚠️ 触发纪律 ${disciplineN}</span>` : "",
-        seg("research", "🟢", "研究池"),
-        seg("watch", "⚪", "观察"),
-        seg("meta", "◽", "不适用/缺资料"),
+        seg("held", "持仓"),
+        disciplineN ? `<span class="px-2 py-1 rounded border bg-rose-50 border-rose-200 text-rose-700 font-semibold">触发纪律 ${disciplineN}</span>` : "",
+        seg("research", "研究池"),
+        seg("watch", "观察"),
+        seg("meta", "不适用/缺资料"),
       ].filter(Boolean).join("");
     }
     countEl.textContent = duplicateN > 0
@@ -4324,13 +4300,13 @@ async function loadWatchlistTable() {
     tbody.innerHTML = filtered.map(r => {
       const code = _watchlistKey(r);
       const item = dailyByCode.get(code) || _watchlistDailyItem(r);
-      const why = item.why.map(w => _shortWatchText(w, 62)).slice(0, 3);
+      const why = item.why.map(w => _shortWatchText(w, 62)).slice(0, 2);
       const intro = r.layman_intro || r.industry || r.business || "";
       const grp = _watchlistGroup(item);
       let groupHead = "";
       if (grp.key !== lastGroupKey) {
         lastGroupKey = grp.key;
-        groupHead = `<tr class="bg-slate-100/80"><td colspan="8" class="px-3 py-1.5 text-[11px] font-bold text-slate-500 tracking-wider">${grp.icon} ${grp.label}（${groupSeen[grp.key] || 0}）</td></tr>`;
+        groupHead = `<tr class="bg-slate-100/80"><td colspan="8" class="px-3 py-1.5 text-[11px] font-bold text-slate-500 tracking-wider border-l-2 ${grp.key === "held" ? "border-rose-400" : grp.key === "research" ? "border-emerald-400" : "border-slate-300"}">${grp.label}（${groupSeen[grp.key] || 0}）</td></tr>`;
       }
       return groupHead + `
       <tr class="hover:bg-slate-50 align-top">
@@ -4340,7 +4316,7 @@ async function loadWatchlistTable() {
           <div class="text-[11px] text-slate-400 mt-0.5" title="${_esc(r.market || '')}">${_esc(_normWatchlistMarket(r.market))}</div>
         </td>
         <td class="px-3 py-3 min-w-[125px]">${_watchActionBadge(item)}</td>
-        <td class="px-3 py-3 min-w-[170px]">${_watchlistMetricsHtml(item)}<div class="mt-1">${_wlRatingBadge(code)}</div></td>
+        <td class="px-3 py-3 min-w-[170px]">${_watchlistMetricsHtml(item)}${(item.rating && item.rating.rating) ? "" : `<div class="mt-1">${_wlRatingBadge(code)}</div>`}</td>
         <td class="px-3 py-3 text-xs text-slate-700 max-w-md leading-relaxed">
           ${why.map(w => `<div>${_esc(w)}</div>`).join("") || '<span class="text-slate-400">—</span>'}
           ${intro ? `<div class="text-[11px] text-slate-500 mt-1">${_esc(_shortWatchText(intro, 74))}</div>` : ""}
@@ -17209,6 +17185,60 @@ def today_decision_panel_html() -> str:
 """
 
 
+def trust_verdict_panel_html() -> str:
+    """🚦 能不能照着买 —— AI 推荐页顶部红绿灯。
+
+    读 shadow_tuning_evidence.json（单一可信源）的 activation_decision + 各市场样本外实测，
+    用大白话回答"现在能不能照着推荐买"。数据驱动：样本外 alpha 转正且达标前一律红灯，
+    达标自动转绿，不靠硬编码。口径 = strategy_eval 收盘价、样本外前瞻。规则文档 §19。"""
+    ev = _runtime_load_json("data/latest/shadow_tuning_evidence.json") or {}
+    mh = [m for m in (ev.get("market_horizon_summary") or []) if m.get("horizon") == "1d"]
+    decision = ev.get("activation_decision") or {}
+    crit = decision.get("criteria") or {}
+    min_hit = crit.get("min_hit_rate", 45.0)
+    rows, any_neg = [], False
+    all_pass = bool(mh)
+    for m in mh:
+        label = m.get("label") or m.get("market")
+        a = m.get("shadow_avg_alpha_pct")
+        h = m.get("shadow_win_rate")
+        n = m.get("reviewed_shadow_buy_count")
+        a_ok = isinstance(a, (int, float)) and a > 0
+        h_ok = isinstance(h, (int, float)) and h >= min_hit
+        if isinstance(a, (int, float)) and a <= 0:
+            any_neg = True
+        if not (a_ok and h_ok):
+            all_pass = False
+        a_txt = f"{a:+.2f}%" if isinstance(a, (int, float)) else "—"
+        h_txt = f"{h:.0f}%" if isinstance(h, (int, float)) else "—"
+        mark = "✅" if (a_ok and h_ok) else "❌"
+        rows.append(
+            f'<li>{mark} <b>{html_lib.escape(str(label))}</b>：样本外 alpha {a_txt} · 命中 {h_txt} · 样本 {n or 0}'
+            f'（达标线：alpha&gt;0、命中≥{min_hit:.0f}%）</li>'
+        )
+    status = str(decision.get("status") or ev.get("status") or "").upper()
+    blocked = status == "BLOCKED" or any_neg or not mh
+    if blocked:
+        light, head, color = "🔴", "现在还不能照着买", "rose"
+        gist = ("各市场样本外实测目前还在亏 / 未达标，样本也不够。"
+                "<b>这套现在只能当研究线索，别照着直接下单。</b>等样本外 alpha 稳定转正再升级。")
+    elif all_pass:
+        light, head, color = "🟢", "可小仓参照（仍须你确认）", "emerald"
+        gist = ("样本外已达标。但仍须：<b>分散、按风险定仓位、设止损、你本人确认每一笔</b>——不是自动下单。")
+    else:
+        light, head, color = "🟡", "接近达标，仍不建议照着买", "amber"
+        gist = "部分指标转好但未全部达标。达标前仍当研究工具。"
+    return (
+        f'<div class="mb-4 rounded-xl border border-{color}-300 bg-{color}-50 px-4 py-3">'
+        f'<div class="text-base font-bold text-{color}-900">{light} 能不能照着这页买？ — {head}</div>'
+        '<div class="text-[12px] text-slate-600 mt-0.5">这页是系统按规则挑的<b>候选股</b>（美股 / A股 / 港股各最多 20 只）。先回答最重要的问题：</div>'
+        f'<div class="text-sm text-slate-800 mt-1.5 leading-relaxed">{gist}</div>'
+        f'<ul class="text-[12px] text-slate-700 mt-2 leading-relaxed space-y-0.5">{"".join(rows)}</ul>'
+        '<div class="text-[11px] text-slate-500 mt-2">口径：strategy_eval 收盘价 · 单一来源 shadow_tuning_evidence.json · 样本外=用当时已知信息前瞻验证。详见规则文档 §19「策略可信度体检」。</div>'
+        '</div>'
+    )
+
+
 def strategy_market_advisory_html() -> str:
     """分市场研究观察 advisory —— 按「只有 US 在验证轨道」策略,列出冻结的非 US 市场(CN/HK)
     及其真实实测 alpha/命中,防止被误读成可买。数据源 shadow_tuning_evidence.json(只读)。
@@ -20472,6 +20502,7 @@ def build():
     html = html.replace("{TODAY_DECISION_PANEL}", today_decision_panel_html())
     html = html.replace("{RUNTIME_STATUS_PANEL}", runtime_status_panel_html())
     html = html.replace("{STRATEGY_MARKET_ADVISORY}", strategy_market_advisory_html())
+    html = html.replace("{TRUST_VERDICT_PANEL}", trust_verdict_panel_html())
     html = html.replace("{US_VALIDATION_PROGRESS}", us_validation_progress_html())
     html = html.replace("{P0_POLICY_VALIDATION_PANEL}", p0_policy_validation_panel_html())
     html = html.replace("{RECOMMENDATION_READINESS_PANEL}", recommendation_readiness_panel_html(compact=True))
