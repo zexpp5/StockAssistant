@@ -178,6 +178,7 @@ def build_proposal(
     *,
     strategy_version: str | None = DEFAULT_STRATEGY_VERSION,
     horizon: str | None = DEFAULT_HORIZON,
+    force_factor_actions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     diag = diagnosis.build_report(strategy_version=strategy_version, horizon=horizon, markets=None)
     generated_at = datetime.now().isoformat(timespec="seconds")
@@ -185,6 +186,19 @@ def build_proposal(
     market_actions = _market_actions(diag)
     factor_actions = _factor_actions(diag)
     gate_actions = _gate_actions(diag)
+    # 手动实验钩子(2026-06-11)：在自动诊断之外强制测某个因子变体(如"降估值主导权重")，
+    # 用于 shadow A/B 验证结构改法。标 manual_experiment=true，仍是 SHADOW_ONLY、只读、不动生产。
+    if force_factor_actions:
+        seen = {(str(a.get("market")), str(a.get("factor"))) for a in factor_actions}
+        for fa in force_factor_actions:
+            key = (str(fa.get("market")), str(fa.get("factor")))
+            if key in seen:
+                continue
+            seen.add(key)
+            fa = {**fa, "manual_experiment": True, "evidence": fa.get("evidence") or "manual experiment (forced for shadow A/B)"}
+            fa.setdefault("label", MARKET_LABELS.get(str(fa.get("market")), str(fa.get("market"))))
+            fa.setdefault("proposed_change", "手动实验：降低估值主导权重，高估值需叠加量价/催化确认。")
+            factor_actions.append(fa)
     return {
         "schema_version": "strategy_tuning_proposal_v1",
         "generated_at": generated_at,
@@ -292,22 +306,36 @@ def main() -> int:
     parser.add_argument("--strategy-version", default=DEFAULT_STRATEGY_VERSION)
     parser.add_argument("--horizon", default=DEFAULT_HORIZON)
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--force-factor", action="append", default=[],
+                        help="手动实验：强制加因子变体，格式 MARKET:FACTOR:ACTION，可重复。"
+                             "如 US:valuation:reduce_weight_and_require_confirmation")
+    parser.add_argument("--out", default=str(OUT_JSON), help="JSON 输出路径(实验用独立文件，避免污染生产)")
+    parser.add_argument("--out-md", default=str(OUT_MD), help="MD 输出路径")
     args = parser.parse_args()
 
     horizon = None if str(args.horizon).lower() in {"all", "*", ""} else str(args.horizon)
-    payload = build_proposal(strategy_version=args.strategy_version, horizon=horizon)
-    OUT_JSON.parent.mkdir(parents=True, exist_ok=True)
-    OUT_MD.parent.mkdir(parents=True, exist_ok=True)
-    OUT_JSON.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    OUT_MD.write_text(_to_markdown(payload), encoding="utf-8")
+    forced: list[dict[str, Any]] = []
+    for spec in args.force_factor or []:
+        parts = str(spec).split(":")
+        if len(parts) != 3:
+            print(f"  ⚠️ 跳过格式错误的 --force-factor: {spec}（应为 MARKET:FACTOR:ACTION）")
+            continue
+        forced.append({"market": parts[0].strip().upper(), "factor": parts[1].strip(), "action": parts[2].strip()})
+    payload = build_proposal(strategy_version=args.strategy_version, horizon=horizon, force_factor_actions=forced or None)
+    out_json = Path(args.out)
+    out_md = Path(args.out_md)
+    out_json.parent.mkdir(parents=True, exist_ok=True)
+    out_md.parent.mkdir(parents=True, exist_ok=True)
+    out_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    out_md.write_text(_to_markdown(payload), encoding="utf-8")
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
     else:
         print(f"Strategy tuning proposal: {payload['status']}")
         print(f"  proposed={payload['proposed_strategy_version']}")
         print(f"  markets={len(payload.get('market_actions') or [])} factors={len(payload.get('factor_actions') or [])} gates={len(payload.get('gate_actions') or [])}")
-        print(f"  JSON: {OUT_JSON}")
-        print(f"  MD:   {OUT_MD}")
+        print(f"  JSON: {out_json}")
+        print(f"  MD:   {out_md}")
     return 0
 
 
