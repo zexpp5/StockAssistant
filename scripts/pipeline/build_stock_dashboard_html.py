@@ -4175,7 +4175,7 @@ function _watchlistDataHealthHtml(item) {
   if (item.isEtf) return '<span class="text-[11px] text-slate-400 cursor-help" title="ETF/指数工具：链条与因子不适用，只做价格跟踪">N/A·ETF</span>';
   if (item.notInUniverse) return '<span class="text-[11px] text-slate-400 cursor-help" title="非科技标的：AI 模型不评分，链条不适用">N/A·非科技</span>';
   const miss = item.missingFields || [];
-  if (!miss.length) return '<span class="text-slate-300 text-xs" title="链条/层级/角色/一句话/行业 五项齐全">齐</span>';
+  if (!miss.length) return '<span class="text-emerald-600 text-xs font-semibold" title="链条/层级/角色/一句话/行业 五项齐全">齐</span>';
   const nameMap = {chain: "链条", chain_tier: "层级", chain_role: "角色", layman_intro: "一句话", industry: "行业"};
   const detail = miss.map(k => nameMap[k] || k).join("、");
   return `<span class="text-amber-600 text-xs cursor-help" title="缺：${_esc(detail)}">缺${miss.length}项</span>`;
