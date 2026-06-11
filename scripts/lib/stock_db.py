@@ -678,6 +678,13 @@ def fetch_research_records_v2(*, conn: duckdb.DuckDBPyConnection | None = None) 
             SELECT * FROM price_daily
             QUALIFY ROW_NUMBER() OVER (PARTITION BY market, symbol ORDER BY trade_date DESC, fetched_at DESC) = 1
         ),
+        latest_metrics AS (
+            -- 盘中/小时级行只有收盘价,动量/估值列为空;展示口径回退到最近一个有数的行
+            -- (与打分端 *_REUSED_RECENT_V2_SNAPSHOT 的回退语义一致)
+            SELECT * FROM price_daily
+            WHERE one_month_pct IS NOT NULL OR ytd_pct IS NOT NULL
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY market, symbol ORDER BY trade_date DESC, fetched_at DESC) = 1
+        ),
         latest_run AS (
             SELECT run_id, generated_at
             FROM recommendation_runs
@@ -723,14 +730,14 @@ def fetch_research_records_v2(*, conn: duckdb.DuckDBPyConnection | None = None) 
             cm.chain, cm.chain_tier, cm.chain_role, cm.layman_intro,
             u.theme,
             lp.close          AS latest_price,
-            lp.market_cap     AS yf_market_cap,
-            lp.forward_pe,
-            lp.peg_ratio      AS peg,
+            COALESCE(lp.market_cap, lm.market_cap)       AS yf_market_cap,
+            COALESCE(lp.forward_pe, lm.forward_pe)       AS forward_pe,
+            COALESCE(lp.peg_ratio, lm.peg_ratio)         AS peg,
             NULL              AS earnings_growth_pct,
-            lp.ytd_pct,
-            lp.one_year_pct,
-            lp.one_month_pct,
-            lp.one_week_pct,
+            COALESCE(lp.ytd_pct, lm.ytd_pct)             AS ytd_pct,
+            COALESCE(lp.one_year_pct, lm.one_year_pct)   AS one_year_pct,
+            COALESCE(lp.one_month_pct, lm.one_month_pct) AS one_month_pct,
+            COALESCE(lp.one_week_pct, lm.one_week_pct)   AS one_week_pct,
             lp.trade_date     AS price_date,
             lp.fetched_at     AS price_fetched_at,
             COALESCE(ls.fetched_at, u.last_seen_at) AS analysis_updated_at,
@@ -740,6 +747,7 @@ def fetch_research_records_v2(*, conn: duckdb.DuckDBPyConnection | None = None) 
             lpk.factor_scores_json AS pick_factor_scores_json
         FROM system_universe u
         LEFT JOIN latest_price lp ON lp.market = u.market AND lp.symbol = u.symbol
+        LEFT JOIN latest_metrics lm ON lm.market = u.market AND lm.symbol = u.symbol
         LEFT JOIN latest_picks lpk ON lpk.market = u.market AND lpk.symbol = u.symbol
         LEFT JOIN latest_snap ls ON ls.market = u.market AND ls.symbol = u.symbol
         LEFT JOIN chain_metadata cm ON cm.market = u.market AND cm.symbol = u.symbol
@@ -1113,17 +1121,28 @@ def fetch_manual_watchlist_enriched(
         WITH latest_price AS (
             SELECT * FROM price_daily
             QUALIFY ROW_NUMBER() OVER (PARTITION BY market, symbol ORDER BY trade_date DESC, fetched_at DESC) = 1
+        ),
+        latest_metrics AS (
+            -- 盘中/小时级行只有收盘价;展示口径回退到最近一个有数的行
+            SELECT * FROM price_daily
+            WHERE one_month_pct IS NOT NULL OR ytd_pct IS NOT NULL
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY market, symbol ORDER BY trade_date DESC, fetched_at DESC) = 1
         )
         SELECT
             w.symbol AS code, COALESCE(NULLIF(u.name, w.symbol), w.name, w.symbol) AS name,
             w.market, u.industry, u.theme,
             lp.close AS latest_price,
-            lp.ytd_pct, lp.one_year_pct, lp.one_month_pct, lp.one_week_pct,
-            lp.forward_pe, lp.peg_ratio AS peg, NULL AS earnings_growth_pct,
-            lp.currency, lp.market_cap
+            COALESCE(lp.ytd_pct, lm.ytd_pct) AS ytd_pct,
+            COALESCE(lp.one_year_pct, lm.one_year_pct) AS one_year_pct,
+            COALESCE(lp.one_month_pct, lm.one_month_pct) AS one_month_pct,
+            COALESCE(lp.one_week_pct, lm.one_week_pct) AS one_week_pct,
+            COALESCE(lp.forward_pe, lm.forward_pe) AS forward_pe,
+            COALESCE(lp.peg_ratio, lm.peg_ratio) AS peg, NULL AS earnings_growth_pct,
+            lp.currency, COALESCE(lp.market_cap, lm.market_cap) AS market_cap
         FROM manual_watchlist w
         LEFT JOIN system_universe u ON u.symbol = w.symbol
         LEFT JOIN latest_price lp ON lp.symbol = w.symbol
+        LEFT JOIN latest_metrics lm ON lm.symbol = w.symbol
     """
     params: list = []
     if market:
