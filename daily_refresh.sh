@@ -51,6 +51,20 @@ is_research_step() {
 is_morning_step() {
     [ "$MODE" = "full" ] || [ "$MODE" = "morning" ]
 }
+# is_13f_window：13F 是季度披露（季度末 + 45 天截止：~2/14、5/15、8/14、11/14），不是每天
+#   有新数据。披露窗口 ≈ 季度末后第一个月全月 + 截止月前 20 天（扎堆申报）；窗口外（如 6/7
+#   月）几乎无新申报。窗口内每天拉、窗口外每周一拉（见 step 2-3/25），不在没数据的月份空跑。
+#   注：用 10#$(...) 把带前导 0 的月/日按十进制解析，避免 08/09 被当八进制（BSD date 无 %-m）。
+is_13f_window() {
+    local m d
+    m=$((10#$(date +%m)))
+    d=$((10#$(date +%d)))
+    case "$m" in
+        1|4|7|10) return 0 ;;                                 # 季度末后第一个月，申报陆续到，全月窗口
+        2|5|8|11) [ "$d" -le 20 ] && return 0 || return 1 ;;  # 截止月（~14/15 截止），前 20 天扎堆申报
+        *)        return 1 ;;                                  # 3/6/9/12 季度末当月：上窗口已过、下窗口未到
+    esac
+}
 # needs_ipo_data：IPO & 次新股 tab 数据源（step 18 + 19b）。
 # 2026-06-08：用户暂不关注 IPO/次新股雷达，默认暂停，避免早班被研究性数据拖慢。
 IPO_JUNIOR_PAUSED="${IPO_JUNIOR_PAUSED:-1}"
@@ -619,9 +633,16 @@ fi
 # M — V2 推荐 run（必须在 step 10/23 之前跑，让两者拿到今日 picks 而不是昨日）
 run_step "1b/25 V2 推荐 run（system_universe → recommendation_picks/portfolio_plans）" \
     "scripts/tools/build_v2_recommendations.py"
-# R — SEC 13F 刷新（拉 10+ 大基金季度持仓变动，慢）
-is_research_step && run_step "2/25 SEC 13F 刷新" "-m stock_research.jobs.refresh_13f"
-is_research_step && run_step "3/25 SEC 13F → track_13f.json（dashboard 用）" "scripts/pipeline/_build_track_13f_from_sec.py"
+# R — SEC 13F 刷新（拉 10+ 大基金季度持仓变动，慢）。13F 是季度披露，按披露窗口调度：
+#   披露窗口期每天拉、窗口外只周一拉，避免 6/7 月这种没新申报的月份每晚空跑。
+if is_research_step; then
+    if is_13f_window || [ "$DOW" = "1" ]; then
+        run_step "2/25 SEC 13F 刷新" "-m stock_research.jobs.refresh_13f"
+        run_step "3/25 SEC 13F → track_13f.json（dashboard 用）" "scripts/pipeline/_build_track_13f_from_sec.py"
+    else
+        echo "[2-3/25 SEC 13F] 跳过：非披露窗口且非周一（13F 季度数据，窗口外每周一拉一次即可）"
+    fi
+fi
 # M — V2 系统池 enrichment（system_universe → industry/earnings/详情页字段）
 run_step "4b/25 V2 系统池 enrichment" \
     "scripts/tools/enrich_system_universe_v2.py --reuse-recent-days 7 --skip-trends --skip-akshare --sleep-sec 0.02 --per-symbol-timeout-sec 18"
