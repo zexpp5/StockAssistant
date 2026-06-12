@@ -479,6 +479,14 @@ def main() -> int:
     state["scans"].append({"at": now.strftime("%H:%M"), "color": res.color,
                            "composite": res.composite, "scan": scan})
     _save_state(state)
+
+    # 瓶颈财报复查提醒（GEV/VRT/MU 领先信号，6-10 研究文档候选的落地）
+    # 独立于闸门颜色：到财报窗口就提醒，每家每季最多一次；失败不影响闸门。
+    try:
+        from stock_research.jobs.bottleneck_earnings_reminder import run as _bottleneck_reminder
+        _bottleneck_reminder(now=now)
+    except Exception as e:
+        logger.warning("瓶颈财报提醒失败（不影响闸门）: %s", e)
     return 0
 
 
