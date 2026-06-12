@@ -435,13 +435,32 @@ class TechGrowthEligibilityGateTest(unittest.TestCase):
         self.assertEqual(policy["action"], "research_only")
         self.assertEqual(policy["eligibility_migration_status"], "data_usability_gate")
 
-    def test_overheated_stock_waits_for_entry(self):
+    def test_overheated_stock_shadow_mode_keeps_action_with_flag(self):
+        # ② 过热动作闸 2026-06-11 改 shadow 默认：不下调 action，只记 overheated_shadow，
+        # 等 strategy_eval 历史回算追认有效后才切 active。
         row = {
             **self._base_row(symbol="AVGO"),
             "risk_flags": [{"code": "OVERHEATED_1Y", "severity": "medium"}],
         }
 
         policy = build_v2._derive_recommendation_policy(row)
+
+        self.assertEqual(policy["eligibility"], "buyable")
+        self.assertEqual(policy["action"], "focus_research")
+        self.assertTrue(policy.get("overheated_shadow"))
+
+    def test_overheated_stock_waits_for_entry_in_active_mode(self):
+        row = {
+            **self._base_row(symbol="AVGO"),
+            "risk_flags": [{"code": "OVERHEATED_1Y", "severity": "medium"}],
+        }
+
+        original_mode = build_v2.OVERHEATED_ACTION_GATE_MODE
+        build_v2.OVERHEATED_ACTION_GATE_MODE = "active"
+        try:
+            policy = build_v2._derive_recommendation_policy(row)
+        finally:
+            build_v2.OVERHEATED_ACTION_GATE_MODE = original_mode
 
         self.assertEqual(policy["eligibility"], "buyable")
         self.assertEqual(policy["action"], "wait_entry")
