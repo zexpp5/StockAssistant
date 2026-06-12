@@ -24,7 +24,9 @@ sys.path.insert(0, str(REPO / "scripts" / "lib"))
 from stock_db import DB_PATH, get_db  # noqa: E402
 from scripts.tools import strategy_tuning_proposal  # noqa: E402
 from scripts.tools.replay_weight_variants import (  # noqa: E402
+    GRADE_LOOKBACK_DAYS,
     VARIANTS as WEIGHT_VARIANTS,
+    grade_score_from_net,
     variant_score,
 )
 
@@ -388,6 +390,53 @@ def apply_shadow_transform(picks: list[dict[str, Any]], proposal: dict[str, Any]
     return transformed
 
 
+def inject_grade_factor(picks: list[dict[str, Any]], asof: Any) -> int:
+    """给美股 picks 注入 grade 因子(评级净上调,analyst_grade_events,as-of 当日)。
+
+    公式与回放工具同源(grade_score_from_net);表缺失时静默跳过 →
+    variant_score 对缺失因子记中性 50,变体退化为不含 grade 的版本。
+    """
+    from datetime import date as _date, timedelta as _td
+
+    if isinstance(asof, str):
+        try:
+            asof = _date.fromisoformat(asof[:10])
+        except Exception:
+            return 0
+    if hasattr(asof, "date") and not isinstance(asof, _date):
+        asof = asof.date()
+    try:
+        conn = get_db(read_only=True)
+        try:
+            rows = conn.execute(
+                """
+                SELECT symbol,
+                       sum(CASE WHEN lower(coalesce(action,''))='upgrade' THEN 1 ELSE -1 END)
+                FROM analyst_grade_events
+                WHERE market='US' AND lower(coalesce(action,'')) IN ('upgrade','downgrade')
+                  AND event_date > ? AND event_date <= ?
+                GROUP BY symbol
+                """,
+                [asof - _td(days=GRADE_LOOKBACK_DAYS), asof],
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return 0
+    net_by_symbol = {str(r[0]): int(r[1]) for r in rows}
+    injected = 0
+    for pick in picks:
+        if str(pick.get("market")) != "US":
+            continue
+        scores = pick.get("factor_scores")
+        if not isinstance(scores, dict):
+            scores = {}
+            pick["factor_scores"] = scores
+        scores["grade"] = grade_score_from_net(net_by_symbol.get(str(pick.get("symbol")), 0))
+        injected += 1
+    return injected
+
+
 def apply_weight_variant_transform(
     picks: list[dict[str, Any]],
     *,
@@ -525,6 +574,8 @@ def build_shadow_run(
 
     if weight_variant:
         weights = WEIGHT_VARIANTS[weight_variant]
+        if "grade" in weights:
+            inject_grade_factor(source_picks, source_run.get("run_date"))
         shadow_picks = apply_weight_variant_transform(
             source_picks, variant_name=weight_variant, weights=weights)
     else:

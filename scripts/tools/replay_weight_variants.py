@@ -47,7 +47,21 @@ FACTOR_KEYS: dict[str, tuple[str, ...]] = {
     "reversal": ("reversal",),
     "f_score": ("f_score",),
     "data_usability": ("data_usability", "data_quality"),
+    # grade = 评级净上调(美股 only,analyst_grade_events 注入;CN/HK 中性 50)
+    # 2026-06-12 IC 验证 PASS: 20d IC=+0.042 t=2.25,五个半年切片全正
+    "grade": ("grade",),
 }
+
+GRADE_LOOKBACK_DAYS = 30
+
+
+def grade_score_from_net(net_upgrades: int) -> float:
+    """评级净上调 → 0-100 分(预注册公式,单一来源,shadow 机器复用)。
+
+    net=±4 封顶:50 + 12.5×net。多数票多数日 net=0 → 中性 50。
+    """
+    return max(0.0, min(100.0, 50.0 + 12.5 * float(net_upgrades)))
+
 
 # 变体矩阵：生产基线 + 结构性改法 + 单因子消融
 VARIANTS: dict[str, dict[str, float]] = {
@@ -59,11 +73,15 @@ VARIANTS: dict[str, dict[str, float]] = {
     "quality_heavy": {"momentum": 0.10, "valuation": 0.25, "reversal": 0.25, "f_score": 0.40},
     "no_valuation": {"momentum": 0.20, "reversal": 0.40, "f_score": 0.40},
     "equal_4": {"momentum": 0.25, "valuation": 0.25, "reversal": 0.25, "f_score": 0.25},
+    # 第三变体(2026-06-12): val_down_mild 把估值再让 0.20 给已 PASS 的评级因子
+    "val_down_grade": {"momentum": 0.15, "valuation": 0.25, "reversal": 0.20,
+                       "f_score": 0.20, "grade": 0.20},
     # 单因子消融：定位 alpha/毒性来源
     "valuation_pure": {"valuation": 1.0},
     "momentum_pure": {"momentum": 1.0},
     "reversal_pure": {"reversal": 1.0},
     "fscore_pure": {"f_score": 1.0},
+    "grade_pure": {"grade": 1.0},
 }
 
 
@@ -92,6 +110,39 @@ def variant_score(scores: dict[str, Any], weights: dict[str, float]) -> tuple[fl
             missing += 1
         total += weight * value
     return total, missing
+
+
+def inject_grade_scores(conn, picks: list[dict[str, Any]]) -> int:
+    """按 run_date 从 analyst_grade_events 注入 PIT 正确的 grade 分(美股)。
+
+    表不存在/为空时静默跳过(grade 因子缺失 → variant_score 记中性 50)。
+    """
+    try:
+        rows = conn.execute(
+            """
+            SELECT symbol, event_date,
+                   CASE WHEN lower(coalesce(action,''))='upgrade' THEN 1 ELSE -1 END AS sign
+            FROM analyst_grade_events
+            WHERE market='US' AND lower(coalesce(action,'')) IN ('upgrade','downgrade')
+            """
+        ).fetchall()
+    except Exception:
+        return 0
+    from collections import defaultdict as _dd
+    from datetime import date as _date, timedelta as _td
+    ev: dict[str, list[tuple[Any, int]]] = _dd(list)
+    for symbol, d, sign in rows:
+        ev[str(symbol)].append((d, int(sign)))
+    injected = 0
+    for pick in picks:
+        if pick["market"] != "US":
+            continue
+        asof = _date.fromisoformat(pick["run_date"])
+        start = asof - _td(days=GRADE_LOOKBACK_DAYS)
+        net = sum(s for d, s in ev.get(pick["symbol"], ()) if start < d <= asof)
+        pick["scores"]["grade"] = grade_score_from_net(net)
+        injected += 1
+    return injected
 
 
 def load_picks(conn) -> list[dict[str, Any]]:
@@ -255,6 +306,7 @@ def main() -> int:
     conn = get_db(force_read_only=True)
     try:
         picks = load_picks(conn)
+        inject_grade_scores(conn, picks)
     finally:
         conn.close()
     if not picks:

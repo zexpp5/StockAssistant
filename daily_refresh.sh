@@ -737,9 +737,12 @@ run_step "23d/25 推荐有效性证据报告" "scripts/tools/recommendation_evid
 is_research_step && run_step "23d2/25 策略失败诊断（只读归因）" "scripts/tools/strategy_failure_diagnosis.py --markets all --horizon 1d" enhance 180
 is_research_step && run_step "23d3/25 策略调权建议（只读灰度）" "scripts/tools/strategy_tuning_proposal.py --horizon 1d" enhance 180
 is_research_step && run_step "23d4/25 shadow 调权模拟（只读对照）" "scripts/tools/build_shadow_tuning_run.py --horizon 1d" enhance 180
-# 23d4a/b 权重变体前向验证(§19.3 第二步):回放赢家 val_down_mild/equal_4 逐日攒前瞻样本,独立归档不污染主链
+# 23d4a/b/c 权重变体前向验证(§19.3 第二步):逐日攒前瞻样本,独立归档不污染主链
+# 23d3c 先刷新评级事件表(yfinance ~4min,全量重建),23d4c 的 grade 因子要当天数据
+is_research_step && run_step "23d3c/25 评级事件刷新（美股·写 analyst_grade_events）" "scripts/tools/backfill_grade_history.py" enhance 900
 is_research_step && run_step "23d4a/25 权重变体 shadow（降估值+质量·只读）" "scripts/tools/build_shadow_tuning_run.py --weight-variant val_down_mild" enhance 180
 is_research_step && run_step "23d4b/25 权重变体 shadow（四因子等权·只读）" "scripts/tools/build_shadow_tuning_run.py --weight-variant equal_4" enhance 180
+is_research_step && run_step "23d4c/25 权重变体 shadow（降估值+评级因子·只读）" "scripts/tools/build_shadow_tuning_run.py --weight-variant val_down_grade" enhance 180
 is_research_step && run_step "23d5/25 shadow 生产门禁（只读证据）" "scripts/tools/evaluate_shadow_tuning_run.py" enhance 120
 is_research_step && run_step "23d6/25 US shadow 预检（唯一 source run · 只读）" "scripts/tools/us_shadow_preflight_check.py" enhance 120
 is_research_step && run_step "23d7/25 US-only 生产验收（先上线美股 · 只读）" "scripts/tools/us_production_acceptance_check.py" enhance 120
