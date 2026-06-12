@@ -480,7 +480,7 @@ def main() -> int:
                            "composite": res.composite, "scan": scan})
     _save_state(state)
 
-    # 瓶颈财报复查提醒（GEV/VRT/MU 领先信号，6-10 研究文档候选的落地）
+    # 财报领先信号提醒：瓶颈订单组(GEV/VRT/MU) + 云大厂capex组(MSFT/GOOGL/AMZN/META)
     # 独立于闸门颜色：到财报窗口就提醒，每家每季最多一次；失败不影响闸门。
     try:
         from stock_research.jobs.bottleneck_earnings_reminder import run as _bottleneck_reminder
