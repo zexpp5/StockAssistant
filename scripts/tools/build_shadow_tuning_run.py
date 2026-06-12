@@ -28,6 +28,8 @@ from scripts.tools.replay_weight_variants import (  # noqa: E402
     VARIANTS as WEIGHT_VARIANTS,
     grade_score_from_net,
     variant_score,
+    variant_uses_factor,
+    weights_for_market,
 )
 
 OUT_JSON = REPO / "data" / "latest" / "shadow_tuning_run.json"
@@ -455,7 +457,8 @@ def apply_weight_variant_transform(
         factor_scores = pick.get("factor_scores") or {}
         if not isinstance(factor_scores, dict):
             factor_scores = {}
-        shadow_score, missing = variant_score(factor_scores, weights)
+        market_weights = weights_for_market(weights, str(pick.get("market") or ""))
+        shadow_score, missing = variant_score(factor_scores, market_weights)
         shadow_score = max(0.0, min(100.0, shadow_score))
         original_score = _round(pick.get("total_score"))
         original_signal = str(pick.get("signal") or _signal(original_score))
@@ -574,7 +577,7 @@ def build_shadow_run(
 
     if weight_variant:
         weights = WEIGHT_VARIANTS[weight_variant]
-        if "grade" in weights:
+        if variant_uses_factor(weights, "grade"):
             inject_grade_factor(source_picks, source_run.get("run_date"))
         shadow_picks = apply_weight_variant_transform(
             source_picks, variant_name=weight_variant, weights=weights)

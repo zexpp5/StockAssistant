@@ -78,6 +78,13 @@ VARIANTS: dict[str, dict[str, float]] = {
                        "f_score": 0.20, "grade": 0.20},
     # 第四变体(2026-06-12): 两年代理回测冠军(268.8% vs 生产代理 111.7%) — 去估值,重评级+反转
     "no_val_grade": {"momentum": 0.20, "reversal": 0.40, "grade": 0.40},
+    # 第五变体(2026-06-12): 分市场权重 — 回放/回测证据:美股估值有毒,港股估值有效,A股是池子问题
+    # US=回测冠军配置 / HK=回放 1d 最优的 val_down_mild / CN=保持生产权重(权重救不了池子,降 churn)
+    "market_adaptive": {"per_market": {
+        "US": {"momentum": 0.20, "reversal": 0.40, "grade": 0.40},
+        "HK": {"momentum": 0.15, "valuation": 0.45, "reversal": 0.20, "f_score": 0.20},
+        "CN": {"momentum": 0.15, "valuation": 0.50, "reversal": 0.15, "data_usability": 0.20},
+    }},
     # 单因子消融：定位 alpha/毒性来源
     "valuation_pure": {"valuation": 1.0},
     "momentum_pure": {"momentum": 1.0},
@@ -85,6 +92,21 @@ VARIANTS: dict[str, dict[str, float]] = {
     "fscore_pure": {"f_score": 1.0},
     "grade_pure": {"grade": 1.0},
 }
+
+
+def weights_for_market(weights: dict[str, Any], market: str) -> dict[str, float]:
+    """变体权重支持分市场:含 per_market 键时按市场取,缺市场回退 default/空。"""
+    per_market = weights.get("per_market")
+    if isinstance(per_market, dict):
+        return per_market.get(market) or per_market.get("default") or {}
+    return weights
+
+
+def variant_uses_factor(weights: dict[str, Any], factor: str) -> bool:
+    per_market = weights.get("per_market")
+    if isinstance(per_market, dict):
+        return any(factor in sub for sub in per_market.values())
+    return factor in weights
 
 
 def _factor_value(scores: dict[str, Any], factor: str) -> float | None:
@@ -223,8 +245,9 @@ def replay(picks: list[dict[str, Any]], top_k: int) -> dict[str, Any]:
                 chosen = prod_top
             else:
                 scored = []
+                market_weights = weights_for_market(weights, market)
                 for p in pool:
-                    s, miss = variant_score(p["scores"], weights)
+                    s, miss = variant_score(p["scores"], market_weights)
                     missing_total += miss
                     scored.append((s, p))
                 scored.sort(key=lambda t: (-t[0], t[1]["symbol"]))
