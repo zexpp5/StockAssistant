@@ -1497,6 +1497,8 @@ function openDiscoveryHistoryFromRadar(event) {
 
   <!-- 2026-06-11: 配置体检卡 — 你现在 vs「指数打底+小仓AI」框架(规则文档 §19.3),advisory 只读 -->
   {ALLOCATION_FRAMEWORK_CARD}
+  <!-- 2026-06-12 收拾B: 卖出/减仓复查提示 — 汇总持仓体检里已算好的减仓/风险信号 -->
+  {HOLDINGS_SELL_ALERT}
 
   <div id="real-holdings-summary" class="mb-3"></div>
   <div id="real-asset-summary" class="hidden"></div>
@@ -17311,6 +17313,63 @@ def trust_verdict_panel_html() -> str:
     )
 
 
+def holdings_sell_alert_html() -> str:
+    """🔻 卖出/减仓 复查提示（2026-06-12）：把"我的持仓"体检里已算好的减仓/风险信号
+    (超仓位上限/过热/破成本均价/评分转弱/亏损达线) 拎到顶上、用人话汇成一个清单。
+    只读 real_holding_review.json，advisory（建议复查，不是必须卖），不碰持仓表。"""
+    rev = _runtime_load_json("data/latest/real_holding_review.json") or {}
+    items = rev.get("items") or []
+    if not items:
+        return ""
+    alerts: list[tuple[int, str, str]] = []  # (priority, symbol, html_li)
+    for it in items:
+        sym = str(it.get("symbol") or it.get("code") or "")
+        name = str(it.get("name") or "")
+        flags = [str(f) for f in (it.get("risk_flags") or [])]
+        reasons = [str(r) for r in (it.get("reasons") or [])]
+        label = str(it.get("action_label") or "")
+        sa = it.get("size_advisory") or {}
+        triggers: list[str] = []
+        prio = 0
+        if any("超过总资产" in f for f in flags) or (isinstance(sa, dict) and sa.get("over_hard_cap")):
+            triggers.append("仓位过重（超单只上限）")
+            prio = max(prio, 3)
+        if any(("过热" in f) or ("1Y 涨幅" in f) or ("涨幅" in f and "%" in f) for f in flags):
+            triggers.append("过热（涨太猛）")
+            prio = max(prio, 3)
+        if any(("低于" in r and "AVWAP" in r) for r in reasons):
+            triggers.append("现价跌破你的成本均价")
+            prio = max(prio, 2)
+        if "减仓" in label:
+            triggers.append("评分转弱（减仓观察）")
+            prio = max(prio, 2)
+        if any(("止损" in r) or ("跌破" in r and "止" in r) for r in reasons):
+            triggers.append("触及止损/纪律线")
+            prio = max(prio, 4)
+        if not triggers:
+            continue
+        disp = sym.split(".")[0]
+        li = (f'<li class="py-1"><span class="font-mono font-bold text-slate-900">{disp}</span>'
+              f'<span class="text-slate-500 text-[12px] ml-1">{name[:8]}</span>'
+              f' — {"、".join(triggers)} <span class="text-violet-700">→ 建议复查是否减仓/止盈</span></li>')
+        alerts.append((prio, sym, li))
+    if not alerts:
+        return (
+            '<div class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-[13px] text-emerald-800">'
+            '🔻 卖出/减仓体检：当前持仓没有触发减仓/风险信号（超仓位/过热/破均价/止损）。继续按纪律持有即可。</div>'
+        )
+    alerts.sort(key=lambda x: -x[0])
+    return (
+        '<div class="mb-4 rounded-xl border border-rose-300 bg-rose-50 px-4 py-3">'
+        '<div class="text-base font-bold text-rose-900">🔻 卖出/减仓 复查提示</div>'
+        '<div class="text-[12px] text-slate-600 mt-0.5 mb-1.5">这几只触发了减仓/风险信号，<b>建议复查是否减仓或止盈</b>'
+        '（advisory，不是必须卖；最终你定）。没触发的票不在此列。</div>'
+        f'<ul class="text-sm leading-relaxed">{"".join(li for _, _, li in alerts)}</ul>'
+        '<div class="text-[11px] text-slate-500 mt-2">来源：持仓体检 real_holding_review（已算好的纪律/风控信号，这里只汇总拎到顶上）。</div>'
+        '</div>'
+    )
+
+
 def ai_workbench_nav_html(step: int) -> str:
     """🧭 AI 工作台 3 步工作流导航（2026-06-12）：推荐(找)→配仓(配)→跟踪(验证)。
     每页顶部标"你在第几步 + 本页职责 + 诚实状态"，治"忘了这页干啥用的"。纯展示。"""
@@ -20707,6 +20766,7 @@ def build():
     html = html.replace("{RUNTIME_STATUS_PANEL}", runtime_status_panel_html())
     html = html.replace("{STRATEGY_MARKET_ADVISORY}", strategy_market_advisory_html())
     html = html.replace("{ALLOCATION_FRAMEWORK_CARD}", allocation_framework_card_html())
+    html = html.replace("{HOLDINGS_SELL_ALERT}", holdings_sell_alert_html())
     html = html.replace("{AI_NAV_DISCOVERY}", ai_workbench_nav_html(1))
     html = html.replace("{AI_NAV_BACKTEST}", ai_workbench_nav_html(2))
     html = html.replace("{AI_NAV_PORTFOLIO}", ai_workbench_nav_html(3))
