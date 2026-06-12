@@ -33,6 +33,9 @@ CREATE TABLE IF NOT EXISTS analyst_grade_events (
     previous_grade VARCHAR,
     new_grade VARCHAR NOT NULL,
     action VARCHAR,
+    price_target_action VARCHAR,
+    price_target DOUBLE,
+    prior_price_target DOUBLE,
     source VARCHAR DEFAULT 'yfinance/upgrades_downgrades',
     fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (market, symbol, event_date, grading_company, new_grade)
@@ -60,12 +63,23 @@ def fetch_symbol(symbol: str) -> list[dict]:
         if not new_grade:
             continue
         action_raw = str(r.get("Action") or "").strip().lower()
+
+        def _f(key: str) -> float | None:
+            try:
+                v = float(r.get(key))
+                return v if v == v and v > 0 else None
+            except Exception:
+                return None
+
         rows.append({
             "event_date": ts.date() if hasattr(ts, "date") else ts,
             "grading_company": firm,
             "previous_grade": str(r.get("FromGrade") or "").strip() or None,
             "new_grade": new_grade,
             "action": ACTION_MAP.get(action_raw, action_raw or None),
+            "price_target_action": str(r.get("priceTargetAction") or "").strip().lower() or None,
+            "price_target": _f("currentPriceTarget"),
+            "prior_price_target": _f("priorPriceTarget"),
         })
     return rows
 
@@ -121,11 +135,13 @@ def main() -> int:
                 """
                 INSERT OR REPLACE INTO analyst_grade_events
                 (market, symbol, event_date, grading_company, previous_grade,
-                 new_grade, action, source, fetched_at)
-                VALUES ('US', ?, ?, ?, ?, ?, ?, 'yfinance/upgrades_downgrades', ?)
+                 new_grade, action, price_target_action, price_target,
+                 prior_price_target, source, fetched_at)
+                VALUES ('US', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'yfinance/upgrades_downgrades', ?)
                 """,
                 [symbol, ev["event_date"], ev["grading_company"], ev["previous_grade"],
-                 ev["new_grade"], ev["action"], datetime.now()],
+                 ev["new_grade"], ev["action"], ev["price_target_action"],
+                 ev["price_target"], ev["prior_price_target"], datetime.now()],
             )
             inserted += 1
         span = conn.execute(
