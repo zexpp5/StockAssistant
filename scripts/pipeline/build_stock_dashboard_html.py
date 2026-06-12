@@ -10033,10 +10033,14 @@ async function renderRealHoldings() {
 async function renderPortfolio() {
   // 防御 race condition：每次 render 都重新 fetch，不依赖任何 cache
   // 之前多次切 tab / DOMContentLoaded 并发触发，cache 可能 stale
+  // 2026-06-12: fetch 失败必须显式可见——API 重启/DuckDB 锁窗口曾把"读取失败"
+  // 渲染成"暂无模拟仓数据"，用户以为数据丢了（数据一直在 model_sim_holdings 表里）
+  let simFetchFailed = false;
   try {
     const r = await fetch(WATCHLIST_API_BASE + "/api/model-sim-holdings");
     if (r.ok) _simHoldingsCache = await r.json();
-  } catch (e) { /* keep cache */ }
+    else simFetchFailed = true;
+  } catch (e) { simFetchFailed = true; /* keep cache */ }
   _refreshMergedHoldingsCache();
   const holdings = _holdingsBySource("ai_plan");
   const tbody = document.getElementById("holdings-table");
@@ -10044,9 +10048,15 @@ async function renderPortfolio() {
   console.log(`[renderPortfolio] simulated holdings=${holdings.length}`, holdings.slice(0, 3));  // debug
 
   if (holdings.length === 0) {
+    const metaEl = document.getElementById("portfolio-data-meta");
+    if (simFetchFailed) {
+      // 读取失败 ≠ 没有数据：明说，并给重试动作
+      tbody.innerHTML = '<tr><td colspan="12" class="text-center text-amber-800 py-8">⚠️ 模拟仓读取失败（API 重启中或数据库被后台任务短暂占用）· 数据仍在库里没有丢 · <button onclick="renderPortfolio()" class="underline font-semibold">点这里重试</button></td></tr>';
+      if (metaEl) metaEl.innerHTML = '<span class="text-amber-800">⚠️ 接口暂时不可用，上面显示的不是"没有数据"。几秒后重试即可。</span>';
+      return;
+    }
     tbody.innerHTML = '<tr><td colspan="12" class="text-center text-slate-500 py-8">暂无推荐模拟仓 · 点击「用 AI 配仓刷新模拟仓」开始观察模型能力</td></tr>';
     document.getElementById("portfolio-summary").innerHTML = "";
-    const metaEl = document.getElementById("portfolio-data-meta");
     if (metaEl) metaEl.innerHTML = '<span class="text-slate-500">暂无模拟仓数据。刷新模拟仓后会显示建仓时间、行情交易日、抓取时间和收益率口径。</span>';
     document.getElementById("alert-line").innerHTML = '<div class="text-sm text-slate-500">生成模拟仓后会显示模型账户警戒线</div>';
     return;
