@@ -46,6 +46,7 @@ REBALANCE_STEP = 5                   # 交易日
 TOP_K = 10
 EPS_LAG_DAYS = 90
 BENCHMARK = "QQQ"
+COST_PER_SIDE_PCT = 0.10             # 单边成本 10bp(含点差,美股大盘保守值);换手按买+卖双边计
 
 # 排名等价权重(略去常数因子 data_usability/f_score,见模块 docstring)
 STRATEGIES: dict[str, dict[str, float]] = {
@@ -165,10 +166,13 @@ def main() -> int:
             return None
         return (p1 / p0 - 1.0) * 100.0
 
-    # 逐换仓日: 算因子分 → 各策略选 top-10 → 持有期收益
+    # 逐换仓日: 算因子分 → 各策略选 top-10 → 持有期收益(毛/净=扣换手成本)
     curves: dict[str, list[float]] = {name: [] for name in STRATEGIES}
     curves["universe_eqw"] = []
     curves[BENCHMARK] = []
+    net_curves: dict[str, list[float]] = {name: [] for name in STRATEGIES}
+    turnovers: dict[str, list[float]] = {name: [] for name in STRATEGIES}
+    prev_holdings: dict[str, set[str]] = {name: set() for name in STRATEGIES}
     periods: list[dict[str, Any]] = []
     for n, t0 in enumerate(rebalance_idx):
         t1 = min(t0 + REBALANCE_STEP, len(trade_dates) - 1)
@@ -212,13 +216,33 @@ def main() -> int:
                 key=lambda s: (-sum(w * scores_by_symbol[s][f] for f, w in weights.items()), s),
             )[:TOP_K]
             port_ret = sum(fwd[s] for s in ranked) / len(ranked)
+            holdings = set(ranked)
+            # 换手率 = 本期换掉的比例(首期建仓不计成本,与各策略公平)
+            if prev_holdings[name]:
+                turnover = 1.0 - len(holdings & prev_holdings[name]) / TOP_K
+            else:
+                turnover = 0.0
+            prev_holdings[name] = holdings
+            cost = turnover * 2.0 * COST_PER_SIDE_PCT  # 卖旧+买新双边
+            turnovers[name].append(turnover)
             curves[name].append(port_ret)
+            net_curves[name].append(port_ret - cost)
             row[name] = round(port_ret - bench_ret, 3)
         periods.append(row)
 
     def stats(name: str) -> dict[str, Any]:
         rets = curves[name]
         bench = curves[BENCHMARK]
+        extra: dict[str, Any] = {}
+        if name in net_curves and net_curves[name]:
+            net_cum = 1.0
+            for r in net_curves[name]:
+                net_cum *= 1 + r / 100.0
+            tos = turnovers[name]
+            extra = {
+                "net_cum_return_pct": round((net_cum - 1) * 100, 1),
+                "avg_turnover_pct": round(sum(tos) / len(tos) * 100, 1) if tos else None,
+            }
         cum = 1.0
         for r in rets:
             cum *= 1 + r / 100.0
@@ -235,6 +259,7 @@ def main() -> int:
         return {
             "n_periods": len(rets),
             "cum_return_pct": round((cum - 1) * 100, 1),
+            **extra,
             "cum_vs_bench_pp": round((cum - cum_bench) * 100, 1),
             "avg_alpha_per_period_pct": round(sum(alphas) / len(alphas), 3) if alphas else None,
             "win_rate_vs_bench_pct": round(wins / len(alphas) * 100, 1) if alphas else None,
@@ -272,13 +297,14 @@ def main() -> int:
         f"- 窗口: {payload['window']} · 每 {REBALANCE_STEP} 交易日换仓 top-{TOP_K} 等权 · 基准 {BENCHMARK}"
         f"(累计 {payload['benchmark_cum_return_pct']}%)",
         "",
-        "| 策略 | 累计收益% | vs QQQ(pp) | 周均alpha% | 周胜率% | 半年切片 alpha |",
-        "|---|---:|---:|---:|---:|---|",
+        f"| 策略 | 毛收益% | 净收益%(扣{COST_PER_SIDE_PCT}%/边×双边换手) | 周换手% | vs QQQ(pp) | 周胜率% | 半年切片 alpha |",
+        "|---|---:|---:|---:|---:|---:|---|",
     ]
     for name, s in summary.items():
         lines.append(
-            f"| {name} | {s['cum_return_pct']} | {s['cum_vs_bench_pp']} | "
-            f"{s['avg_alpha_per_period_pct']} | {s['win_rate_vs_bench_pct']} | {s['alpha_by_half_year']} |")
+            f"| {name} | {s['cum_return_pct']} | {s.get('net_cum_return_pct', '—')} | "
+            f"{s.get('avg_turnover_pct', '—')} | {s['cum_vs_bench_pp']} | "
+            f"{s['win_rate_vs_bench_pct']} | {s['alpha_by_half_year']} |")
     lines += ["", *(f"- {n}" for n in payload["notes"])]
     OUT_MD.parent.mkdir(parents=True, exist_ok=True)
     OUT_MD.write_text("\n".join(lines) + "\n", encoding="utf-8")
