@@ -30,6 +30,48 @@ BENCHMARKS = [
 ]
 
 
+def write_benchmark_rows(con, market: str, symbol: str, currency: str,
+                         bars: list[tuple], now: datetime) -> tuple[int, int]:
+    """把基准收盘写进 price_daily：只刷新自己来源的行 + 补缺失日期。
+
+    2026-06-12 教训：QQQ 既是基准又在用户自选里。旧实现按 (market,symbol,trade_date)
+    无条件 DELETE+INSERT 裸行（只有 close），每天早上把前一晚完整批次写的
+    动量/PE 行抹掉，QQQ 自选页动量永远是"—"。
+    现在 source='yfinance_benchmark' 的行允许自刷新；其它来源（完整批/backfill）
+    的行一概不碰，基准只补这些行没覆盖到的日期。
+    返回 (写入行数, 保留的非基准行数)。bars=[(trade_date, close)]。
+    """
+    keys = [(market, symbol, d, "1d") for d, _ in bars]
+    con.executemany(
+        "DELETE FROM price_daily WHERE market=? AND symbol=? AND trade_date=? AND interval=? "
+        "AND source='yfinance_benchmark'",
+        keys,
+    )
+    dates = [d for d, _ in bars]
+    existing = {
+        r[0] for r in con.execute(
+            "SELECT trade_date FROM price_daily WHERE market=? AND symbol=? AND interval='1d' "
+            "AND trade_date BETWEEN ? AND ?",
+            [market, symbol, min(dates), max(dates)],
+        ).fetchall()
+    }
+    rows = [
+        (market, symbol, d, "1d", close, currency, "yfinance_benchmark", now, now)
+        for d, close in bars if d not in existing
+    ]
+    if rows:
+        con.executemany(
+            """
+            INSERT INTO price_daily
+              (market, symbol, trade_date, interval, close, currency,
+               source, source_updated_at, fetched_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+    return len(rows), len(bars) - len(rows)
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--start", help="YYYY-MM-DD; default: today - 90 days")
@@ -68,27 +110,14 @@ def main() -> int:
             print(f"  ⚠️ {market}/{symbol}: empty range")
             continue
 
-        rows = []
+        bars = []
         for ts, row in df.iterrows():
             d = ts.date() if hasattr(ts, "date") else ts
-            close = float(row["Close"])
-            rows.append((market, symbol, d, "1d", close, currency, "yfinance_benchmark", now, now))
+            bars.append((d, float(row["Close"])))
 
-        con.executemany(
-            "DELETE FROM price_daily WHERE market=? AND symbol=? AND trade_date=? AND interval=?",
-            [(r[0], r[1], r[2], r[3]) for r in rows],
-        )
-        con.executemany(
-            """
-            INSERT INTO price_daily
-              (market, symbol, trade_date, interval, close, currency,
-               source, source_updated_at, fetched_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            rows,
-        )
-        total_written += len(rows)
-        print(f"  ✓ {market}/{symbol}: wrote {len(rows)} rows ({rows[0][2]}..{rows[-1][2]})")
+        written, kept = write_benchmark_rows(con, market, symbol, currency, bars, now)
+        total_written += written
+        print(f"  ✓ {market}/{symbol}: wrote {written} rows, kept {kept} fuller rows ({bars[0][0]}..{bars[-1][0]})")
 
     con.close()
     print(f"ingest_benchmark_prices: total_written={total_written}")
