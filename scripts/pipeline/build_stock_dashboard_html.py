@@ -8382,15 +8382,20 @@ function _entryLevelsCell(item) {
     return `<td class="px-3 py-2 text-[11px] text-slate-400" title="本地价格库只有 ${el.history_rows || 0} 个交易日历史,算不出 50/200 日均线和半年低点——是数据没回补,不代表这只票没有支撑位">历史不足<div class="text-[10px] text-slate-300">仅${el.history_rows || 0}个交易日</div></td>`;
   }
   const cur = Number(el.basis_close);
+  const sizeGuarded = el.size_guard === "over_25pct";
+  const priceCls = sizeGuarded ? "text-slate-400" : "text-slate-800";
   const lines = el.levels.map(lv => {
     const p = Number(lv.price);
     const below = p < cur;
     const distTxt = below
       ? `<span class="text-[10px] text-slate-400">↓${Math.abs(Number(lv.dist_pct)).toFixed(1)}%</span>`
       : `<span class="text-[10px] text-amber-600" title="现价已经低于这条线,它不再是'等回调'的买点参考">已跌破</span>`;
-    return `<div class="whitespace-nowrap"><span class="text-slate-500">${_esc(lv.label)}</span> <span class="font-mono font-semibold text-slate-800">${p.toFixed(2)}</span> ${distTxt}</div>`;
+    return `<div class="whitespace-nowrap"><span class="text-slate-500">${_esc(lv.label)}</span> <span class="font-mono font-semibold ${priceCls}">${p.toFixed(2)}</span> ${distTxt}</div>`;
   }).join("");
-  return `<td class="px-3 py-2 text-[11px] leading-relaxed" title="按 ${_esc(el.basis_trade_date || "")} 收盘价计算,每个交易日自动重算。仅参考不是指令:跌到价位先核对下跌原因(大盘普跌=按计划分批,公司自身坏消息=先停手)。">${lines}</td>`;
+  const guardLine = sizeGuarded
+    ? `<div class="text-[10px] text-rose-700 font-semibold mb-0.5" title="这只票市值已超过总资产的 25%(系统集中度警戒线)。对超限仓位,任何回调价位都不构成加仓理由;下列数字只用来看支撑/减仓参照。">⚠️ 仓位超25%线·不作加仓用</div>`
+    : "";
+  return `<td class="px-3 py-2 text-[11px] leading-relaxed" title="按 ${_esc(el.basis_trade_date || "")} 收盘价计算,每个交易日自动重算。仅参考不是指令:跌到价位先核对下跌原因(大盘普跌=按计划分批,公司自身坏消息=先停手)。">${guardLine}${lines}</td>`;
 }
 
 function _disciplineCell(item) {

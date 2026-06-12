@@ -632,6 +632,22 @@ class EntryLevelsTest(unittest.TestCase):
     def test_empty_returns_none(self):
         self.assertIsNone(_compute_entry_levels([]))
 
+    def test_size_guard_annotation_matches_run_loop_rule(self):
+        # run 主循环规则：current_weight > 0.25 → entry_levels 加 size_guard,
+        # 防止"加仓价位"和单一持仓 25% 集中度警戒线互相打架(GOOGL 51% 案例)。
+        lv = _compute_entry_levels(self._series(250))
+        item_over = {"current_weight": 0.515, "entry_levels": None}
+        item_ok = {"current_weight": 0.007, "entry_levels": None}
+        for item in (item_over, item_ok):
+            v = lv
+            if v and (item.get("current_weight") or 0) > 0.25:
+                v = {**v, "size_guard": "over_25pct"}
+            item["entry_levels"] = v
+        self.assertEqual(item_over["entry_levels"].get("size_guard"), "over_25pct")
+        self.assertNotIn("size_guard", item_ok["entry_levels"])
+        # 原 dict 不被污染(主循环里 lv 是共享引用,必须 copy-on-write)
+        self.assertNotIn("size_guard", lv)
+
 
 if __name__ == "__main__":
     unittest.main()

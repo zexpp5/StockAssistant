@@ -1116,7 +1116,14 @@ def build_real_holding_review(*, persist: bool = True) -> dict[str, Any]:
                 target_weights=target_weights,
                 industry_heat=heat,
             )
-            item["entry_levels"] = entry_levels_by_sym.get(sym)
+            lv = entry_levels_by_sym.get(sym)
+            # 规则闸（2026-06-12）：单一持仓超 25% 警戒线（与 verdict「单一持仓超过总资产 25%」
+            # 同一条线）时，加仓价位不能当买点用——否则和集中度风控互相打架，
+            # 新手会把"跌到 200 日线"读成"该给 51% 的仓位继续加"。价位保留展示（当
+            # 减仓/支撑参照），但必须带 size_guard 标记，前端强制显著警示。
+            if lv and (item.get("current_weight") or 0) > 0.25:
+                lv = {**lv, "size_guard": "over_25pct"}
+            item["entry_levels"] = lv
             plan = active_discipline_plans.get(int(h["id"])) if h.get("id") is not None else None
             if plan:
                 item["discipline"] = stock_db.evaluate_real_holding_discipline_plan(
