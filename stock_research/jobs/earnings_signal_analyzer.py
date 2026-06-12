@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import subprocess
 import sys
 from datetime import date, datetime, timedelta
@@ -33,6 +34,7 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO))
 
+from stock_research.core import bottleneck_signals as bs  # noqa: E402
 from stock_research.jobs.bottleneck_earnings_reminder import (  # noqa: E402
     CALENDAR_JSON, GROUPS,
 )
@@ -111,7 +113,12 @@ def _build_prompt(ev: dict, as_of: date) -> str:
 **结论**：一句话判断信号方向（仍在抢货 / 供给追上 / 需求转弱 / 证据不足），再给一句对应提醒。提醒必须是「建议复查/暂停加仓」式的 advisory 措辞，绝不能出现"必须买/必须卖"。
 **信源**：列出你实际读到的 1-2 个来源（媒体名+标题，不用链接）。
 
-硬性要求：每条都基于真实搜索结果；搜不到的条目写"未披露/未搜到"，禁止编造数字；总长度不超过 15 行；全部用中文。"""
+最后单独输出一行机读行（严格此格式，机器解析用）：
+DRAFT: 转强或持平或转弱或不确定 ; TIER: A或B或C ; NOTE: 不超过30字的关键数字或原话
+（转强=信号仍紧俏；持平=方向没变化；转弱=出现退潮证据；证据不足时写"不确定"。
+TIER 按你信源的硬度：A=公司新闻稿/财报原文，B=电话会/管理层表态的报道，C=媒体二手转述。）
+
+硬性要求：每条都基于真实搜索结果；搜不到的条目写"未披露/未搜到"，禁止编造数字；总长度不超过 16 行；全部用中文。"""
 
 
 def _run_llm(prompt: str) -> str | None:
@@ -136,8 +143,48 @@ def _run_llm(prompt: str) -> str | None:
         return None
 
 
-def _build_result_card(ev: dict, analysis: str, as_of: date) -> dict:
+_DRAFT_RE = re.compile(
+    r"DRAFT[:：]\s*(转强|持平|转弱|不确定)\s*[;；]\s*TIER[:：]\s*([ABCabc]?)\s*[;；]\s*NOTE[:：]\s*(.*)")
+
+
+def _split_draft_line(analysis: str) -> tuple[str, dict | None]:
+    """从分析文本剥出最后的机读行。返回 (展示用文本, 草稿字段 dict 或 None)。
+
+    模型没按格式输出 / 写"不确定" → 不出草稿，只展示正文（不硬编结论）。
+    """
+    m = _DRAFT_RE.search(analysis)
+    if not m:
+        return analysis, None
+    display = (analysis[:m.start()] + analysis[m.end():]).strip()
+    conclusion, tier, note = m.group(1), m.group(2).upper(), m.group(3).strip()
+    if conclusion == "不确定":
+        return display, None
+    return display, {"conclusion": conclusion, "evidence_tier": tier,
+                     "note": note[:60]}
+
+
+def _save_draft_for(ev: dict, draft: dict) -> bool:
+    """把解析出的结论写进红绿灯草稿（人工已确认的同季不覆盖）。"""
+    try:
+        quarter = bs.prev_quarter(bs.quarter_of(ev["event_date"]))
+        saved = bs.save_draft(ev["ticker"], quarter, draft["conclusion"],
+                              draft["evidence_tier"], "", draft["note"])
+        return saved is not None
+    except Exception as exc:
+        logger.warning("写红绿灯草稿失败 %s: %s", ev["ticker"], exc)
+        return False
+
+
+def _build_result_card(ev: dict, analysis: str, as_of: date,
+                       draft_saved: bool = False) -> dict:
     spec = GROUPS[ev["group"]]
+    note = (
+        "🤖 AI 自动联网读财报生成，数字可能有误——重要决定前可打开 Claude 让我复核。"
+        "判读规则见前一晚的提醒卡 · 仅供研究参考，不构成买卖指令"
+    )
+    if draft_saved:
+        note = ("✏️ 已按本卡结论写入红绿灯草稿——到 dashboard「催化信号验证」页"
+                "点 ✓ 确认或修改后才正式记账。 · " + note)
     return {
         "msg_type": "interactive",
         "card": {
@@ -151,10 +198,7 @@ def _build_result_card(ev: dict, analysis: str, as_of: date) -> dict:
             },
             "elements": [
                 {"tag": "div", "text": {"tag": "lark_md", "content": analysis}},
-                {"tag": "note", "elements": [{"tag": "plain_text", "content": (
-                    "🤖 AI 自动联网读财报生成，数字可能有误——重要决定前可打开 Claude 让我复核。"
-                    "判读规则见前一晚的提醒卡 · 仅供研究参考，不构成买卖指令"
-                )}]},
+                {"tag": "note", "elements": [{"tag": "plain_text", "content": note}]},
             ],
         },
     }
@@ -206,7 +250,15 @@ def run(now: datetime | None = None, dry_run: bool = False) -> int:
     for ev in fresh:
         logger.info("财报体检：开始分析 %s（财报日 %s）...", ev["ticker"], ev["event_date"])
         analysis = _run_llm(_build_prompt(ev, as_of))
-        card = (_build_result_card(ev, analysis, as_of) if analysis
+        draft_saved = False
+        if analysis:
+            analysis, draft = _split_draft_line(analysis)
+            if draft:
+                draft_saved = _save_draft_for(ev, draft)
+                logger.info("红绿灯草稿 %s：%s", ev["ticker"],
+                            f"已写入（{draft['conclusion']}）" if draft_saved
+                            else "跳过（同季已人工确认或写入失败）")
+        card = (_build_result_card(ev, analysis, as_of, draft_saved) if analysis
                 else _build_failure_card(ev, as_of))
         ok = _push(card)
         logger.info("财报体检：%s %s → 推送%s", ev["ticker"],

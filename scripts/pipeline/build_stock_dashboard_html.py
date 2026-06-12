@@ -2398,7 +2398,7 @@ function openDiscoveryHistoryFromRadar(event) {
     <div class="mt-3 text-[11px] text-slate-400 leading-relaxed">
       判定规则（后端单一来源）：瓶颈组 GEV/VRT/MU 任一转弱 = 停止给瓶颈类个股加仓，三个同季转弱 = 缺货叙事退潮；
       capex 组 MSFT/GOOGL/AMZN/META 一家下调 = 记一笔先不动作，两家以上同季下调 = capex 消化期开始。
-      结论由你看完财报回填（财报日飞书提醒卡 + 次日 AI 体检卡作参考），不是系统自动判断 ·
+      财报次日 AI 体检卡会自动写入灰色「AI 草稿」，你点 ✓ 确认（或改后提交）才正式记账——草稿不参与亮灯判定，人始终在环里 ·
       超过 150 天未更新的记录按过期处理 · 仅供研究参考，不构成买卖指令
     </div>
   </div>
@@ -6437,10 +6437,17 @@ function renderBottleneckReviews(p) {
         noteCell = (note || link) ? `<span class="text-xs text-slate-600">${note}${link}</span>` : `<span class="text-slate-300 text-xs">—</span>`;
       }
       const hist = (s.history || []).map(h => `<span title="${_esc(h.quarter)}·${_esc(h.conclusion)}">${_bnLight(h.conclusion)}</span>`).join("") || `<span class="text-slate-300">—</span>`;
+      let draftLine = "";
+      if (s.draft) {
+        draftLine = `<div class="mt-1 text-[11px] text-slate-400 whitespace-nowrap" title="AI 体检卡自动写入,待你确认才记账${s.draft.note ? "：" + _esc(s.draft.note) : ""}">` +
+          `🤖 AI 草稿：${_bnLight(s.draft.conclusion)}${_esc(s.draft.conclusion)} <span class="text-[10px]">@${_esc(s.draft.quarter)}</span>` +
+          ` <button onclick="confirmBottleneckDraft('${_esc(s.ticker)}')" class="ml-1 px-1.5 py-0.5 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-600">✓ 确认</button>` +
+          ` <button onclick="openBottleneckForm('${_esc(s.ticker)}', true)" class="px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-500">改</button></div>`;
+      }
       rows.push(`<tr class="border-t border-slate-100">
         <td class="px-2 py-2 whitespace-nowrap"><strong>${_esc(s.ticker)}</strong> <span class="text-[11px] text-slate-500">${_esc(s.name)}</span></td>
         <td class="px-2 py-2 text-xs text-slate-600">${_esc(s.signal)}</td>
-        <td class="px-2 py-2 text-center whitespace-nowrap">${concl}</td>
+        <td class="px-2 py-2 text-center whitespace-nowrap">${concl}${draftLine}</td>
         <td class="px-2 py-2 text-center text-xs text-slate-500" title="A=财报原文 B=管理层措辞 C=媒体转述">${tier}</td>
         <td class="px-2 py-2 text-center tracking-widest">${hist}</td>
         <td class="px-2 py-2">${noteCell}</td>
@@ -6459,38 +6466,65 @@ function _bnQuarterOptions(cur) {
   return out;
 }
 
-function openBottleneckForm(ticker) {
+function openBottleneckForm(ticker, useDraft) {
   const wrap = document.getElementById("bottleneck-review-form-wrap");
   if (!wrap || !_bnPayload) return;
   const sig = _bnPayload.groups.flatMap(g => g.signals).find(s => s.ticker === ticker);
   if (!sig) return;
-  const quarters = _bnQuarterOptions(_bnPayload.current_quarter);
+  // useDraft=true 时用 AI 草稿预填，让"改"只需动要改的那一项
+  const pre = (useDraft && sig.draft) ? sig.draft : null;
+  let quarters = _bnQuarterOptions(_bnPayload.current_quarter);
+  if (pre && !quarters.includes(pre.quarter)) quarters = [pre.quarter, ...quarters];
   // 默认选上一季：财报披露的是刚结束的那个季度
+  const selQuarter = pre ? pre.quarter : quarters[1];
+  const selConcl = pre ? pre.conclusion : "持平";
+  const selTier = pre ? (pre.evidence_tier || "") : "";
   const checks = (sig.checks || []).map((c, i) => `<div class="text-[11px] text-slate-500">${i + 1}. ${_esc(c)}</div>`).join("");
   wrap.classList.remove("hidden");
   wrap.innerHTML = `
-    <div class="text-sm font-bold text-slate-800 mb-1">✏️ 回填：${_esc(sig.ticker)} ${_esc(sig.name)} — ${_esc(sig.signal)}</div>
+    <div class="text-sm font-bold text-slate-800 mb-1">✏️ 回填：${_esc(sig.ticker)} ${_esc(sig.name)} — ${_esc(sig.signal)}${pre ? ' <span class="text-[11px] font-normal text-slate-400">（已按 AI 草稿预填，改完提交即生效）</span>' : ""}</div>
     <div class="mb-2">${checks}</div>
     <div class="flex flex-wrap items-center gap-2 text-xs">
       <select id="bn-form-quarter" class="border border-slate-300 rounded px-2 py-1">
-        ${quarters.map((q, i) => `<option value="${q}" ${i === 1 ? "selected" : ""}>${q}</option>`).join("")}
+        ${quarters.map(q => `<option value="${q}" ${q === selQuarter ? "selected" : ""}>${q}</option>`).join("")}
       </select>
       <select id="bn-form-conclusion" class="border border-slate-300 rounded px-2 py-1">
-        <option value="转强">🟢 转强</option><option value="持平" selected>⚪ 持平</option><option value="转弱">🔴 转弱</option>
+        ${["转强", "持平", "转弱"].map(c => `<option value="${c}" ${c === selConcl ? "selected" : ""}>${_bnLight(c)} ${c}</option>`).join("")}
       </select>
       <select id="bn-form-tier" class="border border-slate-300 rounded px-2 py-1" title="证据档位">
         <option value="">证据档位（可不填）</option>
-        <option value="A">A · 财报原文/一手披露</option>
-        <option value="B">B · 管理层措辞/电话会</option>
-        <option value="C">C · 媒体/研报转述</option>
+        <option value="A" ${selTier === "A" ? "selected" : ""}>A · 财报原文/一手披露</option>
+        <option value="B" ${selTier === "B" ? "selected" : ""}>B · 管理层措辞/电话会</option>
+        <option value="C" ${selTier === "C" ? "selected" : ""}>C · 媒体/研报转述</option>
       </select>
-      <input id="bn-form-url" type="text" placeholder="出处链接（可不填）" class="border border-slate-300 rounded px-2 py-1 w-52">
-      <input id="bn-form-note" type="text" placeholder="一句话备注，如 book-to-bill 1.15" class="border border-slate-300 rounded px-2 py-1 flex-1 min-w-40">
+      <input id="bn-form-url" type="text" placeholder="出处链接（可不填）" value="${pre ? _esc(pre.url || "") : ""}" class="border border-slate-300 rounded px-2 py-1 w-52">
+      <input id="bn-form-note" type="text" placeholder="一句话备注，如 book-to-bill 1.15" value="${pre ? _esc(pre.note || "") : ""}" class="border border-slate-300 rounded px-2 py-1 flex-1 min-w-40">
       <button onclick="submitBottleneckReview('${_esc(sig.ticker)}')" class="px-3 py-1 rounded bg-violet-600 hover:bg-violet-700 text-white">提交</button>
       <button onclick="document.getElementById('bottleneck-review-form-wrap').classList.add('hidden')" class="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-500">取消</button>
       <span id="bn-form-msg" class="text-slate-400"></span>
     </div>`;
   wrap.scrollIntoView({behavior: "smooth", block: "nearest"});
+}
+
+async function confirmBottleneckDraft(ticker) {
+  // 一键确认：把 AI 草稿原样转成正式记录（同季 upsert 自动顶掉草稿）
+  const sig = _bnPayload && _bnPayload.groups.flatMap(g => g.signals).find(s => s.ticker === ticker);
+  if (!sig || !sig.draft) return;
+  const d = sig.draft;
+  try {
+    const r = await fetch(WATCHLIST_API_BASE + "/api/bottleneck-review", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ticker, quarter: d.quarter, conclusion: d.conclusion,
+                            evidence_tier: d.evidence_tier || "", url: d.url || "", note: d.note || ""}),
+    });
+    const res = await r.json();
+    if (!r.ok) throw new Error(res.detail || r.status);
+    _bnPayload = res.payload;
+    renderBottleneckReviews(res.payload);
+  } catch (e) {
+    alert("确认失败：" + String((e && e.message) || e));
+  }
 }
 
 async function submitBottleneckReview(ticker) {

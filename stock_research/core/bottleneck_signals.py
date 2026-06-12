@@ -136,6 +136,11 @@ def quarter_of(d: date) -> str:
     return f"{d.year}Q{(d.month - 1) // 3 + 1}"
 
 
+def prev_quarter(q: str) -> str:
+    y, n = int(q[:4]), int(q[5])
+    return f"{y - 1}Q4" if n == 1 else f"{y}Q{n - 1}"
+
+
 def load_reviews() -> list[dict]:
     if not REVIEWS_FILE.exists():
         return []
@@ -147,12 +152,8 @@ def load_reviews() -> list[dict]:
         return []
 
 
-def save_review(ticker: str, quarter: str, conclusion: str,
-                evidence_tier: str = "", url: str = "", note: str = "") -> dict:
-    """upsert 一条复查记录（按 ticker+quarter 去重）。返回写入的记录。
-
-    校验失败抛 ValueError（API 层转 400）。
-    """
+def _validate_fields(ticker: str, quarter: str, conclusion: str,
+                     evidence_tier: str) -> tuple[str, str, str]:
     ticker = str(ticker).upper().strip()
     quarter = str(quarter).upper().strip()
     evidence_tier = str(evidence_tier).upper().strip()
@@ -164,7 +165,24 @@ def save_review(ticker: str, quarter: str, conclusion: str,
         raise ValueError(f"结论必须是 {'/'.join(CONCLUSIONS)}，收到 {conclusion!r}")
     if evidence_tier and evidence_tier not in EVIDENCE_TIERS:
         raise ValueError(f"证据档位必须是 A/B/C 或留空，收到 {evidence_tier!r}")
+    return ticker, quarter, evidence_tier
 
+
+def _write_reviews(reviews: list[dict]) -> None:
+    reviews.sort(key=lambda r: (r.get("quarter", ""), r.get("ticker", "")))
+    REVIEWS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    REVIEWS_FILE.write_text(
+        json.dumps({"reviews": reviews}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8")
+
+
+def save_review(ticker: str, quarter: str, conclusion: str,
+                evidence_tier: str = "", url: str = "", note: str = "") -> dict:
+    """upsert 一条人工确认记录（按 ticker+quarter 去重，覆盖同季草稿）。
+
+    校验失败抛 ValueError（API 层转 400）。
+    """
+    ticker, quarter, evidence_tier = _validate_fields(ticker, quarter, conclusion, evidence_tier)
     record = {
         "ticker": ticker,
         "group": TICKER_GROUP[ticker],
@@ -178,19 +196,62 @@ def save_review(ticker: str, quarter: str, conclusion: str,
     reviews = [r for r in load_reviews()
                if not (r.get("ticker") == ticker and r.get("quarter") == quarter)]
     reviews.append(record)
-    reviews.sort(key=lambda r: (r.get("quarter", ""), r.get("ticker", "")))
-    REVIEWS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    REVIEWS_FILE.write_text(
-        json.dumps({"reviews": reviews}, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8")
+    _write_reviews(reviews)
+    return record
+
+
+def save_draft(ticker: str, quarter: str, conclusion: str,
+               evidence_tier: str = "", url: str = "", note: str = "") -> dict | None:
+    """AI 体检 job 写一条草稿（draft=True，不参与聚合判定，等用户页面确认）。
+
+    同季已有人工确认记录 → 不覆盖（人工真值优先），返回 None。
+    同季已有草稿 → 覆盖（以最新分析为准）。
+    """
+    ticker, quarter, evidence_tier = _validate_fields(ticker, quarter, conclusion, evidence_tier)
+    existing = load_reviews()
+    for r in existing:
+        if (r.get("ticker") == ticker and r.get("quarter") == quarter
+                and not r.get("draft")):
+            logger.info("草稿跳过：%s %s 已有人工确认记录", ticker, quarter)
+            return None
+    record = {
+        "ticker": ticker,
+        "group": TICKER_GROUP[ticker],
+        "quarter": quarter,
+        "conclusion": conclusion,
+        "evidence_tier": evidence_tier,
+        "url": str(url or "").strip(),
+        "note": str(note or "").strip(),
+        "reviewed_at": datetime.now().isoformat(timespec="seconds"),
+        "draft": True,
+        "source": "ai_analyzer",
+    }
+    reviews = [r for r in existing
+               if not (r.get("ticker") == ticker and r.get("quarter") == quarter)]
+    reviews.append(record)
+    _write_reviews(reviews)
     return record
 
 
 def latest_review(ticker: str, reviews: list[dict] | None = None) -> dict | None:
-    """该票最新一季的复查记录（按 quarter 字符串排序即时间序）。"""
+    """该票最新一季的**人工确认**记录（草稿不算，按 quarter 字符串排序即时间序）。"""
     pool = [r for r in (reviews if reviews is not None else load_reviews())
-            if r.get("ticker") == str(ticker).upper()]
+            if r.get("ticker") == str(ticker).upper() and not r.get("draft")]
     return max(pool, key=lambda r: r.get("quarter", "")) if pool else None
+
+
+def pending_draft(ticker: str, reviews: list[dict] | None = None) -> dict | None:
+    """该票待确认的草稿：比最新人工记录更新的那条（否则视为已过时不展示）。"""
+    reviews = reviews if reviews is not None else load_reviews()
+    drafts = [r for r in reviews
+              if r.get("ticker") == str(ticker).upper() and r.get("draft")]
+    if not drafts:
+        return None
+    draft = max(drafts, key=lambda r: r.get("quarter", ""))
+    confirmed = latest_review(ticker, reviews)
+    if confirmed and confirmed.get("quarter", "") >= draft.get("quarter", ""):
+        return None
+    return draft
 
 
 def _is_stale(record: dict, as_of: date) -> bool:
@@ -245,8 +306,10 @@ def build_payload(as_of: date | None = None) -> dict:
     for key, spec in GROUPS.items():
         signals = []
         for ticker, meta in spec["tickers"].items():
-            history = sorted((r for r in reviews if r.get("ticker") == ticker),
-                             key=lambda r: r.get("quarter", ""), reverse=True)[:4]
+            history = sorted(
+                (r for r in reviews
+                 if r.get("ticker") == ticker and not r.get("draft")),
+                key=lambda r: r.get("quarter", ""), reverse=True)[:4]
             latest = history[0] if history else None
             signals.append({
                 "ticker": ticker,
@@ -256,6 +319,7 @@ def build_payload(as_of: date | None = None) -> dict:
                 "latest": latest,
                 "stale": bool(latest and _is_stale(latest, as_of)),
                 "history": history,
+                "draft": pending_draft(ticker, reviews),
             })
         groups.append({
             "key": key,
@@ -271,5 +335,6 @@ def build_payload(as_of: date | None = None) -> dict:
         "conclusions": list(CONCLUSIONS),
         "evidence_tiers": list(EVIDENCE_TIERS),
         "groups": groups,
-        "n_reviews": len(reviews),
+        "n_reviews": sum(1 for r in reviews if not r.get("draft")),
+        "n_drafts": sum(1 for r in reviews if r.get("draft")),
     }

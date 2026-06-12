@@ -129,6 +129,77 @@ class PayloadTest(_TmpReviewsMixin):
         self.assertEqual(gev["history"][0]["quarter"], "2026Q1")  # 最新在前
 
 
+class DraftTest(_TmpReviewsMixin):
+    def test_draft_not_counted_in_aggregate(self) -> None:
+        bs.save_draft("VRT", "2026Q1", "转弱", "A", "", "AI 草稿")
+        v = bs.aggregate_group("bottleneck")
+        self.assertEqual(v["level"], "pending")  # 草稿不参与判定
+        self.assertEqual(v["n_reviewed"], 0)
+
+    def test_draft_exposed_in_payload_not_history(self) -> None:
+        bs.save_draft("VRT", "2026Q1", "转弱")
+        p = bs.build_payload()
+        vrt = next(s for g in p["groups"] for s in g["signals"]
+                   if s["ticker"] == "VRT")
+        self.assertEqual(vrt["draft"]["conclusion"], "转弱")
+        self.assertIsNone(vrt["latest"])
+        self.assertEqual(vrt["history"], [])
+        self.assertEqual(p["n_drafts"], 1)
+        self.assertEqual(p["n_reviews"], 0)
+
+    def test_confirm_replaces_draft(self) -> None:
+        bs.save_draft("VRT", "2026Q1", "转弱")
+        bs.save_review("VRT", "2026Q1", "转弱", "A")  # 用户点 ✓ 确认
+        rows = bs.load_reviews()
+        self.assertEqual(len(rows), 1)
+        self.assertFalse(rows[0].get("draft"))
+        self.assertEqual(bs.aggregate_group("bottleneck")["level"], "caution")
+        self.assertIsNone(bs.pending_draft("VRT"))
+
+    def test_draft_skipped_when_human_confirmed_same_quarter(self) -> None:
+        bs.save_review("MU", "2026Q1", "转强")
+        self.assertIsNone(bs.save_draft("MU", "2026Q1", "转弱"))  # 人工真值优先
+        rows = bs.load_reviews()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["conclusion"], "转强")
+
+    def test_stale_draft_hidden_when_newer_confirmed(self) -> None:
+        bs.save_draft("GEV", "2025Q4", "转弱")
+        bs.save_review("GEV", "2026Q1", "转强")
+        self.assertIsNone(bs.pending_draft("GEV"))  # 草稿比人工记录旧 → 不展示
+
+    def test_newer_draft_replaces_old_draft(self) -> None:
+        bs.save_draft("GEV", "2026Q1", "持平")
+        bs.save_draft("GEV", "2026Q1", "转弱", "B", "", "复跑分析改判")
+        d = bs.pending_draft("GEV")
+        self.assertEqual(d["conclusion"], "转弱")
+        self.assertEqual(len([r for r in bs.load_reviews() if r.get("draft")]), 1)
+
+
+class QuarterHelperTest(unittest.TestCase):
+    def test_prev_quarter(self) -> None:
+        self.assertEqual(bs.prev_quarter("2026Q2"), "2026Q1")
+        self.assertEqual(bs.prev_quarter("2026Q1"), "2025Q4")
+
+
+class AnalyzerDraftLineTest(unittest.TestCase):
+    def test_split_draft_line(self) -> None:
+        from stock_research.jobs.earnings_signal_analyzer import _split_draft_line
+        text = "**美光 财报信号体检**\n✅ HBM 涨价\n**结论**：仍在抢货\nDRAFT: 转强 ; TIER: A ; NOTE: HBM 合约价环比+12%"
+        display, draft = _split_draft_line(text)
+        self.assertNotIn("DRAFT", display)
+        self.assertEqual(draft["conclusion"], "转强")
+        self.assertEqual(draft["evidence_tier"], "A")
+        self.assertIn("12%", draft["note"])
+
+    def test_uncertain_and_missing_line_no_draft(self) -> None:
+        from stock_research.jobs.earnings_signal_analyzer import _split_draft_line
+        _, d1 = _split_draft_line("正文\nDRAFT: 不确定 ; TIER: ; NOTE: 没搜到")
+        self.assertIsNone(d1)
+        _, d2 = _split_draft_line("模型没按格式输出的正文")
+        self.assertIsNone(d2)
+
+
 class RegistryCompatTest(unittest.TestCase):
     def test_job_reexports_groups(self) -> None:
         # earnings_signal_analyzer 仍从提醒 job import GROUPS — 迁移后不能破
