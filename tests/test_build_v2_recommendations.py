@@ -310,6 +310,56 @@ class DataUsabilityGateTest(unittest.TestCase):
         self.assertEqual(audit["attention"][0]["symbol"], "REUSE")
         self.assertTrue(audit["attention"][0]["in_recommendation_list"])
 
+    def test_audit_records_price_action_review_gated(self):
+        # 2026-06-11 ADSK/SMCI/NRG 被结构性下跌闸砍分跌出 Top20，但审计里完全隐形，
+        # dashboard 跌出 banner 误标"排名跌出（被新候选顶下）"。review_gated 段补这个洞。
+        good = {
+            **self._strong_row(),
+            "market": "US",
+            "symbol": "GOOD",
+            "name": "Good Co",
+            "theme": "AI",
+            "industry": "Software",
+        }
+        gated = {
+            **good,
+            "symbol": "KNIFE",
+            "name": "Falling Knife",
+            "ytd_pct": -27.0,
+            "one_week_pct": -6.0,
+            "one_month_pct": -12.0,
+            "one_year_pct": -26.0,
+        }
+        scored = []
+        for row in (good, gated):
+            scores = build_v2._factor_scores(row)
+            price_flags = build_v2._apply_price_action_review_gate(row, scores)
+            data_flags = build_v2._apply_data_usability_gate(row, scores)
+            scored.append({
+                **row,
+                "factor_scores": scores,
+                "risk_flags": data_flags + price_flags + build_v2._quality_flags(row),
+                "total_score": scores["total"],
+                "signal": build_v2._signal(scores["total"]),
+                "rating": build_v2._rating(scores["total"]),
+            })
+
+        audit = build_v2._build_data_usability_audit(
+            scored,
+            [scored[0]],
+            run_id="r1",
+            generated_at=build_v2.datetime(2026, 6, 12, 9, 0, 0),
+        )
+
+        self.assertEqual(audit["review_gated_count"], 1)
+        entry = audit["review_gated"][0]
+        self.assertEqual(entry["symbol"], "KNIFE")
+        self.assertFalse(entry["in_recommendation_list"])
+        self.assertEqual(entry["gate_codes"], ["STRUCTURAL_DOWNTREND_REVIEW_GATE"])
+        self.assertEqual(entry["total_score"], 59.99)
+        self.assertGreater(entry["raw_total"], 59.99)
+        self.assertTrue(any("结构性下跌" in r for r in entry["reasons"]))
+
 
 class TechGrowthEligibilityGateTest(unittest.TestCase):
     def _base_row(self, *, symbol: str = "MRVL", market: str = "US") -> dict:
@@ -385,13 +435,32 @@ class TechGrowthEligibilityGateTest(unittest.TestCase):
         self.assertEqual(policy["action"], "research_only")
         self.assertEqual(policy["eligibility_migration_status"], "data_usability_gate")
 
-    def test_overheated_stock_waits_for_entry(self):
+    def test_overheated_stock_shadow_mode_keeps_action_with_flag(self):
+        # ② 过热动作闸 2026-06-11 改 shadow 默认：不下调 action，只记 overheated_shadow，
+        # 等 strategy_eval 历史回算追认有效后才切 active。
         row = {
             **self._base_row(symbol="AVGO"),
             "risk_flags": [{"code": "OVERHEATED_1Y", "severity": "medium"}],
         }
 
         policy = build_v2._derive_recommendation_policy(row)
+
+        self.assertEqual(policy["eligibility"], "buyable")
+        self.assertEqual(policy["action"], "focus_research")
+        self.assertTrue(policy.get("overheated_shadow"))
+
+    def test_overheated_stock_waits_for_entry_in_active_mode(self):
+        row = {
+            **self._base_row(symbol="AVGO"),
+            "risk_flags": [{"code": "OVERHEATED_1Y", "severity": "medium"}],
+        }
+
+        original_mode = build_v2.OVERHEATED_ACTION_GATE_MODE
+        build_v2.OVERHEATED_ACTION_GATE_MODE = "active"
+        try:
+            policy = build_v2._derive_recommendation_policy(row)
+        finally:
+            build_v2.OVERHEATED_ACTION_GATE_MODE = original_mode
 
         self.assertEqual(policy["eligibility"], "buyable")
         self.assertEqual(policy["action"], "wait_entry")

@@ -883,6 +883,7 @@ def _build_data_usability_audit(
         selected_rank[(row.get("market"), row.get("symbol"))] = market_rank_counter[market]
     blocked: list[dict[str, Any]] = []
     attention: list[dict[str, Any]] = []
+    review_gated: list[dict[str, Any]] = []
     summary_by_market: dict[str, dict[str, int]] = {}
 
     attention_codes = {
@@ -891,6 +892,10 @@ def _build_data_usability_audit(
         "INVALID_VALUATION_RATIO",
         "ACUTE_PRICE_PULLBACK",
     }
+    # 价格行为审查闸：分数被砍到 _PRICE_ACTION_REVIEW_SCORE_CAP 后自然跌出 Top N，
+    # 但 eligibility 不变、不进 gated_out/blocked，审计里曾经完全隐形 —— 导致
+    # dashboard 跌出 banner 把它们误标成"排名跌出（被新候选顶下）"（2026-06-12 修）。
+    price_review_gate_codes = {"PRICE_ACTION_REVIEW_GATE", "STRUCTURAL_DOWNTREND_REVIEW_GATE"}
     for row in scored:
         market = str(row.get("market") or "UNKNOWN")
         bucket = summary_by_market.setdefault(
@@ -901,6 +906,15 @@ def _build_data_usability_audit(
         key = (row.get("market"), row.get("symbol"))
         rank = selected_rank.get(key)
         scores = row.get("factor_scores") or {}
+        gate_hits = [
+            flag for flag in (row.get("risk_flags") or [])
+            if isinstance(flag, dict) and flag.get("code") in price_review_gate_codes
+        ]
+        if gate_hits:
+            entry = _audit_row(row, rank, [str(f.get("message") or f.get("code")) for f in gate_hits])
+            entry["gate_codes"] = sorted({str(f.get("code")) for f in gate_hits})
+            entry["next_action"] = "等价格修复确认（月线转正且无新急跌）后自动恢复参与排名"
+            review_gated.append(entry)
         reasons = _data_usability_review_reasons(row, scores)
         if reasons:
             bucket["blocked"] += 1
@@ -926,6 +940,7 @@ def _build_data_usability_audit(
             attention.append(_audit_row(row, rank, weak_reasons))
 
     blocked.sort(key=lambda r: (r.get("market") or "", -(r.get("raw_total") or r.get("total_score") or 0), r.get("symbol") or ""))
+    review_gated.sort(key=lambda r: (r.get("market") or "", -(r.get("raw_total") or r.get("total_score") or 0), r.get("symbol") or ""))
     attention.sort(key=lambda r: (
         0 if r.get("in_recommendation_list") else 1,
         r.get("data_usability") if r.get("data_usability") is not None else 999,
@@ -942,10 +957,15 @@ def _build_data_usability_audit(
         "blocked_count": len(blocked),
         "attention_count": len(attention),
         "selected_attention_count": sum(1 for r in attention if r.get("in_recommendation_list")),
+        "review_gated_count": len(review_gated),
         "summary_by_market": summary_by_market,
         "blocked": blocked[:120],
         "attention": attention[:120],
-        "note": "blocked=硬拦截，不能进入 buy；attention=数据偏弱或复用旧快照，仍可研究但需看原因。",
+        # review_gated 不截断：dashboard 跌出 banner 按 (market, symbol) 全量查找，
+        # 截断会让排序靠后的市场（US 排 CN/HK 之后）查不到、回落到错误的兜底标签。
+        "review_gated": review_gated,
+        "note": "blocked=硬拦截，不能进入 buy；attention=数据偏弱或复用旧快照，仍可研究但需看原因；"
+                "review_gated=价格行为审查闸砍分（跌深反转/结构性下跌），分数被压到 59.99 后自然跌出排名。",
     }
 
 
@@ -1354,6 +1374,8 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
                 "blocked_count": data_usability_audit["blocked_count"],
                 "attention_count": data_usability_audit["attention_count"],
                 "selected_attention_count": data_usability_audit["selected_attention_count"],
+                "review_gated_count": data_usability_audit["review_gated_count"],
+                "review_gated": data_usability_audit["review_gated"],
                 "summary_by_market": data_usability_audit["summary_by_market"],
             },
             "p0_eligibility_gate": data_usability_audit["p0_eligibility_gate"],
