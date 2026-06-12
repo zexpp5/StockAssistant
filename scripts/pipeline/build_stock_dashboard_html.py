@@ -2357,8 +2357,13 @@ function openDiscoveryHistoryFromRadar(event) {
       <h2 class="text-2xl font-bold text-slate-900">催化信号验证</h2>
     </div>
     <p class="text-sm text-slate-600 leading-relaxed">
-      在 AI 推荐里你会看到每只票下面有一行「📰 5/21 EPS 超预期 +58%」这种催化句。
-      这一页用<strong>真实历史数据</strong>检验：<strong>这些催化信号事后真的会让股价涨吗？</strong>
+      这一页管两件事，一个看当下、一个看历史：<br>
+      <strong>🚦 上面的红绿灯（每季手动填）</strong>——盯「AI 基建还缺不缺货」的 7 个关键信号。
+      每季财报后照着清单看一眼，回填 🟢转强 / ⚪持平 / 🔴转弱，系统帮你记账、攒趋势、按规则亮灯。
+      它回答：<strong>AI 行情的地基这季还稳不稳？</strong><br>
+      <strong>📰 下面的统计大表（系统自动算）</strong>——AI 推荐里那些「EPS 超预期 +58%」之类的催化句，
+      历史上灵不灵？每类消息发生后，股价平均比大盘多涨几个点、几成概率涨，全部用真实数据回测。
+      它回答：<strong>这类消息值不值得当回事？</strong>（先看样本数，少于 5 次的结论别信）
     </p>
   </div>
 
