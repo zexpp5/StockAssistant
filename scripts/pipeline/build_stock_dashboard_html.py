@@ -2727,13 +2727,14 @@ function openDiscoveryHistoryFromRadar(event) {
 
   <!-- 主表格 -->
   <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
-    <table class="w-full min-w-[1100px] text-sm">
+    <table class="w-full min-w-[1250px] text-sm">
       <thead class="bg-slate-50 text-xs text-slate-600">
         <tr>
           <th class="px-3 py-2 text-left">股票</th>
           <th class="px-3 py-2 text-left">今日动作</th>
           <th class="px-3 py-2 text-left">关键数据</th>
           <th class="px-3 py-2 text-left">为什么关注</th>
+          <th class="px-3 py-2 text-left">备注/计划</th>
           <th class="px-3 py-2 text-left">定位</th>
           <th class="px-3 py-2 text-left">资料</th>
           <th class="px-3 py-2 text-left">加入/来源</th>
@@ -4212,6 +4213,13 @@ function _watchlistSourceHtml(row) {
   return `<div class="text-[11px] text-slate-500 leading-tight" title="${_esc(row.notes || "")}">${_esc(label)}<br><span class="text-slate-400" title="${_esc(row.created_at || "")}">${_fmtAddedAt(row.created_at)}</span></div>`;
 }
 
+function _watchlistNoteHtml(row) {
+  const n = String((row && row.notes) || "").trim();
+  // 纯机器来源文案(auto-sync)不占备注列,细节仍在「加入/来源」悬停里
+  if (!n || n.startsWith("auto-sync")) return '<span class="text-xs text-slate-300">—</span>';
+  return `<div class="text-[11px] text-slate-600 leading-snug" title="${_esc(n)}">${_esc(_shortWatchText(n, 140))}</div>`;
+}
+
 async function loadWatchlistTable() {
   const apiSt = await _checkApiStatus();
   const tbody = document.getElementById("watchlist-table-body");
@@ -4220,7 +4228,7 @@ async function loadWatchlistTable() {
     const msg = apiSt.reason === "db_busy"
       ? "API 已启动，DuckDB 正被 daily_refresh 等脚本占用，请几分钟后再点「刷新」。"
       : "无法连接本地 API；登录后应由 launchd 自动启动，或执行 launchctl kickstart -k gui/$(id -u)/com.linearview.stockassistant.api";
-    tbody.innerHTML = `<tr><td colspan="8" class="px-3 py-8 text-center text-amber-800 text-sm">⚠️ ${_esc(msg)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" class="px-3 py-8 text-center text-amber-800 text-sm">⚠️ ${_esc(msg)}</td></tr>`;
     countEl.textContent = "";
     return;
   }
@@ -4301,7 +4309,7 @@ async function loadWatchlistTable() {
       ? `${filtered.length} / ${displayRows.length} 只 · 已合并 ${duplicateN} 条重复`
       : `${filtered.length} / ${displayRows.length} 只`;
     if (filtered.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="8" class="px-3 py-8 text-center text-slate-500 text-sm">没有匹配的记录</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="9" class="px-3 py-8 text-center text-slate-500 text-sm">没有匹配的记录</td></tr>`;
       return;
     }
     const groupSeen = {};
@@ -4319,7 +4327,7 @@ async function loadWatchlistTable() {
       let groupHead = "";
       if (grp.key !== lastGroupKey) {
         lastGroupKey = grp.key;
-        groupHead = `<tr class="bg-slate-100/80"><td colspan="8" class="px-3 py-1.5 text-[11px] font-bold text-slate-500 tracking-wider border-l-2 ${grp.key === "held" ? "border-rose-400" : grp.key === "research" ? "border-emerald-400" : "border-slate-300"}">${grp.label}（${groupSeen[grp.key] || 0}）</td></tr>`;
+        groupHead = `<tr class="bg-slate-100/80"><td colspan="9" class="px-3 py-1.5 text-[11px] font-bold text-slate-500 tracking-wider border-l-2 ${grp.key === "held" ? "border-rose-400" : grp.key === "research" ? "border-emerald-400" : "border-slate-300"}">${grp.label}（${groupSeen[grp.key] || 0}）</td></tr>`;
       }
       return groupHead + `
       <tr class="hover:bg-slate-50 align-top">
@@ -4334,6 +4342,7 @@ async function loadWatchlistTable() {
           ${why.map(w => `<div>${_esc(w)}</div>`).join("") || '<span class="text-slate-400">—</span>'}
           ${intro ? `<div class="text-[11px] text-slate-500 mt-1">${_esc(_shortWatchText(intro, 74))}</div>` : ""}
         </td>
+        <td class="px-3 py-3 min-w-[200px] max-w-[260px]">${_watchlistNoteHtml(r)}</td>
         <td class="px-3 py-3 min-w-[150px]">${_watchlistLocationHtml(r)}</td>
         <td class="px-3 py-3 min-w-[70px]">${_watchlistDataHealthHtml(item)}</td>
         <td class="px-3 py-3 min-w-[120px]">${_watchlistSourceHtml(r)}</td>
@@ -4344,7 +4353,7 @@ async function loadWatchlistTable() {
       </tr>`;
     }).join("");
   } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="8" class="px-3 py-8 text-center text-rose-700 text-sm">加载失败：${_esc(e.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" class="px-3 py-8 text-center text-rose-700 text-sm">加载失败：${_esc(e.message)}</td></tr>`;
   }
 }
 async function forceReloadWatchlist() { _watchlistCache = []; await loadWatchlistTable(); }
@@ -12779,7 +12788,7 @@ function _reasonSummaryHtml(row) {
       const dropoutTitle = allFromMarketTop
         ? `${_marketLabel(activeMarket)} 上批次在本市场 Top ${marketTopLimit}，本批次跌出`
         : `${_marketLabel(activeMarket)} 上批候选，本批未入推荐`;
-      const dropoutExplain = `这些票上次（${filtered[0].prev_date || "上批次"}）还在${_marketLabel(activeMarket)}推荐里，本批没有入选当前推荐。<strong>原因见每行标注</strong>——多数是被今天的身份/证据/数据闸过滤掉的，不一定是排名被新候选顶下。`;
+      const dropoutExplain = `这些票上次（${filtered[0].prev_date || "上批次"}）还在${_marketLabel(activeMarket)}推荐里，本批没有入选当前推荐。<strong>原因见每行标注</strong>——多数是被今天的身份/证据/数据/价格行为闸过滤掉的，不一定是排名被新候选顶下。`;
       const rows = sorted.map(d => {
         const tk = String(d.ticker || "");
         const tkUpper = tk.toUpperCase();
@@ -14829,10 +14838,14 @@ _GATED_OUT_REASON_LABELS = {
 
 
 def _load_gated_out_reasons() -> dict[tuple[str, str], dict]:
-    """读 ④ 排除审计(recommendation_data_usability_audit.json 的 p0_eligibility_gate)，
+    """读 ④ 排除审计(recommendation_data_usability_audit.json)，
     返回 {(market, SYMBOL): {reason, label}}。供跌出 banner 标注每只的真实原因。
 
-    P0 闸目前仅美股；命中说明是被身份/证据/数据/分层闸过滤，而非排名竞争跌出。
+    三类来源，优先级从高到低（同一票取先命中的）：
+    ① p0_eligibility_gate.gated_out — 身份/证据/分层闸（仅美股）
+    ② review_gated — 价格行为审查闸（跌深反转/结构性下跌），分数被砍到 59.99 后
+      自然跌出排名；2026-06-11 ADSK/SMCI/NRG 曾因审计缺这段被误标"被新候选顶下"
+    ③ blocked — 数据可用性硬拦截
     """
     try:
         path = os.path.join(_REPO, "data", "latest", "recommendation_data_usability_audit.json")
@@ -14850,6 +14863,25 @@ def _load_gated_out_reasons() -> dict[tuple[str, str], dict]:
             out[("US", sym)] = {
                 "reason": reason,
                 "label": _GATED_OUT_REASON_LABELS.get(reason, "已被新规则闸过滤"),
+            }
+        for row in audit.get("review_gated") or []:
+            sym = str(row.get("symbol") or "").upper()
+            market = str(row.get("market") or "").upper()
+            if not sym or not market or (market, sym) in out:
+                continue
+            structural = "STRUCTURAL_DOWNTREND_REVIEW_GATE" in (row.get("gate_codes") or [])
+            out[(market, sym)] = {
+                "reason": "structural_downtrend_review_gate" if structural else "price_action_review_gate",
+                "label": "🚧 结构性下跌审查闸·分数已压" if structural else "🚧 跌深反转审查闸·分数已压",
+            }
+        for row in audit.get("blocked") or []:
+            sym = str(row.get("symbol") or "").upper()
+            market = str(row.get("market") or "").upper()
+            if not sym or not market or (market, sym) in out:
+                continue
+            out[(market, sym)] = {
+                "reason": "data_usability_blocked",
+                "label": "数据缺失·硬拦截",
             }
         return out
     except Exception as e:
