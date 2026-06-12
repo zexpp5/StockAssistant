@@ -8404,6 +8404,8 @@ function _disciplineCell(item) {
     return `<td class="px-3 py-2 text-left text-[11px] text-slate-400 whitespace-nowrap" title="这笔持仓还没有单独设置纪律线"><div>未设置</div></td>`;
   }
   const status = d.status || "watching";
+  const isDraft = String(d.source_type || "") === "rule_template";
+  const draftTag = isDraft ? `<div class="text-[10px] text-slate-400">模板草稿 · 默认线未校准</div>` : "";
   const price = d.current_price == null ? "" : Number(d.current_price).toFixed(2);
   const priceLine = price ? `${_esc(d.symbol || "")} 当前 ${price}` : _esc(d.symbol || "");
   const cleanRange = (raw) => String(raw || "")
@@ -8429,6 +8431,7 @@ function _disciplineCell(item) {
   const risk = splitTrigger(riskTrigger);
   const titleLines = [
     priceLine,
+    isDraft ? "模板草稿：线位按固定规则生成（成本±15% + 保本锁公式），建议校准到有意义价位后转正。" : "",
     d.message || "纪律线未触发",
     profit.range ? `止盈线: ${profit.range} ${profit.action}` : "",
     n1.range ? `当前最近线: ${n1.range} ${n1.action}` : "",
@@ -8455,6 +8458,7 @@ function _disciplineCell(item) {
     return `<td class="px-3 py-2 text-left whitespace-normal cursor-help leading-snug" title="${_esc(title)}">
       <div class="text-[11px] font-semibold text-amber-800">先刷新行情 · ${status === "stale_price" ? "旧价不触发" : "缺价不触发"}</div>
       ${ruleLines || `<div class="text-[11px] text-amber-700">${status === "stale_price" ? "旧价格不触发规则" : "缺价格不触发规则"}</div>`}
+      ${draftTag}
     </td>`;
   }
   if (status === "triggered") {
@@ -8466,6 +8470,7 @@ function _disciplineCell(item) {
       <div class="text-[12px] font-semibold ${cls}">触发：${_esc(d.action_label || "纪律提醒")}</div>
       <div class="text-[11px] text-slate-700">${_esc(triggerRange || "纪律线")}</div>
       <div class="text-[10px] text-slate-500">${_esc(detail)}</div>
+      ${draftTag}
     </td>`;
   }
   if (status === "watching") {
@@ -8474,6 +8479,7 @@ function _disciplineCell(item) {
       ${profit.range ? `<div class="text-[10px] text-amber-700">止盈 ${_esc(profit.range)} · ${_esc(profit.action)}</div>` : ""}
       <div class="text-[11px] text-slate-700">${n1.range ? `最近 ${_esc(n1.range)} · ${_esc(n1.action)}` : "等待价格触发"}</div>
       ${risk.range ? `<div class="text-[10px] text-rose-700">风控 ${_esc(risk.range)} · ${_esc(risk.action)}</div>` : ""}
+      ${draftTag}
     </td>`;
   }
   return `<td class="px-3 py-2 text-center whitespace-nowrap cursor-help" title="${_esc(title)}">

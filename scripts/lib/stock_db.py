@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import time
 from datetime import datetime, date
@@ -2901,6 +2902,187 @@ def create_real_holding_discipline_plan(
     if own:
         conn.close()
     return plan or {"plan_id": plan_id, "triggers": []}
+
+
+def _fmt_px(v: float) -> str:
+    s = f"{v:.2f}"
+    return s.rstrip("0").rstrip(".") if "." in s else s
+
+
+def build_discipline_template_draft(
+    holding: Mapping[str, Any],
+    *,
+    low6m_price: float | None = None,
+    total_capital: float | None = None,
+) -> dict[str, Any] | None:
+    """按固定规则为一笔持仓生成纪律计划草稿 payload（2026-06-12 与用户对齐的口径）。
+
+    纯函数不写库；调用方交给 create_real_holding_discipline_plan 落库。
+    固定规则（advisory only，线位是"盲线"，等用户校准到有意义价位后转正）：
+    - 成本预警线 = 成本 C
+    - 默认止损线 D = C×0.85；若半年低点落在 (C×0.85, C×0.97) 区间则吸附过去（更贴筹码结构）
+    - 默认锁利线 U = C×1.15
+    - 保本锁减仓股数 N = ceil(S×(C−D)÷(U−D))，港股/A股向上取整到 100 股
+      （锁住 N×(U−C) ≥ 剩仓最大回吐 (S−N)×(C−D)，触发后无论怎么走整体不亏）
+    - 仓位闸：成本(RMB)占总资产 > hard_single_cap 时草稿开头标注集中度警示
+    返回 None 表示成本/股数不可用，造不出有意义的草稿。
+    """
+    cost = _as_float_or_none(holding.get("avg_cost_local_per_share")) or _as_float_or_none(holding.get("entry_price"))
+    shares = _as_float_or_none(holding.get("remaining_shares")) or _as_float_or_none(holding.get("shares"))
+    if not cost or cost <= 0 or not shares or shares <= 0:
+        return None
+    market = str(holding.get("market") or _infer_market_from_ticker(str(holding.get("symbol") or ""))).upper()
+    lot = 100 if market in {"HK", "CN"} else 1
+
+    stop = cost * 0.85
+    stop_basis = "成本-15%"
+    low6m = _as_float_or_none(low6m_price)
+    if low6m and cost * 0.85 < low6m < cost * 0.97:
+        stop = low6m
+        stop_basis = "吸附半年低点"
+    take = cost * 1.15
+
+    n_raw = shares * (cost - stop) / (take - stop)
+    # round(…,6) 钳掉浮点尾巴(100×0.85=85.000…01 会把整好 500 ceil 成 501)
+    n = int(math.ceil(round(n_raw, 6) / lot)) * lot
+    n = max(lot, min(n, int(shares)))
+    remain = int(shares) - n
+    trim_size = (
+        f"卖{n}股,保留{remain}股" if remain > 0
+        else f"仓位仅{int(shares)}股,锁利触发即清仓复查"
+    )
+
+    c_s, d_s, u_s = _fmt_px(cost), _fmt_px(stop), _fmt_px(take)
+    notes_head = ""
+    cap_pct = _as_float_or_none(
+        ((USER_CONFIG_DEFAULTS.get("real_holding_review_rules") or {}).get("hard_single_cap_pct"))
+    ) or 0.25
+    cost_rmb = _as_float_or_none(holding.get("remaining_cost_rmb")) or _as_float_or_none(holding.get("cost_rmb_locked"))
+    tc = _as_float_or_none(total_capital)
+    if cost_rmb and tc and tc > 0 and cost_rmb / tc > cap_pct:
+        notes_head = (
+            f"⚠️仓位闸:本仓成本约占总资产{cost_rmb / tc * 100:.0f}%"
+            f">{cap_pct * 100:.0f}%警戒线,先解决集中度,本计划线位不作加仓参考。"
+        )
+
+    return {
+        "plan_type": "manual_price_plan",
+        "source_type": "rule_template",
+        "validation_status": "template_draft_unconfirmed",
+        "thesis": (
+            f"模板草稿(建仓自动生成,固定规则):成本{c_s}×{int(shares)}股。"
+            f"止损D={d_s}({stop_basis})/锁利U={u_s}(成本+15%)/保本锁N=S×(C−D)÷(U−D)={n}股。"
+            "默认线是盲线:待校准到有意义价位(前低/抛压区/目标价)+补买入论据后转正。"
+        ),
+        "invalidation_note": (
+            f"默认口径:跌破{d_s}=按模板认错复查;基本面实质恶化不受价格线约束,立即重评。"
+            "校准时应替换为这只票自己的论据证伪条件。"
+        ),
+        "notes": (
+            notes_head
+            + "纪律核心:价格线管动作、时间点管复查;到线即执行,禁止盘中临时上挪线位。"
+            "时间检查点:下一个财报日(校准时补具体日期)。advisory only,不自动交易。"
+        ),
+        "triggers": [
+            {
+                "trigger_type": "invalidation_review",
+                "comparator": "lte",
+                "price_max": round(stop, 4),
+                "severity": "critical",
+                "priority": 3,
+                "action_label": f"跌破{d_s}:默认止损线·建议撤出并复查",
+                "suggested_size_text": "重评全部持仓",
+                "rationale": f"模板默认线({stop_basis});校准时挪到论据证伪位。",
+            },
+            {
+                "trigger_type": "cost_line_review",
+                "comparator": "lte",
+                "price_max": round(cost, 4),
+                "severity": "warning",
+                "priority": 5,
+                "action_label": f"跌回成本{c_s}:浮盈清零,复查",
+                "suggested_size_text": "不强制动作,复查买入理由是否仍成立",
+                "rationale": "成本线=持仓从盈转亏的分界,作为止损硬线之前的提前预警。",
+            },
+            {
+                "trigger_type": "strength_trim",
+                "comparator": "gte",
+                "price_min": round(take, 4),
+                "severity": "info",
+                "priority": 8,
+                "action_label": f"涨到{u_s}:保本锁减{n}股",
+                "suggested_size_text": trim_size,
+                "rationale": (
+                    f"保本锁公式N=S×(C−D)÷(U−D)={n_raw:.0f}→按{'手(100股)' if lot == 100 else '股'}取整{n};"
+                    "执行后锁利≥剩仓最大回吐,整体立于不败。港股各票手数不同,下单前按实际手数再取整。"
+                ),
+            },
+        ],
+    }
+
+
+def ensure_discipline_template_draft(
+    holding_id: int,
+    *,
+    conn: duckdb.DuckDBPyConnection | None = None,
+) -> dict[str, Any] | None:
+    """持仓若没有 active 纪律计划，按固定规则生成模板草稿并落库（幂等）。
+
+    买入/加仓后调用，保证"任何新仓位从第一天起就不裸奔"。
+    已有 active 计划（手工或草稿）则什么都不做返回 None。
+    """
+    own = conn is None
+    if own:
+        conn = get_db()
+    try:
+        holding = fetch_real_holding_by_id(int(holding_id), conn=conn)
+        if not holding or str(holding.get("close_status") or "open") == "closed":
+            return None
+        existing = conn.execute(
+            "SELECT plan_id FROM real_holding_discipline_plans WHERE holding_id = ? AND status = 'active' LIMIT 1",
+            [int(holding_id)],
+        ).fetchone()
+        if existing:
+            return None
+        # 半年低点口径与 real_holding_review._compute_entry_levels 对齐:
+        # 最近 183 日历日最低收盘,窗口实际跨度 <150 日历日不算数
+        low6m = None
+        try:
+            rows = conn.execute(
+                "SELECT trade_date, close FROM price_daily WHERE symbol = ? ORDER BY trade_date DESC LIMIT 200",
+                [str(holding.get("symbol"))],
+            ).fetchall()
+        except duckdb.Error:
+            # price_daily 由行情管线另建;没有这张表只是少了吸附锚,模板照常生成
+            rows = []
+        def _as_d(x: Any) -> date | None:
+            if isinstance(x, datetime):
+                return x.date()
+            if isinstance(x, date):
+                return x
+            try:
+                return date.fromisoformat(str(x)[:10])
+            except ValueError:
+                return None
+
+        closes = [(_as_d(d), float(c)) for d, c in rows if c is not None]
+        closes = [(d, c) for d, c in closes if d is not None]
+        if closes:
+            d0 = closes[0][0]
+            window = [(d, c) for d, c in closes if (d0 - d).days <= 183]
+            if window and (d0 - min(d for d, _ in window)).days >= 150:
+                low6m = min(c for _, c in window)
+        payload = build_discipline_template_draft(
+            holding,
+            low6m_price=low6m,
+            total_capital=_as_float_or_none(get_config("total_capital", conn=conn)),
+        )
+        if not payload:
+            return None
+        return create_real_holding_discipline_plan(int(holding_id), payload, conn=conn)
+    finally:
+        if own:
+            conn.close()
 
 
 def fetch_real_holding_discipline_plan(

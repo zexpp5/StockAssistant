@@ -238,5 +238,84 @@ class HoldingDisciplineTest(unittest.TestCase):
         create_mock.assert_called_once()
 
 
+class DisciplineTemplateDraftTest(unittest.TestCase):
+    """建仓自动模板草稿（2026-06-12 固定规则）：成本±15% 三线 + 保本锁公式。"""
+
+    def _db(self):
+        tmp = tempfile.TemporaryDirectory()
+        conn = stock_db.get_db(str(Path(tmp.name) / "test.duckdb"))
+        return tmp, conn
+
+    def test_formula_us_basic(self):
+        payload = stock_db.build_discipline_template_draft(
+            {"avg_cost_local_per_share": 100.0, "remaining_shares": 1000, "market": "US"}
+        )
+        self.assertEqual(payload["source_type"], "rule_template")
+        self.assertEqual(payload["validation_status"], "template_draft_unconfirmed")
+        by_type = {t["trigger_type"]: t for t in payload["triggers"]}
+        self.assertEqual(by_type["invalidation_review"]["price_max"], 85.0)
+        self.assertEqual(by_type["cost_line_review"]["price_max"], 100.0)
+        self.assertEqual(by_type["strength_trim"]["price_min"], 115.0)
+        # N = 1000×15÷30 = 500，立于不败：锁 500×15 = 剩 500×15
+        self.assertIn("卖500股,保留500股", by_type["strength_trim"]["suggested_size_text"])
+
+    def test_low6m_snap_and_hk_lot_rounding(self):
+        # 泡泡玛特口径复算：C=167 S=3000，半年低点 160 落在 (141.95, 161.99) 吸附
+        payload = stock_db.build_discipline_template_draft(
+            {"avg_cost_local_per_share": 167.0, "remaining_shares": 3000, "market": "HK"},
+            low6m_price=160.0,
+        )
+        by_type = {t["trigger_type"]: t for t in payload["triggers"]}
+        self.assertEqual(by_type["invalidation_review"]["price_max"], 160.0)
+        self.assertIn("吸附半年低点", by_type["invalidation_review"]["action_label"] + by_type["invalidation_review"]["rationale"])
+        # N = 3000×7÷32.05 = 655.2 → 港股向上取整到 700
+        self.assertIn("卖700股,保留2300股", by_type["strength_trim"]["suggested_size_text"])
+
+    def test_low6m_below_band_ignored(self):
+        payload = stock_db.build_discipline_template_draft(
+            {"avg_cost_local_per_share": 167.0, "remaining_shares": 3000, "market": "HK"},
+            low6m_price=140.0,  # < 0.85×167，太远不吸附
+        )
+        by_type = {t["trigger_type"]: t for t in payload["triggers"]}
+        self.assertAlmostEqual(by_type["invalidation_review"]["price_max"], 141.95, places=2)
+
+    def test_tiny_position_trim_becomes_full_exit_wording(self):
+        payload = stock_db.build_discipline_template_draft(
+            {"avg_cost_local_per_share": 417.0, "remaining_shares": 1, "market": "US"}
+        )
+        by_type = {t["trigger_type"]: t for t in payload["triggers"]}
+        self.assertIn("清仓复查", by_type["strength_trim"]["suggested_size_text"])
+
+    def test_concentration_warning_in_notes(self):
+        h = {"avg_cost_local_per_share": 167.0, "remaining_shares": 3000, "market": "HK",
+             "remaining_cost_rmb": 433078.0}
+        flagged = stock_db.build_discipline_template_draft(h, total_capital=500000.0)
+        self.assertIn("仓位闸", flagged["notes"])
+        ok = stock_db.build_discipline_template_draft(h, total_capital=5000000.0)
+        self.assertNotIn("仓位闸", ok["notes"])
+
+    def test_missing_cost_returns_none(self):
+        self.assertIsNone(stock_db.build_discipline_template_draft({"market": "US", "shares": 10}))
+
+    def test_ensure_creates_once_and_skips_existing(self):
+        tmp, conn = self._db()
+        try:
+            holding_id = int(stock_db.insert_real_holding_result({
+                "symbol": "AAPL", "market": "US", "entry_price": 302.0,
+                "shares": 5, "entry_date": "2026-06-09", "currency": "USD",
+            }, conn=conn)["id"])
+            plan = stock_db.ensure_discipline_template_draft(holding_id, conn=conn)
+            self.assertIsNotNone(plan)
+            self.assertEqual(plan["source_type"], "rule_template")
+            self.assertIsNone(plan.get("confirmed_at"))  # 草稿没有"已确认"语义
+            self.assertEqual(len(plan["triggers"]), 3)
+            self.assertTrue(all(t["auto_trade_allowed"] is False for t in plan["triggers"]))
+            # 幂等：已有 active 计划（无论草稿还是手工）不再生成
+            self.assertIsNone(stock_db.ensure_discipline_template_draft(holding_id, conn=conn))
+        finally:
+            conn.close()
+            tmp.cleanup()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1479,11 +1479,15 @@ _sys.exit(rc)
                 sync_info["watchlist_synced"] = True
             except Exception as e:
                 sync_info = {"status": "error", "error": str(e), "watchlist_synced": False}
+        # 没有 active 纪律计划的仓位按固定规则补一份模板草稿（保本锁公式三线），
+        # 保证新仓位从第一天起就有人盯线；已有计划则跳过。fail-soft。
+        draft_info = _ensure_discipline_draft_safe(res.get("holding_id"))
         # 新建仓后用缓存行情立即重算持仓体检，让新标的当场进入「今日持仓体检」列表，
         # 不必等下一次拉行情/定时任务（与 /add /close /undo 行为对齐）。fail-soft。
         _refresh_holding_review_safe()
         new_h = stock_db.fetch_real_holding_by_id(res["holding_id"]) if res.get("holding_id") else None
-        return _json_any({"status": "ok", "holding": new_h, "sync": sync_info, **res})
+        return _json_any({"status": "ok", "holding": new_h, "sync": sync_info,
+                          "discipline_draft": draft_info, **res})
 
     def _holding_key_or_404(holding_id: int):
         import stock_db
@@ -1501,6 +1505,21 @@ _sys.exit(rc)
         except Exception as e:
             logger.warning("post-trade review refresh failed (non-fatal): %s", e)
 
+    def _ensure_discipline_draft_safe(holding_id) -> dict[str, Any] | None:
+        """买入/加仓后给无计划的持仓补模板草稿纪律计划。草稿生成失败不阻断交易记录。"""
+        import stock_db
+        if not holding_id:
+            return None
+        try:
+            plan = stock_db.ensure_discipline_template_draft(int(holding_id))
+        except Exception as e:
+            logger.warning("discipline template draft failed (non-fatal): %s", e)
+            return None
+        if not plan:
+            return None
+        return {"plan_id": plan.get("plan_id"), "source_type": plan.get("source_type"),
+                "validation_status": plan.get("validation_status")}
+
     @app.post("/api/real-holdings/{holding_id}/add")
     def add_to_real_holding(holding_id: int, item: dict[str, Any] = Body(...)) -> dict[str, Any]:
         """加仓：对已存在持仓追加一笔买入成交，rebuild 后返回更新后的聚合持仓。"""
@@ -1514,9 +1533,10 @@ _sys.exit(rc)
             res = stock_db.insert_real_holding_buy(payload)
         except stock_db.LedgerError as e:
             raise HTTPException(400, str(e))
+        draft_info = _ensure_discipline_draft_safe(res.get("holding_id") or holding_id)
         _refresh_holding_review_safe()
         new_h = stock_db.fetch_real_holding_by_id(res.get("holding_id") or holding_id)
-        return _json_any({"status": "ok", "holding": new_h, **res})
+        return _json_any({"status": "ok", "holding": new_h, "discipline_draft": draft_info, **res})
 
     @app.post("/api/real-holdings/{holding_id}/close")
     def close_real_holding(holding_id: int, item: dict[str, Any] = Body(...)) -> dict[str, Any]:
