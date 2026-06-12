@@ -1162,6 +1162,8 @@ window.echarts = window.echarts || {
 <section id="discovery" class="max-w-7xl mx-auto px-6 pt-6 pb-8 bg-gradient-to-br from-sky-50 to-indigo-50 rounded-2xl my-3" style="display:none">
   <!-- 分市场研究观察 advisory：哪些市场被策略诊断判为 degraded/research_only(早期实测 alpha 偏弱)。
        数据源: strategy_tuning_proposal.json market_actions(shadow 诊断,服务端渲染,只读)。 -->
+  <!-- 2026-06-12 工作流导航：推荐→配仓→跟踪，治"忘了这页干啥用的" -->
+  {AI_NAV_DISCOVERY}
   <!-- 2026-06-11 顶部减负 + 信任红绿灯：最上面用大白话回答"能不能照着买"(数据驱动红/黄/绿)，
        技术自检面板折叠。纯展示，不改数据/逻辑。 -->
   {TRUST_VERDICT_PANEL}
@@ -1837,6 +1839,7 @@ function openDiscoveryHistoryFromRadar(event) {
 
 <!-- ============ ③ 🧪 AI 跟踪 Tab (原 AI 跟踪) ============ -->
 <section id="portfolio" class="max-w-7xl mx-auto px-6 pt-6 pb-8 my-3" style="display:none">
+  {AI_NAV_PORTFOLIO}
   <!-- sub-tab 切换器 (2026-05-27): 把两件事彻底分开 · 刷新按钮挂右侧 -->
   <div class="mb-5 border-b border-slate-200 flex gap-1 items-center">
     <button onclick="switchPortfolioSub('tracking')" id="ptf-sub-btn-tracking"
@@ -2072,6 +2075,7 @@ function openDiscoveryHistoryFromRadar(event) {
 <!-- ============ 🤖 AI 配仓 Tab ============ -->
 <section id="backtest" class="max-w-7xl mx-auto px-6 pt-6 pb-8 my-3" style="display:none">
 
+  {AI_NAV_BACKTEST}
   <!-- 候选池溯源条 (2026-05-27): 让用户看见组合是从哪个池子里挑出来的 -->
   <div id="backtest-universe-banner" class="mb-5 bg-violet-50 border-l-4 border-violet-500 rounded-r-lg px-4 py-3 text-sm flex flex-wrap items-center gap-x-4 gap-y-1">
     <span class="font-semibold text-violet-900">📊 候选池</span>
@@ -17307,6 +17311,35 @@ def trust_verdict_panel_html() -> str:
     )
 
 
+def ai_workbench_nav_html(step: int) -> str:
+    """🧭 AI 工作台 3 步工作流导航（2026-06-12）：推荐(找)→配仓(配)→跟踪(验证)。
+    每页顶部标"你在第几步 + 本页职责 + 诚实状态"，治"忘了这页干啥用的"。纯展示。"""
+    steps = [
+        ("①", "AI 推荐", "找候选：哪些值得看、未来可能买", "#discovery"),
+        ("②", "AI 配仓", "配组合：要买的话买哪几只、各多少仓位", "#backtest"),
+        ("③", "AI 跟踪", "验业绩：这套到底赚不赚、值不值得信", "#portfolio"),
+    ]
+    step = max(1, min(3, step))
+    chips: list[str] = []
+    for i, (num, name_i, _job, href) in enumerate(steps, 1):
+        cls = "bg-violet-600 text-white" if i == step else "bg-white text-slate-500 hover:text-violet-700 border border-slate-200"
+        chips.append(f'<a href="{href}" class="px-2.5 py-1 rounded-md text-[12px] font-semibold {cls}">{num} {name_i}</a>')
+        if i < 3:
+            chips.append('<span class="text-slate-300">→</span>')
+    job = steps[step - 1][2]
+    name = steps[step - 1][1]
+    return (
+        '<div class="mb-4 rounded-xl border border-violet-200 bg-violet-50 px-4 py-2.5">'
+        '<div class="flex items-center gap-1.5 flex-wrap">'
+        '<span class="text-[12px] font-bold text-slate-700 mr-1">🧭 AI 工作台 3 步：</span>'
+        + "".join(chips)
+        + '</div>'
+        f'<div class="text-[12px] text-slate-600 mt-1.5">本页（{name}）= <b>{job}</b>。'
+        '<span class="text-rose-700">⚠️ 整套策略还没验证（红绿灯🔴），先当研究线索，别照着直接买。</span></div>'
+        '</div>'
+    )
+
+
 def allocation_framework_card_html() -> str:
     """🧭 配置体检：你现在 vs「指数打底 + 小仓 AI」稳健框架（规则文档 §19.3）。
 
@@ -20674,6 +20707,9 @@ def build():
     html = html.replace("{RUNTIME_STATUS_PANEL}", runtime_status_panel_html())
     html = html.replace("{STRATEGY_MARKET_ADVISORY}", strategy_market_advisory_html())
     html = html.replace("{ALLOCATION_FRAMEWORK_CARD}", allocation_framework_card_html())
+    html = html.replace("{AI_NAV_DISCOVERY}", ai_workbench_nav_html(1))
+    html = html.replace("{AI_NAV_BACKTEST}", ai_workbench_nav_html(2))
+    html = html.replace("{AI_NAV_PORTFOLIO}", ai_workbench_nav_html(3))
     html = html.replace("{TRUST_VERDICT_PANEL}", trust_verdict_panel_html())
     html = html.replace("{US_VALIDATION_PROGRESS}", us_validation_progress_html())
     html = html.replace("{P0_POLICY_VALIDATION_PANEL}", p0_policy_validation_panel_html())
