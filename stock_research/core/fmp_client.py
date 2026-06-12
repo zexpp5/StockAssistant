@@ -128,6 +128,16 @@ def is_available() -> bool:
     return bool(FMP_API_KEY)
 
 
+def reset_throttle_disable() -> None:
+    """复位 402/429 软熔断。长回填类调用方冷却(≥60s)后调用,继续慢速拉取。
+
+    软熔断本意是保护"一批内别继续撞墙";一次性回填脚本自己控制节奏时,
+    冷却后复位是安全的(实测 402 是短窗限流,会自行恢复)。
+    """
+    global _FMP_DISABLED_REASON
+    _FMP_DISABLED_REASON = None
+
+
 def _get(path: str, params: dict | None = None, force_refresh: bool = False) -> Any:
     """带 24h 文件缓存 + 速率友好的 FMP HTTP 请求。Key 自动附加。
 
@@ -474,6 +484,27 @@ def fetch_analyst_estimates(ticker: str) -> dict[str, Any] | None:
             "analysts_eps": r.get("numAnalystsEps") or r.get("numberAnalystsEstimatedEps"),
         })
     return {"ticker": ticker, "estimates": out, "source": "FMP/analyst-estimates"}
+
+
+def fetch_grade_events(ticker: str) -> list[dict[str, Any]] | None:
+    """逐笔分析师评级变动事件流(PIT 正确:每条带发生日期,不会被改写)。
+
+    实测 2026-06-12: 一次调用返回全量历史(NVDA ~1130 条,跨数年),
+    是"盈利预期上修"的长历史近亲 — 上下调事件即预期方向的离散信号。
+    """
+    raw = _get("/grades", {"symbol": ticker, "limit": 2000})
+    if not raw or not isinstance(raw, list):
+        return None
+    out = []
+    for r in raw:
+        out.append({
+            "date": r.get("date"),
+            "grading_company": r.get("gradingCompany"),
+            "previous_grade": r.get("previousGrade"),
+            "new_grade": r.get("newGrade"),
+            "action": r.get("action"),
+        })
+    return out
 
 
 # ────────────────────────────────────────────────────────
