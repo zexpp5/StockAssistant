@@ -76,6 +76,8 @@ VARIANTS: dict[str, dict[str, float]] = {
     # 第三变体(2026-06-12): val_down_mild 把估值再让 0.20 给已 PASS 的评级因子
     "val_down_grade": {"momentum": 0.15, "valuation": 0.25, "reversal": 0.20,
                        "f_score": 0.20, "grade": 0.20},
+    # 第四变体(2026-06-12): 两年代理回测冠军(268.8% vs 生产代理 111.7%) — 去估值,重评级+反转
+    "no_val_grade": {"momentum": 0.20, "reversal": 0.40, "grade": 0.40},
     # 单因子消融：定位 alpha/毒性来源
     "valuation_pure": {"valuation": 1.0},
     "momentum_pure": {"momentum": 1.0},

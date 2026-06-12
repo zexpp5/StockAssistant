@@ -743,6 +743,7 @@ is_research_step && run_step "23d3c/25 评级事件刷新（美股·写 analyst_
 is_research_step && run_step "23d4a/25 权重变体 shadow（降估值+质量·只读）" "scripts/tools/build_shadow_tuning_run.py --weight-variant val_down_mild" enhance 180
 is_research_step && run_step "23d4b/25 权重变体 shadow（四因子等权·只读）" "scripts/tools/build_shadow_tuning_run.py --weight-variant equal_4" enhance 180
 is_research_step && run_step "23d4c/25 权重变体 shadow（降估值+评级因子·只读）" "scripts/tools/build_shadow_tuning_run.py --weight-variant val_down_grade" enhance 180
+is_research_step && run_step "23d4d/25 权重变体 shadow（去估值·评级+反转·两年回测冠军·只读）" "scripts/tools/build_shadow_tuning_run.py --weight-variant no_val_grade" enhance 180
 is_research_step && run_step "23d5/25 shadow 生产门禁（只读证据）" "scripts/tools/evaluate_shadow_tuning_run.py" enhance 120
 is_research_step && run_step "23d6/25 US shadow 预检（唯一 source run · 只读）" "scripts/tools/us_shadow_preflight_check.py" enhance 120
 is_research_step && run_step "23d7/25 US-only 生产验收（先上线美股 · 只读）" "scripts/tools/us_production_acceptance_check.py" enhance 120
