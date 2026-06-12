@@ -1280,6 +1280,73 @@ def _load_candidates(conn: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
     return [dict(zip(cols, row)) for row in rows]
 
 
+def _archive_factor_snapshot(
+    conn: "duckdb.DuckDBPyConnection",
+    scored: list[dict[str, Any]],
+    *,
+    run_id: str,
+    strategy_version: str,
+    run_date: Any,
+) -> int:
+    """全宇宙因子分 PIT 归档（2026-06-12 加,§19 优化项①）。
+
+    痛点:recommendation_picks 只存 top-20/市场/天,历史回放只能"池内重排",
+    发现不了池外股票。这里把整个 scored 宇宙(~370 只)的因子分按
+    (run_date, market, symbol) 落档,同日多批后批覆盖(=每天最后一批口径,
+    与 strategy_eval 对齐)。纯增量存档,不碰打分与推荐流程。
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS factor_snapshot_universe (
+            run_date DATE NOT NULL,
+            market VARCHAR NOT NULL,
+            symbol VARCHAR NOT NULL,
+            run_id VARCHAR,
+            strategy_version VARCHAR,
+            total_score DOUBLE,
+            momentum DOUBLE,
+            valuation DOUBLE,
+            reversal DOUBLE,
+            data_usability DOUBLE,
+            f_score DOUBLE,
+            quality DOUBLE,
+            eligibility VARCHAR,
+            action VARCHAR,
+            market_rank INTEGER,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (run_date, market, symbol)
+        )
+        """
+    )
+    by_market: dict[str, list[dict[str, Any]]] = {}
+    for row in scored:
+        by_market.setdefault(str(row.get("market") or ""), []).append(row)
+    n = 0
+    for market_rows in by_market.values():
+        market_rows = sorted(market_rows, key=lambda x: (-(x.get("total_score") or 0), str(x.get("symbol"))))
+        for rank, row in enumerate(market_rows, start=1):
+            scores = row.get("factor_scores") or {}
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO factor_snapshot_universe
+                (run_date, market, symbol, run_id, strategy_version, total_score,
+                 momentum, valuation, reversal, data_usability, f_score, quality,
+                 eligibility, action, market_rank, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                [
+                    run_date, row.get("market"), row.get("symbol"), run_id,
+                    strategy_version, row.get("total_score"),
+                    scores.get("momentum"), scores.get("valuation"), scores.get("reversal"),
+                    scores.get("data_usability", scores.get("data_quality")),
+                    scores.get("f_score"), scores.get("quality"),
+                    scores.get("eligibility"), scores.get("action"), rank,
+                ],
+            )
+            n += 1
+    return n
+
+
 def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: bool) -> dict[str, Any]:
     conn = duckdb.connect(str(db_path), read_only=dry_run)
     tables = {str(r[0]) for r in conn.execute("SHOW TABLES").fetchall()}
@@ -1352,6 +1419,11 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
         market_rows.sort(key=lambda x: (-x["total_score"], x["symbol"]))
         selected.extend(market_rows[:top_per_market])
     selected.sort(key=lambda x: (x["market"], -x["total_score"], x["symbol"]))
+    if not dry_run:
+        _archive_factor_snapshot(
+            conn, scored,
+            run_id=run_id, strategy_version=strategy_version, run_date=now.date(),
+        )
     data_usability_audit = _build_data_usability_audit(
         scored,
         selected,
