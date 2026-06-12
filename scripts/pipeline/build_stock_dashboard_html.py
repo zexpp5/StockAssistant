@@ -14680,8 +14680,8 @@ def early_growth_radar_section_html(payload: dict | None = None) -> str:
     <summary class="cursor-pointer select-none px-4 py-3 bg-emerald-50 border-b border-emerald-100">
       <div class="flex flex-wrap items-center gap-2">
         <div>
-          <h3 class="text-base font-bold text-slate-900">早发现雷达 <span class="text-xs font-normal text-slate-500">研究前哨，默认折叠</span></h3>
-          <p class="text-xs text-slate-600 mt-0.5">可研究 {early_count} 只 · 已涨太多 {overheated_count} 只；展开后可买前研究或加关注。</p>
+          <h3 class="text-base font-bold text-slate-900">🌱 成长但不太热 · 早发现雷达 <span class="text-xs font-normal text-slate-500">找还没炒热的新兴成长票 · 点开看</span></h3>
+          <p class="text-xs text-slate-600 mt-0.5">✅ 可研究 <b>{early_count}</b> 只（成长 + 价格未过热）· ⚠️ 已涨太多 <b>{overheated_count}</b> 只（已过滤）；这就是你要的"不追热门的成长股"入口，展开可买前研究或加关注。</p>
         </div>
         <div class="ml-auto flex flex-col items-end gap-1 text-[11px]">
           <div class="text-slate-500">雷达生成 {esc(generated)}</div>
