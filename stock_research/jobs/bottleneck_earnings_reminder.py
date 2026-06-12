@@ -29,6 +29,12 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO))
 
+# 注册表 2026-06-12 迁到 core 成单一来源；这里 re-export，
+# earnings_signal_analyzer 等老引用 `from ...bottleneck_earnings_reminder import GROUPS` 不破
+from stock_research.core.bottleneck_signals import (  # noqa: E402,F401
+    CONCLUSION_LIGHT, GROUPS, latest_review,
+)
+
 logger = logging.getLogger(__name__)
 
 CALENDAR_JSON = _REPO / "data" / "event_calendar_us.json"
@@ -37,93 +43,6 @@ STATE_FILE = _REPO / "data" / "bottleneck_earnings_reminder_state.json"
 # 财报日后再提醒几天仍有效（覆盖盘后发布 + 周末错位）
 WINDOW_AFTER_DAYS = 2
 
-# 两组领先信号 → 各自的"财报里看什么"复查清单（白话，新手能照着看）
-GROUPS: dict[str, dict] = {
-    "bottleneck": {
-        "title": "🔬 瓶颈信号复查提醒",
-        "headline": "AI 瓶颈龙头财报窗口到了",
-        "intro": ("财报发布后花十分钟，对着下面的清单核对一遍——"
-                  "这是「AI 基建还缺不缺货」最早的体温计。"),
-        "meaning": ("**信号亮了怎么办**：任一指标转弱 ≠ 清仓，含义是**停止给瓶颈类个股加仓**，"
-                    "等下一季财报确认方向。三个信号同时转弱才说明整条「缺货叙事」在退潮。"),
-        "tickers": {
-            "GEV": {
-                "name": "GE Vernova（燃机/电力设备）",
-                "signal": "燃机订单还抢手吗",
-                "checks": [
-                    "燃机槽位/新订单：预订增速比上季度回落了吗？",
-                    "有没有客户「转售槽位 / 折价」的字眼？出现 = 抢产能的人开始撤了",
-                    "订单积压（backlog）还在创新高吗？",
-                ],
-            },
-            "VRT": {
-                "name": "Vertiv（数据中心电力/散热）",
-                "signal": "book-to-bill 还 ≥1.2 吗",
-                "checks": [
-                    "book-to-bill（新签订单 ÷ 当期出货）：≥1.2 = 订单仍供不应求",
-                    "跌破 1.2 = 出货追上了订单，是数据中心建设热度见顶的领先信号",
-                    "管理层对明年订单管线（pipeline）的措辞有没有变保守？",
-                ],
-            },
-            "MU": {
-                "name": "美光（HBM 存储）",
-                "signal": "HBM 还在涨价、还售罄吗",
-                "checks": [
-                    "HBM 合约价：环比还在涨吗？环比转负 = 存储瓶颈退潮",
-                    "HBM 产能是否仍「提前售罄」（sold out）？措辞从售罄变「供需平衡」要警惕",
-                    "注意它是周期股：利润最好的时候往往就是周期顶",
-                ],
-            },
-        },
-    },
-    "capex": {
-        "title": "☁️ 云大厂 capex 指引复查",
-        "headline": "AI 供应链「总阀门」财报窗口到了",
-        "intro": ("整条 AI 供应链（英伟达/台积电/电力链/光模块）的收入，本质上就是这四家的资本开支。"
-                  "财报后只盯一个问题：**capex 指引是上调、维持，还是下调？**"),
-        "meaning": ("**信号怎么读**：一家下调 = 记一笔，先不动作；**两家以上同季下调 = "
-                    "「capex 消化期」开始的强信号**——停止 AI 基建/算力类个股加仓，底仓定投照旧。"
-                    "这是本轮牛熊机制里最重要的领先指标，比股价早一到两个季度。"),
-        "tickers": {
-            "MSFT": {
-                "name": "微软（Azure）",
-                "signal": "capex 指引方向 + 产能措辞",
-                "checks": [
-                    "下季度/全财年 capex 指引：上调、维持还是下调？",
-                    "「产能受限/供不应求」（capacity constrained）的措辞还在吗？消失 = 需求降温早期信号",
-                    "Azure 增速有没有掉档？",
-                ],
-            },
-            "GOOGL": {
-                "name": "谷歌（GCP/TPU）",
-                "signal": "全年 capex 数字变没变",
-                "checks": [
-                    "全年 capex 指引金额：比上次说的数字高了还是低了？",
-                    "Cloud 增速与利润率方向",
-                    "管理层对「算力供不应求」的表述是否退坡？",
-                ],
-            },
-            "AMZN": {
-                "name": "亚马逊（AWS）",
-                "signal": "capex（大头给 AWS）还在加吗",
-                "checks": [
-                    "capex 同比增速方向（绝大部分投给 AWS/AI）",
-                    "AWS 增速有没有掉档？",
-                    "管理层对 AI 需求的措辞：仍然「需求远超供给」吗？",
-                ],
-            },
-            "META": {
-                "name": "Meta（纯自用烧钱方）",
-                "signal": "capex 指引区间上调还是下调",
-                "checks": [
-                    "全年 capex 指引区间：上调还是下调？",
-                    "⚠️ 解读相反：META 下调对**它自己**股价常是利好，但对**整条 AI 供应链**是需求转弱的坏信号",
-                    "对「AI 投入回报」的措辞有没有从进攻转防守？",
-                ],
-            },
-        },
-    },
-}
 
 
 def _load_due_events(as_of: date) -> list[dict]:
@@ -178,9 +97,18 @@ def build_card(group_key: str, events: list[dict], as_of: date) -> dict:
     for ev in events:
         meta = spec["tickers"][ev["ticker"]]
         checks = "\n".join(f"  {i}. {c}" for i, c in enumerate(meta["checks"], 1))
+        # 上季回填结论作对照（来自 dashboard「催化信号验证」页人工复查记录）
+        prev = latest_review(ev["ticker"])
+        if prev:
+            light = CONCLUSION_LIGHT.get(prev["conclusion"], "")
+            extra = f"（{prev['note']}）" if prev.get("note") else ""
+            prev_line = (f"\n上季回填：{light}{prev['conclusion']} "
+                         f"@{prev['quarter']}{extra}")
+        else:
+            prev_line = "\n上季回填：暂无记录（首次复查）"
         blocks.append(
             f"**{meta['name']}** · 财报日 {ev['event_date']}\n"
-            f"核心问题：**{meta['signal']}**\n{checks}"
+            f"核心问题：**{meta['signal']}**\n{checks}{prev_line}"
         )
     elements: list[dict] = [
         {"tag": "div", "text": {"tag": "lark_md", "content": (
@@ -193,6 +121,7 @@ def build_card(group_key: str, events: list[dict], as_of: date) -> dict:
         {"tag": "note", "elements": [{"tag": "plain_text", "content": (
             "📖 出处：2026-06-10《AI供给瓶颈行业与标的研究》领先信号体系；"
             "订单/指引类数据无法自动抓取，本卡只负责到点提醒。每家每季最多提醒一次 · "
+            "复查后到 dashboard「催化信号验证」页回填结论（次日 08:30 的 AI 体检卡可作参考） · "
             "仅供研究参考，不构成买卖指令"
         )}]},
     ]

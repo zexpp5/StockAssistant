@@ -1768,6 +1768,43 @@ _sys.exit(rc)
             raise HTTPException(404, f"real holding id not found: {holding_id}")
         return {"status": "ok", "id": holding_id, "rows_deleted": n}
 
+    @app.get("/api/bottleneck-reviews")
+    def bottleneck_reviews() -> dict[str, Any]:
+        """瓶颈信号红绿灯 — 7 个领先信号的季度复查记录 + 聚合判定。
+
+        dashboard「催化信号验证」页读这个单一源；判定规则在
+        core/bottleneck_signals.aggregate_group 算好，前端只渲染
+        (feedback_single_source_no_double_engine)。
+        """
+        from stock_research.core import bottleneck_signals as _bs
+
+        try:
+            return _bs.build_payload()
+        except Exception as e:
+            return {"available": False, "reason": f"读取失败: {e}"}
+
+    @app.post("/api/bottleneck-review")
+    def bottleneck_review_save(item: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        """回填一条瓶颈信号复查结论（按 ticker+quarter upsert）。
+
+        body: {ticker, quarter: "2026Q2", conclusion: 转强/持平/转弱,
+               evidence_tier?: A/B/C, url?, note?}
+        """
+        from stock_research.core import bottleneck_signals as _bs
+
+        try:
+            record = _bs.save_review(
+                ticker=str(item.get("ticker", "")),
+                quarter=str(item.get("quarter", "")),
+                conclusion=str(item.get("conclusion", "")),
+                evidence_tier=str(item.get("evidence_tier", "") or ""),
+                url=str(item.get("url", "") or ""),
+                note=str(item.get("note", "") or ""),
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"status": "ok", "record": record, "payload": _bs.build_payload()}
+
     @app.get("/api/premarket-gate")
     def premarket_gate_latest() -> dict[str, Any]:
         """美股盘前风险闸门最新结论 — 今日决策台 / 持仓页顶部横幅读这个单一源。
