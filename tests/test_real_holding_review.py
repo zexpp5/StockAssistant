@@ -15,6 +15,7 @@ sys.path.insert(0, str(REPO / "scripts" / "lib"))
 import stock_db  # type: ignore
 from stock_research.jobs.real_holding_review import (  # type: ignore
     _build_item,
+    _compute_entry_levels,
     _default_rules,
     _hk_watchlist_score_fallbacks,
     _manual_watchlist_score_fallbacks,
@@ -578,6 +579,58 @@ class RealHoldingReviewTest(unittest.TestCase):
         with patch("stock_research.jobs.real_holding_review._load_json", return_value=cache):
             out = _hk_watchlist_score_fallbacks(["9992.HK"], max_age_days=3)
         self.assertEqual(out, {})
+
+
+class EntryLevelsTest(unittest.TestCase):
+    """加仓参考价位 _compute_entry_levels 纯函数测试。"""
+
+    @staticmethod
+    def _series(n: int, *, start: date = date(2026, 6, 11), price_fn=None):
+        """构造 n 个交易日的 (date, close)，按日期降序；默认 close=100+行号。"""
+        rows = []
+        d = start
+        for i in range(n):
+            while d.weekday() >= 5:  # 跳过周末，模拟真实交易日
+                d -= timedelta(days=1)
+            close = price_fn(i) if price_fn else 100.0 + i
+            rows.append((d, close))
+            d -= timedelta(days=1)
+        return rows
+
+    def test_full_history_three_levels(self):
+        rows = self._series(250)
+        out = _compute_entry_levels(rows)
+        self.assertFalse(out["insufficient"])
+        keys = [lv["key"] for lv in out["levels"]]
+        self.assertEqual(keys, ["ma50", "ma200", "low6m"])
+        # close = 100+i (i=0 最新)，ma50 = 100 + mean(0..49) = 124.5
+        ma50 = next(lv for lv in out["levels"] if lv["key"] == "ma50")
+        self.assertAlmostEqual(ma50["price"], 124.5, places=4)
+        ma200 = next(lv for lv in out["levels"] if lv["key"] == "ma200")
+        self.assertAlmostEqual(ma200["price"], 199.5, places=4)
+        # 价格越早越高 → 半年低点应是最新价 100.0（dist_pct=0）
+        low6m = next(lv for lv in out["levels"] if lv["key"] == "low6m")
+        self.assertAlmostEqual(low6m["price"], 100.0, places=4)
+        self.assertEqual(out["basis_close"], 100.0)
+        # dist_pct 相对现价：ma50 在现价上方 → 正数（前端标"已跌破"）
+        self.assertGreater(ma50["dist_pct"], 0)
+
+    def test_short_history_is_insufficient(self):
+        # 17 个交易日（泡泡玛特 price_daily 现状）→ 三个锚全缺，不能拿 17 天 min 冒充半年低点
+        out = _compute_entry_levels(self._series(17))
+        self.assertTrue(out["insufficient"])
+        self.assertEqual(out["levels"], [])
+        self.assertEqual(out["history_rows"], 17)
+
+    def test_mid_history_only_ma50(self):
+        # 120 个交易日：够 ma50，不够 ma200；日历跨度约 168 天 < 150? (120 交易日≈168 日历日)
+        out = _compute_entry_levels(self._series(120))
+        keys = [lv["key"] for lv in out["levels"]]
+        self.assertIn("ma50", keys)
+        self.assertNotIn("ma200", keys)
+
+    def test_empty_returns_none(self):
+        self.assertIsNone(_compute_entry_levels([]))
 
 
 if __name__ == "__main__":

@@ -1538,6 +1538,7 @@ function openDiscoveryHistoryFromRadar(event) {
           <th class="px-3 py-2 text-center whitespace-nowrap w-[145px]" title="这只股票用哪种方式分析：有没有美股组合建议、算不算因子分、还是只看仓位盈亏">分析方式</th>
           <th class="px-3 py-2 text-center whitespace-nowrap w-[118px]" title="GICS 板块 ETF 近 60 日涨跌 · 来自 openbb_intel 行业轮动">板块热度</th>
           <th class="px-3 py-2 text-left whitespace-nowrap w-[180px]" title="你为真实持仓手动确认的价格纪律线；只提醒，不自动交易，不写推荐池">纪律提醒</th>
+          <th class="px-3 py-2 text-left whitespace-nowrap w-[170px]" title="可以考虑分批加仓的参考价位，每个交易日收盘后自动重算。50日线=中期趋势支撑（正常小回调，小笔参与档）；200日线=长期趋势支撑（情绪降温，认真考虑档）；半年低点=恐慌价（一年只出现一两次）。仅参考不是指令：跌到价位先核对下跌原因——大盘普跌带下来=按计划，公司自身坏消息=先停手">加仓参考</th>
           <th class="px-3 py-2 text-right whitespace-nowrap w-[150px]">成本/数量</th>
           <th class="px-3 py-2 text-right whitespace-nowrap w-[150px]">现价/市值</th>
           <th class="px-3 py-2 text-left whitespace-nowrap w-[130px]">买入/汇率</th>
@@ -1558,7 +1559,7 @@ function openDiscoveryHistoryFromRadar(event) {
         </tr>
       </thead>
       <tbody id="real-holdings-table">
-        <tr><td colspan="14" class="text-center text-slate-500 py-8">暂无持仓 · 点击右上角「+ 录入持仓」添加</td></tr>
+        <tr><td colspan="15" class="text-center text-slate-500 py-8">暂无持仓 · 点击右上角「+ 录入持仓」添加</td></tr>
       </tbody>
     </table>
   </div>
@@ -8367,6 +8368,25 @@ function _suggestedSizeCell(item) {
   </td>`;
 }
 
+function _entryLevelsCell(item) {
+  // 加仓参考价位:后端 real_holding_review 每日算好(50日线/200日线/半年低点),前端只渲染
+  const el = item && item.entry_levels;
+  if (!el) return `<td class="px-3 py-2 text-[11px] text-slate-300">—</td>`;
+  if (!el.levels || !el.levels.length) {
+    return `<td class="px-3 py-2 text-[11px] text-slate-400" title="本地价格库只有 ${el.history_rows || 0} 个交易日历史,算不出 50/200 日均线和半年低点——是数据没回补,不代表这只票没有支撑位">历史不足<div class="text-[10px] text-slate-300">仅${el.history_rows || 0}个交易日</div></td>`;
+  }
+  const cur = Number(el.basis_close);
+  const lines = el.levels.map(lv => {
+    const p = Number(lv.price);
+    const below = p < cur;
+    const distTxt = below
+      ? `<span class="text-[10px] text-slate-400">↓${Math.abs(Number(lv.dist_pct)).toFixed(1)}%</span>`
+      : `<span class="text-[10px] text-amber-600" title="现价已经低于这条线,它不再是'等回调'的买点参考">已跌破</span>`;
+    return `<div class="whitespace-nowrap"><span class="text-slate-500">${_esc(lv.label)}</span> <span class="font-mono font-semibold text-slate-800">${p.toFixed(2)}</span> ${distTxt}</div>`;
+  }).join("");
+  return `<td class="px-3 py-2 text-[11px] leading-relaxed" title="按 ${_esc(el.basis_trade_date || "")} 收盘价计算,每个交易日自动重算。仅参考不是指令:跌到价位先核对下跌原因(大盘普跌=按计划分批,公司自身坏消息=先停手)。">${lines}</td>`;
+}
+
 function _disciplineCell(item) {
   const d = item && item.discipline;
   if (!d || !d.plan_id) {
@@ -9351,7 +9371,7 @@ async function toggleHoldingTrades(holdingId, ev) {
   if (caret) caret.classList.add("bg-violet-200");
   const sub = document.createElement("tr");
   sub.className = "rhsub-" + holdingId + " bg-slate-50/70";
-  sub.innerHTML = `<td colspan="14" class="px-9 py-2 text-[11px] text-slate-500">加载中…</td>`;
+  sub.innerHTML = `<td colspan="15" class="px-9 py-2 text-[11px] text-slate-500">加载中…</td>`;
   row.after(sub);
   try {
     const d = await fetch(WATCHLIST_API_BASE + "/api/real-holdings/" + holdingId + "/records").then(r => r.ok ? r.json() : null);
@@ -9371,9 +9391,9 @@ async function toggleHoldingTrades(holdingId, ev) {
     const more = recs.length > MAX
       ? `<div class="text-slate-400 mt-1">… 还有 ${recs.length - MAX} 笔，点「记录」看全部 <button onclick="openTradeRecords(${holdingId})" class="text-violet-600 underline">查看全部</button></div>`
       : "";
-    sub.innerHTML = `<td colspan="14" class="px-9 py-2 text-[11px] space-y-0.5">${lines || "<span class='text-slate-400'>暂无交易记录</span>"}${more}</td>`;
+    sub.innerHTML = `<td colspan="15" class="px-9 py-2 text-[11px] space-y-0.5">${lines || "<span class='text-slate-400'>暂无交易记录</span>"}${more}</td>`;
   } catch (e) {
-    sub.innerHTML = `<td colspan="14" class="px-9 py-2 text-[11px] text-rose-500">加载失败：${e.message}</td>`;
+    sub.innerHTML = `<td colspan="15" class="px-9 py-2 text-[11px] text-rose-500">加载失败：${e.message}</td>`;
   }
 }
 
@@ -9540,7 +9560,7 @@ async function renderRealHoldings() {
           ? "无法读取持仓：DuckDB 正被 daily_refresh 等脚本占用，请稍后再点刷新。"
           : "无法连接本地 API；登录后应由 launchd 自动启动（com.linearview.stockassistant.api）。")
       : "暂无持仓 · 点击右上角「+ 录入持仓」添加";
-    tbody.innerHTML = `<tr><td colspan="14" class="text-center ${holdingsFetchFailed ? "text-amber-800" : "text-slate-500"} py-8">${emptyMsg}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="15" class="text-center ${holdingsFetchFailed ? "text-amber-800" : "text-slate-500"} py-8">${emptyMsg}</td></tr>`;
     const realAlloc = document.getElementById("chart-real-allocation");
     const realTheme = document.getElementById("chart-real-theme");
     if (realAlloc) realAlloc.innerHTML = '<div class="text-sm text-slate-400 p-6">暂无持仓分布</div>';
@@ -9838,13 +9858,13 @@ async function renderRealHoldings() {
     if (!items || items.length === 0) return [];
     const meta = _assetMeta(asset);
     const subHeader = `<tr class="bg-slate-50 border-t-2 border-slate-200">
-      <td colspan="14" class="px-3 py-2 text-[13px] font-semibold text-slate-800">
+      <td colspan="15" class="px-3 py-2 text-[13px] font-semibold text-slate-800">
         ${meta.emoji} ${meta.text} · <span class="text-slate-500 font-normal">${items.length} 只</span>
       </td>
     </tr>`;
     return [subHeader, ...items.map(x => _renderHoldingRow(x, x._verdict, x._cls, CLASS_META[x._cls], x._reviewItem || _lookupReviewItem(x.code)))];
   }).join("");
-  tbody.innerHTML = rendered || '<tr><td colspan="14" class="text-center text-slate-500 py-8">这个类别暂无持仓</td></tr>';
+  tbody.innerHTML = rendered || '<tr><td colspan="15" class="text-center text-slate-500 py-8">这个类别暂无持仓</td></tr>';
 
   function _renderHoldingRow(x, verdict, cls, meta, reviewItem) {
   // 优先级: 用户手填的 holding.name > watchlist record.name > ticker fallback
@@ -9911,6 +9931,7 @@ async function renderRealHoldings() {
       <td class="px-3 py-2 text-center whitespace-nowrap">${_badge(treatmentMeta, treatmentMeta.hint || meta.hint)}</td>
       ${reviewItem ? _industryHeatCell(reviewItem) : `<td class="px-3 py-2 text-center text-[11px] text-slate-300">—</td>`}
       ${disciplineCell}
+      ${_entryLevelsCell(reviewItem)}
       <td class="px-3 py-2 text-right font-mono whitespace-nowrap">
         ${Number(x.h.entry_price || 0).toFixed(2)} <span class="text-[10px] text-slate-400">${_esc(x.h.currency || _currencyForTicker(x.code))}</span>
         <div class="text-[11px] text-slate-500">${Number(x.h.shares || 0)} 股</div>

@@ -11,7 +11,7 @@ import logging
 import math
 import sys
 import zoneinfo
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -150,6 +150,91 @@ def _latest_prices_by_symbol(conn, symbols: list[str]) -> dict[str, dict]:
         elif row_num == 2 and key in out:
             out[key]["prev_close"] = close
             out[key]["prev_trade_date"] = trade_date
+    return out
+
+
+def _compute_entry_levels(closes: list[tuple[Any, float]]) -> dict | None:
+    """加仓参考价位（advisory only），纯函数方便单测。closes=[(trade_date, close)] 按日期降序。
+
+    三个锚（2026-06-12 与用户对齐的口径）：
+    - ma50  = 最近 50 个交易日收盘均值 → 中期趋势支撑（回调到这里=正常小回调，小笔参与档）
+    - ma200 = 最近 200 个交易日收盘均值 → 长期趋势支撑（回调到这里=情绪降温，认真考虑档）
+    - low6m = 最近 183 个日历日最低收盘 → 恐慌低点档（一年只出现一两次的价格）
+    口径约束：
+    - 均线按"最近 N 行"算（标准 MA 定义），低点按日历日窗算——不混用，
+      防止短历史票把 17 天的 min 冒充"半年低点"（见 momentum iloc 教训）。
+    - 数据不够的锚直接缺省；三个全缺时返回 insufficient 标记，前端解释而不是空白。
+    - 锚可能高于现价（已跌破均线），照样写入，由前端标注"已跌破"，不在后端裁剪。
+    """
+    rows = [(d, float(c)) for d, c in closes if c is not None]
+    if not rows:
+        return None
+    basis_date, basis_close = rows[0]
+    n = len(rows)
+    out: dict[str, Any] = {
+        "basis_trade_date": str(basis_date)[:10],
+        "basis_close": round(basis_close, 4),
+        "history_rows": n,
+        "levels": [],
+        "caliber": "ma50/ma200=最近N个交易日收盘均值; low6m=最近183日历日最低收盘",
+    }
+
+    def _add(key: str, label: str, price: float, extra: dict | None = None) -> None:
+        lv = {
+            "key": key,
+            "label": label,
+            "price": round(price, 4),
+            "dist_pct": round((price / basis_close - 1.0) * 100.0, 2) if basis_close else None,
+        }
+        if extra:
+            lv.update(extra)
+        out["levels"].append(lv)
+
+    if n >= 50:
+        _add("ma50", "50日线", sum(c for _, c in rows[:50]) / 50.0)
+    if n >= 200:
+        _add("ma200", "200日线", sum(c for _, c in rows[:200]) / 200.0)
+    d0 = _parse_iso_date(str(basis_date)[:10])
+    if d0 is not None:
+        window = [(d, c) for d, c in rows if (_parse_iso_date(str(d)[:10]) or d0) >= d0 - timedelta(days=183)]
+        span_days = (d0 - min((_parse_iso_date(str(d)[:10]) or d0) for d, _ in window)).days if window else 0
+        # 窗口实际跨度不足 150 个日历日就不挂"半年低点"招牌——那只是"最近的低点"，没参考意义
+        if window and span_days >= 150:
+            low_date, low_close = min(window, key=lambda x: x[1])
+            _add("low6m", "半年低点", low_close, {"date": str(low_date)[:10]})
+    out["insufficient"] = not out["levels"]
+    return out
+
+
+def _entry_levels_by_symbol(conn, symbols: list[str]) -> dict[str, dict]:
+    """每只持仓从 price_daily 取最近 200 个交易日收盘，算加仓参考价位。
+
+    只读本地 DB、不打网络；price_daily 没历史的票（如港股回补前）自然落 insufficient。
+    """
+    if not symbols:
+        return {}
+    placeholders = ",".join(["?"] * len(symbols))
+    rows = conn.execute(
+        f"""
+        SELECT symbol, trade_date, close FROM (
+          SELECT symbol, trade_date, close,
+                 ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY trade_date DESC) AS rn
+          FROM price_daily
+          WHERE symbol IN ({placeholders})
+        )
+        WHERE rn <= 200
+        ORDER BY symbol, trade_date DESC
+        """,
+        symbols,
+    ).fetchall()
+    by_sym: dict[str, list[tuple[Any, float]]] = {}
+    for symbol, trade_date, close in rows:
+        by_sym.setdefault(str(symbol), []).append((trade_date, close))
+    out: dict[str, dict] = {}
+    for sym, closes in by_sym.items():
+        levels = _compute_entry_levels(closes)
+        if levels is not None:
+            out[sym] = levels
     return out
 
 
@@ -977,6 +1062,7 @@ def build_real_holding_review(*, persist: bool = True) -> dict[str, Any]:
         holdings = stock_db.fetch_all_real_holdings(conn=conn)
         symbols = [str(h.get("symbol") or h.get("code")) for h in holdings if h.get("symbol") or h.get("code")]
         prices = _latest_prices_by_symbol(conn, symbols)
+        entry_levels_by_sym = _entry_levels_by_symbol(conn, symbols)
         picks = _latest_picks_by_symbol(conn, symbols)
         rules = _load_review_rules(conn)
         for sym, pick in _manual_watchlist_score_fallbacks(symbols).items():
@@ -1030,6 +1116,7 @@ def build_real_holding_review(*, persist: bool = True) -> dict[str, Any]:
                 target_weights=target_weights,
                 industry_heat=heat,
             )
+            item["entry_levels"] = entry_levels_by_sym.get(sym)
             plan = active_discipline_plans.get(int(h["id"])) if h.get("id") is not None else None
             if plan:
                 item["discipline"] = stock_db.evaluate_real_holding_discipline_plan(
