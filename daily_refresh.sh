@@ -746,6 +746,8 @@ is_research_step && run_step "23d7/25 US-only 生产验收（先上线美股 · 
 is_research_step && run_step "23d8/25 推荐规则快速体检（US 优先 · 只读）" "scripts/tools/recommendation_readiness_check.py" enhance 120
 is_research_step && run_step "23d9/25 US 严筛试运行（只读研究队列）" "scripts/tools/us_strict_trial.py" enhance 180
 is_research_step && run_step "23d9b/25 严筛口径影子回算（B1 只读·前瞻验证攒样本）" "scripts/tools/strict_caliber_backtest.py" enhance 120
+# 23d10 盈利预期上修(§19.3 第二步):yfinance eps_trend 每晚快照落库+出信号 JSON,美股 only,shadow 试用
+is_research_step && run_step "23d10/25 盈利预期上修信号采集（美股·写快照表）" "scripts/tools/collect_estimate_snapshots.py" enhance 900
 # 2026-05-21 V2 cutover 补洞：替代被删的 V1 audit_picks，喂 dashboard「买前审查」tab
 run_step "23e/25 picks 反向审查（V2 · Risk Parity + 估值 + Markowitz）" "-m stock_research.jobs.audit_picks_v2 --fast"
 run_step "23f/25 真实持仓每日体检（评分/建议/说明）" "-m stock_research.jobs.real_holding_review"
