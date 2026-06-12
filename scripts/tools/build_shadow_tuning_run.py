@@ -23,6 +23,10 @@ sys.path.insert(0, str(REPO / "scripts" / "lib"))
 
 from stock_db import DB_PATH, get_db  # noqa: E402
 from scripts.tools import strategy_tuning_proposal  # noqa: E402
+from scripts.tools.replay_weight_variants import (  # noqa: E402
+    VARIANTS as WEIGHT_VARIANTS,
+    variant_score,
+)
 
 OUT_JSON = REPO / "data" / "latest" / "shadow_tuning_run.json"
 OUT_MD = REPO / "data" / "reports" / "shadow_tuning_run.md"
@@ -384,6 +388,79 @@ def apply_shadow_transform(picks: list[dict[str, Any]], proposal: dict[str, Any]
     return transformed
 
 
+def apply_weight_variant_transform(
+    picks: list[dict[str, Any]],
+    *,
+    variant_name: str,
+    weights: dict[str, float],
+    top_k: int = 10,
+) -> list[dict[str, Any]]:
+    """纯权重重打分变体（§19.3 第二步）：用 pick 落库时的因子分快照按新权重重算总分。
+
+    与 apply_shadow_transform 的扣分/降级互斥 —— 变体只测「换公式」这一件事，
+    不叠加 factor/gate haircut，保证归因干净。组合口径与回放工具一致：每市场
+    按变体分取 top_k 标 shadow_portfolio_top（评估时用它而非 signal 阈值）。
+    """
+    transformed: list[dict[str, Any]] = []
+    for pick in picks:
+        factor_scores = pick.get("factor_scores") or {}
+        if not isinstance(factor_scores, dict):
+            factor_scores = {}
+        shadow_score, missing = variant_score(factor_scores, weights)
+        shadow_score = max(0.0, min(100.0, shadow_score))
+        original_score = _round(pick.get("total_score"))
+        original_signal = str(pick.get("signal") or _signal(original_score))
+        transformed.append({
+            "market": str(pick.get("market") or ""),
+            "market_label": MARKET_LABELS.get(str(pick.get("market") or ""), str(pick.get("market") or "")),
+            "symbol": pick.get("symbol"),
+            "name": pick.get("name"),
+            "original_rank": pick.get("rank"),
+            "original_rating": pick.get("rating"),
+            "original_signal": original_signal,
+            "original_score": original_score,
+            "shadow_rating": _rating(shadow_score),
+            "shadow_signal": _signal(shadow_score),
+            "shadow_score": round(shadow_score, 2),
+            "score_delta": round(shadow_score - original_score, 2),
+            "market_status": "unchanged",
+            "shadow_recommendation_mode": "keep_current",
+            "shadow_portfolio_multiplier": 1.0,
+            "action": "reweight",
+            "demoted": False,
+            "risk_flags": pick.get("risk_flags") or [],
+            "shadow_tags": [f"weight_variant:{variant_name}"],
+            "adjustments": [{
+                "source": f"weight_variant:{variant_name}",
+                "score_delta": round(shadow_score - original_score, 2),
+                "reason": "按变体权重从因子分快照重算总分",
+                "detail": f"missing_factor_fills={missing}",
+            }] if abs(shadow_score - original_score) >= 0.01 else [],
+            "entry_price": pick.get("entry_price"),
+            "entry_currency": pick.get("entry_currency"),
+            "source_origin": pick.get("source_origin"),
+            "universe_scope": pick.get("universe_scope"),
+        })
+
+    by_market: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in transformed:
+        by_market[str(row.get("market") or "")].append(row)
+    for market_rows in by_market.values():
+        market_rows.sort(key=lambda row: (-_as_float(row.get("shadow_score")), str(row.get("symbol"))))
+        for idx, row in enumerate(market_rows, start=1):
+            row["shadow_market_rank"] = idx
+            row["shadow_portfolio_top"] = idx <= top_k
+            # 评估/组合口径 = top_k 成员；eligible 沿用同一含义,便于复用现有汇总
+            row["shadow_portfolio_eligible"] = idx <= top_k
+            row["production_portfolio_eligible"] = idx <= top_k
+
+    transformed.sort(key=lambda row: (-_as_float(row.get("shadow_score")), str(row.get("market")), str(row.get("symbol"))))
+    for idx, row in enumerate(transformed, start=1):
+        row["shadow_rank"] = idx
+        row["shadow_portfolio_weight_hint_pct"] = 0.0
+    return transformed
+
+
 def _market_summary(rows: list[dict[str, Any]], proposal: dict[str, Any]) -> list[dict[str, Any]]:
     market_actions = _market_action_map(proposal)
     by_market: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -421,9 +498,13 @@ def build_shadow_run(
     proposal: dict[str, Any],
     source_run: dict[str, Any] | None,
     source_picks: list[dict[str, Any]],
+    weight_variant: str | None = None,
 ) -> dict[str, Any]:
     generated_at = datetime.now().isoformat(timespec="seconds")
-    run_id = f"shadow_{datetime.now().strftime('%Y%m%d_%H%M%S')}_tuning"
+    if weight_variant:
+        run_id = f"shadow_{datetime.now().strftime('%Y%m%d_%H%M%S')}_wv_{weight_variant}"
+    else:
+        run_id = f"shadow_{datetime.now().strftime('%Y%m%d_%H%M%S')}_tuning"
 
     if not source_run:
         return {
@@ -442,8 +523,14 @@ def build_shadow_run(
             "notes": ["No latest generated system_tech_universe production run was found."],
         }
 
-    shadow_picks = apply_shadow_transform(source_picks, proposal)
-    market_summary = _market_summary(shadow_picks, proposal)
+    if weight_variant:
+        weights = WEIGHT_VARIANTS[weight_variant]
+        shadow_picks = apply_weight_variant_transform(
+            source_picks, variant_name=weight_variant, weights=weights)
+    else:
+        weights = None
+        shadow_picks = apply_shadow_transform(source_picks, proposal)
+    market_summary = _market_summary(shadow_picks, proposal if not weight_variant else {})
     demoted_count = sum(1 for row in shadow_picks if row.get("demoted"))
     production_eligible_count = sum(1 for row in shadow_picks if row.get("production_portfolio_eligible"))
 
@@ -452,6 +539,8 @@ def build_shadow_run(
         "run_id": run_id,
         "generated_at": generated_at,
         "status": "SHADOW_ONLY",
+        "weight_variant": weight_variant,
+        "weight_override": weights,
         "safety_boundary": (
             "Read-only shadow artifact. It reads the latest production system_tech_universe run, "
             "but does not write recommendation_runs, recommendation_picks, portfolio_plans, "
@@ -462,7 +551,11 @@ def build_shadow_run(
             key: (value.isoformat() if hasattr(value, "isoformat") else value)
             for key, value in source_run.items()
         },
-        "proposed_strategy_version": proposal.get("proposed_strategy_version"),
+        # 变体 run 用独立版本号,避免 evaluate 的 dedupe 与主链 haircut run 互相顶掉
+        "proposed_strategy_version": (
+            f"weight_variant:{weight_variant}" if weight_variant
+            else proposal.get("proposed_strategy_version")
+        ),
         "proposal_generated_at": proposal.get("generated_at"),
         "source_proposal_status": proposal.get("status"),
         "summary": {
@@ -606,15 +699,34 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--horizon", default="1d")
     parser.add_argument("--top-n-report", type=int, default=20)
     parser.add_argument("--no-archive", action="store_true", help="Only write latest artifacts; do not archive PIT shadow run.")
+    parser.add_argument(
+        "--weight-variant",
+        choices=sorted(WEIGHT_VARIANTS),
+        help="纯权重重打分变体(§19.3 第二步);与 haircut proposal 互斥,归因干净。",
+    )
     args = parser.parse_args(argv)
+
+    output_json = Path(args.output_json)
+    output_md = Path(args.output_md)
+    if args.weight_variant:
+        # 变体有独立 latest 文件,不覆盖主链 shadow_tuning_run.json
+        if output_json == OUT_JSON:
+            output_json = OUT_JSON.with_name(f"shadow_tuning_run_wv_{args.weight_variant}.json")
+        if output_md == OUT_MD:
+            output_md = OUT_MD.with_name(f"shadow_tuning_run_wv_{args.weight_variant}.md")
 
     proposal = load_proposal(Path(args.proposal_json), strategy_version=args.strategy_version, horizon=args.horizon)
     source_run, source_picks = fetch_latest_production_run()
-    payload = build_shadow_run(proposal=proposal, source_run=source_run, source_picks=source_picks)
+    payload = build_shadow_run(
+        proposal=proposal,
+        source_run=source_run,
+        source_picks=source_picks,
+        weight_variant=args.weight_variant,
+    )
     write_outputs(
         payload,
-        output_json=Path(args.output_json),
-        output_md=Path(args.output_md),
+        output_json=output_json,
+        output_md=output_md,
         top_n=args.top_n_report,
         archive=not args.no_archive,
     )
@@ -624,8 +736,9 @@ def main(argv: list[str] | None = None) -> int:
                 "status": payload.get("status"),
                 "run_id": payload.get("run_id"),
                 "source_run_id": (payload.get("source_production_run") or {}).get("run_id"),
-                "output_json": str(Path(args.output_json)),
-                "output_md": str(Path(args.output_md)),
+                "weight_variant": args.weight_variant,
+                "output_json": str(output_json),
+                "output_md": str(output_md),
             },
             ensure_ascii=False,
         )

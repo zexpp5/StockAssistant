@@ -431,6 +431,75 @@ def activation_decision(
     }
 
 
+def build_weight_variant_summary(
+    variant_runs: list[dict[str, Any]],
+    outcomes: dict[tuple[str, str, str, str], dict[str, Any]],
+    *,
+    horizons: tuple[str, ...] = DEFAULT_HORIZONS,
+) -> list[dict[str, Any]]:
+    """权重变体(§19.3 第二步)前向评估：变体 top-10 组合 vs 同日生产 top-10。
+
+    与回放工具同口径(top-10 组合、收盘价 alpha)，但样本是变体上线后逐日
+    新攒的前瞻数据 —— 回放给方向，这里给「真金白银前向验证」。
+    只产出独立段落，不参与 activation_decision(红绿灯只看主链)。
+    """
+    by_name: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for run in variant_runs:
+        name = str(run.get("weight_variant") or "")
+        if name:
+            by_name[name].append(run)
+
+    summary: list[dict[str, Any]] = []
+    for name in sorted(by_name):
+        runs = _dedup_source_last_batch(dedupe_shadow_runs(by_name[name]))
+        records = _outcome_records(runs, outcomes, horizons)
+        # rank 是跨市场全局编号(CN 1-20/HK 21-40/US 41-60),基线 top-10 必须按市场内取
+        baseline_keys: set[tuple[str, str, str]] = set()
+        for run in runs:
+            picks_by_market: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for pick in run.get("picks") or []:
+                market = str(pick.get("market") or "")
+                if market and pick.get("original_rank") is not None:
+                    picks_by_market[market].append(pick)
+            for market, market_picks in picks_by_market.items():
+                ranked = sorted(market_picks, key=lambda p: int(p["original_rank"]))[:10]
+                for pick in ranked:
+                    baseline_keys.add((str(run.get("run_id")), market, str(pick.get("symbol"))))
+        weights = next(
+            (run.get("weight_override") for run in reversed(runs) if run.get("weight_override")),
+            None,
+        )
+        markets = sorted({row["market"] for row in records})
+        for market in markets:
+            for horizon in horizons:
+                rows = [r for r in records if r["market"] == market and r["horizon"] == horizon]
+                # 变体 run 里 production_portfolio_eligible = 变体市场内 top-10(见 apply_weight_variant_transform)
+                variant_stats = _stats(_records_for(rows, lambda r: r["production_portfolio_eligible"]))
+                baseline_stats = _stats(_records_for(
+                    rows,
+                    lambda r: (str(r["shadow_run_id"]), r["market"], r["symbol"]) in baseline_keys))
+                alpha_delta = None
+                if variant_stats["avg_alpha_pct"] is not None and baseline_stats["avg_alpha_pct"] is not None:
+                    alpha_delta = round(
+                        variant_stats["avg_alpha_pct"] - baseline_stats["avg_alpha_pct"], 4)
+                summary.append({
+                    "variant": name,
+                    "weights": weights,
+                    "market": market,
+                    "label": MARKET_LABELS.get(market, market),
+                    "horizon": horizon,
+                    "shadow_run_count": len(runs),
+                    "variant_top10_n": variant_stats["n"],
+                    "variant_top10_avg_alpha_pct": variant_stats["avg_alpha_pct"],
+                    "variant_top10_win_rate": variant_stats["win_rate"],
+                    "prod_top10_n": baseline_stats["n"],
+                    "prod_top10_avg_alpha_pct": baseline_stats["avg_alpha_pct"],
+                    "prod_top10_win_rate": baseline_stats["win_rate"],
+                    "variant_vs_prod_alpha_delta_pct": alpha_delta,
+                })
+    return summary
+
+
 def build_evidence_payload(
     *,
     runs: list[dict[str, Any]],
@@ -442,6 +511,12 @@ def build_evidence_payload(
     min_hit_rate: float = 45.0,
     primary_horizon: str = "1d",
 ) -> dict[str, Any]:
+    # 权重变体 run 走独立评估段,不进 activation_decision/market_horizon_summary
+    # (红绿灯口径不变;变体证据只用于决定哪个新公式值得升级提案)
+    variant_runs = [run for run in runs if run.get("weight_variant")]
+    runs = [run for run in runs if not run.get("weight_variant")]
+    weight_variant_summary = build_weight_variant_summary(
+        variant_runs, outcomes, horizons=horizons)
     deduped = dedupe_shadow_runs(runs)
     market_summary = build_market_horizon_summary(deduped, outcomes, horizons=horizons)
     decision = activation_decision(
@@ -471,6 +546,8 @@ def build_evidence_payload(
         "latest_proposed_strategy_version": latest.get("proposed_strategy_version") if latest else None,
         "activation_decision": decision,
         "market_horizon_summary": market_summary,
+        "weight_variant_run_count": len(variant_runs),
+        "weight_variant_summary": weight_variant_summary,
     }
 
 
@@ -523,6 +600,24 @@ def to_markdown(payload: dict[str, Any]) -> str:
             f"{row.get('demoted_avg_alpha_pct')} | {row.get('avoided_loss_alpha_pct')} | "
             f"{row.get('production_portfolio_eligible_count')} |"
         )
+
+    variant_rows = payload.get("weight_variant_summary") or []
+    if variant_rows:
+        lines.extend([
+            "",
+            "## Weight Variant Evidence（§19.3 第二步 · 前向 top-10 组合对比，不参与红绿灯）",
+            "",
+            "| Variant | Market | Horizon | Runs | Variant n | Variant Alpha | Variant Win | Prod n | Prod Alpha | Prod Win | Delta |",
+            "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ])
+        for row in variant_rows:
+            lines.append(
+                f"| {row.get('variant')} | {row.get('label')} | {row.get('horizon')} | "
+                f"{row.get('shadow_run_count')} | {row.get('variant_top10_n')} | "
+                f"{row.get('variant_top10_avg_alpha_pct')} | {row.get('variant_top10_win_rate')} | "
+                f"{row.get('prod_top10_n')} | {row.get('prod_top10_avg_alpha_pct')} | "
+                f"{row.get('prod_top10_win_rate')} | {row.get('variant_vs_prod_alpha_delta_pct')} |"
+            )
     return "\n".join(lines) + "\n"
 
 
