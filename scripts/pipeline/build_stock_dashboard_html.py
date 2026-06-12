@@ -2362,6 +2362,42 @@ function openDiscoveryHistoryFromRadar(event) {
     </p>
   </div>
 
+  <!-- 🚦 瓶颈信号红绿灯（人工季度复查 · 数据走 /api/bottleneck-reviews，判定后端算好前端只渲染） -->
+  <div class="bg-white border border-slate-200 rounded-xl p-5 mb-5">
+    <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
+      <h3 class="font-bold text-slate-900">🚦 瓶颈信号红绿灯
+        <span class="text-xs font-normal text-slate-400 ml-1">AI 缺货叙事的 7 个领先信号 · 每季财报后人工回填</span>
+      </h3>
+      <button onclick="loadBottleneckReviews()" class="text-xs px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-600">🔄 刷新</button>
+    </div>
+    <div id="bottleneck-verdict-bar" class="flex flex-wrap gap-2 my-3"></div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm border border-slate-200 rounded-lg overflow-hidden">
+        <thead class="bg-slate-100 text-[11px] text-slate-600">
+          <tr>
+            <th class="px-2 py-2 text-left">信号</th>
+            <th class="px-2 py-2 text-left">核心问题</th>
+            <th class="px-2 py-2 text-center">最新结论</th>
+            <th class="px-2 py-2 text-center" title="证据档位：A=财报原文/公司一手披露 B=管理层措辞/电话会 C=媒体或研报转述">证据</th>
+            <th class="px-2 py-2 text-center" title="近 4 季结论，左新右旧">近4季</th>
+            <th class="px-2 py-2 text-left">备注 / 出处</th>
+            <th class="px-2 py-2 text-center">回填</th>
+          </tr>
+        </thead>
+        <tbody id="bottleneck-reviews-body">
+          <tr><td colspan="7" class="px-3 py-4 text-center text-slate-400 text-xs">读取中…（需要本机 API 运行）</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div id="bottleneck-review-form-wrap" class="hidden mt-3 border-t border-slate-200 pt-3"></div>
+    <div class="mt-3 text-[11px] text-slate-400 leading-relaxed">
+      判定规则（后端单一来源）：瓶颈组 GEV/VRT/MU 任一转弱 = 停止给瓶颈类个股加仓，三个同季转弱 = 缺货叙事退潮；
+      capex 组 MSFT/GOOGL/AMZN/META 一家下调 = 记一笔先不动作，两家以上同季下调 = capex 消化期开始。
+      结论由你看完财报回填（财报日飞书提醒卡 + 次日 AI 体检卡作参考），不是系统自动判断 ·
+      超过 150 天未更新的记录按过期处理 · 仅供研究参考，不构成买卖指令
+    </div>
+  </div>
+
   <!-- 教学卡：怎么读这一页 -->
   <div class="bg-amber-50 border border-amber-200 rounded-xl p-5 mb-5">
     <h3 class="font-bold text-amber-900 mb-3">📖 怎么读这一页（新人必读）</h3>
@@ -6340,6 +6376,144 @@ function _catalystSparkline(t1, t5, t20) {
   </svg>`;
 }
 
+// ============ 🚦 瓶颈信号红绿灯（/api/bottleneck-reviews · 人工季度回填,判定后端算） ============
+let _bnPayload = null;
+
+async function loadBottleneckReviews() {
+  const body = document.getElementById("bottleneck-reviews-body");
+  if (!body) return;
+  try {
+    const r = await fetch(WATCHLIST_API_BASE + "/api/bottleneck-reviews");
+    const p = await r.json();
+    if (!p.available) throw new Error(p.reason || "unavailable");
+    _bnPayload = p;
+    renderBottleneckReviews(p);
+  } catch (e) {
+    body.innerHTML = `<tr><td colspan="7" class="px-3 py-4 text-center text-amber-600 text-xs">` +
+      `读取失败（${_esc(String((e && e.message) || e))}）——红绿灯需要本机 API（127.0.0.1:8765）在运行</td></tr>`;
+  }
+}
+
+function _bnLight(c) { return ({"转强": "🟢", "持平": "⚪", "转弱": "🔴"})[c] || "◌"; }
+
+const _BN_LEVEL_CHIP = {
+  ok:      "bg-emerald-50 text-emerald-700 border-emerald-200",
+  caution: "bg-amber-50 text-amber-700 border-amber-200",
+  alert:   "bg-rose-50 text-rose-700 border-rose-200",
+  pending: "bg-slate-50 text-slate-500 border-slate-200",
+};
+
+function renderBottleneckReviews(p) {
+  const bar = document.getElementById("bottleneck-verdict-bar");
+  const body = document.getElementById("bottleneck-reviews-body");
+  if (!bar || !body) return;
+
+  bar.innerHTML = p.groups.map(g => {
+    const v = g.verdict;
+    const cls = _BN_LEVEL_CHIP[v.level] || _BN_LEVEL_CHIP.pending;
+    return `<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-xs ${cls}">` +
+      `<strong>${_esc(g.title.replace(/复查提醒|复查/g, "").trim())}</strong>` +
+      `${_esc(v.text)}（已复查 ${v.n_reviewed}/${v.n_total}）</span>`;
+  }).join("");
+
+  const rows = [];
+  for (const g of p.groups) {
+    rows.push(`<tr class="bg-slate-50"><td colspan="7" class="px-2 py-1.5 text-[11px] font-bold text-slate-500">${_esc(g.title)}</td></tr>`);
+    for (const s of g.signals) {
+      const latest = s.latest;
+      let concl = `<span class="text-slate-400 text-xs">未复查</span>`;
+      let tier = "—", noteCell = `<span class="text-slate-300 text-xs">—</span>`;
+      if (latest) {
+        const staleTag = s.stale ? ` <span class="text-[10px] text-slate-400">(已过期)</span>` : "";
+        concl = `${_bnLight(latest.conclusion)} ${_esc(latest.conclusion)} <span class="text-[10px] text-slate-400">@${_esc(latest.quarter)}</span>${staleTag}`;
+        tier = latest.evidence_tier ? _esc(latest.evidence_tier) : "—";
+        const note = latest.note ? _esc(latest.note) : "";
+        const link = latest.url ? ` <a href="${_esc(latest.url)}" target="_blank" class="text-violet-500 hover:underline">↗出处</a>` : "";
+        noteCell = (note || link) ? `<span class="text-xs text-slate-600">${note}${link}</span>` : `<span class="text-slate-300 text-xs">—</span>`;
+      }
+      const hist = (s.history || []).map(h => `<span title="${_esc(h.quarter)}·${_esc(h.conclusion)}">${_bnLight(h.conclusion)}</span>`).join("") || `<span class="text-slate-300">—</span>`;
+      rows.push(`<tr class="border-t border-slate-100">
+        <td class="px-2 py-2 whitespace-nowrap"><strong>${_esc(s.ticker)}</strong> <span class="text-[11px] text-slate-500">${_esc(s.name)}</span></td>
+        <td class="px-2 py-2 text-xs text-slate-600">${_esc(s.signal)}</td>
+        <td class="px-2 py-2 text-center whitespace-nowrap">${concl}</td>
+        <td class="px-2 py-2 text-center text-xs text-slate-500" title="A=财报原文 B=管理层措辞 C=媒体转述">${tier}</td>
+        <td class="px-2 py-2 text-center tracking-widest">${hist}</td>
+        <td class="px-2 py-2">${noteCell}</td>
+        <td class="px-2 py-2 text-center"><button onclick="openBottleneckForm('${_esc(s.ticker)}')" class="text-xs px-2 py-0.5 rounded bg-violet-50 hover:bg-violet-100 text-violet-600">✏️ 回填</button></td>
+      </tr>`);
+    }
+  }
+  body.innerHTML = rows.join("");
+}
+
+function _bnQuarterOptions(cur) {
+  // cur="2026Q2" → 本季 + 往前 3 季（财报滞后,常回填的是上一季）
+  let y = parseInt(cur.slice(0, 4), 10), q = parseInt(cur.slice(5), 10);
+  const out = [];
+  for (let i = 0; i < 4; i++) { out.push(`${y}Q${q}`); q--; if (q === 0) { q = 4; y--; } }
+  return out;
+}
+
+function openBottleneckForm(ticker) {
+  const wrap = document.getElementById("bottleneck-review-form-wrap");
+  if (!wrap || !_bnPayload) return;
+  const sig = _bnPayload.groups.flatMap(g => g.signals).find(s => s.ticker === ticker);
+  if (!sig) return;
+  const quarters = _bnQuarterOptions(_bnPayload.current_quarter);
+  // 默认选上一季：财报披露的是刚结束的那个季度
+  const checks = (sig.checks || []).map((c, i) => `<div class="text-[11px] text-slate-500">${i + 1}. ${_esc(c)}</div>`).join("");
+  wrap.classList.remove("hidden");
+  wrap.innerHTML = `
+    <div class="text-sm font-bold text-slate-800 mb-1">✏️ 回填：${_esc(sig.ticker)} ${_esc(sig.name)} — ${_esc(sig.signal)}</div>
+    <div class="mb-2">${checks}</div>
+    <div class="flex flex-wrap items-center gap-2 text-xs">
+      <select id="bn-form-quarter" class="border border-slate-300 rounded px-2 py-1">
+        ${quarters.map((q, i) => `<option value="${q}" ${i === 1 ? "selected" : ""}>${q}</option>`).join("")}
+      </select>
+      <select id="bn-form-conclusion" class="border border-slate-300 rounded px-2 py-1">
+        <option value="转强">🟢 转强</option><option value="持平" selected>⚪ 持平</option><option value="转弱">🔴 转弱</option>
+      </select>
+      <select id="bn-form-tier" class="border border-slate-300 rounded px-2 py-1" title="证据档位">
+        <option value="">证据档位（可不填）</option>
+        <option value="A">A · 财报原文/一手披露</option>
+        <option value="B">B · 管理层措辞/电话会</option>
+        <option value="C">C · 媒体/研报转述</option>
+      </select>
+      <input id="bn-form-url" type="text" placeholder="出处链接（可不填）" class="border border-slate-300 rounded px-2 py-1 w-52">
+      <input id="bn-form-note" type="text" placeholder="一句话备注，如 book-to-bill 1.15" class="border border-slate-300 rounded px-2 py-1 flex-1 min-w-40">
+      <button onclick="submitBottleneckReview('${_esc(sig.ticker)}')" class="px-3 py-1 rounded bg-violet-600 hover:bg-violet-700 text-white">提交</button>
+      <button onclick="document.getElementById('bottleneck-review-form-wrap').classList.add('hidden')" class="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-500">取消</button>
+      <span id="bn-form-msg" class="text-slate-400"></span>
+    </div>`;
+  wrap.scrollIntoView({behavior: "smooth", block: "nearest"});
+}
+
+async function submitBottleneckReview(ticker) {
+  const msg = document.getElementById("bn-form-msg");
+  msg.textContent = "提交中…";
+  try {
+    const r = await fetch(WATCHLIST_API_BASE + "/api/bottleneck-review", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        ticker,
+        quarter: document.getElementById("bn-form-quarter").value,
+        conclusion: document.getElementById("bn-form-conclusion").value,
+        evidence_tier: document.getElementById("bn-form-tier").value,
+        url: document.getElementById("bn-form-url").value,
+        note: document.getElementById("bn-form-note").value,
+      }),
+    });
+    const res = await r.json();
+    if (!r.ok) throw new Error(res.detail || r.status);
+    _bnPayload = res.payload;
+    renderBottleneckReviews(res.payload);
+    document.getElementById("bottleneck-review-form-wrap").classList.add("hidden");
+  } catch (e) {
+    msg.textContent = `❌ ${String((e && e.message) || e)}`;
+  }
+}
+
 function renderCatalystValidation() {
   const meta = document.getElementById("catalyst-validation-meta");
   const body = document.getElementById("catalyst-validation-body");
@@ -6476,7 +6650,7 @@ function switchTab(tab) {
   if (tab === "professional") setTimeout(renderProfessional, 50);
   if (tab === "db-explorer") setTimeout(loadDbExplorer, 50);
   if (tab === "chain") setTimeout(loadChainOverview, 50);
-  if (tab === "catalyst-validation") setTimeout(renderCatalystValidation, 50);
+  if (tab === "catalyst-validation") setTimeout(() => { renderCatalystValidation(); loadBottleneckReviews(); }, 50);
   if (tab === "ipo-junior") setTimeout(renderJuniorRadar, 50);
   if (tab === "init-config") switchInitSub(_initSubCurrent);
   if (tab === "watchlist-hub") switchHubSub(_hubSubCurrent);
