@@ -74,26 +74,53 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 
 def _latest_prices(conn: duckdb.DuckDBPyConnection) -> dict[tuple[str, str], dict[str, Any]]:
+    """每只取最新行；动量/估值字段为空时回退最近一条带动量的行（限 7 天内）。
+
+    2026-06-12 修复：早班批次只有隔日动量（完整因子行晚间才落库），最新行
+    one_month/one_week/one_year 常为 NULL，曾把全部候选的价格分打到 4/35、
+    early_or_watch 清零、页面整段消失。回退用的是历史行，PIT 安全。
+    """
     rows = conn.execute(
         """
-        SELECT pd.market, pd.symbol, pd.trade_date, pd.close, pd.currency,
-               pd.market_cap, pd.forward_pe, pd.peg_ratio,
-               pd.one_week_pct, pd.one_month_pct, pd.one_year_pct, pd.ytd_pct
-        FROM price_daily pd
-        JOIN (
+        WITH latest AS (
             SELECT market, symbol, MAX(trade_date) AS trade_date
             FROM price_daily
             GROUP BY market, symbol
-        ) latest
+        ),
+        latest_mom AS (
+            SELECT market, symbol, MAX(trade_date) AS trade_date
+            FROM price_daily
+            WHERE one_month_pct IS NOT NULL
+            GROUP BY market, symbol
+        )
+        SELECT pd.market, pd.symbol, pd.trade_date, pd.close, pd.currency,
+               COALESCE(pd.market_cap,  pm.market_cap)  AS market_cap,
+               COALESCE(pd.forward_pe,  pm.forward_pe)  AS forward_pe,
+               COALESCE(pd.peg_ratio,   pm.peg_ratio)   AS peg_ratio,
+               COALESCE(pd.one_week_pct,  pm.one_week_pct)  AS one_week_pct,
+               COALESCE(pd.one_month_pct, pm.one_month_pct) AS one_month_pct,
+               COALESCE(pd.one_year_pct,  pm.one_year_pct)  AS one_year_pct,
+               COALESCE(pd.ytd_pct,       pm.ytd_pct)       AS ytd_pct,
+               CASE WHEN pd.one_month_pct IS NULL AND pm.one_month_pct IS NOT NULL
+                    THEN CAST(pm.trade_date AS VARCHAR) END AS momentum_as_of
+        FROM price_daily pd
+        JOIN latest
           ON latest.market = pd.market
          AND latest.symbol = pd.symbol
          AND latest.trade_date = pd.trade_date
+        LEFT JOIN latest_mom lm
+          ON lm.market = pd.market AND lm.symbol = pd.symbol
+         AND lm.trade_date >= pd.trade_date - INTERVAL 7 DAY
+        LEFT JOIN price_daily pm
+          ON pm.market = lm.market AND pm.symbol = lm.symbol
+         AND pm.trade_date = lm.trade_date
         """
     ).fetchall()
     cols = [
         "market", "symbol", "trade_date", "close", "currency",
         "market_cap", "forward_pe", "peg_ratio",
         "one_week_pct", "one_month_pct", "one_year_pct", "ytd_pct",
+        "momentum_as_of",
     ]
     return {(r[0], r[1]): dict(zip(cols, r)) for r in rows}
 
