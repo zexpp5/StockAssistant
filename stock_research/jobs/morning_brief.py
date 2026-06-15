@@ -1773,12 +1773,44 @@ def section_dropouts() -> str:
     return "\n".join(parts)
 
 
+def _compute_us_buy_zones(entries: list[dict]) -> dict:
+    """给一批美股 entry 算可买入区间 {TICKER: zone}（开一条只读连接复用）。
+
+    任何异常都吞掉返回 {} —— 可买区间是增强展示，绝不能拖垮整份早报。
+    """
+    try:
+        from stock_research.core import buy_zone as _bz
+        tickers = [e.get("ticker") for e in entries
+                   if e.get("ticker") and not _is_a_share(e.get("ticker", ""))]
+        if not tickers:
+            return {}
+        return _bz.compute_buy_zones(tickers)
+    except Exception:
+        return {}
+
+
+def _buy_zone_line(ticker: str, buy_zones: dict | None) -> str | None:
+    """从预算好的 buy_zones map 取一行可买区间文案（buy_zone.format_line）。"""
+    if not buy_zones:
+        return None
+    zone = buy_zones.get((ticker or "").upper())
+    if not zone:
+        return None
+    try:
+        from stock_research.core import buy_zone as _bz
+        return _bz.format_line(zone)
+    except Exception:
+        return None
+
+
 def _humanize_picks(plan: list[dict], a_share: bool, history: dict | None = None,
-                    factor_scores: dict | None = None, compact: bool = False) -> list[str]:
+                    factor_scores: dict | None = None, compact: bool = False,
+                    buy_zones: dict | None = None) -> list[str]:
     """把 plan_v5 entry 排成一句话/只 + 推荐理由行（扁平 list，每只股 1-4 行）。
 
     compact=True：只出主行 + 行内 🆕/📈 异动标（🆕 追加一行催化保证 why-now），
     供「其余 N 只速览」用，完整理由看 dashboard。
+    buy_zones：{TICKER: zone}（来自 buy_zone.compute_buy_zones），非 compact 美股才渲染可买区间。
     """
     factors_map, signals_map = _factor_scores_index(factor_scores)
     out = []
@@ -1812,15 +1844,20 @@ def _humanize_picks(plan: list[dict], a_share: bool, history: dict | None = None
                 out.append(qtag)
             pros, cons = _build_us_reasons(ticker, factors_map, signals_map)
             out.extend(_format_reason_lines(pros, cons))
+            if buy_zones:
+                bz_line = _buy_zone_line(ticker, buy_zones)
+                if bz_line:
+                    out.append(bz_line)
     return out
 
 
 def _humanize_picks_grouped(plan: list[dict], a_share: bool, history: dict | None = None,
                             factor_scores: dict | None = None,
-                            compact: bool = False) -> list[str]:
+                            compact: bool = False, buy_zones: dict | None = None) -> list[str]:
     """每只股聚合成 1 个多行 markdown 块（含 ticker 主行 + 缩进 reasons）。供飞书卡片 2 列拆分用。
 
     compact=True 同 _humanize_picks：每块只剩主行（🆕 多一行催化）。
+    buy_zones：{TICKER: zone}，非 compact 美股块追加一行可买入区间。
     """
     factors_map, signals_map = _factor_scores_index(factor_scores)
     out = []
@@ -1855,6 +1892,10 @@ def _humanize_picks_grouped(plan: list[dict], a_share: bool, history: dict | Non
                 block_lines.append(qtag)
             pros, cons = _build_us_reasons(ticker, factors_map, signals_map)
             block_lines.extend(_format_reason_lines(pros, cons))
+            if buy_zones:
+                bz_line = _buy_zone_line(ticker, buy_zones)
+                if bz_line:
+                    block_lines.append(bz_line)
         out.append("\n".join(block_lines))
     return out
 
@@ -1957,15 +1998,17 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
                 star = _star_weight_tickers(us_entries)
                 detail_entries = [e for e in us_entries if (e.get("ticker") or "").upper() in star]
                 rest_entries = [e for e in us_entries if (e.get("ticker") or "").upper() not in star]
+                bz = _compute_us_buy_zones(detail_entries)
                 lines.append(f"⭐ **重点 {len(detail_entries)} 只（按仓位）**")
                 lines.extend(_humanize_picks(detail_entries, a_share=False, history=history,
-                                             factor_scores=factor_scores))
+                                             factor_scores=factor_scores, buy_zones=bz))
                 lines.append(f"**其余 {len(rest_entries)} 只 · 一行速览**（完整理由见 dashboard）")
                 lines.extend(_humanize_picks(rest_entries, a_share=False, history=history,
                                              factor_scores=factor_scores, compact=True))
             else:
+                bz = _compute_us_buy_zones(us_entries)
                 lines.extend(_humanize_picks(us_entries, a_share=False, history=history,
-                                             factor_scores=factor_scores))
+                                             factor_scores=factor_scores, buy_zones=bz))
         else:
             lines.append("**🇺🇸 美股** — _plan_v5 为空_")
 
@@ -3010,7 +3053,8 @@ def _build_card_payload() -> dict:
             else:
                 us_detail, us_rest = us_entries, []
             us_blocks = _humanize_picks_grouped(us_detail, a_share=False, history=history,
-                                                factor_scores=factor_scores)
+                                                factor_scores=factor_scores,
+                                                buy_zones=_compute_us_buy_zones(us_detail))
             ts_us = _fmt_ts((plan or {}).get("generated_at"))
             weight_src = _plan_weight_source(plan)
             section2.append({"tag": "div", "text": {"tag": "lark_md",
