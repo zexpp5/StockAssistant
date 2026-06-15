@@ -1257,6 +1257,19 @@ _sys.exit(rc)
             bypass_reason=str(item.get("bypass_reason") or ""),
         )
 
+    @app.get("/api/short-crowding/{symbol}")
+    def get_short_crowding(symbol: str) -> dict[str, Any]:
+        """空头拥挤度提示灯（display-only · 绝不进打分）。单只查询，缓存优先（20h TTL），
+        只对美股打网络；港股/A 股返回 not_applicable。供个股详情页(AI 推荐/买前研究都跳这里)懒加载。"""
+        try:
+            import short_interest
+            out = short_interest.resolve_short_crowding([symbol])
+            return out.get(symbol.upper()) or out.get(symbol) or {
+                "level": "未知", "note": "无数据", "reasons": [],
+            }
+        except Exception as e:
+            return {"level": "未知", "note": f"短仓数据获取失败：{str(e)[:80]}", "reasons": []}
+
     @app.get("/api/picks/latest-summary")
     def picks_latest_summary() -> dict[str, Any]:
         """V2: 每只标的取最新 recommendation_runs 里的 pick。

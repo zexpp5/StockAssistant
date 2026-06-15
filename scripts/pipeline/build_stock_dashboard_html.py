@@ -6158,7 +6158,54 @@ function renderStockDetail(data) {
       <p class="text-[10px] text-slate-400 mt-2">⚠️ YoY 需要 4 季前的同期数据，当前 yfinance 只给 5 季历史，所以多数老季的 YoY 暂为「—」；DB 每周累积后会自动补齐。QoQ（环比）对季节性行业仅供参考。前两列「季度末 + 分析」固定，其余列可横向滚动查看。</p>
     </div>`;
 
-  content.innerHTML = _renderStockDetailAdvisories() + wlMetaCard + earningsCard + pricesCard + picksCard + reviewsCard + discoveryCard;
+  // 空头拥挤度提示灯(display-only,不进打分):AI 推荐 / 买前研究 都跳到本详情页,故装一次覆盖两页。
+  // 懒加载:渲染占位 → 拉 /api/short-crowding/{code} 回填。单只、缓存优先,不碰早班快线。
+  const detailCode = (document.getElementById("stock-detail-code") || {}).textContent
+    || (data.watchlist && data.watchlist.code) || "";
+  const shortCrowdingCard = `
+    <div class="bg-white border border-slate-200 rounded-lg p-4">
+      <h3 class="text-base font-bold text-slate-800 mb-1">🩳 空头拥挤度 <span class="text-xs font-normal text-slate-400">提示灯 · 只看有没有额外空头风险，不回答该不该买</span></h3>
+      <div id="stock-detail-shortcrowd" class="mt-2"><span class="text-sm text-slate-400">加载中…</span></div>
+      <p class="text-[10px] text-slate-400 mt-2">数据＝FINRA 双月短仓披露（约两周滞后，抓不住盘中突发逼空）。低/中/高看空头占流通股+回补天数，环比看在增还是减。借券费/实时短仓需付费源，本灯不含；港股/A股无此披露＝不适用。<strong>此灯纯展示，不进 AI 打分。</strong></p>
+    </div>`;
+
+  content.innerHTML = _renderStockDetailAdvisories() + shortCrowdingCard + wlMetaCard + earningsCard + pricesCard + picksCard + reviewsCard + discoveryCard;
+  _loadShortCrowdingInto(detailCode, "stock-detail-shortcrowd");
+}
+
+function _shortCrowdingDetailHtml(sc) {
+  if (!sc) return '<span class="text-sm text-slate-400">短仓数据暂时获取失败</span>';
+  const lvl = sc.level || "未知";
+  if (lvl === "不适用") return `<div class="text-sm text-slate-500">不适用 · ${_esc(sc.note || "非美股，无 FINRA 短仓披露")}</div>`;
+  if (lvl === "未知") return `<div class="text-sm text-slate-400">${_esc(sc.note || "暂无数据")}</div>`;
+  const palette = {
+    "低": ["bg-emerald-50", "text-emerald-700", "border-emerald-200"],
+    "中": ["bg-amber-50", "text-amber-700", "border-amber-200"],
+    "高": ["bg-rose-50", "text-rose-700", "border-rose-200"],
+  }[lvl] || ["bg-slate-50", "text-slate-600", "border-slate-200"];
+  const spf = sc.short_pct_float != null ? `空头占流通股 <b class="font-mono">${Number(sc.short_pct_float).toFixed(1)}%</b>` : "";
+  const dtc = sc.days_to_cover != null ? `回补天数 <b class="font-mono">${Number(sc.days_to_cover).toFixed(1)}</b>` : "";
+  const mom = sc.mom_change_pct != null
+    ? `环比 <b class="font-mono ${Number(sc.mom_change_pct) > 15 ? "text-rose-600" : (Number(sc.mom_change_pct) < -15 ? "text-emerald-600" : "")}">${Number(sc.mom_change_pct) > 0 ? "+" : ""}${Number(sc.mom_change_pct).toFixed(0)}%</b>`
+    : "";
+  const stats = [spf, dtc, mom].filter(Boolean).map(s => `<span>${s}</span>`).join("");
+  return `
+    <div class="flex items-center gap-3 flex-wrap">
+      <span class="inline-flex px-2.5 py-1 rounded-lg border text-sm font-bold ${palette.join(" ")}">${lvl}</span>
+      <span class="text-sm text-slate-700">${sc.note ? _esc(sc.note) : ""}</span>
+    </div>
+    <div class="mt-2 text-xs text-slate-600 flex flex-wrap gap-x-4 gap-y-1">${stats}</div>`;
+}
+
+async function _loadShortCrowdingInto(code, slotId) {
+  const slot = document.getElementById(slotId);
+  if (!slot || !code) { if (slot) slot.innerHTML = '<span class="text-sm text-slate-400">—</span>'; return; }
+  try {
+    const sc = await fetch(WATCHLIST_API_BASE + "/api/short-crowding/" + encodeURIComponent(code)).then(r => r.ok ? r.json() : null);
+    slot.innerHTML = _shortCrowdingDetailHtml(sc);
+  } catch (e) {
+    slot.innerHTML = '<span class="text-sm text-slate-400">短仓数据暂时获取失败</span>';
+  }
 }
 
 function _yahooLink(code, market) {
