@@ -35,10 +35,33 @@ import pandas as pd  # noqa: E402
 
 DATA_DIR = _REPO
 INFO_CACHE_FILE = os.path.join(DATA_DIR, "data", "latest", "yf_info_cache.json")
+YFINANCE_CACHE_BASE_DIR = os.path.join(DATA_DIR, "data", "cache", "yfinance")
+YFINANCE_CACHE_DIR = os.path.join(YFINANCE_CACHE_BASE_DIR, f"pid-{os.getpid()}")
 DEFAULT_INFO_TTL_HOURS = 12
 SOURCE_HEALTH_FILE = os.path.join(DATA_DIR, "data", "latest", "source_health.json")
 # 2026-05-20：快照不再写根目录，统一进 data/snapshots/prices/
 PRICES_SNAPSHOT_DIR = os.path.join(DATA_DIR, "data", "snapshots", "prices")
+
+
+def _configure_yfinance_cache() -> None:
+    """Keep yfinance's SQLite cache inside a per-process repo folder.
+
+    In app/background jobs the default user cache path can be missing or
+    sandbox-unwritable.  When that happens yfinance surfaces a misleading
+    "OperationalError: unable to open database file" for many tickers, making
+    the data-repair button look like it did nothing.  yfinance also stores
+    cookies/timezones in SQLite, so concurrent refreshes must not share one DB.
+    """
+    try:
+        os.makedirs(YFINANCE_CACHE_DIR, exist_ok=True)
+        setter = getattr(yf, "set_tz_cache_location", None)
+        if callable(setter):
+            setter(YFINANCE_CACHE_DIR)
+    except Exception as e:
+        print(f"  ⚠️ yfinance cache location setup failed: {e}")
+
+
+_configure_yfinance_cache()
 
 
 def _tables_in_db(db_path: str) -> set[str]:
@@ -413,15 +436,37 @@ def _cache_entry_fresh(entry: dict | None, ttl_hours: float) -> bool:
     return datetime.now() - ts <= timedelta(hours=ttl_hours)
 
 
+def _fetch_fmp_quote_fields(yf_ticker: str) -> dict:
+    fields: dict = {}
+    if _is_us_ticker(yf_ticker):
+        try:
+            q = fmp_client.fetch_quote(yf_ticker, force_refresh=True)
+            if q:
+                fields.update({
+                    "price": q.get("price"),
+                    "prev_close": q.get("previous_close"),
+                    "currency": "USD",
+                    "market_cap": q.get("market_cap"),
+                    "fmp_quote_source": q.get("source") or "FMP/stable/quote",
+                    "fetched_at": datetime.now().isoformat(timespec="seconds"),
+                })
+        except Exception as e:
+            fields["fmp_quote_error"] = str(e)[:200]
+    return fields
+
+
 def _fetch_info_fields(yf_ticker: str) -> dict:
     """拉估值/基本面快照；这些字段变化慢，允许用本地 TTL cache。"""
+    # 美股 quote 先走 FMP：价格/前收/市值稳定、速度快，不依赖 yfinance 的 SQLite cache。
+    fields: dict = _fetch_fmp_quote_fields(yf_ticker)
+
     try:
         t = yf.Ticker(yf_ticker)
         info = t.info
-        if not info:
+        if not info and not fields:
             return {"error": "empty info"}
 
-        fields = {
+        yf_fields = {
             "price": info.get("currentPrice") or info.get("regularMarketPrice"),
             "prev_close": info.get("previousClose"),
             "currency": info.get("currency", "USD"),
@@ -433,9 +478,20 @@ def _fetch_info_fields(yf_ticker: str) -> dict:
             "revenue_growth": info.get("revenueGrowth"),
             "fetched_at": datetime.now().isoformat(timespec="seconds"),
         }
+        # PE/PEG 这类慢字段优先吃 yfinance；FMP quote 已拿到的快字段作为兜底。
+        for key, value in yf_fields.items():
+            if value is not None:
+                fields[key] = value
     except Exception as e:
+        if fields:
+            fields["yf_info_error"] = str(e)[:200]
+            fields.setdefault("fetched_at", datetime.now().isoformat(timespec="seconds"))
+            return fields
         return {"error": str(e), "fetched_at": datetime.now().isoformat(timespec="seconds")}
 
+    if not fields:
+        return {"error": "empty info", "fetched_at": datetime.now().isoformat(timespec="seconds")}
+    fields.setdefault("fetched_at", datetime.now().isoformat(timespec="seconds"))
     return fields
 
 
@@ -469,8 +525,11 @@ def _fmp_history_df(yf_ticker: str) -> "pd.DataFrame | None":
 
 # yfinance 历史下载并发/重试（2026-06-11）：抓 Yahoo 公开接口、瞬时高并发易被反爬限流
 # （静默返回空）。降并发把请求摊平、对返回空的票退避后只重试它们，比一股脑全并发更稳。
-# 可用环境变量调：STOCK_ASSISTANT_YF_WORKERS / _YF_RETRIES / _YF_RETRY_WAIT。
-_YF_WORKERS = int(os.getenv("STOCK_ASSISTANT_YF_WORKERS", "4"))
+# 可用环境变量调：STOCK_ASSISTANT_YF_WORKERS / _YF_BATCH_SIZE / _YF_RETRIES / _YF_RETRY_WAIT。
+# yfinance 1.3.0 内部会用 SQLite 缓存 cookie/timezone。高并发时容易把缓存库锁死，
+# 导致整批报 "unable to open database file"。默认改为稳态串行；想追速度再显式调大。
+_YF_WORKERS = int(os.getenv("STOCK_ASSISTANT_YF_WORKERS", "1"))
+_YF_BATCH_SIZE = int(os.getenv("STOCK_ASSISTANT_YF_BATCH_SIZE", "40"))
 _YF_MAX_RETRIES = int(os.getenv("STOCK_ASSISTANT_YF_RETRIES", "2"))
 _YF_RETRY_WAIT = float(os.getenv("STOCK_ASSISTANT_YF_RETRY_WAIT", "8"))
 # 涓流模式(2026-06-11 用户提议"一个一个查"):批量+重试后仍漏的票,逐只串行慢拉,
@@ -481,13 +540,14 @@ _YF_SERIAL_WAIT = float(os.getenv("STOCK_ASSISTANT_YF_SERIAL_WAIT", "1.5"))
 def _yf_download_once(yf_tickers: list[str], period: str, workers: int) -> dict[str, pd.DataFrame]:
     """一次 yfinance 批量下载（限并发 workers），拆成 {ticker: DataFrame}。"""
     unique = sorted(set(yf_tickers))
+    thread_setting = False if workers <= 1 else workers
     try:
         df = yf.download(
             " ".join(unique),
             period=period,
             progress=False,
             group_by="ticker",
-            threads=workers,        # 限并发：摊平瞬时请求，降低 Yahoo 反爬限流概率
+            threads=thread_setting,  # workers=1 时禁用内部线程，避免 SQLite cache 锁库
             auto_adjust=False,
         )
     except Exception as e:
@@ -518,7 +578,14 @@ def _download_history_batch_yf(yf_tickers: list[str], period: str = "1y") -> dic
     for attempt in range(_YF_MAX_RETRIES + 1):
         if not pending:
             break
-        got = _yf_download_once(pending, period, _YF_WORKERS)
+        got: dict[str, pd.DataFrame] = {}
+        batches = [pending[i:i + max(1, _YF_BATCH_SIZE)] for i in range(0, len(pending), max(1, _YF_BATCH_SIZE))]
+        for idx, batch in enumerate(batches, 1):
+            if len(batches) > 1:
+                print(f"  yfinance 历史价批次 {idx}/{len(batches)}：{len(batch)} 只 · workers={_YF_WORKERS}")
+            got.update(_yf_download_once(batch, period, _YF_WORKERS))
+            if idx < len(batches) and _YF_WORKERS <= 1:
+                time.sleep(0.5)
         for tk, df in got.items():
             if df is not None and not df.empty:
                 out[tk] = df
@@ -898,13 +965,15 @@ def main():
         help="价格输入来源：手动 watchlist、科技/AI universe，或两者合并",
     )
     parser.add_argument("--dry-run", action="store_true", help="只打印,不写 DuckDB")
-    parser.add_argument("--workers", type=int, default=int(os.getenv("STOCK_ASSISTANT_PRICE_WORKERS", "8")),
-                        help="并发拉 yfinance info 的线程数（默认 8）")
+    parser.add_argument("--workers", type=int, default=int(os.getenv("STOCK_ASSISTANT_PRICE_WORKERS", "1")),
+                        help="并发拉 yfinance info 的线程数（默认 1，稳态避免 yfinance SQLite 锁库）")
     parser.add_argument("--info-ttl-hours", type=float,
                         default=float(os.getenv("STOCK_ASSISTANT_INFO_TTL_HOURS", DEFAULT_INFO_TTL_HOURS)),
                         help="估值/基本面 info 缓存小时数（默认 12）")
     parser.add_argument("--refresh-fundamentals", action="store_true",
                         help="忽略 info 缓存，强制刷新 PE/PEG/市值/增长率")
+    parser.add_argument("--fast-repair", action="store_true",
+                        help="全量补数据快修：US 先用 FMP quote 补价格/市值并保留旧 PE/PEG，避免 386 只逐个深刷卡死")
     parser.add_argument(
         "--db-schema",
         choices=["auto", "legacy", "v2"],
@@ -943,9 +1012,24 @@ def main():
     cache_items = info_cache.setdefault("items", {})
     info_by_ticker: dict[str, dict] = {}
     missing_info = []
+    if args.fast_repair:
+        print("  快速补数据模式：US 用 FMP quote 补价格/市值，并保留缓存 PE/PEG 慢字段")
     for tk in sorted(set(yf_codes)):
         cached = cache_items.get(tk)
-        if not args.refresh_fundamentals and _cache_entry_fresh(cached, args.info_ttl_hours):
+        if args.fast_repair and _is_us_ticker(tk):
+            fields = dict(cached) if isinstance(cached, dict) else {}
+            quote_fields = _fetch_fmp_quote_fields(tk)
+            for key, value in quote_fields.items():
+                if value is not None:
+                    fields[key] = value
+            if fields:
+                cache_items[tk] = fields
+                info_by_ticker[tk] = fields
+            else:
+                missing_info.append(tk)
+        elif args.fast_repair:
+            info_by_ticker[tk] = cached if isinstance(cached, dict) else {}
+        elif not args.refresh_fundamentals and _cache_entry_fresh(cached, args.info_ttl_hours):
             info_by_ticker[tk] = cached
         else:
             missing_info.append(tk)
@@ -958,14 +1042,26 @@ def main():
             for fut in as_completed(futures):
                 tk = futures[fut]
                 fields = fut.result()
+                previous = cache_items.get(tk) if isinstance(cache_items.get(tk), dict) else {}
                 if fields.get("error") and cache_items.get(tk):
                     fields = cache_items[tk]
                 else:
+                    if previous:
+                        # FMP quote 能稳定补价格/市值，但没有 PE/PEG；yfinance info 偶发失败时，
+                        # 不要把缓存里已有的慢字段清空，否则用户点"补数据"反而看不到改善。
+                        for key in (
+                            "forward_pe", "trailing_pe", "peg_ratio",
+                            "earnings_growth", "revenue_growth", "currency",
+                        ):
+                            if fields.get(key) is None and previous.get(key) is not None:
+                                fields[key] = previous[key]
                     cache_items[tk] = fields
                 info_by_ticker[tk] = fields
         _save_info_cache(info_cache)
     else:
         print(f"  info 全部命中缓存（TTL={args.info_ttl_hours:g}h）")
+        if args.fast_repair:
+            _save_info_cache(info_cache)
 
     results = []
     success_count = 0
@@ -1017,11 +1113,12 @@ def main():
             **data,
         })
 
-    print(f"\n[3/3] 完成：成功 {success_count} / 总 {len(items)}")
+    attempted_count = success_count + len(fail_codes)
+    print(f"\n[3/3] 完成：成功 {success_count} / 总 {attempted_count}")
     if fail_codes:
         print(f"  失败标的：{', '.join(fail_codes)}")
     _write_source_health(
-        total_count=len(items),
+        total_count=attempted_count,
         success_count=success_count,
         fail_count=len(fail_codes),
         source=args.source,
@@ -1044,7 +1141,7 @@ def main():
     if results:
         try:
             # 2026-05-21 V1 cutover：永远只写 V2 price_daily（V1 prices 表已删）
-            n = _upsert_v2_price_daily(results, DB_PATH, total_count=len(items), fail_count=len(fail_codes))
+            n = _upsert_v2_price_daily(results, DB_PATH, total_count=attempted_count, fail_count=len(fail_codes))
             print(f"  DuckDB：已写入 {n} 行 ({DB_PATH} · price_daily)")
         except Exception as e:
             print(f"  DuckDB 写入失败（不阻塞主流程）：{e}")

@@ -2449,7 +2449,11 @@ b{{font-weight:700}}
             "--db-schema",
             "v2",
             "--refresh-fundamentals",
+            "--workers",
+            "1",
         ]
+        if not clean_code:
+            fetch_cmd.append("--fast-repair")
         if clean_code:
             fetch_cmd.extend(["--code", clean_code])
         steps = [
@@ -2500,7 +2504,14 @@ try:
             cmd = step.get("cmd") or []
             log.write(f"[v2-refresh] step {name}: {' '.join(cmd)}\n")
             log.flush()
-            rc = _sub.call(cmd, cwd=repo_root, stdout=log, stderr=_sub.STDOUT)
+            env = None
+            if name == "fetch_stock_prices":
+                import os as _os
+                env = dict(_os.environ)
+                env.setdefault("PYTHONUNBUFFERED", "1")
+                env.setdefault("STOCK_ASSISTANT_YF_WORKERS", "1")
+                env.setdefault("STOCK_ASSISTANT_YF_BATCH_SIZE", "40")
+            rc = _sub.call(cmd, cwd=repo_root, stdout=log, stderr=_sub.STDOUT, env=env)
             log.write(f"[v2-refresh] step {name} exit={rc} at {_dt.datetime.now().isoformat(timespec='seconds')}\n")
             log.flush()
             if rc:

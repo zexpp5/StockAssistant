@@ -13474,6 +13474,7 @@ function _reasonSummaryHtml(row) {
 
       function _dataHealthBucket(r, kind) {
         const text = _dataHealthReasonText(r);
+        const hasExplicitRepairableGap = /缺最新价格|缺动量数据源|动量数据已过期|缺估值数据源|估值数据已过期/.test(text);
         if (/没有可用正向估值字段|估值字段异常|Forward PE=-|PEG=0|亏损/.test(text)) {
           return {
             key: "valuation",
@@ -13496,7 +13497,7 @@ function _reasonSummaryHtml(row) {
             action: "先做买前研究和事件复查，不直接因为分数高就买。",
           };
         }
-        if (/缺最新价格|缺动量数据源|动量数据已过期|缺估值数据源|估值数据已过期|核心字段覆盖不足|数据可用性|字段覆盖/.test(text)) {
+        if (hasExplicitRepairableGap) {
           return {
             key: "repairable",
             label: "可自动补数据",
@@ -13505,6 +13506,17 @@ function _reasonSummaryHtml(row) {
             cls: "border-amber-200 bg-amber-50 text-amber-800",
             rowCls: "bg-amber-100 text-amber-800 border-amber-200",
             action: "可以重拉行情/估值/涨跌幅后再重算；补完仍不过，就降为研究观察。",
+          };
+        }
+        if (/核心字段覆盖不足|数据可用性|字段覆盖/.test(text)) {
+          return {
+            key: "quality_check",
+            label: "数据质量待查",
+            short: "待查来源",
+            tone: "orange",
+            cls: "border-orange-200 bg-orange-50 text-orange-900",
+            rowCls: "bg-orange-100 text-orange-800 border-orange-200",
+            action: "行情已经拉到，但覆盖率/数据分没过闸；需要查具体字段来源，或确认这类股票是否应该换成长/订单口径。",
           };
         }
         return kind === "blocked"
@@ -13518,13 +13530,13 @@ function _reasonSummaryHtml(row) {
               action: "原因不够结构化，先不要进可买推荐，走买前研究。",
             }
           : {
-              key: "repairable",
-              label: "可自动补数据",
-              short: "可补数据",
-              tone: "amber",
-              cls: "border-amber-200 bg-amber-50 text-amber-800",
-              rowCls: "bg-amber-100 text-amber-800 border-amber-200",
-              action: "先重拉数据并复核。",
+              key: "quality_check",
+              label: "数据质量待查",
+              short: "待查来源",
+              tone: "orange",
+              cls: "border-orange-200 bg-orange-50 text-orange-900",
+              rowCls: "bg-orange-100 text-orange-800 border-orange-200",
+              action: "原因不够结构化，先查字段来源和数据覆盖，再决定是否补数据或改研究口径。",
             };
       }
 
@@ -13533,6 +13545,7 @@ function _reasonSummaryHtml(row) {
         ...attention.map(r => ({...r, _kind: "attention", _bucket: _dataHealthBucket(r, "attention")})),
       ];
       const repairableRows = bucketedRows.filter(r => r._bucket.key === "repairable");
+      const qualityCheckRows = bucketedRows.filter(r => r._bucket.key === "quality_check");
       const valuationRows = bucketedRows.filter(r => r._bucket.key === "valuation");
       const researchRows = bucketedRows.filter(r => r._bucket.key === "research");
       const activeIssueCount = bucketedRows.length;
@@ -13544,7 +13557,7 @@ function _reasonSummaryHtml(row) {
         ? `当前${_marketLabel(activeMarket)}有 ${activeIssueCount} 只需要处理`
         : `当前${_marketLabel(activeMarket)}没有数据闸提醒`;
       const statusExplain = activeIssueCount > 0
-        ? "不是所有问题都叫“没数据”：能补的重拉数据；亏损/无正向 PE 的改用成长证据；价格异动的先做买前研究。"
+        ? "不是所有问题都叫“没数据”：明确缺源的重拉数据；数据分不过闸的查字段来源；亏损/无正向 PE 的改用成长证据；价格异动的先做买前研究。"
         : "这表示当前市场候选的核心行情、动量、估值字段满足当前公式要求。";
 
       function _sampleSymbols(rows) {
@@ -13566,8 +13579,9 @@ function _reasonSummaryHtml(row) {
       }
 
       const bucketCardsHtml = activeIssueCount > 0 ? `
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-2 mt-3">
-          ${_bucketCard("可自动补数据", repairableRows, "border-amber-200 bg-white/70 text-amber-900", "缺行情、动量日期、估值快照或字段覆盖不满。", "动作：点“全量补数据并重算”或明细里的“补这只”。")}
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-2 mt-3">
+          ${_bucketCard("可自动补数据", repairableRows, "border-amber-200 bg-white/70 text-amber-900", "明确缺行情、动量日期或估值快照。", "动作：点“全量补数据并重算”或明细里的“补这只”。")}
+          ${_bucketCard("数据质量待查", qualityCheckRows, "border-orange-200 bg-white/70 text-orange-900", "行情已拉到，但数据分/覆盖率没过闸。", "动作：展开明细，看缺口字段；不保证点按钮后必过。")}
           ${_bucketCard("估值口径不适用", valuationRows, "border-purple-200 bg-white/70 text-purple-900", "公司亏损、Forward PE/PEG 无意义，不能靠补 PE 解决。", "动作：改看收入增速、EV/Sales、订单、现金消耗。")}
           ${_bucketCard("只适合研究/复查", researchRows, "border-rose-200 bg-white/70 text-rose-900", "短线异动、事件性下跌或原因不够结构化。", "动作：先进买前研究，不直接买。")}
         </div>` : "";
