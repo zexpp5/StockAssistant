@@ -78,6 +78,11 @@ VARIANTS: dict[str, dict[str, float]] = {
                        "f_score": 0.20, "grade": 0.20},
     # 第四变体(2026-06-12): 两年代理回测冠军(268.8% vs 生产代理 111.7%) — 去估值,重评级+反转
     "no_val_grade": {"momentum": 0.20, "reversal": 0.40, "grade": 0.40},
+    # 第六变体(2026-06-13): 只用两个 IC 已验证的因子(reversal✅+grade✅)。
+    # 动量 IC FAIL(t=0.75 不显著+regime翻飞),回测里 momentum_pure 405% 是幸存者假象;
+    # 去掉它后单纯形海选净 343.9% > no_val_grade 240%。最干净的"纯验证 alpha"组合。
+    # 注: grade 美股专属,CN/HK 取中性 50 → 在非美市场退化为 reversal 主导(reversal 仍是验证因子)。
+    "rev_grade_5050": {"reversal": 0.50, "grade": 0.50},
     # 第五变体(2026-06-12): 分市场权重 — 回放/回测证据:美股估值有毒,港股估值有效,A股是池子问题
     # US=回测冠军配置 / HK=回放 1d 最优的 val_down_mild / CN=保持生产权重(权重救不了池子,降 churn)
     "market_adaptive": {"per_market": {
