@@ -614,34 +614,12 @@ def _evidence_lines() -> list[str]:
     total_m = cov.get("total_mature", 0)
     coverage = cov.get("coverage")
     cov_txt = "—" if coverage is None else f"{coverage * 100:.1f}%"
+    # 瘦身(2026-06-16):压成一行大白话。保留"别盲信"信号,砍掉文件时间戳/pipeline_status 等管线术语。
     if is_stale or pipeline_open:
-        lines = [
-            f"⚠️ **有效性证据 = {grade}（历史文件，不能单独证明本轮推荐）** "
-            f"· 成熟回顾 {total_r}/{total_m} · 覆盖 {cov_txt}"
-        ]
-        details = []
-        if is_stale:
-            details.append(f"证据 {_fmt_plain_ts(ev_ts)} 早于本轮产物 {_fmt_plain_ts(ref_ts)}")
-        if pipeline_open:
-            details.append(f"pipeline_status={pipeline_status or 'UNKNOWN'}")
-        if details:
-            lines.append("• " + "；".join(details) + "。今日结论以质量闸门/生产验收为准。")
-    else:
-        lines = [
-            f"📐 **有效性证据 = {grade}** · 成熟回顾 {total_r}/{total_m} · 覆盖 {cov_txt} "
-            f"· 证据时间 {_fmt_plain_ts(ev_ts)}"
-        ]
-    rows = [r for r in (ev.get("review_metrics_by_source") or []) if r.get("signal") == "buy"]
-    if rows:
-        bits = []
-        for r in rows[:3]:
-            alpha = r.get("avg_alpha_pct")
-            alpha_txt = "—" if alpha is None else f"{alpha:+.2f}%"
-            bits.append(f"{r.get('model_source')} alpha {alpha_txt} n={r.get('n', 0)}")
-        lines.append("• " + " ｜ ".join(bits))
+        return [f"⚠️ 历史回顾数据，**不能单独证明今天这批推荐有效**；今天能不能动手以顶部三道闸门为准。"]
     if grade == "INSUFFICIENT_EVIDENCE":
-        lines.append("• 证据仍在积累：清空重跑后至少等 1/5/20 日窗口成熟，再判断模型是否真有效。")
-    return lines
+        return ["📐 有效性证据仍在积累中，暂不足以证明模型真有效——别照着重仓。"]
+    return [f"📐 有效性证据 = {grade}（成熟回顾 {total_r}/{total_m}，覆盖 {cov_txt}）"]
 
 
 def section_evidence() -> str:
@@ -1358,6 +1336,30 @@ def _regime_advice_text(severity: str, defense_sev: str, qgate_status: str, acce
     return "👉 保守按已有计划执行"
 
 
+def _humanize_gate_reason(reason: str) -> str:
+    """把升档理由里的程序员术语换成大白话（瘦身 2026-06-16）。
+
+    例:"data/latest/junior_stock_radar.json 已滞后 7 天" → "次新股雷达数据 已滞后 7 天"
+    只替换已知文件名 + 去掉路径/.json 后缀，认不出的原样保留。
+    """
+    import re as _re
+    name_map = {
+        "junior_stock_radar": "次新股雷达数据",
+        "recommendation_evidence": "推荐有效性证据",
+        "factor_scores_today": "今日因子分",
+        "trade_delta": "调仓清单",
+        "risk_metrics": "风险指标",
+        "source_health": "数据源健康",
+    }
+
+    def _repl(m: str) -> str:
+        stem = m.group(1)
+        return name_map.get(stem, stem)
+
+    out = _re.sub(r"(?:[\w./]*?/)?(\w+)\.json", _repl, reason)
+    return out
+
+
 def section_regime(defense: dict | None,
                    qgate: dict | None = None,
                    acceptance: dict | None = None) -> str:
@@ -1392,16 +1394,16 @@ def section_regime(defense: dict | None,
     advice = _regime_advice_text(severity, defense_sev, qgate_status, accept_status) + "。"
 
     lines = [
-        "#### 1. 今天能不能动手？（防御 + 质量闸门 + 生产验收 · 取最严）",
+        "#### 1. 今天能不能动手？",
         f"{icon} **{severity}** — 防御 {defense_sev} · 质量闸门 {_badge(qgate_status)} · 生产验收 {_badge(accept_status)}",
         advice,
-        "📖 灯色 = 三道闸门取最严（防御=VIX/200MA/止损 · 质量=数据完整 · 验收=pipeline 跑通）：🟢 全绿 → 🟡 WARN → 🟠 FAIL/防御 HIGH → 🔴 崩盘",
+        "📖 灯色取三道闸门最严：🟢全绿 → 🟡留意 → 🟠别动手 → 🔴崩盘",
     ]
     if reasons:
         lines.append("")
-        lines.append(f"**为什么不是 🟢**（{len(reasons)} 条升档理由）:")
+        lines.append(f"**为什么不是 🟢**（{len(reasons)} 条）:")
         for r in reasons:
-            lines.append(f"• {r}")
+            lines.append(f"• {_humanize_gate_reason(r)}")
     if defense_summary:
         lines.append("")
         lines.append(f"**防御原文**：{defense_summary}")
@@ -2160,27 +2162,14 @@ def section_walk_forward_oos(today: date | None = None) -> str:
     if not months:
         return ""
 
-    lines = ["#### 🔬 12 月 OOS 校验（周一专属 · walk-forward）"]
-    lines.append(f"窗口 {data.get('start_month')} ~ {data.get('end_month')} · "
-                 f"benchmark {data.get('benchmark', 'SPY')} · top-k {data.get('top_k', 5)}")
+    # 瘦身(2026-06-16):压成两行结论,砍 4 月明细 + 学术引用(完整见 dashboard)。
     sh = summary.get("sharpe_annual")
     ex = summary.get("total_excess_return_pct")
-    mdd = summary.get("max_drawdown_pct")
     n = summary.get("n_months")
-    lines.append(f"")
-    lines.append(f"📊 **年化 Sharpe {sh:+.2f}** · 总超额 {ex:+.1f}% · 最大回撤 {mdd:.1f}% · {n} 月样本")
-    lines.append(f"")
-    lines.append("📅 最近 4 月明细：")
-    for m in months[-4:]:
-        ret = m.get("monthly_return", 0)
-        bench = m.get("benchmark_return", 0)
-        excess = m.get("excess_return", 0)
-        picks = ",".join(m.get("selected", [])[:4])
-        lines.append(f"• {m.get('month')}: 组合 {ret:+.1f}% / 基准 {bench:+.1f}% / "
-                     f"超额 {excess:+.1f}% · {picks}")
-    lines.append("")
-    lines.append("📖 学术依据：Bailey & Lopez de Prado (2014) JPM — walk-forward "
-                 "是减少 backtest overfit 的金标准；单次回测 Sharpe 严重高估")
+    lines = [
+        "#### 🔬 滚动回测校验（周一专属）",
+        f"过去 {n} 个月滚动测试：年化 Sharpe {sh:+.2f} · 总超额 {ex:+.1f}%（比单次回测更可信，明细见 dashboard）",
+    ]
     return "\n".join(lines) + "\n"
 
 
@@ -2251,37 +2240,21 @@ def section_ai_alpha(risk_metrics: dict | None) -> str:
     inception_date = date(2026, 5, 10)
     days_tracked = max(0, (today - inception_date).days - 1)
 
+    # 瘦身(2026-06-16):压成 3 行 —— A 死守 vs C 跟 AI 调仓,谁赢看 dashboard;NAV/VaR 等指标移走。
     lines = [
-        "#### 3. 系统在跑两个方案 · 看 AI 到底有没有用",
-        "_系统每周一同时跑两套策略，让数据自然分胜负_",
-        "",
-        "**📦 方案 A · 静态死守**：5-10 锁定 12 只股，从此不动（佛系基准）",
-        "**🔄 方案 C · 动态调仓**：每周一按 AI 重新优化（扣 10bps/换股 手续费）",
-        "",
+        "#### 3. AI 到底有没有用（两方案对照）",
+        "_A 死守不动 vs C 每周跟 AI 调仓，让数据分胜负_",
     ]
     if days_tracked < 7:
-        lines.append(f"📅 **Forward tracking 累积中**：已 {days_tracked} / 7 天（第一周还没结束）")
-        lines.append("🆚 等下周起每周一较量 → **C − A spread** 就是 AI 加的 alpha")
+        lines.append(f"📅 才跑了 {days_tracked}/7 天，下周起每周一见分晓（C 减 A 就是 AI 的真本事）")
     else:
-        lines.append(f"📅 已 forward tracked {days_tracked} 天 — 真实数据见 dashboard")
-
-    if risk_metrics:
-        rm = risk_metrics
-        lines.append("")
-        lines.append("⚠️ **以下是历史回测/模拟，不是实盘业绩；forward 样本仍很短，不能据此证明策略有效。**")
-        # NAV 净值趋势 — emoji 双时间窗（近 30d + 总累计）
-        nav = _nav_sparkline(rm)
-        if nav:
-            lines.append(
-                f"历史 NAV：近 30d {nav['spark_30d']} {nav['pct_30d']:+.1f}% · "
-                f"累计 {nav['spark']} {nav['total_pct']:+.1f}% ({nav['n_days']}d)"
-            )
-        lines.append(
-            f"回测 Sharpe {_fmt_metric(rm.get('sharpe'))} · "
-            f"MaxDD **{_fmt_metric(rm.get('max_drawdown_pct'), '%')}** · "
-            f"95% VaR {_fmt_metric(rm.get('var_95_pct'), '%')} · "
-            "崩盘期 alpha **-9.77%**（4/4 regime 3 跑输 SPY）"
-        )
+        nav_txt = ""
+        if risk_metrics:
+            nav = _nav_sparkline(risk_metrics)
+            if nav:
+                nav_txt = f"历史累计 {nav['total_pct']:+.1f}%（{nav['n_days']}天），"
+        lines.append(f"📅 已跟踪 {days_tracked} 天 — {nav_txt}详细净值对照见 dashboard")
+        lines.append("⚠️ 多为历史回测/模拟非实盘，崩盘期历史上跑输大盘，别据此当已验证。")
 
     return "\n".join(lines) + "\n"
 
@@ -2399,35 +2372,40 @@ def section_factor_risk(plan: dict | None, factor_scores: dict | None) -> str:
     if not has_alert and not severe_stress:
         return ""
 
-    lines = ["#### 3.5 组合风格暴露 + 因子 Stress（Fama-French + Carhart）"]
-    # 暴露
-    exp = exposures.get("exposure") or {}
-    cov = exposures.get("coverage") or {}
-    lines.append("**风格暴露 z-score**（>1 = 偏高 / <-1 = 偏低）：")
+    # 瘦身(2026-06-16):砍掉自我否定噪音 —— 覆盖率<60%的因子不展示(本就不可靠),
+    # "数据覆盖不可靠"这类告警不刷屏(降级成一句),只把真高暴露 + 真严重的压力测试留下。
     factor_names_zh = {"beta": "β市场", "size": "规模", "value": "价值",
                        "momentum": "动量", "quality": "质量"}
+    exp = exposures.get("exposure") or {}
+    cov = exposures.get("coverage") or {}
+    lines = ["#### 3.5 组合风险体检（看不懂可跳过）"]
+
+    # 只列覆盖足够(≥60%)且确实偏高/偏低(|z|≥1)的因子,其余沉默
+    notable = []
     for f in exposures.get("factor_list", []):
         z = exp.get(f)
-        c = cov.get(f, 0)
-        z_str = f"{z:+.2f}" if z is not None else "—"
-        cov_flag = f"({c*100:.0f}%)" if c < 0.6 else ""
-        lines.append(f"• {factor_names_zh.get(f,f)} z={z_str} {cov_flag}")
+        if z is None or cov.get(f, 0) < 0.6 or abs(z) < 1.0:
+            continue
+        notable.append(f"{factor_names_zh.get(f, f)} {'偏高' if z > 0 else '偏低'}(z={z:+.1f})")
+    if notable:
+        lines.append("⚖️ 风格偏离：" + "、".join(notable))
 
-    if has_alert:
-        lines.append("")
-        lines.append("⚠️ 暴露告警：")
-        for a in exposures["alerts"][:5]:
-            lines.append(f"• {a}")
+    # 压力测试:只在真严重(≥5%)时留一行
+    if severe_stress:
+        lines.append(
+            f"💥 最怕「{factor_names_zh.get(worst['factor'], worst['factor'])}」大跌 → "
+            f"组合可能 {worst['expected_pnl_pct']:+.1f}% {worst.get('severity','')}"
+        )
 
-    # Stress
-    if worst and worst.get("expected_pnl_pct") is not None:
-        lines.append("")
-        lines.append(f"💥 **单因子最差**：{factor_names_zh.get(worst['factor'], worst['factor'])} "
-                     f"shock {worst['shock_pct']:+.0f}% → 组合预期 **{worst['expected_pnl_pct']:+.2f}%** "
-                     f"{worst.get('severity','')}")
-        combined = stress.get("combined_stress_pct")
-        if combined is not None:
-            lines.append(f"💀 最差 3 因子叠加（保守相关性=1）：**{combined:+.2f}%**")
+    # 覆盖不足时一句话带过,不再逐因子刷"不可靠"
+    low_cov = [factor_names_zh.get(f, f) for f in exposures.get("factor_list", [])
+               if cov.get(f, 0) < 0.6]
+    if low_cov:
+        lines.append(f"_注:部分因子数据覆盖不足({len(low_cov)}项)，估算仅供参考_")
+
+    # 除标题外没有任何实质内容就整段不出(避免空版面)
+    if len(lines) == 1:
+        return ""
     return "\n".join(lines) + "\n"
 
 
@@ -2463,11 +2441,12 @@ def section_junior_radar(top_n: int = 5) -> str:
     数据源: data/latest/junior_stock_radar.json (junior_stock_watcher 输出)
     不渲染条件: 池子里没有 actionable (可研究/可小仓试探)
     """
+    # 瘦身(2026-06-16):研究料非每天必看 —— 每市场压成一行(只数 + 前 3 名),明细去 dashboard。
     radar = _load_junior_radar()
     if not radar:
         return ""
     markets = radar.get("markets") or {}
-    sections = []
+    rows = []
     market_keys = [("us", "🇺🇸 美股")] + ([("cn", "🇨🇳 A 股")] if _brief_show_a_share() else [])
     for mk, label in market_keys:
         pool = (markets.get(mk) or {}).get("junior_pool") or []
@@ -2478,34 +2457,18 @@ def section_junior_radar(top_n: int = 5) -> str:
         ))
         if not actionable:
             continue
-        lines = [f"**{label}** ({len(actionable)} 只 actionable, 显示前 {min(top_n, len(actionable))}):"]
-        for x in actionable[:top_n]:
-            code = x.get("symbol") or x.get("code")
-            name = x.get("name") or ""
-            tier_emoji = "🟢" if x.get("tier") == "可小仓试探" else "🟡"
-            diff = _diff_emoji(x.get("diff_flag"))
-            pct = x.get("percentile")
-            pct_str = f"前 {pct}%" if pct is not None else ""
-            ready = x.get("readiness_score")
-            ready_str = f" · 准备度 {int(ready)}" if ready is not None else ""
-            audit = x.get("audit_card") or {}
-            why = audit.get("why_bottom_like") or ""
-            missing = audit.get("whats_missing") or ""
-            head = f"- {tier_emoji} **{code}** {name} {diff} ({pct_str}{ready_str})"
-            lines.append(head)
-            if why:
-                lines.append(f"  ✓ {why}")
-            if missing and missing != "三层信号齐全,可正式进入买前研究":
-                lines.append(f"  ⚠ {missing}")
-        sections.append("\n".join(lines))
-    if not sections:
+        names = []
+        for x in actionable[:3]:
+            emoji = "🟢" if x.get("tier") == "可小仓试探" else "🟡"
+            names.append(f"{emoji}{x.get('symbol') or x.get('code')}")
+        rows.append(f"• {label}：{len(actionable)} 只 {'、'.join(names)}"
+                    + ("…" if len(actionable) > 3 else ""))
+    if not rows:
         return ""
-    body = "\n\n".join(sections)
     return (
-        "#### 🎯 次新股触底候选\n"
-        "_仅作研究起点,非买入建议;来自 IPO & 次新股 tab 触底分前 10/30% + 过解禁窗口的候选。_\n\n"
-        f"{body}\n\n"
-        "_完整列表 + 买前审查卡见 dashboard IPO & 次新股 tab → 次新股底部观察池。_\n"
+        "#### 🎯 次新股触底候选（研究料，非买入建议）\n"
+        + "\n".join(rows)
+        + "\n_明细 + 买前审查卡见 dashboard → IPO & 次新股 tab。_\n"
     )
 
 
