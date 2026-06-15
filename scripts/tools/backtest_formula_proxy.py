@@ -63,7 +63,49 @@ STRATEGIES: dict[str, dict[str, float]] = {
     "mrg_even": {"momentum": 1 / 3, "reversal": 1 / 3, "grade": 1 / 3},
     "reversal_pure": {"reversal": 1.0},                          # 反转单因子对照
     "momentum_pure": {"momentum": 1.0},                          # 动量单因子对照
+    # 2026-06-13 组合方法对照: 同因子同权重,改用 rank/zscore 截面标准化后再相加,
+    # 看"组合方法"本身能否优于加权和(各因子 0-100 分的标度/饱和不一致会扭曲排序)。
+    "rev_grade_rank": {"reversal": 0.50, "grade": 0.50},
+    "rev_grade_z": {"reversal": 0.50, "grade": 0.50},
+    "no_val_grade_rank": {"momentum": 0.20, "reversal": 0.40, "grade": 0.40},
+    "prod_proxy_rank": {"momentum": 0.15, "valuation": 0.50, "reversal": 0.15},
 }
+
+# 组合方法: weighted(默认,加权和原始 0-100 分) / rank(截面百分位) / zscore(截面标准分)
+COMBINE: dict[str, str] = {
+    "rev_grade_rank": "rank",
+    "rev_grade_z": "zscore",
+    "no_val_grade_rank": "rank",
+    "prod_proxy_rank": "rank",
+}
+
+
+def _percentiles(pairs: list[tuple[str, float]]) -> dict[str, float]:
+    """截面百分位(平均秩处理并列,如 grade 大量为 0),归一到 [0,1]。"""
+    order = sorted(range(len(pairs)), key=lambda i: pairs[i][1])
+    pct: dict[str, float] = {}
+    n = len(pairs)
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and pairs[order[j + 1]][1] == pairs[order[i]][1]:
+            j += 1
+        avg_rank = (i + j) / 2.0
+        for k in range(i, j + 1):
+            pct[pairs[order[k]][0]] = avg_rank / (n - 1) if n > 1 else 0.5
+        i = j + 1
+    return pct
+
+
+def _zscores(pairs: list[tuple[str, float]]) -> dict[str, float]:
+    vals = [v for _, v in pairs]
+    n = len(vals)
+    mean = sum(vals) / n
+    var = sum((v - mean) ** 2 for v in vals) / n
+    std = var ** 0.5
+    if std <= 0:
+        return {s: 0.0 for s, _ in pairs}
+    return {s: (v - mean) / std for s, v in pairs}
 
 
 def _clip(x: float, lo: float = 0.0, hi: float = 100.0) -> float:
@@ -217,10 +259,27 @@ def main() -> int:
                                "bench_ret": round(bench_ret, 3)}
         curves[BENCHMARK].append(bench_ret)
         curves["universe_eqw"].append(sum(fwd.values()) / len(fwd))
+        # 截面标准化(供 rank/zscore 组合): 每个因子在当期全体候选上算百分位/标准分
+        factors_used = {f for w in STRATEGIES.values() for f in w}
+        pctile: dict[str, dict[str, float]] = {}
+        zmap: dict[str, dict[str, float]] = {}
+        for f in factors_used:
+            pairs = [(s, scores_by_symbol[s][f]) for s in scores_by_symbol]
+            pctile[f] = _percentiles(pairs)
+            zmap[f] = _zscores(pairs)
+
+        def _combined(sym: str, weights: dict[str, float], method: str) -> float:
+            if method == "rank":
+                return sum(w * pctile[f][sym] for f, w in weights.items())
+            if method == "zscore":
+                return sum(w * zmap[f][sym] for f, w in weights.items())
+            return sum(w * scores_by_symbol[sym][f] for f, w in weights.items())
+
         for name, weights in STRATEGIES.items():
+            method = COMBINE.get(name, "weighted")
             ranked = sorted(
                 scores_by_symbol,
-                key=lambda s: (-sum(w * scores_by_symbol[s][f] for f, w in weights.items()), s),
+                key=lambda s: (-_combined(s, weights, method), s),
             )[:TOP_K]
             port_ret = sum(fwd[s] for s in ranked) / len(ranked)
             holdings = set(ranked)
