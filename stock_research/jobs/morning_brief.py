@@ -220,9 +220,7 @@ def _plan_cash_breakdown(plan: dict | None) -> dict[str, Any]:
     pruned = ra.get("pruned_dropped") if isinstance(ra.get("pruned_dropped"), list) else []
     if pruned and isinstance(max_corr, (int, float)):
         pieces.append(f"相关性 ρ<{float(max_corr):.1f} 剪掉 {len(pruned)} 只")
-    ic_gate = plan.get("factor_ic_gate") if isinstance(plan.get("factor_ic_gate"), dict) else {}
-    if ic_gate.get("reason"):
-        pieces.append(f"IC 闸门={ic_gate.get('reason')}")
+    # 瘦身(2026-06-16):IC 闸门=v2_fallback_skipped 是纯内部术语,新手看不懂,从早报现金解释里去掉
     explain = " · ".join(pieces) if pieces else ""
     return {
         "cash_pct": float(cash),
@@ -1621,6 +1619,63 @@ def _format_reason_lines(pros: list[str], cons: list[str],
     return lines
 
 
+def _plain_reason(text: str) -> str:
+    """把带术语/数字的因子理由翻成新手大白话（瘦身 2026-06-16，用户选"只留一句 why"）。
+
+    认得的因子→固定大白话；认不出的兜底去掉百分比/x/9 等原始数字。
+    """
+    t = text or ""
+    if "动量" in t and "异常高" in t:
+        return "涨幅异常大，当心回调"
+    if "动量" in t and "强势" in t:
+        return "过去一年涨势强"
+    if "动量" in t and "下行" in t:
+        return "过去一年走弱"
+    if "盈利加速" in t:
+        return "最近盈利在加速"
+    if "盈利减速" in t:
+        return "最近盈利在放缓"
+    if "F-Score" in t or "基本面" in t:
+        if "优" in t:
+            return "基本面稳健"
+        if "偏弱" in t or "弱" in t:
+            return "基本面偏弱"
+        return "基本面中性"
+    if "转向" in t:
+        return "管理层近期改变了买卖方向"
+    if "净买入" in t:
+        return "管理层近期增持（看好信号）"
+    if "净卖出" in t:
+        return "管理层近期减持（留意）"
+    if "分析师" in t and "上调" in t:
+        return "近期多家分析师上调看法"
+    if "分析师" in t and "下调" in t:
+        return "近期有分析师下调看法"
+    if "评级" in t:
+        return "分析师评级偏正面"
+    if "估值" in t or "便宜" in t:
+        return "估值不算贵"
+    import re as _re
+    t = _re.sub(r"[+\-]?\d+(?:\.\d+)?%?", "", t)
+    t = _re.sub(r"\d+/\d+", "", t)
+    return t.strip(" ·（）()，,") or (text or "")
+
+
+def _plain_reason_lines(pros: list[str], cons: list[str]) -> list[str]:
+    """美股详解瘦身版：只留 1 句大白话 why（✅）+ 1 句风险（⚠️），去重避免雷同。"""
+    out: list[str] = []
+    seen: set[str] = set()
+    if pros:
+        why = _plain_reason(pros[0])
+        out.append(f"  ✅ {why}")
+        seen.add(why)
+    if cons:
+        risk = _plain_reason(cons[0])
+        if risk not in seen:
+            out.append(f"  ⚠️ {risk}")
+    return out
+
+
 # ───────────── why now catalyst (近 60 天事件解释 X 为啥被推荐) ─────────────
 # 实现抽到 stock_research/core/catalyst.py 与 dashboard 共享，避免双引擎漂移。
 
@@ -1829,7 +1884,8 @@ def _humanize_picks(plan: list[dict], a_share: bool, history: dict | None = None
         spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
         # F-Score 缺失时不在主行展示「F-Score 缺失」噪声；section header 已说明基本面未覆盖
         f_str = f" · F-Score {f_score}" if f_score != "缺失" else ""
-        head = f"• **{ticker}** {weight*100:.1f}%{f_str} · 综合 {z:+.2f}{spark_str}"
+        # 瘦身(2026-06-16):主行去掉综合分/F-Score 数字(术语),留仓位+60天趋势
+        head = f"• **{ticker}** {weight*100:.1f}%{spark_str}"
         if compact:
             marker = _rise_marker(ticker)
             out.append(head + marker)
@@ -1845,7 +1901,7 @@ def _humanize_picks(plan: list[dict], a_share: bool, history: dict | None = None
             if qtag:
                 out.append(qtag)
             pros, cons = _build_us_reasons(ticker, factors_map, signals_map)
-            out.extend(_format_reason_lines(pros, cons))
+            out.extend(_plain_reason_lines(pros, cons))
             if buy_zones:
                 bz_line = _buy_zone_line(ticker, buy_zones)
                 if bz_line:
@@ -1876,7 +1932,8 @@ def _humanize_picks_grouped(plan: list[dict], a_share: bool, history: dict | Non
         spark_str = f" · {spark}" + (f" {pct60:+.1f}% 60d" if pct60 is not None else "")
         # F-Score 缺失时不在主行展示「F-Score 缺失」噪声；section header 已说明基本面未覆盖
         f_str = f" · F-Score {f_score}" if f_score != "缺失" else ""
-        head = f"• **{ticker}** {weight*100:.1f}%{f_str} · 综合 {z:+.2f}{spark_str}"
+        # 瘦身(2026-06-16):主行去掉综合分/F-Score 数字(术语),留仓位+60天趋势
+        head = f"• **{ticker}** {weight*100:.1f}%{spark_str}"
         if compact:
             marker = _rise_marker(ticker)
             block_lines = [head + marker]
@@ -1893,7 +1950,7 @@ def _humanize_picks_grouped(plan: list[dict], a_share: bool, history: dict | Non
             if qtag:
                 block_lines.append(qtag)
             pros, cons = _build_us_reasons(ticker, factors_map, signals_map)
-            block_lines.extend(_format_reason_lines(pros, cons))
+            block_lines.extend(_plain_reason_lines(pros, cons))
             if buy_zones:
                 bz_line = _buy_zone_line(ticker, buy_zones)
                 if bz_line:
@@ -1953,19 +2010,10 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
         )
 
     scope_label = "三线独立" if _brief_show_a_share() else "美股 + 港股"
-    head = f"#### 2. 🔝 AI 推荐与模型组合（{scope_label} · ⭐ 重点 {DETAIL_TOP_N} 只详解 + 其余一行速览）"
+    # 瘦身(2026-06-16):标题去掉回测Sharpe/年化/波动/仓位来源等术语(移 dashboard)
+    head = f"#### 2. 🔝 AI 推荐组合（{scope_label}）"
     if read_only:
         head += "\n🔴 **质量闸门 FAIL：以下只读观察，不作为买入/加仓清单。**"
-    if plan:
-        pm = plan.get("portfolio_metrics") or {}
-        if pm:
-            weight_src = _plan_weight_source(plan)
-            head += (
-                f"  ·  模型回测 Sharpe {pm.get('annual_sharpe', '?')} · "
-                f"回测年化 {pm.get('annual_return_pct', '?')}% · "
-                f"波动 {pm.get('annual_vol_pct', '?')}% · "
-                f"{weight_src['label']}"
-            )
     lines = [head]
 
     # 🇺🇸 美股（plan_v5 兼容字段 · v6 risk-aware optimize）
@@ -1977,9 +2025,8 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
             ts_us = _fmt_ts(plan.get("generated_at"))
             weight_src = _plan_weight_source(plan)
             # 检测本批次 F-Score 是否全部缺失，用以调整 section header 文案
-            us_f_present = any(_entry_f_score(e) is not None for e in us_entries)
-            factor_label = "动量 + 估值 + 数据覆盖" + ("" if us_f_present else "（基本面 Piotroski 暂未覆盖）")
-            lines.append(f"**🇺🇸 美股 ({n_us} 只 · {factor_label} · {weight_src['label']})** · {ts_us}")
+            # 瘦身(2026-06-16):子标题只留只数+时间,因子口径/仓位来源移 dashboard
+            lines.append(f"**🇺🇸 美股 ({n_us} 只)** · {ts_us}")
             if weight_src.get("is_fallback"):
                 lines.append(f"⚠️ {weight_src['detail']}。这些百分比不是新鲜 risk-aware optimizer 输出。")
                 if weight_src.get("stage_errors"):
