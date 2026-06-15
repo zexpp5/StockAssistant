@@ -1063,6 +1063,13 @@ def build_real_holding_review(*, persist: bool = True) -> dict[str, Any]:
         symbols = [str(h.get("symbol") or h.get("code")) for h in holdings if h.get("symbol") or h.get("code")]
         prices = _latest_prices_by_symbol(conn, symbols)
         entry_levels_by_sym = _entry_levels_by_symbol(conn, symbols)
+        # 空头拥挤度提示灯（display-only，不进打分；非美股自动 not_applicable，不打网络）
+        try:
+            import short_interest  # type: ignore
+            short_crowding_by_sym = short_interest.resolve_short_crowding(symbols)
+        except Exception as e:
+            logging.warning("short_crowding resolve failed: %s", e)
+            short_crowding_by_sym = {}
         picks = _latest_picks_by_symbol(conn, symbols)
         rules = _load_review_rules(conn)
         for sym, pick in _manual_watchlist_score_fallbacks(symbols).items():
@@ -1116,6 +1123,7 @@ def build_real_holding_review(*, persist: bool = True) -> dict[str, Any]:
                 target_weights=target_weights,
                 industry_heat=heat,
             )
+            item["short_crowding"] = short_crowding_by_sym.get(sym.upper()) or short_crowding_by_sym.get(sym)
             lv = entry_levels_by_sym.get(sym)
             # 规则闸（2026-06-12）：单一持仓超 25% 警戒线（与 verdict「单一持仓超过总资产 25%」
             # 同一条线）时，加仓价位不能当买点用——否则和集中度风控互相打架，

@@ -264,6 +264,7 @@ ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS day_change_basis 
 ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS price_is_prior_session BOOLEAN;
 ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS discipline_json VARCHAR;
 ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS entry_levels_json VARCHAR;
+ALTER TABLE real_holding_review_items ADD COLUMN IF NOT EXISTS short_crowding_json VARCHAR;
 
 -- 真实持仓纪律计划：只绑定 real_holdings，不写 watchlist / AI 推荐 / 模拟仓。
 CREATE TABLE IF NOT EXISTS real_holding_discipline_plans (
@@ -1591,6 +1592,7 @@ REAL_HOLDING_REVIEW_ITEM_COLS = [
     "industry_heat_json",
     "discipline_json",
     "entry_levels_json",
+    "short_crowding_json",
 ]
 REAL_HOLDING_REVIEW_ITEM_FULL_COLS = REAL_HOLDING_REVIEW_ITEM_COLS + ["created_at"]
 REAL_HOLDING_DISCIPLINE_PLAN_COLS = [
@@ -3546,6 +3548,7 @@ def save_real_holding_review(
             _dump_json_field(item.get("industry_heat")),
             _dump_json_value(item.get("discipline")),
             _dump_json_field(item.get("entry_levels")),
+            _dump_json_field(item.get("short_crowding")),
         ]
         conn.execute(
             f"INSERT INTO real_holding_review_items ({','.join(REAL_HOLDING_REVIEW_ITEM_COLS)}) "
@@ -3651,6 +3654,8 @@ def fetch_latest_real_holding_review(
         item_cols = [c for c in item_cols if c != "discipline_json"]
     if not _table_has_column(conn, "real_holding_review_items", "entry_levels_json"):
         item_cols = [c for c in item_cols if c != "entry_levels_json"]
+    if not _table_has_column(conn, "real_holding_review_items", "short_crowding_json"):
+        item_cols = [c for c in item_cols if c != "short_crowding_json"]
     item_rows = conn.execute(
         f"SELECT {','.join(item_cols)} "
         "FROM real_holding_review_items WHERE review_run_id = ? "
@@ -3667,6 +3672,7 @@ def fetch_latest_real_holding_review(
         d["industry_heat"] = _load_json_field(d.pop("industry_heat_json", None), None)
         d["discipline"] = _load_json_field(d.pop("discipline_json", None), None)
         d["entry_levels"] = _load_json_field(d.pop("entry_levels_json", None), None)
+        d["short_crowding"] = _load_json_field(d.pop("short_crowding_json", None), None)
         d["trade_date"] = d.get("price_trade_date")
         items.append(d)
 

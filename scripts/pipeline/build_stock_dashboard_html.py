@@ -1543,6 +1543,7 @@ function openDiscoveryHistoryFromRadar(event) {
           <th class="px-3 py-2 text-center whitespace-nowrap w-[118px]" title="GICS 板块 ETF 近 60 日涨跌 · 来自 openbb_intel 行业轮动">板块热度</th>
           <th class="px-3 py-2 text-left whitespace-nowrap w-[180px]" title="你为真实持仓手动确认的价格纪律线；只提醒，不自动交易，不写推荐池">纪律提醒</th>
           <th class="px-3 py-2 text-left whitespace-nowrap w-[170px]" title="可以考虑分批加仓的参考价位，每个交易日收盘后自动重算。50日线=中期趋势支撑（正常小回调，小笔参与档）；200日线=长期趋势支撑（情绪降温，认真考虑档）；半年低点=恐慌价（一年只出现一两次）。仅参考不是指令：跌到价位先核对下跌原因——大盘普跌带下来=按计划，公司自身坏消息=先停手">加仓参考</th>
+          <th class="px-3 py-2 text-center whitespace-nowrap w-[120px]" title="空头拥挤度提示灯（只看风险、不看买卖）：只回答'这只票现在有没有额外空头风险'，不回答'该不该买'。数据=FINRA 双月短仓披露（约两周滞后的慢数据，抓不住盘中突发逼空）。低/中/高 看空头占流通股+回补天数；环比看空头在增还是减。借券费/实时短仓需付费数据，本灯不含。港股/A股无此披露=不适用">空头拥挤度</th>
           <th class="px-3 py-2 text-right whitespace-nowrap w-[150px]">成本/数量</th>
           <th class="px-3 py-2 text-right whitespace-nowrap w-[150px]">现价/市值</th>
           <th class="px-3 py-2 text-left whitespace-nowrap w-[130px]">买入/汇率</th>
@@ -1563,7 +1564,7 @@ function openDiscoveryHistoryFromRadar(event) {
         </tr>
       </thead>
       <tbody id="real-holdings-table">
-        <tr><td colspan="15" class="text-center text-slate-500 py-8">暂无持仓 · 点击右上角「+ 录入持仓」添加</td></tr>
+        <tr><td colspan="16" class="text-center text-slate-500 py-8">暂无持仓 · 点击右上角「+ 录入持仓」添加</td></tr>
       </tbody>
     </table>
   </div>
@@ -3629,8 +3630,9 @@ function _esc(s) {
 function _dataRepairCommand(code) {
   const safeCode = String(code || "").trim().replace(/[^A-Za-z0-9.\-]/g, "");
   const codeArg = safeCode ? ` --code ${safeCode}` : "";
+  const fastArg = safeCode ? "" : " --fast-repair";
   return [
-    `/opt/homebrew/bin/python3 scripts/pipeline/fetch_stock_prices.py --source tech-universe --db-schema v2 --refresh-fundamentals${codeArg}`,
+    `/opt/homebrew/bin/python3 scripts/pipeline/fetch_stock_prices.py --source tech-universe --db-schema v2 --refresh-fundamentals --workers 1${fastArg}${codeArg}`,
     `/opt/homebrew/bin/python3 scripts/tools/build_v2_recommendations.py`,
     `/opt/homebrew/bin/python3 -m stock_research.jobs.optimize_portfolio`,
     `/opt/homebrew/bin/python3 scripts/tools/recommendation_evidence_report.py`,
@@ -8611,6 +8613,33 @@ function _entryLevelsCell(item) {
   return `<td class="px-3 py-2 text-[11px] leading-relaxed" title="按 ${_esc(el.basis_trade_date || "")} 收盘价计算,每个交易日自动重算。仅参考不是指令:跌到价位先核对下跌原因(大盘普跌=按计划分批,公司自身坏消息=先停手)。">${guardLine}${lines}</td>`;
 }
 
+function _shortCrowdingCell(item) {
+  // 空头拥挤度提示灯(display-only,后端 short_interest 算好):只看风险,不看买卖
+  const sc = item && item.short_crowding;
+  if (!sc) return `<td class="px-3 py-2 text-center text-[11px] text-slate-300">—</td>`;
+  const lvl = sc.level || "未知";
+  if (lvl === "不适用" || lvl === "未知") {
+    return `<td class="px-3 py-2 text-center text-[11px] text-slate-400" title="${_esc(sc.note || "")}">${lvl === "不适用" ? "不适用" : "无数据"}</td>`;
+  }
+  // 低=绿 中=琥珀 高=红;只表达"额外空头风险"高低,不是买卖信号
+  const palette = {
+    "低": ["bg-emerald-50", "text-emerald-700", "border-emerald-200"],
+    "中": ["bg-amber-50", "text-amber-700", "border-amber-200"],
+    "高": ["bg-rose-50", "text-rose-700", "border-rose-200"],
+  }[lvl] || ["bg-slate-50", "text-slate-600", "border-slate-200"];
+  const spf = sc.short_pct_float != null ? `空头${Number(sc.short_pct_float).toFixed(1)}%` : "";
+  const dtc = sc.days_to_cover != null ? `· 回补${Number(sc.days_to_cover).toFixed(1)}天` : "";
+  const mom = sc.mom_change_pct != null
+    ? `<div class="text-[10px] ${Number(sc.mom_change_pct) > 15 ? "text-rose-500" : (Number(sc.mom_change_pct) < -15 ? "text-emerald-600" : "text-slate-400")}">环比 ${Number(sc.mom_change_pct) > 0 ? "+" : ""}${Number(sc.mom_change_pct).toFixed(0)}%</div>`
+    : "";
+  const tip = `${_esc(sc.note || "")}｜${(sc.reasons || []).map(_esc).join("、")}｜提示灯只看空头风险,不回答该不该买`;
+  return `<td class="px-3 py-2 text-center" title="${tip}">
+    <span class="inline-flex px-1.5 py-0.5 rounded border text-[11px] font-semibold ${palette.join(" ")}">${lvl}</span>
+    <div class="text-[10px] text-slate-500 mt-0.5 whitespace-nowrap">${spf} ${dtc}</div>
+    ${mom}
+  </td>`;
+}
+
 function _disciplineCell(item) {
   const d = item && item.discipline;
   if (!d || !d.plan_id) {
@@ -9601,7 +9630,7 @@ async function toggleHoldingTrades(holdingId, ev) {
   if (caret) caret.classList.add("bg-violet-200");
   const sub = document.createElement("tr");
   sub.className = "rhsub-" + holdingId + " bg-slate-50/70";
-  sub.innerHTML = `<td colspan="15" class="px-9 py-2 text-[11px] text-slate-500">加载中…</td>`;
+  sub.innerHTML = `<td colspan="16" class="px-9 py-2 text-[11px] text-slate-500">加载中…</td>`;
   row.after(sub);
   try {
     const d = await fetch(WATCHLIST_API_BASE + "/api/real-holdings/" + holdingId + "/records").then(r => r.ok ? r.json() : null);
@@ -9621,9 +9650,9 @@ async function toggleHoldingTrades(holdingId, ev) {
     const more = recs.length > MAX
       ? `<div class="text-slate-400 mt-1">… 还有 ${recs.length - MAX} 笔，点「记录」看全部 <button onclick="openTradeRecords(${holdingId})" class="text-violet-600 underline">查看全部</button></div>`
       : "";
-    sub.innerHTML = `<td colspan="15" class="px-9 py-2 text-[11px] space-y-0.5">${lines || "<span class='text-slate-400'>暂无交易记录</span>"}${more}</td>`;
+    sub.innerHTML = `<td colspan="16" class="px-9 py-2 text-[11px] space-y-0.5">${lines || "<span class='text-slate-400'>暂无交易记录</span>"}${more}</td>`;
   } catch (e) {
-    sub.innerHTML = `<td colspan="15" class="px-9 py-2 text-[11px] text-rose-500">加载失败：${e.message}</td>`;
+    sub.innerHTML = `<td colspan="16" class="px-9 py-2 text-[11px] text-rose-500">加载失败：${e.message}</td>`;
   }
 }
 
@@ -9790,7 +9819,7 @@ async function renderRealHoldings() {
           ? "无法读取持仓：DuckDB 正被 daily_refresh 等脚本占用，请稍后再点刷新。"
           : "无法连接本地 API；登录后应由 launchd 自动启动（com.linearview.stockassistant.api）。")
       : "暂无持仓 · 点击右上角「+ 录入持仓」添加";
-    tbody.innerHTML = `<tr><td colspan="15" class="text-center ${holdingsFetchFailed ? "text-amber-800" : "text-slate-500"} py-8">${emptyMsg}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="16" class="text-center ${holdingsFetchFailed ? "text-amber-800" : "text-slate-500"} py-8">${emptyMsg}</td></tr>`;
     const realAlloc = document.getElementById("chart-real-allocation");
     const realTheme = document.getElementById("chart-real-theme");
     if (realAlloc) realAlloc.innerHTML = '<div class="text-sm text-slate-400 p-6">暂无持仓分布</div>';
@@ -10088,13 +10117,13 @@ async function renderRealHoldings() {
     if (!items || items.length === 0) return [];
     const meta = _assetMeta(asset);
     const subHeader = `<tr class="bg-slate-50 border-t-2 border-slate-200">
-      <td colspan="15" class="px-3 py-2 text-[13px] font-semibold text-slate-800">
+      <td colspan="16" class="px-3 py-2 text-[13px] font-semibold text-slate-800">
         ${meta.emoji} ${meta.text} · <span class="text-slate-500 font-normal">${items.length} 只</span>
       </td>
     </tr>`;
     return [subHeader, ...items.map(x => _renderHoldingRow(x, x._verdict, x._cls, CLASS_META[x._cls], x._reviewItem || _lookupReviewItem(x.code)))];
   }).join("");
-  tbody.innerHTML = rendered || '<tr><td colspan="15" class="text-center text-slate-500 py-8">这个类别暂无持仓</td></tr>';
+  tbody.innerHTML = rendered || '<tr><td colspan="16" class="text-center text-slate-500 py-8">这个类别暂无持仓</td></tr>';
 
   function _renderHoldingRow(x, verdict, cls, meta, reviewItem) {
   // 优先级: 用户手填的 holding.name > watchlist record.name > ticker fallback
@@ -10162,6 +10191,7 @@ async function renderRealHoldings() {
       ${reviewItem ? _industryHeatCell(reviewItem) : `<td class="px-3 py-2 text-center text-[11px] text-slate-300">—</td>`}
       ${disciplineCell}
       ${_entryLevelsCell(reviewItem)}
+      ${_shortCrowdingCell(reviewItem)}
       <td class="px-3 py-2 text-right font-mono whitespace-nowrap">
         ${Number(x.h.entry_price || 0).toFixed(2)} <span class="text-[10px] text-slate-400">${_esc(x.h.currency || _currencyForTicker(x.code))}</span>
         <div class="text-[11px] text-slate-500">${Number(x.h.shares || 0)} 股</div>
@@ -12900,6 +12930,105 @@ function _catalystActionBadge(catalyst) {
   return `<span class="${baseCls} border-rose-300 bg-rose-50 text-rose-700 font-bold" title="${tip}">↘️ 谨慎 ${explain}</span>`;
 }
 
+function _catalystStats(catalyst) {
+  const key = _inferCatalystEventKey(catalyst);
+  if (!key) return null;
+  if (typeof CATALYST_VALIDATION === "undefined" || !CATALYST_VALIDATION || !CATALYST_VALIDATION.summary_by_type) return null;
+  const stats = CATALYST_VALIDATION.summary_by_type[key];
+  if (!stats || !stats.by_horizon || !stats.by_horizon["T+5"]) return null;
+  const h5 = stats.by_horizon["T+5"];
+  const n = Number(stats.n || 0);
+  const mean = Number(h5.mean);
+  const hit = Number(h5.hit_pos);
+  if (!Number.isFinite(n) || !Number.isFinite(mean) || !Number.isFinite(hit)) return null;
+  let tone = "slate";
+  let label = "中性";
+  if (n < 5) {
+    tone = "slate";
+    label = "样本少";
+  } else if (mean >= 3 && hit >= 60) {
+    tone = "emerald";
+    label = "历史强";
+  } else if (mean > 1) {
+    tone = "emerald";
+    label = "可关注";
+  } else if (mean < -2) {
+    tone = "rose";
+    label = "历史弱";
+  } else if (mean < -1) {
+    tone = "amber";
+    label = "偏弱";
+  }
+  return { n, mean, hit, tone, label };
+}
+
+function _compactCatalystText(catalyst) {
+  const text = String(catalyst || "").trim();
+  if (!text) return "";
+  const head = text.split("—")[0].trim();
+  const date = (head.match(/(?:^|\\s)(\\d{1,2}[/]\\d{1,2})(?:\\s|$)/) || [])[1] || "";
+  const eventMap = [
+    ["高管变动", "高管变动"],
+    ["内部人净买入", "内部人净买入"],
+    ["内部人净卖出", "内部人净卖出"],
+    ["重大协议", "重大协议"],
+    ["重大商业协议", "重大协议"],
+    ["重大订单", "重大订单"],
+    ["回购", "回购"],
+    ["财报", "财报"],
+    ["EPS 实际", "财报"],
+    ["股东大会", "股东大会"],
+    ["股东表决", "股东表决"],
+    ["并购", "并购"],
+    ["收购完成", "并购"],
+    ["裁员", "裁员/退出"],
+    ["资产减值", "资产减值"],
+    ["破产", "破产"],
+  ];
+  const found = eventMap.find(([needle]) => head.includes(needle) || text.includes(needle));
+  const event = found ? found[1] : head.replace(/^\\W+/, "").replace(/\\(.*?\\)/g, "").trim().slice(0, 18);
+  return [date, event].filter(Boolean).join(" · ") || "公司事件";
+}
+
+function _catalystMiniBadge(catalyst) {
+  const stats = _catalystStats(catalyst);
+  if (!stats) return "";
+  const cls = {
+    emerald: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    amber: "border-amber-200 bg-amber-50 text-amber-700",
+    rose: "border-rose-200 bg-rose-50 text-rose-700",
+    slate: "border-slate-200 bg-slate-50 text-slate-600",
+  }[stats.tone] || "border-slate-200 bg-slate-50 text-slate-600";
+  const mean = `${stats.mean >= 0 ? "+" : ""}${stats.mean.toFixed(1)}%`;
+  const tip = `历史同类事件 ${stats.n} 次；事件后 5 天平均超额 ${mean}；${stats.hit.toFixed(0)}% 样本上涨。这里只是历史参考，不是买入指令。`;
+  return `<span class="inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-medium ${cls}" title="${_esc(tip)}">${stats.label} · ${stats.n}次 · 5日${mean}</span>`;
+}
+
+function _factorReadableLine(row) {
+  const items = [
+    ["估值", _factorValue(row, ["valuation_score", "valuation"])],
+    ["质量", _factorValue(row, ["quality_score", "quality", "data_quality"])],
+    ["反转", _factorValue(row, ["reversal_score", "reversal"])],
+    ["动量", _factorValue(row, ["momentum_score", "momentum"])],
+    ["覆盖", _factorValue(row, ["coverage_score", "coverage"])],
+  ].map(([label, value]) => {
+    let v = value;
+    if (label === "覆盖" && v !== null && v <= 1) v = v * 100;
+    return [label, v];
+  }).filter(([, value]) => value !== null && Number.isFinite(value));
+  const strong = items.filter(([, value]) => value >= 80).slice(0, 2);
+  const weak = items.filter(([, value]) => value < 50).slice(0, 1);
+  if (strong.length) {
+    const s = strong.map(([label, value]) => `${label}${value.toFixed(0)}`).join("、");
+    const w = weak.length ? `；短板 ${weak.map(([label, value]) => `${label}${value.toFixed(0)}`).join("、")}` : "";
+    return `模型强项：${s}${w}`;
+  }
+  if (items.length) {
+    return `模型依据：${items.slice(0, 2).map(([label, value]) => `${label}${value.toFixed(0)}`).join("、")}`;
+  }
+  return "";
+}
+
 function _reasonSummary(row) {
   // 纯文本版（不带 HTML/badge），保留兼容老调用
   const catalyst = row && row.catalyst ? String(row.catalyst) : "";
@@ -12939,18 +13068,31 @@ function _reasonSummary(row) {
 // 调用方不需要 _esc — 此函数内部已 _esc user content
 function _reasonSummaryHtml(row) {
   const catalyst = row && row.catalyst ? String(row.catalyst) : "";
-  const actionBadge = catalyst ? _catalystActionBadge(catalyst) : "";
-  // 把纯文本版的 catalyst prefix 拆出来，剩下的部分用 _reasonSummary 复用
+  const catalystCompact = catalyst ? _compactCatalystText(catalyst) : "";
+  const catalystBadge = catalyst ? _catalystMiniBadge(catalyst) : "";
   const fullText = _reasonSummary(row);  // 含 "catalyst · body"
-  // 去掉前面的 catalyst（如果有），剩下 body
   let bodyPart = fullText;
   if (catalyst && fullText.startsWith(catalyst)) {
     bodyPart = fullText.slice(catalyst.length).replace(/^\s*·\s*/, "");
   }
-  const catalystHtml = catalyst ? `${_esc(catalyst)}${actionBadge}` : "";
-  const bodyHtml = _esc(bodyPart);
-  if (catalystHtml && bodyHtml) return `${catalystHtml} · ${bodyHtml}`;
-  return catalystHtml || bodyHtml;
+  const factorLine = _factorReadableLine(row);
+  const title = catalyst ? `完整事件原文：${catalyst}` : "";
+  const mainLine = catalystCompact
+    ? `<div class="flex items-center gap-1.5 flex-wrap" title="${_esc(title)}">
+         <span class="font-semibold text-slate-800">事件：${_esc(catalystCompact)}</span>
+         ${catalystBadge}
+       </div>`
+    : `<div class="font-semibold text-slate-800">${_esc(bodyPart || factorLine || "暂无结构化推荐理由")}</div>`;
+  const factorHtml = factorLine
+    ? `<div class="mt-1 text-[11px] text-slate-500">${_esc(factorLine)}</div>`
+    : "";
+  const detailHtml = bodyPart && catalyst
+    ? `<details class="mt-1">
+         <summary class="cursor-pointer text-[11px] text-slate-500 hover:text-slate-700 select-none">看原始依据</summary>
+         <div class="mt-1 rounded bg-slate-50 border border-slate-200 p-2 text-[11px] text-slate-600 leading-snug max-h-24 overflow-auto">${_esc(bodyPart)}</div>
+       </details>`
+    : "";
+  return `<div class="space-y-0.5">${mainLine}${factorHtml}${detailHtml}</div>`;
 }
 
 (function renderDiscovery() {
@@ -13322,17 +13464,116 @@ function _reasonSummaryHtml(row) {
       const marketAttention = Number(marketSummary.attention || attention.length || 0);
       const marketSelectedAttention = Number(marketSummary.selected_attention || attention.filter(r => r.in_recommendation_list).length || 0);
       const generated = _fmtTs(audit.generated_at);
-      const statusCls = blockedTotal > 0
+
+      function _dataHealthReasonText(r) {
+        return [
+          ...(Array.isArray(r && r.reasons) ? r.reasons : []),
+          (r && r.next_action) || "",
+        ].filter(Boolean).join("；");
+      }
+
+      function _dataHealthBucket(r, kind) {
+        const text = _dataHealthReasonText(r);
+        if (/没有可用正向估值字段|估值字段异常|Forward PE=-|PEG=0|亏损/.test(text)) {
+          return {
+            key: "valuation",
+            label: "估值口径不适用",
+            short: "估值不适用",
+            tone: "purple",
+            cls: "border-purple-200 bg-purple-50 text-purple-800",
+            rowCls: "bg-purple-100 text-purple-800 border-purple-200",
+            action: "不是再拉一次 PE 就能解决；改看收入增速、EV/Sales、订单、现金消耗和客户验证。",
+          };
+        }
+        if (/短线价格异动|事件性下跌|价格异动|风险|红旗/.test(text)) {
+          return {
+            key: "research",
+            label: "只适合研究/复查",
+            short: "研究复查",
+            tone: "rose",
+            cls: "border-rose-200 bg-rose-50 text-rose-800",
+            rowCls: "bg-rose-100 text-rose-800 border-rose-200",
+            action: "先做买前研究和事件复查，不直接因为分数高就买。",
+          };
+        }
+        if (/缺最新价格|缺动量数据源|动量数据已过期|缺估值数据源|估值数据已过期|核心字段覆盖不足|数据可用性|字段覆盖/.test(text)) {
+          return {
+            key: "repairable",
+            label: "可自动补数据",
+            short: "可补数据",
+            tone: "amber",
+            cls: "border-amber-200 bg-amber-50 text-amber-800",
+            rowCls: "bg-amber-100 text-amber-800 border-amber-200",
+            action: "可以重拉行情/估值/涨跌幅后再重算；补完仍不过，就降为研究观察。",
+          };
+        }
+        return kind === "blocked"
+          ? {
+              key: "research",
+              label: "只适合研究/复查",
+              short: "研究复查",
+              tone: "rose",
+              cls: "border-rose-200 bg-rose-50 text-rose-800",
+              rowCls: "bg-rose-100 text-rose-800 border-rose-200",
+              action: "原因不够结构化，先不要进可买推荐，走买前研究。",
+            }
+          : {
+              key: "repairable",
+              label: "可自动补数据",
+              short: "可补数据",
+              tone: "amber",
+              cls: "border-amber-200 bg-amber-50 text-amber-800",
+              rowCls: "bg-amber-100 text-amber-800 border-amber-200",
+              action: "先重拉数据并复核。",
+            };
+      }
+
+      const bucketedRows = [
+        ...blocked.map(r => ({...r, _kind: "blocked", _bucket: _dataHealthBucket(r, "blocked")})),
+        ...attention.map(r => ({...r, _kind: "attention", _bucket: _dataHealthBucket(r, "attention")})),
+      ];
+      const repairableRows = bucketedRows.filter(r => r._bucket.key === "repairable");
+      const valuationRows = bucketedRows.filter(r => r._bucket.key === "valuation");
+      const researchRows = bucketedRows.filter(r => r._bucket.key === "research");
+      const activeIssueCount = bucketedRows.length;
+
+      const statusCls = marketBlocked > 0
         ? "border-amber-300 bg-amber-50 text-amber-900"
-        : (attentionTotal > 0 ? "border-sky-200 bg-sky-50 text-sky-900" : "border-emerald-200 bg-emerald-50 text-emerald-900");
-      const statusTitle = blockedTotal > 0
-        ? `有 ${blockedTotal} 只因为核心数据不足被拦截`
-        : (attentionTotal > 0 ? `无硬拦截；${attentionTotal} 只有数据提醒` : "本批没有数据不足拦截");
-      const statusExplain = blockedTotal > 0
-        ? "被拦截的票不会进入可买推荐；需要先补数据或只做研究观察。"
-        : (attentionTotal > 0 ? "这些不是硬错误，但说明部分票复用了近期快照或字段不够满，买前要看原因。" : "这表示候选池里的核心行情、动量、估值字段满足当前公式要求。");
+        : (marketAttention > 0 ? "border-sky-200 bg-sky-50 text-sky-900" : "border-emerald-200 bg-emerald-50 text-emerald-900");
+      const statusTitle = activeIssueCount > 0
+        ? `当前${_marketLabel(activeMarket)}有 ${activeIssueCount} 只需要处理`
+        : `当前${_marketLabel(activeMarket)}没有数据闸提醒`;
+      const statusExplain = activeIssueCount > 0
+        ? "不是所有问题都叫“没数据”：能补的重拉数据；亏损/无正向 PE 的改用成长证据；价格异动的先做买前研究。"
+        : "这表示当前市场候选的核心行情、动量、估值字段满足当前公式要求。";
+
+      function _sampleSymbols(rows) {
+        const syms = rows.slice(0, 4).map(r => r.symbol).filter(Boolean);
+        const more = rows.length > syms.length ? ` 等 ${rows.length} 只` : "";
+        return syms.length ? `${syms.join(" / ")}${more}` : "暂无";
+      }
+
+      function _bucketCard(title, rows, cls, explain, actionText) {
+        return `<div class="rounded-lg border ${cls} p-3">
+          <div class="flex items-start justify-between gap-2">
+            <div class="text-sm font-bold">${title}</div>
+            <div class="text-xl font-black leading-none">${rows.length}</div>
+          </div>
+          <div class="mt-1 text-xs leading-relaxed">${explain}</div>
+          <div class="mt-2 text-[11px] opacity-80">样例：${_esc(_sampleSymbols(rows))}</div>
+          <div class="mt-1 text-[11px] font-semibold">${actionText}</div>
+        </div>`;
+      }
+
+      const bucketCardsHtml = activeIssueCount > 0 ? `
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-2 mt-3">
+          ${_bucketCard("可自动补数据", repairableRows, "border-amber-200 bg-white/70 text-amber-900", "缺行情、动量日期、估值快照或字段覆盖不满。", "动作：点“全量补数据并重算”或明细里的“补这只”。")}
+          ${_bucketCard("估值口径不适用", valuationRows, "border-purple-200 bg-white/70 text-purple-900", "公司亏损、Forward PE/PEG 无意义，不能靠补 PE 解决。", "动作：改看收入增速、EV/Sales、订单、现金消耗。")}
+          ${_bucketCard("只适合研究/复查", researchRows, "border-rose-200 bg-white/70 text-rose-900", "短线异动、事件性下跌或原因不够结构化。", "动作：先进买前研究，不直接买。")}
+        </div>` : "";
 
       function _rowHtml(r, kind) {
+        const bucket = r._bucket || _dataHealthBucket(r, kind);
         const reasons = (r.reasons || []).map(_esc).join("；") || "—";
         const score = r.data_usability == null ? "—" : `${Number(r.data_usability).toFixed(1)}分`;
         const coverage = r.coverage_pct == null ? "—" : `${Number(r.coverage_pct).toFixed(1)}%`;
@@ -13340,37 +13581,42 @@ function _reasonSummaryHtml(row) {
           ? `<span class="px-1.5 py-0.5 rounded bg-violet-50 text-violet-700 border border-violet-200">已入榜 #${_esc(String(r.rank || ""))}</span>`
           : `<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">未入榜</span>`;
         const symbol = _esc(r.symbol || "");
-        const repairButtons = `<div class="inline-flex items-center gap-1">
-          <button onclick="triggerDataUsabilityRepair('${symbol}', this)"
-                  class="px-2 py-1 rounded bg-amber-600 hover:bg-amber-700 disabled:bg-amber-300 text-white text-[11px] font-semibold whitespace-nowrap"
-                  title="只刷新这只股票的行情/估值，然后重算推荐和看板">补这只</button>
-          <button onclick="copyDataUsabilityRepairCommand('${symbol}', this)"
-                  class="px-2 py-1 rounded bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 text-[11px] whitespace-nowrap"
-                  title="API 没开时，复制命令到终端执行">复制命令</button>
-        </div>`;
-        const badgeCls = kind === "blocked"
-          ? "bg-amber-100 text-amber-800 border-amber-200"
-          : "bg-sky-100 text-sky-800 border-sky-200";
-        const badgeText = kind === "blocked" ? "数据不足" : "数据提醒";
+        const nameAttr = _esc(r.name || "");
+        const actionButtons = bucket.key === "repairable"
+          ? `<div class="inline-flex items-center gap-1">
+              <button onclick="triggerDataUsabilityRepair('${symbol}', this)"
+                      class="px-2 py-1 rounded bg-amber-600 hover:bg-amber-700 disabled:bg-amber-300 text-white text-[11px] font-semibold whitespace-nowrap"
+                      title="只刷新这只股票的行情/估值，然后重算推荐和看板">补这只</button>
+              <button onclick="copyDataUsabilityRepairCommand('${symbol}', this)"
+                      class="px-2 py-1 rounded bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 text-[11px] whitespace-nowrap"
+                      title="API 没开时，复制命令到终端执行">复制命令</button>
+            </div>`
+          : `<button data-code="${symbol}" data-name="${nameAttr}"
+                    onclick="openStockDetail(this.dataset.code, this.dataset.name)"
+                    class="px-2 py-1 rounded bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 text-[11px] whitespace-nowrap"
+                    title="${_esc(bucket.action)}">买前研究</button>`;
         return `<tr class="border-t border-slate-100">
           <td class="py-2 pr-3 font-mono font-bold text-slate-900">${_esc(r.symbol || "")}</td>
           <td class="py-2 pr-3 text-slate-700 min-w-[170px]">${_esc(r.name || "")}</td>
-          <td class="py-2 pr-3 text-xs"><span class="px-1.5 py-0.5 rounded border ${badgeCls}">${badgeText}</span></td>
+          <td class="py-2 pr-3 text-xs"><span class="px-1.5 py-0.5 rounded border ${bucket.rowCls}" title="${_esc(bucket.action)}">${bucket.short}</span></td>
           <td class="py-2 pr-3 text-xs text-slate-700 min-w-[280px]">${reasons}</td>
           <td class="py-2 pr-3 text-xs font-mono whitespace-nowrap">${score} / 覆盖 ${coverage}</td>
           <td class="py-2 pr-3 text-xs text-slate-500 whitespace-nowrap">行情 ${_esc(r.trade_date || "—")} · 动量 ${_esc(r.momentum_trade_date || "—")} · 估值 ${_esc(r.fundamentals_trade_date || "—")}</td>
-          <td class="py-2 pr-3 text-xs text-slate-700 min-w-[220px]">${_esc(r.next_action || "")}</td>
+          <td class="py-2 pr-3 text-xs text-slate-700 min-w-[260px]">
+            <div>${_esc(r.next_action || "")}</div>
+            <div class="mt-0.5 text-[11px] text-slate-500">${_esc(bucket.action)}</div>
+          </td>
           <td class="py-2 text-xs whitespace-nowrap">${rank}</td>
-          <td class="py-2 pl-3 text-xs whitespace-nowrap">${repairButtons}</td>
+          <td class="py-2 pl-3 text-xs whitespace-nowrap">${actionButtons}</td>
         </tr>`;
       }
 
-      const blockedRows = blocked.slice(0, 12).map(r => _rowHtml(r, "blocked")).join("");
-      const attentionRows = attention.slice(0, 12).map(r => _rowHtml(r, "attention")).join("");
+      const blockedRows = bucketedRows.filter(r => r._kind === "blocked").slice(0, 12).map(r => _rowHtml(r, "blocked")).join("");
+      const attentionRows = bucketedRows.filter(r => r._kind === "attention").slice(0, 12).map(r => _rowHtml(r, "attention")).join("");
       const detailsHtml = (blockedRows || attentionRows) ? `
         <details class="mt-3 bg-white/70 border border-slate-200 rounded-lg overflow-hidden">
           <summary class="cursor-pointer px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-white">
-            展开看 ${_marketLabel(activeMarket)} 缺什么数据
+            展开看 ${_marketLabel(activeMarket)} 处理明细
             <span class="text-slate-400 font-normal">（硬拦截 ${marketBlocked} · 数据提醒 ${marketAttention} · 入榜提醒 ${marketSelectedAttention}）</span>
           </summary>
           <div class="overflow-x-auto">
@@ -13379,13 +13625,13 @@ function _reasonSummaryHtml(row) {
                 <tr>
                   <th class="py-2 pr-3 pl-3 text-left">代码</th>
                   <th class="py-2 pr-3 text-left">名称</th>
-                  <th class="py-2 pr-3 text-left">状态</th>
-                  <th class="py-2 pr-3 text-left">缺什么 / 为什么提醒</th>
+                  <th class="py-2 pr-3 text-left">类别</th>
+                  <th class="py-2 pr-3 text-left">原因 / 为什么提醒</th>
                   <th class="py-2 pr-3 text-left">数据分</th>
                   <th class="py-2 pr-3 text-left">数据日期</th>
-                  <th class="py-2 pr-3 text-left">下一步</th>
+                  <th class="py-2 pr-3 text-left">处理建议</th>
                   <th class="py-2 text-left">是否入榜</th>
-                  <th class="py-2 pl-3 text-left">处理</th>
+                  <th class="py-2 pl-3 text-left">动作</th>
                 </tr>
               </thead>
               <tbody>${blockedRows}${attentionRows}</tbody>
@@ -13410,10 +13656,11 @@ function _reasonSummaryHtml(row) {
                       title="本地 API 没开时复制命令到终端执行">复制全量命令</button>
               <a href="#runtime-status" class="px-2.5 py-1 rounded bg-white/70 hover:bg-white border border-slate-300 text-slate-700 text-[11px]">系统状态</a>
             </div>
-            <div>当前市场 ${_marketLabel(activeMarket)}：硬拦截 <b>${marketBlocked}</b> · 数据提醒 <b>${marketAttention}</b> · 入榜提醒 <b>${marketSelectedAttention}</b></div>
-            <div class="text-slate-500">全池 ${audit.candidate_count || "?"} 只 · 推荐 ${audit.selected_count || "?"} 只 · 审计 ${_esc(generated.short)} ${_esc(generated.age)}</div>
+            <div>当前市场 ${_marketLabel(activeMarket)}：可补 <b>${repairableRows.length}</b> · 估值不适用 <b>${valuationRows.length}</b> · 研究复查 <b>${researchRows.length}</b></div>
+            <div class="text-slate-500">全市场硬拦 ${blockedTotal} · 数据提醒 ${attentionTotal} · 全池 ${audit.candidate_count || "?"} 只 · 审计 ${_esc(generated.short)} ${_esc(generated.age)}</div>
           </div>
         </div>
+        ${bucketCardsHtml}
         ${detailsHtml}
       </div>`;
     }
