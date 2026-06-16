@@ -334,9 +334,9 @@ def _build_daily_briefing_card(res: pg.GateResult, scan_label: str,
     uni = bs.get("universe_size", 0)
     zoned = bs.get("zoned", 0)
     elements.append({"tag": "note", "elements": [{"tag": "plain_text", "content": (
-        f"📖 盘前一句话：环境灯看「今晚适不适合开新仓」，名单看「现价偏贵还是偏便宜」。"
-        f"名单池 自选+推荐+瓶颈 共 {uni} 只，其中 {zoned} 只有可买区间数据（目标价覆盖有限，名单可能偏短）。"
-        f"⚠️ 研究参考，不是投资建议；真钱决策你来定。"
+        f"📖 可买区间 = 分析师目标价打 7~8.5 折（留安全边际）；现价低于下沿=偏便宜、高于上沿=偏贵。"
+        f"环境灯看「今晚适不适合开新仓」。名单池 自选+推荐+瓶颈 共 {uni} 只，其中 {zoned} 只有区间数据"
+        f"（目标价覆盖有限，名单可能偏短）。⚠️ 研究参考，不是投资建议；真钱决策你来定。"
     )}]})
 
     return {

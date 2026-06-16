@@ -86,13 +86,20 @@ def _gather_universe(conn) -> dict[str, dict[str, str]]:
 
 
 def _compact_line(sym: str, market: str, sources: list[str], zone: dict) -> str:
-    """一行人话：MU(自选/瓶颈) 现价$182 · 可买$150~$182 · 锚:目标价。"""
+    """一行人话，带「低于/高于」方向词，新手一眼看懂现价在区间哪边：
+    MU(自选/瓶颈) 现价 $182 · 低于可买区间 $150~$180 · 锚:分析师目标价。
+    """
     src = "/".join(sources)
     cur = zone.get("current")
     low, high = zone.get("low"), zone.get("high")
+    pos = zone.get("position")
     cur_str = f"现价 ${cur:.0f}" if cur else "现价未知"
-    band = f"区间 ${low:.0f}~${high:.0f}" if (low is not None and high is not None) else ""
-    anchor = "锚:目标价" if zone.get("method") == "估值" else "锚:MA回撤"
+    if low is not None and high is not None:
+        rel = "低于" if pos == "便宜" else ("高于" if pos == "偏贵" else "处于")
+        band = f"{rel}可买区间 ${low:.0f}~${high:.0f}"
+    else:
+        band = ""
+    anchor = "锚:分析师目标价" if zone.get("method") == "估值" else "锚:均线回撤"
     mkt = f"·{market}" if market and market != "US" else ""
     return f"**{sym}**（{src}{mkt}） {cur_str} · {band} · {anchor}"
 
