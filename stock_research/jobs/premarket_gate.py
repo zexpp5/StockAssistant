@@ -72,6 +72,7 @@ logger = logging.getLogger(__name__)
 
 OUT_JSON = _REPO / "data" / "latest" / "premarket_gate.json"
 STATE_FILE = _REPO / "data" / "premarket_gate_state.json"
+DEFENSE_STATE_FILE = _REPO / "data" / "defense_watcher_state.json"
 HISTORY_FILE = _REPO / "data" / "premarket_gate_history.json"
 REAL_HOLDING_REVIEW_JSON = _REPO / "data" / "latest" / "real_holding_review.json"
 
@@ -296,8 +297,60 @@ def _build_downgrade_card(res: pg.GateResult, scan_label: str, previous_color: s
     }
 
 
+# 大盘中期趋势（defense_watcher）—— 并进盘前卡，省得用户对照三张卡
+_SEV_ORDER = {"NONE": 0, "LOW": 1, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
+
+
+def _defense_summary() -> dict:
+    """大盘中期趋势：档位取 defense_watcher 已落库的权威值(用户看到的那个)，
+    原因用轻量版 check_market_regime(不跑慢的宏观/期权)现算一句人话。失败给 NONE。
+    """
+    severity = "NONE"
+    try:
+        st = json.loads(DEFENSE_STATE_FILE.read_text(encoding="utf-8"))
+        severity = str(st.get("last_severity") or "NONE").upper()
+    except Exception:
+        pass
+    reason = None
+    try:
+        from stock_research.core import defense_signals
+        alerts = defense_signals.check_market_regime(include_macro=False, include_options=False)
+        alerts = sorted(alerts, key=lambda a: _SEV_ORDER.get(str(a.get("severity", "")).upper(), 0),
+                        reverse=True)
+        if alerts:
+            top = alerts[0]
+            t = str(top.get("type", ""))
+            if "TREND_BREAK" in t:
+                reason = "SPY 跌破 200 日均线（中期趋势转弱）"
+            elif "PANIC" in t:
+                reason = f"VIX 偏高（{top.get('vix_close', '恐慌')}）"
+            elif "MACRO" in t:
+                reason = "宏观面转弱"
+            else:
+                reason = str(top.get("trigger") or "")[:40]
+    except Exception as e:
+        logger.warning("defense 摘要失败(不影响盘前卡): %s", str(e)[:80])
+    return {"severity": severity, "reason": reason}
+
+
+def _synthesize(env_color: str, def_sev: str) -> str:
+    """把「今晚开盘环境」和「大盘中期趋势」合成一句人话结论。"""
+    e = _SEV_ORDER.get(str(env_color).upper(), 0)
+    d = _SEV_ORDER.get(str(def_sev).upper(), 0)
+    if e <= 0 and d <= 0:
+        return "短期、中期都平稳，可按计划研究/操作。"
+    if e <= 1 and d >= 2:
+        return "今晚开盘环境平稳，但大盘中期偏防守（已破位）→ 可研究/小仓，别激进加仓追高。"
+    if e >= 2 and d <= 1:
+        return "今晚开盘有扰动，但大盘中期还健康 → 想动等开盘 30-60 分钟企稳再看。"
+    if e >= 2 and d >= 2:
+        return "短期、中期都偏防守 → 以守为主，原则上别开新仓。"
+    return "短期或中期有轻微留意 → 控制仓位、别追高。"
+
+
 def _build_daily_briefing_card(res: pg.GateResult, scan_label: str,
-                               buy_signals: dict | None) -> dict:
+                               buy_signals: dict | None,
+                               defense: dict | None = None) -> dict:
     """每交易日盘前主动推的「盘前一句话」：环境灯 + 🟢可买 / 🔴别追名单。
 
     与 _build_card（出事才报警的风险卡）分开：这张每天都推一次，正常日也推。
@@ -307,9 +360,20 @@ def _build_daily_briefing_card(res: pg.GateResult, scan_label: str,
     green = bs.get("green") or []
     red = bs.get("red") or []
 
-    # 1) 环境一句话（大字）
-    head = f"### {res.headline_plain}\n\n**怎么做**：{res.can_buy}"
+    # 1) 今晚开盘环境（大字）
+    head = f"### 今晚开盘环境：{res.headline_plain}\n\n**怎么做**：{res.can_buy}"
     elements: list[dict] = [{"tag": "div", "text": {"tag": "lark_md", "content": head}}]
+
+    # 1.5) 大盘中期趋势（defense_watcher）+ 综合一句话 —— 一张卡看懂短期+中期
+    ds = defense or {}
+    dsev = str(ds.get("severity") or "NONE").upper()
+    dicon = pg.ICON.get(dsev, "⚪")
+    dline = f"{dicon} 大盘中期趋势：**{dsev}**"
+    if ds.get("reason"):
+        dline += f" — {ds['reason']}"
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": dline}})
+    syn = _synthesize(res.color, dsev)
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"🧭 **综合**：{syn}"}})
 
     # 2) 🟢 现在偏便宜（可研究）
     elements.append({"tag": "hr"})
@@ -500,6 +564,9 @@ def main() -> int:
         except Exception as e:
             logger.warning("可买名单计算失败（不影响闸门）: %s", e)
 
+    # 大盘中期趋势（defense_watcher）—— 并进盘前卡 + 首页抽屉，省得对照三张卡
+    defense = _defense_summary()
+
     # 控制台摘要
     print(f"\n{res.icon} {res.color}  综合压力 {res.composite:.2f}/3  覆盖率 {res.coverage:.0%}  [{scan}]")
     print(f"今晚能不能买：{res.can_buy}")
@@ -528,6 +595,8 @@ def main() -> int:
     payload["scan_label"] = scan
     payload["phase"] = _market_phase(now) or "pre"  # pre=盘前 / post=盘后跟踪
     payload["buy_signals"] = buy_signals  # 首页盘前预警横幅 + 日报卡共用
+    payload["defense"] = defense          # 大盘中期趋势（首页抽屉显示）
+    payload["synthesis"] = _synthesize(res.color, defense.get("severity", "NONE"))
     OUT_JSON.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info("已写 %s", OUT_JSON.relative_to(_REPO))
 
@@ -583,7 +652,7 @@ def main() -> int:
     if scan == "开盘前最终" and state.get("briefing_date") != today:
         logger.info("🌅 推送盘前日报卡（%s，🟢%d/🔴%d）",
                     res.color, len(buy_signals["green"]), len(buy_signals["red"]))
-        ok_brief = _push(_build_daily_briefing_card(res, scan, buy_signals))
+        ok_brief = _push(_build_daily_briefing_card(res, scan, buy_signals, defense))
         state["briefing_date"] = today
         state["briefing_push_ok"] = ok_brief
 

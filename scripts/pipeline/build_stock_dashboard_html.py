@@ -514,6 +514,16 @@ window.echarts = window.echarts || {
     if(wrap===false) h+='</div>';
     return wrap===false?h:card(h);
   }
+  function pmSynthesis(d){
+    var ds=d&&d.defense;
+    if(!ds && !(d&&d.synthesis)) return "";
+    var sev=(ds&&ds.severity)||"NONE";
+    var ic=({NONE:"🟢",LOW:"🟡",HIGH:"🟠",CRITICAL:"🔴"})[sev]||"⚪";
+    var h='<h4 style="margin:0 0 6px;font-size:14px">🛡 大盘中期趋势 <span style="font-weight:400;color:#94a3b8;font-size:12px">（防御信号·和上面盘前环境互补）</span></h4>';
+    h+='<div style="font-size:13.5px">'+ic+' <b>'+esc(sev)+'</b>'+((ds&&ds.reason)?(' — '+esc(ds.reason)):'')+'</div>';
+    if(d&&d.synthesis) h+='<div style="margin-top:8px;font-size:13.5px;background:#f8fafc;border:1px solid #e8eef5;border-radius:8px;padding:9px 11px"><b>🧭 综合：</b>'+esc(d.synthesis)+'</div>';
+    return card(h);
+  }
   function pmBuySignals(d){
     var bs=d&&d.buy_signals; if(!bs) return "";
     var g=bs.green||[], r=bs.red||[];
@@ -574,6 +584,7 @@ window.echarts = window.echarts || {
     }
     pm+=pmEvidence(d,false);
     h+=card(pm);
+    h+=pmSynthesis(d);
     h+=pmBuySignals(d);
     if(d.holdings_impact&&d.holdings_impact.length){
       var hh='<h4 style="margin:0 0 8px;font-size:14px">💼 对你持仓的影响 <span style="font-weight:400;color:#94a3b8;font-size:12px">（只是提醒，不是叫你一定买卖）</span></h4>';

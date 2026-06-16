@@ -191,6 +191,30 @@ def test_weekend_never_valid():
     assert not ok and "周末" in why
 
 
+def test_synthesize_combines_short_and_medium():
+    from stock_research.jobs import premarket_gate as job
+    assert "都平稳" in job._synthesize("NONE", "NONE")
+    # 短期稳 + 中期 HIGH（当前实况：开盘平稳但 SPY 破位）
+    s = job._synthesize("NONE", "HIGH")
+    assert "中期偏防守" in s and "别激进加仓" in s
+    # 短期差 + 中期稳
+    assert "等开盘" in job._synthesize("HIGH", "NONE")
+    # 双防守
+    assert "以守为主" in job._synthesize("CRITICAL", "HIGH")
+
+
+def test_daily_briefing_card_includes_defense():
+    from stock_research.jobs import premarket_gate as job
+    res = SimpleNamespace(color="NONE", headline_plain="🟢 今晚环境正常", can_buy="可正常研究。")
+    defense = {"severity": "HIGH", "reason": "SPY 跌破 200 日均线（中期趋势转弱）"}
+    card = job._build_daily_briefing_card(
+        res, "开盘前最终",
+        {"green": [], "red": [], "universe_size": 5, "zoned": 0}, defense)
+    blob = str(card["card"]["elements"])
+    assert "大盘中期趋势" in blob and "HIGH" in blob
+    assert "综合" in blob and "200 日均线" in blob
+
+
 def test_daily_briefing_card_empty_green():
     from stock_research.jobs import premarket_gate as job
 
