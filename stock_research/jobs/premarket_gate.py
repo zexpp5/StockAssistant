@@ -63,6 +63,11 @@ _load_dotenv(_REPO / ".env")
 
 from stock_research.core import premarket_gate as pg  # noqa: E402
 
+try:  # 盘前可买/别追名单（自选+推荐+瓶颈宇宙 套 buy_zone）；失败不拖垮闸门
+    from stock_research.core import premarket_buy_signals as pbs  # noqa: E402
+except Exception:  # pragma: no cover - 防御
+    pbs = None
+
 logger = logging.getLogger(__name__)
 
 OUT_JSON = _REPO / "data" / "latest" / "premarket_gate.json"
@@ -172,8 +177,26 @@ def _us_open_beijing(now: datetime) -> datetime | None:
         return None
 
 
+def _market_phase(now: datetime) -> str | None:
+    """now 处在哪个阶段：'pre'=盘前窗口 / 'post'=盘后第一小时跟踪窗口 / None=不在任何窗口。
+
+    delta_min = 开盘北京时间 - now（正=开盘前，负=开盘后）。
+      盘前窗口  = 开盘前 5 ~ 95 分钟
+      盘后窗口  = 开盘后 5 ~ 65 分钟（覆盖 +10/+20/+30/+40/+50/+60 六个跟踪点）
+    """
+    open_bj = _us_open_beijing(now)
+    if open_bj is None:
+        return "pre" if 19 <= now.hour <= 23 else None  # 时区库不可用的粗兜底
+    delta_min = (open_bj - now).total_seconds() / 60.0
+    if 5 <= delta_min <= 95:
+        return "pre"
+    if -65 <= delta_min <= -5:
+        return "post"
+    return None
+
+
 def _is_valid_window(now: datetime) -> tuple[bool, str]:
-    """是否美股开盘前有效窗口。周末/美股假日跳过；夏令时/冬令时自动适配。"""
+    """是否在有效扫描窗口（盘前 或 盘后第一小时）。周末/美股假日跳过；夏/冬令时自适配。"""
     d = now.date()
     if now.weekday() >= 5:
         return False, f"{d} 是周末，美股休市"
@@ -181,13 +204,14 @@ def _is_valid_window(now: datetime) -> tuple[bool, str]:
         return False, f"{d} 是美股假日，休市"
     open_bj = _us_open_beijing(now)
     if open_bj is None:
-        # 兜底：时区库不可用时退回固定 19-23 点
         return (19 <= now.hour <= 23), "盘前窗口(固定兜底)"
     delta_min = (open_bj - now).total_seconds() / 60.0
-    # 盘前窗口 = 开盘前 5 ~ 95 分钟（三个扫描点 80/45/15 分钟前都落在内）
-    if 5 <= delta_min <= 95:
+    phase = _market_phase(now)
+    if phase == "pre":
         return True, f"盘前窗口（美股 {open_bj:%H:%M} 开盘，距开盘 {delta_min:.0f} 分）"
-    return False, f"不在盘前窗口（美股 {open_bj:%H:%M} 开盘，距开盘 {delta_min:.0f} 分）"
+    if phase == "post":
+        return True, f"盘后跟踪窗口（美股 {open_bj:%H:%M} 已开盘 {-delta_min:.0f} 分）"
+    return False, f"不在扫描窗口（美股 {open_bj:%H:%M} 开盘，距开盘 {delta_min:.0f} 分）"
 
 
 # ──────────────────────────────────────────────────
@@ -230,12 +254,13 @@ def _build_card(res: pg.GateResult, scan_label: str) -> dict:
         f"风险打分 {res.composite:.1f}/3（越高越危险）· ⚠️ 仅供参考，不是投资建议"
     )}]})
 
+    phase_txt = "盘后跟踪" if scan_label.startswith("开盘后") else "开盘前"
     return {
         "msg_type": "interactive",
         "card": {
             "config": {"wide_screen_mode": True},
             "header": {
-                "title": {"tag": "plain_text", "content": f"🚦 美股开盘前 · 今晚能不能买 · {now_str}"},
+                "title": {"tag": "plain_text", "content": f"🚦 美股{phase_txt} · 今晚能不能买 · {now_str}"},
                 "subtitle": {"tag": "plain_text", "content": f"{scan_label}"},
                 "template": pg.TEMPLATE.get(res.color, "grey"),
             },
@@ -267,6 +292,63 @@ def _build_downgrade_card(res: pg.GateResult, scan_label: str, previous_color: s
                 {"tag": "div", "text": {"tag": "lark_md", "content": content}},
                 {"tag": "note", "elements": [{"tag": "plain_text", "content": "仅供参考，不是投资建议。"}]},
             ],
+        },
+    }
+
+
+def _build_daily_briefing_card(res: pg.GateResult, scan_label: str,
+                               buy_signals: dict | None) -> dict:
+    """每交易日盘前主动推的「盘前一句话」：环境灯 + 🟢可买 / 🔴别追名单。
+
+    与 _build_card（出事才报警的风险卡）分开：这张每天都推一次，正常日也推。
+    """
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    bs = buy_signals or {}
+    green = bs.get("green") or []
+    red = bs.get("red") or []
+
+    # 1) 环境一句话（大字）
+    head = f"### {res.headline_plain}\n\n**怎么做**：{res.can_buy}"
+    elements: list[dict] = [{"tag": "div", "text": {"tag": "lark_md", "content": head}}]
+
+    # 2) 🟢 现在偏便宜（可研究）
+    elements.append({"tag": "hr"})
+    if green:
+        body = "\n".join(f"• {g['line']}" for g in green[:8])
+        more = f"\n…另有 {len(green) - 8} 只" if len(green) > 8 else ""
+        elements.append({"tag": "div", "text": {"tag": "lark_md",
+                        "content": "**🟢 现在偏便宜（可研究，不是叫你买）**\n" + body + more}})
+    else:
+        elements.append({"tag": "div", "text": {"tag": "lark_md",
+                        "content": "**🟢 现在偏便宜**：今日名单为空（票池里没有现价跌破可买区间下沿的）"}})
+
+    # 3) 🔴 偏贵别追
+    if red:
+        body = "\n".join(f"• {r['line']}" for r in red[:6])
+        more = f"\n…另有 {len(red) - 6} 只" if len(red) > 6 else ""
+        elements.append({"tag": "hr"})
+        elements.append({"tag": "div", "text": {"tag": "lark_md",
+                        "content": "**🔴 偏贵别追**\n" + body + more}})
+
+    # 4) 脚注：覆盖率诚实交代 + 免责
+    uni = bs.get("universe_size", 0)
+    zoned = bs.get("zoned", 0)
+    elements.append({"tag": "note", "elements": [{"tag": "plain_text", "content": (
+        f"📖 盘前一句话：环境灯看「今晚适不适合开新仓」，名单看「现价偏贵还是偏便宜」。"
+        f"名单池 自选+推荐+瓶颈 共 {uni} 只，其中 {zoned} 只有可买区间数据（目标价覆盖有限，名单可能偏短）。"
+        f"⚠️ 研究参考，不是投资建议；真钱决策你来定。"
+    )}]})
+
+    return {
+        "msg_type": "interactive",
+        "card": {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": f"🌅 今日盘前一句话 · {now_str}"},
+                "subtitle": {"tag": "plain_text", "content": f"{scan_label} · 开盘前最终一扫"},
+                "template": pg.TEMPLATE.get(res.color, "blue"),
+            },
+            "elements": elements,
         },
     }
 
@@ -345,16 +427,20 @@ def _load_real_holdings() -> list[dict]:
 # ──────────────────────────────────────────────────
 
 def _scan_label(now: datetime) -> str:
-    """按"距开盘还有多久"命名，夏/冬令时通用。"""
+    """按"距开盘还有多久"命名，夏/冬令时通用。盘后按"开盘后多少分"命名。"""
     open_bj = _us_open_beijing(now)
     if open_bj is None:
         return "盘前"
     delta = (open_bj - now).total_seconds() / 60.0
-    if delta > 60:
-        return "初扫"
-    if delta > 25:
-        return "数据后复扫"
-    return "开盘前最终"
+    if delta >= 0:  # 盘前
+        if delta > 60:
+            return "初扫"
+        if delta > 25:
+            return "数据后复扫"
+        return "开盘前最终"
+    # 盘后：四舍五入到最近的 10 分钟刻度
+    mins = int(round(-delta / 10.0) * 10) or 10
+    return f"开盘后{mins}分"
 
 
 def main() -> int:
@@ -393,7 +479,9 @@ def main() -> int:
                     last_hm = _scans[-1].get("at", "")
                     lh, lm = (int(x) for x in last_hm.split(":"))
                     gap = (now.hour * 60 + now.minute) - (lh * 60 + lm)
-                    if 0 <= gap < 18:
+                    # 盘前同季可能两个 launchd 点挨 5 分钟（需去重）；盘后是 10 分钟一扫（必须保留）。
+                    # 阈值取 8 分钟：5 分钟近邻仍去重，10 分钟盘后节奏不误杀。
+                    if 0 <= gap < 8:
                         logger.info("跳过：距上次扫描仅 %d 分钟（避免近邻重复）", gap)
                         return 0
                 except Exception:
@@ -403,6 +491,14 @@ def main() -> int:
     logger.info("拉行情 + %d 只真实持仓...", len(holdings))
     res = pg.compute_gate(now=now, holdings=holdings)
     scan = _scan_label(now)
+
+    # 盘前可买/别追名单（自选+推荐+瓶颈宇宙 套 buy_zone）；失败给空名单，绝不拖垮闸门
+    buy_signals: dict = {"green": [], "red": [], "universe_size": 0, "zoned": 0}
+    if pbs is not None:
+        try:
+            buy_signals = pbs.compute_buy_avoid(today=now.date())
+        except Exception as e:
+            logger.warning("可买名单计算失败（不影响闸门）: %s", e)
 
     # 控制台摘要
     print(f"\n{res.icon} {res.color}  综合压力 {res.composite:.2f}/3  覆盖率 {res.coverage:.0%}  [{scan}]")
@@ -415,6 +511,11 @@ def main() -> int:
         print(f"  💼 {h['symbol']}: {h['reason']}")
     if res.notes:
         print("备注：" + "；".join(res.notes))
+    print(f"🟢 可研究 {len(buy_signals['green'])} 只 / 🔴 别追 {len(buy_signals['red'])} 只"
+          f"（票池 {buy_signals.get('universe_size', 0)} 只，有区间 {buy_signals.get('zoned', 0)} 只）")
+    for g in buy_signals["green"][:8]:
+        print(f"  🟢 {g['symbol']}({'/'.join(g['sources'])}) {g.get('current')} ∈ "
+              f"[{g.get('low')},{g.get('high')}]")
 
     if not do_production:
         tag = "--dry-run" if args.dry_run else "--force 测试模式（未带 --push-production）"
@@ -425,6 +526,8 @@ def main() -> int:
     OUT_JSON.parent.mkdir(parents=True, exist_ok=True)
     payload = res.to_dict()
     payload["scan_label"] = scan
+    payload["phase"] = _market_phase(now) or "pre"  # pre=盘前 / post=盘后跟踪
+    payload["buy_signals"] = buy_signals  # 首页盘前预警横幅 + 日报卡共用
     OUT_JSON.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info("已写 %s", OUT_JSON.relative_to(_REPO))
 
@@ -474,6 +577,15 @@ def main() -> int:
             logger.info("🟡 LOW：只写 JSON，今日决策台横幅读取，不推飞书")
         else:
             logger.info("🟢 NONE：不弹不推，仅写 JSON")
+
+    # 每交易日「盘前一句话」日报卡：只在开盘前最终一扫推一次（正常日也推），
+    # 与上面的橙/红报警分开 —— 用户要的是每天一个明确的积极/消极信号 + 名单。
+    if scan == "开盘前最终" and state.get("briefing_date") != today:
+        logger.info("🌅 推送盘前日报卡（%s，🟢%d/🔴%d）",
+                    res.color, len(buy_signals["green"]), len(buy_signals["red"]))
+        ok_brief = _push(_build_daily_briefing_card(res, scan, buy_signals))
+        state["briefing_date"] = today
+        state["briefing_push_ok"] = ok_brief
 
     state["last_color"] = res.color
     state["scans"].append({"at": now.strftime("%H:%M"), "color": res.color,
