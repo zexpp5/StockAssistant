@@ -507,6 +507,35 @@ def fetch_grade_events(ticker: str) -> list[dict[str, Any]] | None:
     return out
 
 
+def fetch_price_target(ticker: str) -> dict[str, Any] | None:
+    """分析师目标价共识（/price-target-summary）。
+
+    2026-06-16 接入,用于补 buy_zone 估值锚点覆盖(yfinance grade history 只盖~33%)。
+    取最新够样本的窗口:近 1 月 → 近 1 季 → 近 1 年,返回均值 + 分析师数 + 窗口。
+    /price-target-consensus 与 /price-target-news 不在当前套餐(实测 402),故用 summary。
+    """
+    raw = _get("/price-target-summary", {"symbol": ticker})
+    if not raw or not isinstance(raw, list) or not raw[0]:
+        return None
+    r = raw[0]
+    for cnt_key, avg_key, window in (
+        ("lastMonthCount", "lastMonthAvgPriceTarget", "近1月"),
+        ("lastQuarterCount", "lastQuarterAvgPriceTarget", "近1季"),
+        ("lastYearCount", "lastYearAvgPriceTarget", "近1年"),
+    ):
+        cnt = r.get(cnt_key) or 0
+        avg = r.get(avg_key)
+        if cnt and isinstance(avg, (int, float)) and avg > 0:
+            return {
+                "ticker": ticker,
+                "price_target": float(avg),
+                "n_analysts": int(cnt),
+                "window": window,
+                "source": "FMP/price-target-summary",
+            }
+    return None
+
+
 # ────────────────────────────────────────────────────────
 # 财报日历
 # ────────────────────────────────────────────────────────

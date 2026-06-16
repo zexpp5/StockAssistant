@@ -646,6 +646,8 @@ fi
 # M — V2 系统池 enrichment（system_universe → industry/earnings/详情页字段）
 run_step "4b/25 V2 系统池 enrichment" \
     "scripts/tools/enrich_system_universe_v2.py --reuse-recent-days 7 --skip-trends --skip-akshare --sleep-sec 0.02 --per-symbol-timeout-sec 18"
+# M2 — 分析师目标价补齐（yfinance 主源 + FMP 兜底 → 喂 buy_zone 估值锚点;只补缺口,enhance 非关键）
+run_step "4c/25 分析师目标价补齐（buy_zone 估值锚点）" "-m scripts.tools.fetch_fmp_price_targets" enhance 300
 # 2026-05-20 V1 cutover：删 step 4 (V1 enrich_watchlist) / 5 (V1 daily_audit) /
 # 6 (V1 daily_picks dry-run) / 7 (audit_picks V1 reviews) / 8 (weekly_review V1 picks)
 
