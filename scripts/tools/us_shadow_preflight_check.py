@@ -490,6 +490,9 @@ def to_markdown(payload: dict[str, Any]) -> str:
 
 def run() -> dict[str, Any]:
     runs = shadow_eval.load_shadow_runs()
+    # 周末 source run 永远评不出 outcome(无收盘价),计入唯一 run 计数/分母只会
+    # 永久压低覆盖率并虚增 run 数 → 与 build_market_horizon_summary 同口径剔除。
+    runs = [r for r in runs if not shadow_eval._is_weekend_source_run(r)]
     shadow_evidence = _load_json(SHADOW_EVIDENCE_JSON)
     source_unique_runs, _duplicates = _latest_by_source(runs)
     source_run_ids = sorted({

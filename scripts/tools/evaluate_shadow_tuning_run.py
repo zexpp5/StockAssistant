@@ -66,6 +66,27 @@ def _source_run_id(run: dict[str, Any]) -> str | None:
     return str(value) if value else None
 
 
+def _source_run_date(run: dict[str, Any]) -> str | None:
+    source = run.get("source_production_run") or {}
+    value = source.get("run_date")
+    return str(value)[:10] if value else None
+
+
+def _is_weekend_source_run(run: dict[str, Any]) -> bool:
+    """source run 落在周六/周日 → 三市场(US/HK/CN)都不开盘,这批推荐永远拿不到
+    1D/5D/20D outcome(入场=推荐日收盘价,周末无收盘)。计入候选分母只会永久压低
+    覆盖率,故从分母剔除。仅按 ISO 周末判定,节假日残差暂忽略。"""
+    run_date = _source_run_date(run)
+    if not run_date:
+        return False  # 无法确定日期时保守保留
+    try:
+        from datetime import date as _date
+        y, m, d = (int(x) for x in run_date.split("-")[:3])
+        return _date(y, m, d).weekday() >= 5
+    except Exception:
+        return False
+
+
 def load_shadow_runs(
     *,
     latest_path: Path = LATEST_SHADOW_JSON,
@@ -288,6 +309,9 @@ def build_market_horizon_summary(
     horizons: tuple[str, ...] = DEFAULT_HORIZONS,
 ) -> list[dict[str, Any]]:
     runs = _dedup_source_last_batch(runs)
+    # 周末 source run 的 picks 永远评不出 outcome(无收盘价),计入分母只会永久压低
+    # 覆盖率 → 从候选+成熟两侧一并剔除,保证 reviewed/candidate 同口径。
+    runs = [r for r in runs if not _is_weekend_source_run(r)]
     counts = _candidate_counts(runs, horizons)
     records = _outcome_records(runs, outcomes, horizons)
     markets = sorted({key[0] for key in counts} | {row["market"] for row in records})
