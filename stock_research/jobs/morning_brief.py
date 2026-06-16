@@ -2221,7 +2221,14 @@ def section_walk_forward_oos(today: date | None = None) -> str:
 
 
 def section_weekly_hitrate(today: date | None = None) -> str:
-    """V2: 周一回顾 — 由 pick_outcomes alpha 数据驱动（V1 reviews/discovery_tracking 已删）。"""
+    """V2: 周一回顾 — AI 准不准。
+
+    统一口径：用 stock_research.core.strategy_eval 去重成熟样本（当前
+    strategy_version + 每天最后一批 + (推荐日,股票)去重 + isfinite），与
+    dashboard「策略验证进度」同源。旧实现混三市场 + 未去重（早晚两批重复
+    计数）→ 把美股(正 alpha)和 A股(负 alpha)平均成误导性的近零数字。
+    现按市场分行，让用户看清「哪个市场的 AI 真有用」。
+    """
     today = today or date.today()
     if today.weekday() != 0:
         return ""
@@ -2231,48 +2238,48 @@ def section_weekly_hitrate(today: date | None = None) -> str:
         _repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         sys.path.insert(0, os.path.join(_repo, "scripts", "lib"))
         import stock_db
+        from stock_research.core import strategy_eval as se
     except Exception:
         return ""
     try:
         conn = stock_db.get_db(force_read_only=True)
     except Exception:
         return ""
-    lines = ["#### 🧪 上周回顾 · AI 准不准（周一专属 · V2 pick_outcomes）"]
+    lines = ["#### 🧪 上周回顾 · AI 准不准（周一专属 · 去重分市场口径）"]
+    market_names = {"US": "🇺🇸 美股", "HK": "🇭🇰 港股", "CN": "🇨🇳 A股"}
     try:
-        rows = conn.execute(
-            """
-            SELECT po.horizon, COUNT(*) n,
-                   ROUND(AVG(po.return_pct), 2) avg_ret,
-                   ROUND(AVG(po.alpha_pct), 2) avg_alpha,
-                   ROUND(SUM(CASE WHEN po.is_success THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 0) win_rate
-            FROM pick_outcomes po
-            JOIN recommendation_runs rr ON rr.run_id = po.run_id
-            WHERE po.outcome_date >= ?
-              AND po.alpha_pct IS NOT NULL
-              AND rr.universe_scope = 'system_tech_universe'
-              AND rr.run_date >= ?
-              AND rr.strategy_version = (
-                SELECT strategy_version
-                FROM recommendation_runs
-                WHERE universe_scope = 'system_tech_universe' AND status = 'generated'
-                ORDER BY generated_at DESC LIMIT 1
-              )
-            GROUP BY po.horizon ORDER BY po.horizon
-            """,
-            [today - timedelta(days=30), PRODUCTION_METRICS_START_DATE],
-        ).fetchall()
-        if rows:
-            lines.append(f"**V2 推荐 alpha（近 30 天成熟样本，生产统计自 {PRODUCTION_METRICS_START_DATE} 起）**")
-            lines.append("| Horizon | 样本 | 平均涨幅 | 平均 alpha | 胜率 |")
-            lines.append("|---|---:|---:|---:|---:|")
-            for h, n, ret, alpha, win in rows:
-                sign_r = "+" if (ret or 0) >= 0 else ""
-                sign_a = "+" if (alpha or 0) >= 0 else ""
-                lines.append(f"| {h} | {n} | {sign_r}{ret}% | {sign_a}{alpha}% | {int(win or 0)}% |")
+        any_sample = False
+        markets = ["US", "HK"] + (["CN"] if _brief_show_a_share() else [])
+        for mkt in markets:
+            mkt_lines = []
+            for horizon in ("1d", "5d"):
+                samples = se.mature_samples(
+                    conn, market=mkt, horizon=horizon,
+                    metrics_start=str(PRODUCTION_METRICS_START_DATE))
+                if not samples:
+                    continue
+                summ = se.summarize(samples)
+                n = summ["n"]
+                if not n:
+                    continue
+                any_sample = True
+                win = summ["win_rate_pct"] or 0
+                alpha = summ["avg_alpha_pct"] or 0
+                sign_a = "+" if alpha >= 0 else ""
+                mkt_lines.append(
+                    f"| {horizon} | {n} | {win:.0f}% | {sign_a}{alpha:.2f}% |")
+            if mkt_lines:
+                lines.append(f"**{market_names.get(mkt, mkt)}**")
+                lines.append("| Horizon | 样本 | 胜率 | 平均 alpha |")
+                lines.append("|---|---:|---:|---:|")
+                lines.extend(mkt_lines)
+        if not any_sample:
+            lines.append("_pick_outcomes 暂无成熟样本（evaluate_v2_picks 每天累积）_")
         else:
-            lines.append("_pick_outcomes 近 30 天暂无成熟样本（evaluate_v2_picks 每天累积）_")
+            lines.append(
+                f"_alpha = 跑赢同市场基准的幅度；正=有用，负=跑输。统计自 {PRODUCTION_METRICS_START_DATE} 起，研究参考非投资建议。_")
     except Exception as e:
-        lines.append(f"_pick_outcomes 查询失败: {e}_")
+        lines.append(f"_strategy_eval 查询失败: {e}_")
     conn.close()
     return "\n".join(lines) + "\n"
 
