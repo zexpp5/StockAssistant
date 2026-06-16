@@ -532,12 +532,17 @@ def test_dst_us_open_summer_vs_winter():
 
 def test_dst_window_picks_right_season():
     from stock_research.jobs import premarket_gate as job
-    # 夏令时：20:10 在窗口、22:15 太晚（已开盘后）
+    # 夏令时(21:30开盘)：20:10 盘前；22:15 现在是合法的盘后跟踪点(+45)；23:30 太晚出窗口
+    assert job._market_phase(datetime(2026, 6, 8, 20, 10)) == "pre"
     assert job._is_valid_window(datetime(2026, 6, 8, 20, 10))[0] is True
-    assert job._is_valid_window(datetime(2026, 6, 8, 22, 15))[0] is False
-    # 冬令时：20:10 太早、22:15 在窗口
+    assert job._market_phase(datetime(2026, 6, 8, 22, 15)) == "post"
+    assert job._is_valid_window(datetime(2026, 6, 8, 22, 15))[0] is True
+    assert job._is_valid_window(datetime(2026, 6, 8, 23, 30))[0] is False  # 开盘后2小时，出窗
+    # 冬令时(22:30开盘)：20:10 太早；22:15 盘前(-? +15)；23:30 盘后跟踪点
     assert job._is_valid_window(datetime(2026, 12, 8, 20, 10))[0] is False
+    assert job._market_phase(datetime(2026, 12, 8, 22, 15)) == "pre"
     assert job._is_valid_window(datetime(2026, 12, 8, 22, 15))[0] is True
+    assert job._market_phase(datetime(2026, 12, 8, 23, 30)) == "post"
 
 
 def test_window_skips_weekend():

@@ -514,6 +514,27 @@ window.echarts = window.echarts || {
     if(wrap===false) h+='</div>';
     return wrap===false?h:card(h);
   }
+  function pmBuySignals(d){
+    var bs=d&&d.buy_signals; if(!bs) return "";
+    var g=bs.green||[], r=bs.red||[];
+    function row(o){
+      var src=(o.sources||[]).join("/");
+      var cur=(o.current!=null)?("现价 $"+Math.round(o.current)):"现价未知";
+      var rel=(o.position==="便宜")?"低于":((o.position==="偏贵")?"高于":"处于");
+      var band=(o.low!=null&&o.high!=null)?(rel+"可买区间 $"+Math.round(o.low)+"~$"+Math.round(o.high)):"";
+      var disc=(o.discount_pct!=null)?(" · 比目标价"+(o.discount_pct<0?"低":"高")+" "+Math.abs(o.discount_pct)+"%"):"";
+      var anchor=(o.method==="估值")?"锚:分析师目标价":"锚:均线回撤";
+      var flags=(o.flags&&o.flags.length)?'<div style="color:#b45309;font-size:11px;margin-top:2px">'+esc(o.flags.join("　"))+'</div>':'';
+      return '<div style="padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:13px"><b>'+esc(o.symbol)+'</b> <span style="color:#94a3b8;font-size:11px">'+esc(src)+'</span> · '+cur+' · '+band+disc+' · '+anchor+flags+'</div>';
+    }
+    var h='<h4 style="margin:0 0 4px;font-size:14px">🟢 现在偏便宜 <span style="font-weight:400;color:#94a3b8;font-size:12px">（可研究，不是叫你买）</span></h4>';
+    if(g.length){ g.slice(0,10).forEach(function(o){h+=row(o);}); }
+    else { h+='<div style="font-size:13px;color:#64748b;padding:6px 0">今日名单为空（票池里没有现价跌破可买区间下沿的）</div>'; }
+    if(r.length){ h+='<h4 style="margin:12px 0 4px;font-size:14px">🔴 偏贵别追</h4>'; r.slice(0,8).forEach(function(o){h+=row(o);}); }
+    var uni=bs.universe_size||0, z=bs.zoned||0;
+    h+='<div style="font-size:11px;color:#94a3b8;margin-top:8px">名单池 自选+推荐+瓶颈 '+uni+' 只，其中 '+z+' 只有可买区间数据 · ⚠️ 研究参考，非投资建议</div>';
+    return card(h);
+  }
   function renderDetail(hist){
     var d=_gate, body=document.getElementById("pm-drawer-body");
     if(!body) return;
@@ -553,6 +574,7 @@ window.echarts = window.echarts || {
     }
     pm+=pmEvidence(d,false);
     h+=card(pm);
+    h+=pmBuySignals(d);
     if(d.holdings_impact&&d.holdings_impact.length){
       var hh='<h4 style="margin:0 0 8px;font-size:14px">💼 对你持仓的影响 <span style="font-weight:400;color:#94a3b8;font-size:12px">（只是提醒，不是叫你一定买卖）</span></h4>';
       d.holdings_impact.forEach(function(o){hh+='<div style="padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:13.5px"><b>'+esc(o.symbol)+'</b>：'+esc(o.reason)+'</div>';});
