@@ -85,23 +85,92 @@ def _gather_universe(conn) -> dict[str, dict[str, str]]:
     return uni
 
 
-def _compact_line(sym: str, market: str, sources: list[str], zone: dict) -> str:
-    """一行人话，带「低于/高于」方向词，新手一眼看懂现价在区间哪边：
-    MU(自选/瓶颈) 现价 $182 · 低于可买区间 $150~$180 · 锚:分析师目标价。
+# 富集阈值（研究参考用，非验证过的交易参数）
+TARGET_STALE_DAYS = 60       # 目标价超过这么多天 → 标"偏旧"（analyst 一般随季度财报更新）
+FALLING_KNIFE_DD_PCT = -20.0  # 近 20 日从高点回撤超过这个 % → 标"可能接飞刀"
+KNIFE_WINDOW = 20
+
+
+def _days_since(d, today: date) -> int | None:
+    """目标价事件日距今多少天。兼容 date / datetime / 'YYYY-MM-DD' 字符串。"""
+    if d is None:
+        return None
+    try:
+        if isinstance(d, str):
+            d = date.fromisoformat(d[:10])
+        elif isinstance(d, datetime):
+            d = d.date()
+        return (today - d).days
+    except Exception:
+        return None
+
+
+def _recent_drawdown(conn, symbol: str, window: int = KNIFE_WINDOW):
+    """近 window 日「从区间内最高收盘回撤多少 %」。返回 (回撤%, 期间高点)，负数=跌。"""
+    try:
+        rows = conn.execute(
+            "SELECT close FROM price_daily WHERE upper(symbol)=upper(?) AND close IS NOT NULL "
+            "ORDER BY trade_date DESC LIMIT ?",
+            [symbol, window],
+        ).fetchall()
+        closes = [float(r[0]) for r in rows if r[0] is not None]
+        if len(closes) < 5:
+            return None, None
+        cur, hi = closes[0], max(closes)
+        if hi <= 0:
+            return None, None
+        return (cur / hi - 1.0) * 100.0, hi
+    except Exception:
+        return None, None
+
+
+def _enrich(conn, sym: str, zone: dict, today: date) -> dict:
+    """给一只票算 A 折价% / B 目标价新鲜度 / C 接飞刀，返回要并进 item 的字段。"""
+    current, target = zone.get("current"), zone.get("target")
+    # A：折价/溢价 vs 分析师目标价（仅估值口径有）
+    discount_pct = round((current / target - 1.0) * 100.0) if (target and current) else None
+    # B：目标价新鲜度
+    target_age = _days_since(zone.get("target_date"), today)
+    target_stale = target_age is not None and target_age > TARGET_STALE_DAYS
+    # C：近期急跌（接飞刀）
+    dd_pct, _hi = _recent_drawdown(conn, sym)
+    falling_knife = dd_pct is not None and dd_pct <= FALLING_KNIFE_DD_PCT
+    flags: list[str] = []
+    if target_stale:
+        flags.append(f"⚠️目标价{target_age}天前(偏旧,可能没反映最新情况)")
+    if falling_knife:
+        flags.append(f"⚠️近20日跌{abs(round(dd_pct))}%·可能接飞刀,先查为什么跌")
+    return {
+        "discount_pct": discount_pct,
+        "target_age_days": target_age,
+        "target_stale": target_stale,
+        "drawdown_pct": round(dd_pct) if dd_pct is not None else None,
+        "falling_knife": falling_knife,
+        "flags": flags,
+    }
+
+
+def _compact_line(item: dict) -> str:
+    """一行人话：方向词 + 折价% + 锚定 + ⚠️旗标。
+    MU(自选/瓶颈) 现价 $182 · 低于可买区间 $150~$180 · 比目标价低 24% · 锚:分析师目标价 ⚠️…
     """
-    src = "/".join(sources)
-    cur = zone.get("current")
-    low, high = zone.get("low"), zone.get("high")
-    pos = zone.get("position")
-    cur_str = f"现价 ${cur:.0f}" if cur else "现价未知"
+    src = "/".join(item.get("sources") or [])
+    cur, low, high = item.get("current"), item.get("low"), item.get("high")
+    pos, market = item.get("position"), item.get("market", "US")
+    mkt = f"·{market}" if market and market != "US" else ""
+    parts = [f"**{item['symbol']}**（{src}{mkt}）"]
+    parts.append(f"现价 ${cur:.0f}" if cur else "现价未知")
     if low is not None and high is not None:
         rel = "低于" if pos == "便宜" else ("高于" if pos == "偏贵" else "处于")
-        band = f"{rel}可买区间 ${low:.0f}~${high:.0f}"
-    else:
-        band = ""
-    anchor = "锚:分析师目标价" if zone.get("method") == "估值" else "锚:均线回撤"
-    mkt = f"·{market}" if market and market != "US" else ""
-    return f"**{sym}**（{src}{mkt}） {cur_str} · {band} · {anchor}"
+        parts.append(f"{rel}可买区间 ${low:.0f}~${high:.0f}")
+    dp = item.get("discount_pct")
+    if dp is not None:
+        parts.append(f"比目标价{'低' if dp < 0 else '高'} {abs(dp):.0f}%")
+    parts.append("锚:分析师目标价" if item.get("method") == "估值" else "锚:均线回撤")
+    line = " · ".join(p for p in parts if p)
+    if item.get("flags"):
+        line += " " + " ".join(item["flags"])
+    return line
 
 
 def _is_a_share(symbol: str, market: str | None) -> bool:
@@ -167,8 +236,10 @@ def compute_buy_avoid(conn=None, *, today: date | None = None,
                 "high": zone.get("high"),
                 "method": zone.get("method"),
                 "target": zone.get("target"),
-                "line": _compact_line(sym, market, sources, zone),
+                "target_date": zone.get("target_date"),
             }
+            item.update(_enrich(conn, sym, zone, today))  # A 折价 / B 新鲜度 / C 接飞刀
+            item["line"] = _compact_line(item)
             if zone.get("position") == "便宜":
                 green.append(item)
             elif zone.get("position") == "偏贵":

@@ -10,17 +10,20 @@ from stock_research.core import premarket_buy_signals as pbs  # noqa: E402
 
 
 class FakeConn:
-    """按 SQL 文本返回固定行，模拟 manual_watchlist / recommendation_picks 查询。"""
+    """按 SQL 文本返回固定行，模拟 manual_watchlist / recommendation_picks / price_daily 查询。"""
 
-    def __init__(self, watchlist, picks):
+    def __init__(self, watchlist, picks, prices=None):
         self._watchlist = watchlist
         self._picks = picks
+        self._prices = prices or []  # 近 N 日收盘（新→旧），供 _recent_drawdown
 
-    def execute(self, sql):
+    def execute(self, sql, params=None):
         if "manual_watchlist" in sql:
             rows = self._watchlist
         elif "recommendation_picks" in sql:
             rows = self._picks
+        elif "price_daily" in sql:
+            rows = [(c,) for c in self._prices]
         else:
             rows = []
         return SimpleNamespace(fetchall=lambda: rows)
@@ -90,6 +93,42 @@ def test_hk_and_a_share_hidden_by_default(monkeypatch):
     assert "9618.HK" not in [g["symbol"] for g in out_a["green"]]  # 只开 A 股，港股仍隐
     out_hk = pbs.compute_buy_avoid(conn=conn, include_hk=True)
     assert "9618.HK" in [g["symbol"] for g in out_hk["green"]]
+
+
+def test_enrichment_discount_stale_and_falling_knife(monkeypatch):
+    from datetime import date, timedelta
+    old_target = (date.today() - timedelta(days=90)).isoformat()
+    # 收盘(新→旧) 75/80/90/100/95 → 现价75、期间高点100 → -25% 回撤 → 接飞刀
+    conn = FakeConn(watchlist=[("US", "FALL")], picks=[], prices=[75, 80, 90, 100, 95])
+
+    def fake_zones(symbols, c, today=None):
+        return {"FALL": {"symbol": "FALL", "method": "估值", "current": 75.0,
+                         "low": 80.0, "high": 100.0, "target": 100.0,
+                         "target_date": old_target, "position": "便宜"}}
+
+    monkeypatch.setattr(pbs.buy_zone, "compute_buy_zones", fake_zones)
+    g = pbs.compute_buy_avoid(conn=conn)["green"][0]
+    assert g["discount_pct"] == -25       # A：现价75 vs 目标价100
+    assert g["target_stale"] is True       # B：目标价90天>60天
+    assert g["falling_knife"] is True      # C：近20日 -25% <= -20%
+    assert any("接飞刀" in f for f in g["flags"])
+    assert any("偏旧" in f for f in g["flags"])
+    assert "比目标价低 25%" in g["line"] and "接飞刀" in g["line"]
+
+
+def test_no_flags_when_fresh_and_stable(monkeypatch):
+    from datetime import date
+    # 目标价今天、价格平稳(无急跌) → 不该有任何 ⚠️
+    conn = FakeConn(watchlist=[("US", "CALM")], picks=[], prices=[99, 100, 99, 100, 98])
+
+    def fake_zones(symbols, c, today=None):
+        return {"CALM": {"symbol": "CALM", "method": "估值", "current": 80.0,
+                         "low": 85.0, "high": 100.0, "target": 100.0,
+                         "target_date": date.today().isoformat(), "position": "便宜"}}
+
+    monkeypatch.setattr(pbs.buy_zone, "compute_buy_zones", fake_zones)
+    g = pbs.compute_buy_avoid(conn=conn)["green"][0]
+    assert g["flags"] == [] and g["falling_knife"] is False and g["target_stale"] is False
 
 
 def test_compute_buy_avoid_survives_db_failure(monkeypatch):
