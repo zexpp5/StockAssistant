@@ -69,8 +69,11 @@ def test_compute_buy_avoid_classifies_green_red(monkeypatch):
     assert {"symbol", "sources", "position", "current", "low", "high", "line"} <= set(g)
 
 
-def test_a_share_hidden_by_default(monkeypatch):
-    conn = FakeConn(watchlist=[("US", "MU"), ("CN", "300073.SZ")], picks=[])
+def test_hk_and_a_share_hidden_by_default(monkeypatch):
+    # 港股 + A 股默认都不进名单（美股盘前卡 US-only）
+    conn = FakeConn(
+        watchlist=[("US", "MU"), ("CN", "300073.SZ"), ("HK", "9618.HK")], picks=[]
+    )
 
     def fake_zones(symbols, c, today=None):
         return {s: {"symbol": s, "method": "估值", "current": 70.0, "low": 80.0,
@@ -79,11 +82,14 @@ def test_a_share_hidden_by_default(monkeypatch):
     monkeypatch.setattr(pbs.buy_zone, "compute_buy_zones", fake_zones)
     out = pbs.compute_buy_avoid(conn=conn)
     syms = [g["symbol"] for g in out["green"]]
-    assert "MU" in syms and "300073.SZ" not in syms  # A 股默认被过滤
-    assert out["universe_size"] >= 1                 # 计数也已排除 A 股
-    # include_a_share=True 时放行
-    out2 = pbs.compute_buy_avoid(conn=conn, include_a_share=True)
-    assert "300073.SZ" in [g["symbol"] for g in out2["green"]]
+    assert "MU" in syms                                   # 美股保留
+    assert "300073.SZ" not in syms and "9618.HK" not in syms  # 港/A 默认过滤
+    # 显式放开各自参数时才出现
+    out_a = pbs.compute_buy_avoid(conn=conn, include_a_share=True)
+    assert "300073.SZ" in [g["symbol"] for g in out_a["green"]]
+    assert "9618.HK" not in [g["symbol"] for g in out_a["green"]]  # 只开 A 股，港股仍隐
+    out_hk = pbs.compute_buy_avoid(conn=conn, include_hk=True)
+    assert "9618.HK" in [g["symbol"] for g in out_hk["green"]]
 
 
 def test_compute_buy_avoid_survives_db_failure(monkeypatch):

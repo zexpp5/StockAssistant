@@ -8,6 +8,9 @@
   🔴 别追   = 现价高于 buy_zone 上沿（偏贵，别追高）
   区间内/未知 不进名单（既不喊买也不喊别追，保持低噪）
 
+默认 US-only：港股 + A 股暂不进名单（用户 2026-06-16：港股和 A 股暂时不需要推荐）。
+  这是美股盘前卡，标的就该是美股；include_hk / include_a_share 参数留作以后放开。
+
 票池三来源（去重）：
   ① manual_watchlist        你手动加的自选
   ② recommendation_picks    最新一批 AI 推荐（system_tech_universe）
@@ -102,8 +105,16 @@ def _is_a_share(symbol: str, market: str | None) -> bool:
     return s.endswith(".SZ") or s.endswith(".SS") or s.endswith(".SH")
 
 
+def _is_hk(symbol: str, market: str | None) -> bool:
+    """港股识别：market==HK 或 .HK 后缀。"""
+    if (market or "").upper() == "HK":
+        return True
+    return (symbol or "").upper().endswith(".HK")
+
+
 def compute_buy_avoid(conn=None, *, today: date | None = None,
-                      include_a_share: bool = False) -> dict[str, Any]:
+                      include_a_share: bool = False,
+                      include_hk: bool = False) -> dict[str, Any]:
     """产出盘前 🟢可买 / 🔴别追 名单。
 
     返回:
@@ -125,9 +136,13 @@ def compute_buy_avoid(conn=None, *, today: date | None = None,
                     "as_of": today.isoformat()}
     try:
         uni = _gather_universe(conn)
-        # A 股默认不放（memory: feedback_brief_no_a_share — 新 surface 默认隐藏 A 股）
-        if not include_a_share:
-            uni = {s: m for s, m in uni.items() if not _is_a_share(s, m.get("market"))}
+        # 港股 + A 股暂不进推荐名单（用户 2026-06-16：港股和 A 股暂时不需要推荐；
+        # 这是美股盘前卡，默认 US-only。memory: feedback_brief_no_a_share）
+        def _hidden(sym: str, meta: dict) -> bool:
+            mkt = meta.get("market")
+            return (not include_a_share and _is_a_share(sym, mkt)) or \
+                   (not include_hk and _is_hk(sym, mkt))
+        uni = {s: m for s, m in uni.items() if not _hidden(s, m)}
         zones = buy_zone.compute_buy_zones(list(uni.keys()), conn, today=today)
         green: list[dict] = []
         red: list[dict] = []
