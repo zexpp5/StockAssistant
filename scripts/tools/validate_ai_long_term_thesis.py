@@ -297,3 +297,46 @@ def validate(thesis: dict, *,
             v.append(Violation("no_real_holding_write", "构建/打开页面写入了真实持仓"))
 
     return v
+
+
+# ── 构建期 fail-loud CLI ────────────────────────────────────
+
+def _load_json(path: str) -> dict:
+    import json
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """命令行入口：校验不过返回 1（构建期应据此硬阻断），通过返回 0。"""
+    import argparse
+    import sys
+
+    ap = argparse.ArgumentParser(
+        description="AI 长期主线 MVP 护栏校验（构建期 fail-loud；不过即不得上线）")
+    ap.add_argument("thesis", help="ai_long_term_thesis.json 路径")
+    ap.add_argument("--universe", help="universe 快照 JSON（含 symbols）")
+    ap.add_argument("--page-payload", help="页面动态 payload JSON")
+    ap.add_argument("--build-context", help="构建行为标志 JSON")
+    ap.add_argument("--outcome-pipeline-live", action="store_true",
+                    help="月级 outcome 链路已上线（放开 passed/failed 状态）")
+    args = ap.parse_args(argv)
+
+    viols = validate(
+        _load_json(args.thesis),
+        universe_snapshot=_load_json(args.universe) if args.universe else None,
+        page_payload=_load_json(args.page_payload) if args.page_payload else None,
+        build_context=_load_json(args.build_context) if args.build_context else None,
+        outcome_pipeline_live=args.outcome_pipeline_live,
+    )
+    if viols:
+        print(f"❌ MVP 护栏未通过（{len(viols)} 条），长期主线页不得上线：", file=sys.stderr)
+        for x in viols:
+            print(f"  - [{x.test}] {x.message}", file=sys.stderr)
+        return 1
+    print(f"✅ MVP 护栏通过：{args.thesis}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,22 @@
+{
+  "version": "AI长期主线 v2026-06-16-seed",
+  "as_of_date": "2026-06-16",
+  "confirmed_at": "2026-06-16T00:00:00+08:00",
+  "reviewed_by": "unconfirmed_seed",
+  "source_policy": "blank seed scaffold; no confirmed members yet",
+  "change_summary": "blank seed; awaiting human-confirmed first list (8-15 names max)",
+  "price_basis": "same_pull_adjusted_close_by_trade_date",
+  "entry_trade_date_policy": "next_regular_session_after_confirmation",
+  "performance_validation_status": "insufficient_sample",
+  "primary_test": {
+    "horizon": "6m",
+    "benchmark": "same_universe_equal_weight",
+    "metric": "median_excess_return_gt_0_and_ex_best_still_gt_0"
+  },
+  "risk_exposure_summary": {
+    "single_factor_threshold_pct": 50,
+    "scope": "long_term_list_only",
+    "concentration_warning": false
+  },
+  "members": []
+}

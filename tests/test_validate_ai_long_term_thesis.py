@@ -18,9 +18,9 @@ sys.path.insert(0, str(ROOT / "scripts" / "tools"))
 
 try:
     from scripts.tools.validate_ai_long_term_thesis import (compute_freshness,
-                                                            validate)
+                                                            main, validate)
 except ImportError:  # 兜底：直接按文件名导入
-    from validate_ai_long_term_thesis import compute_freshness, validate
+    from validate_ai_long_term_thesis import compute_freshness, main, validate
 
 
 # ── 测试夹具 ────────────────────────────────────────────────
@@ -265,6 +265,28 @@ def test_freshness_post_earnings_overdue_to_stale():
 
 def test_freshness_calendar_only_reason_when_no_earnings():
     assert compute_freshness("2026-06-01", as_of=AS_OF)[1] == "calendar_only"
+
+
+# ── CLI 闸 + 空白种子 ───────────────────────────────────────
+
+def test_cli_valid_exit_0(tmp_path):
+    import json
+    p = tmp_path / "t.json"
+    p.write_text(json.dumps(_thesis()), encoding="utf-8")
+    assert main([str(p)]) == 0
+
+
+def test_cli_invalid_exit_1(tmp_path):
+    import json
+    p = tmp_path / "t.json"
+    p.write_text(json.dumps(_thesis(price_basis="raw_close")), encoding="utf-8")
+    assert main([str(p)]) == 1
+
+
+def test_blank_seed_passes_gate():
+    import json
+    seed = ROOT / "data" / "curated" / "ai_long_term_thesis.json"
+    assert validate(json.loads(seed.read_text(encoding="utf-8"))) == []
 
 
 if __name__ == "__main__":
