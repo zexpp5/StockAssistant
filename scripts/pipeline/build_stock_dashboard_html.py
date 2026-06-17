@@ -1301,7 +1301,7 @@ window.echarts = window.echarts || {
             <th class="disc-sticky-code px-2 py-1 text-left">代码</th>
             <th class="disc-sticky-name px-2 py-1 text-left">名称</th>
             <th class="disc-sticky-policy px-2 py-1 text-left" title="P0 新规则根据身份、证据、数据和风险给出的动作；不覆盖原始总分。鼠标放到标签上看每只票的具体理由。">新规则动作 ⓘ</th>
-            <th class="px-2 py-1 text-left" title="人工确认的买点纪律，只做提醒；不改变推荐排序">买点计划</th>
+            <th class="px-2 py-1 text-left" title="买入/加仓的价位参考：有人工详细计划优先显示，否则自动算的可买区间（现价低于下沿🟢偏便宜/区间内🟡/高于上沿🔴偏贵别追）。只提醒，不改排名、不自动交易">买入价位参考</th>
             <th class="px-2 py-1 text-left">信号</th>
             <th class="px-2 py-1 text-left">市场</th>
             <th class="px-2 py-1 text-left">主题</th>
@@ -1575,8 +1575,8 @@ function openDiscoveryHistoryFromRadar(event) {
           <th class="px-3 py-2 text-left whitespace-nowrap sticky left-0 bg-slate-100 z-20 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.15)] w-[180px] min-w-[180px]">股票</th>
           <th class="px-3 py-2 text-center whitespace-nowrap w-[145px]" title="这只股票用哪种方式分析：有没有美股组合建议、算不算因子分、还是只看仓位盈亏">分析方式</th>
           <th class="px-3 py-2 text-center whitespace-nowrap w-[118px]" title="GICS 板块 ETF 近 60 日涨跌 · 来自 openbb_intel 行业轮动">板块热度</th>
-          <th class="px-3 py-2 text-left whitespace-nowrap w-[180px]" title="你为真实持仓手动确认的价格纪律线；只提醒，不自动交易，不写推荐池">纪律提醒</th>
-          <th class="px-3 py-2 text-left whitespace-nowrap w-[170px]" title="可以考虑分批加仓的参考价位，每个交易日收盘后自动重算。50日线=中期趋势支撑（正常小回调，小笔参与档）；200日线=长期趋势支撑（情绪降温，认真考虑档）；半年低点=恐慌价（一年只出现一两次）。仅参考不是指令：跌到价位先核对下跌原因——大盘普跌带下来=按计划，公司自身坏消息=先停手">加仓参考</th>
+          <th class="px-3 py-2 text-left whitespace-nowrap w-[180px]" title="已持有的票：跌破关键位（如50/200日线）提醒你复查、考虑减仓或撤出；涨回目标位提醒你可落袋一点。卖出/防守侧，只提醒，不自动交易，不写推荐池">减仓/复查提醒</th>
+          <th class="px-3 py-2 text-left whitespace-nowrap w-[170px]" title="买入侧：已持有想加仓时的低吸参考价位，每个交易日收盘后自动重算。50日线=中期趋势支撑（正常小回调，小笔参与档）；200日线=长期趋势支撑（情绪降温，认真考虑档）；半年低点=恐慌价（一年只出现一两次）。仅参考不是指令：跌到价位先核对下跌原因——大盘普跌带下来=按计划，公司自身坏消息=先停手">加仓价位参考</th>
           <th class="px-3 py-2 text-center whitespace-nowrap w-[120px]" title="空头拥挤度提示灯（只看风险、不看买卖）：只回答'这只票现在有没有额外空头风险'，不回答'该不该买'。数据=FINRA 双月短仓披露（约两周滞后的慢数据，抓不住盘中突发逼空）。低/中/高 看空头占流通股+回补天数；环比看空头在增还是减。借券费/实时短仓需付费数据，本灯不含。港股/A股无此披露=不适用">空头拥挤度</th>
           <th class="px-3 py-2 text-right whitespace-nowrap w-[150px]">成本/数量</th>
           <th class="px-3 py-2 text-right whitespace-nowrap w-[150px]">现价/市值</th>
@@ -2815,7 +2815,7 @@ function openDiscoveryHistoryFromRadar(event) {
         <tr>
           <th class="px-3 py-2 text-left">股票</th>
           <th class="px-3 py-2 text-left">今日动作</th>
-          <th class="px-3 py-2 text-left" title="人工确认的买点纪律，只做提醒；不改 AI 排名，不自动交易">买点计划</th>
+          <th class="px-3 py-2 text-left" title="买入/加仓的价位参考：有人工详细计划优先显示，否则自动算的可买区间（现价低于下沿🟢偏便宜/区间内🟡/高于上沿🔴偏贵别追）。只提醒，不改 AI 排名，不自动交易">买入价位参考</th>
           <th class="px-3 py-2 text-left">关键数据</th>
           <th class="px-3 py-2 text-left">为什么关注</th>
           <th class="px-3 py-2 text-left">备注/计划</th>
@@ -3710,7 +3710,7 @@ function _buyZoneCompactHtml(code) {
   const cur = (z.current != null) ? ("现价 $" + Math.round(z.current)) : "";
   const disc = (z.discount_pct != null) ? (" · 比目标价" + (z.discount_pct < 0 ? "低" : "高") + Math.abs(z.discount_pct) + "%") : "";
   const anchor = (z.method === "估值") ? "锚:分析师目标价" : "锚:均线回撤";
-  const title = `自动可买区间（${anchor}，研究参考·非买入信号）：$${z.low}~$${z.high}${disc}\n现价低于下沿=偏便宜🟢 / 区间内🟡 / 高于上沿=偏贵🔴 别追高。\n（无人工买点计划，自动兜底显示；不改 AI 排名、不自动交易）`;
+  const title = `自动可买区间（${anchor}，研究参考·非买入信号）：$${z.low}~$${z.high}${disc}\n现价低于下沿=偏便宜🟢 / 区间内🟡 / 高于上沿=偏贵🔴 别追高。\n（无人工详细计划，自动兜底显示；不改 AI 排名、不自动交易）`;
   return `<div class="text-[11px] leading-snug max-w-[190px] cursor-help" title="${_esc(title)}">
     <span class="${tone} font-semibold">${dot} 可买 $${Math.round(z.low)}~$${Math.round(z.high)}</span>
     <div class="text-slate-400">${_esc(cur)} · 自动区间</div>
@@ -8863,7 +8863,7 @@ function _disciplineCell(item) {
     const detail = d.suggested_size_text || d.threshold_text || "触发纪律线";
     const triggerRange = cleanRange(d.threshold_text);
     return `<td class="px-3 py-2 text-left whitespace-normal cursor-help leading-snug" title="${_esc(title)}">
-      <div class="text-[12px] font-semibold ${cls}">触发：${_esc(d.action_label || "纪律提醒")}</div>
+      <div class="text-[12px] font-semibold ${cls}">触发：${_esc(d.action_label || "减仓/复查提醒")}</div>
       <div class="text-[11px] text-slate-700">${_esc(triggerRange || "纪律线")}</div>
       <div class="text-[10px] text-slate-500">${_esc(detail)}</div>
       ${draftTag}
@@ -15473,7 +15473,7 @@ def trading_plan_today_panel_html(payload: dict | None = None) -> str:
     )
     auto_block = (
         f"""
-    <div class="text-[11px] font-semibold text-slate-500 mb-2">🤖 自动可买区间 · 你的持仓 <span class="font-normal text-slate-400">· 系统按目标价/均线自动算，与「买点计划」列同源</span></div>
+    <div class="text-[11px] font-semibold text-slate-500 mb-2">🤖 自动可买区间 · 你的持仓 <span class="font-normal text-slate-400">· 系统按目标价/均线自动算，与「买入价位参考」列同源</span></div>
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-2">{''.join(auto_rows)}</div>"""
         if auto_rows else ""
     )
