@@ -1,0 +1,69 @@
+{
+  "schema": "trading_plan_v1",
+  "updated_at": "2026-06-16",
+  "safety_boundary": "Display-only research reminder. Does not mutate watchlist, portfolio plans, or real holdings.",
+  "plans": [
+    {
+      "symbol": "MRVL",
+      "market": "US",
+      "name": "Marvell Technology",
+      "as_of": "2026-06-16",
+      "source": "manual_analysis_confirmed",
+      "confidence": "manual_guardrail_unvalidated",
+      "thesis": "长期看好 AI 定制芯片/高速互联/数据中心网络，但短期半导体波动大，只做分批再买入计划。",
+      "position_note": "用户已清仓，等待重新买点；本计划只做每日提醒，不自动交易。",
+      "levels": [
+        {
+          "kind": "first_buy_zone",
+          "label": "第一买点",
+          "low": 275,
+          "high": 282,
+          "action": "先小仓试探，确认不是公司级坏消息下跌",
+          "reason": "接近前次恐慌反弹区，赔率开始改善，但仍需看市场风险。"
+        },
+        {
+          "kind": "second_buy_zone",
+          "label": "第二买点",
+          "low": 263,
+          "high": 268,
+          "action": "分批加仓，仍需看板块和成交量",
+          "reason": "更接近强支撑，适合把总计划拆成第二批。"
+        },
+        {
+          "kind": "strong_support",
+          "label": "强支撑观察",
+          "low": 252,
+          "high": 255,
+          "action": "赔率较好，但只在下跌原因可解释时考虑",
+          "reason": "若跌到这里还没有基本面恶化，属于恐慌价；若有坏消息则不接。"
+        },
+        {
+          "kind": "breakout_confirmation",
+          "label": "突破确认",
+          "low": 306,
+          "high": null,
+          "action": "站稳后再小仓跟随，不在单日冲高时追",
+          "reason": "价格重新站回建仓成本上方，说明市场愿意重新定价。"
+        }
+      ],
+      "invalidations": [
+        {
+          "label": "失效线",
+          "price": 252,
+          "condition": "跌破 252 且两天收不回",
+          "action": "暂停买入，重新做基本面和事件复查"
+        }
+      ],
+      "display": {
+        "default_action": "等待回踩",
+        "compact_note": "看 275-282 第一买点；263-268 第二买点；252 下方复查。"
+      },
+      "safety": {
+        "is_trade_instruction": false,
+        "mutates_watchlist": false,
+        "mutates_portfolio": false,
+        "mutates_real_holdings": false
+      }
+    }
+  ]
+}

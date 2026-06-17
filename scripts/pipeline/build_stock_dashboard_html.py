@@ -1294,13 +1294,14 @@ window.echarts = window.echarts || {
       #discovery-table-wrap tbody tr .flex-wrap { flex-wrap: nowrap; }
     </style>
     <div id="discovery-table-wrap" class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
-      <table class="w-full min-w-[1760px] text-sm">
+      <table class="w-full min-w-[1920px] text-sm">
         <thead class="bg-slate-50 text-slate-500 text-[10px] uppercase tracking-wide">
           <tr>
             <th class="disc-sticky-rank px-2 py-1 text-left">排名</th>
             <th class="disc-sticky-code px-2 py-1 text-left">代码</th>
             <th class="disc-sticky-name px-2 py-1 text-left">名称</th>
             <th class="disc-sticky-policy px-2 py-1 text-left" title="P0 新规则根据身份、证据、数据和风险给出的动作；不覆盖原始总分。鼠标放到标签上看每只票的具体理由。">新规则动作 ⓘ</th>
+            <th class="px-2 py-1 text-left" title="人工确认的买点纪律，只做提醒；不改变推荐排序">买点计划</th>
             <th class="px-2 py-1 text-left">信号</th>
             <th class="px-2 py-1 text-left">市场</th>
             <th class="px-2 py-1 text-left">主题</th>
@@ -2809,11 +2810,12 @@ function openDiscoveryHistoryFromRadar(event) {
 
   <!-- 主表格 -->
   <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
-    <table class="w-full min-w-[1250px] text-sm">
+    <table class="w-full min-w-[1420px] text-sm">
       <thead class="bg-slate-50 text-xs text-slate-600">
         <tr>
           <th class="px-3 py-2 text-left">股票</th>
           <th class="px-3 py-2 text-left">今日动作</th>
+          <th class="px-3 py-2 text-left" title="人工确认的买点纪律，只做提醒；不改 AI 排名，不自动交易">买点计划</th>
           <th class="px-3 py-2 text-left">关键数据</th>
           <th class="px-3 py-2 text-left">为什么关注</th>
           <th class="px-3 py-2 text-left">备注/计划</th>
@@ -3585,6 +3587,9 @@ const TRACK_13F    = {TRACK_13F_JSON_DB};
 const OPTIMIZATION = {OPTIMIZATION_JSON_DB};
 const PLAN_A_V6    = {PLAN_A_V6_JSON_DB};
 const DISCOVERY    = {DISCOVERY_JSON};
+const TRADING_PLANS = {TRADING_PLANS_JSON};
+// 自动可买区间（buy_zone）：「买点计划」列无人工计划时兜底显示。US-only。
+const BUY_ZONES = {BUY_ZONES_JSON};
 // AI 配仓数据：A 静态（buy-and-hold from inception） / C 动态（每周一 rebalance）
 const _BACKTEST    = {PLAN_BACKTEST_JSON_DB};
 const _DYNAMIC     = {PLAN_DYNAMIC_JSON_DB};
@@ -3658,6 +3663,74 @@ async function _checkApiStatus() {
 
 function _esc(s) {
   return (s || "").toString().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function _tradingPlanForCode(code) {
+  const key = String(code || "").trim().toUpperCase();
+  if (!key || !TRADING_PLANS || !Array.isArray(TRADING_PLANS.plans)) return null;
+  return TRADING_PLANS.plans.find(p => String(p.symbol || "").toUpperCase() === key) || null;
+}
+
+function _tradingPlanToneClass(plan) {
+  const tone = String((plan && plan.status_tone) || "slate");
+  return ({
+    emerald: "border-emerald-200 bg-emerald-50 text-emerald-800",
+    amber: "border-amber-200 bg-amber-50 text-amber-800",
+    rose: "border-rose-200 bg-rose-50 text-rose-800",
+    sky: "border-sky-200 bg-sky-50 text-sky-800",
+    slate: "border-slate-200 bg-slate-50 text-slate-600",
+  })[tone] || "border-slate-200 bg-slate-50 text-slate-600";
+}
+
+function _tradingPlanTitle(plan) {
+  if (!plan) return "";
+  const levels = Array.isArray(plan.display_levels) ? plan.display_levels : [];
+  const invalid = Array.isArray(plan.display_invalidations) ? plan.display_invalidations[0] : null;
+  const lines = [
+    `${plan.symbol || ""} 再买入计划（人工确认，只提醒，不自动交易）`,
+    `当前：${plan.current == null ? "缺行情" : Number(plan.current).toFixed(2) + " " + (plan.currency || "")} ${plan.price_trade_date || ""}`,
+    `状态：${plan.status_label || "观察"} · ${plan.summary || ""}`,
+    `下一步：${plan.next_line || ""}`,
+    "",
+    ...levels.map(l => `${l.label || ""}: ${l.range_text || "—"} · ${l.action || ""}`),
+    invalid ? `${invalid.label || "失效线"}: ${invalid.price_text || "—"} · ${invalid.condition || ""} · ${invalid.action || ""}` : "",
+    "",
+    "不会改变 AI 推荐排名、不会写自选股、不会写真实持仓。",
+  ].filter(Boolean);
+  return lines.join("\n");
+}
+
+function _buyZoneCompactHtml(code) {
+  const key = String(code || "").trim().toUpperCase();
+  const z = (typeof BUY_ZONES !== "undefined" && BUY_ZONES) ? BUY_ZONES[key] : null;
+  if (!z || z.low == null || z.high == null) return '<span class="text-xs text-slate-300">—</span>';
+  const pos = String(z.position || "");
+  const dot = pos === "便宜" ? "🟢" : (pos === "偏贵" ? "🔴" : "🟡");
+  const tone = pos === "便宜" ? "text-emerald-700" : (pos === "偏贵" ? "text-rose-600" : "text-amber-700");
+  const cur = (z.current != null) ? ("现价 $" + Math.round(z.current)) : "";
+  const disc = (z.discount_pct != null) ? (" · 比目标价" + (z.discount_pct < 0 ? "低" : "高") + Math.abs(z.discount_pct) + "%") : "";
+  const anchor = (z.method === "估值") ? "锚:分析师目标价" : "锚:均线回撤";
+  const title = `自动可买区间（${anchor}，研究参考·非买入信号）：$${z.low}~$${z.high}${disc}\n现价低于下沿=偏便宜🟢 / 区间内🟡 / 高于上沿=偏贵🔴 别追高。\n（无人工买点计划，自动兜底显示；不改 AI 排名、不自动交易）`;
+  return `<div class="text-[11px] leading-snug max-w-[190px] cursor-help" title="${_esc(title)}">
+    <span class="${tone} font-semibold">${dot} 可买 $${Math.round(z.low)}~$${Math.round(z.high)}</span>
+    <div class="text-slate-400">${_esc(cur)} · 自动区间</div>
+  </div>`;
+}
+
+function _tradingPlanCompactHtml(code, opts = {}) {
+  const plan = _tradingPlanForCode(code);
+  if (!plan) return opts.empty === false ? "" : _buyZoneCompactHtml(code);
+  const cls = _tradingPlanToneClass(plan);
+  const current = plan.current == null ? "缺价" : Number(plan.current).toFixed(2);
+  const nearest = [plan.nearest_level, plan.nearest_range].filter(Boolean).join(" ");
+  const invalid = Array.isArray(plan.display_invalidations) ? plan.display_invalidations[0] : null;
+  const invalidLine = invalid && invalid.price_text ? `失效 ${_esc(invalid.price_text)}` : "";
+  return `<div class="text-[11px] leading-snug max-w-[190px] cursor-help" title="${_esc(_tradingPlanTitle(plan))}">
+    <span class="inline-flex px-2 py-0.5 rounded-full border font-semibold ${cls}">${_esc(plan.status_label || "观察")}</span>
+    <div class="mt-1 text-slate-700 font-mono">${_esc(current)} ${_esc(plan.currency || "")}</div>
+    <div class="text-slate-600">${_esc(nearest || plan.distance_text || "未设置区间")}</div>
+    <div class="text-slate-400">${_esc([plan.distance_text, invalidLine].filter(Boolean).join(" · "))}</div>
+  </div>`;
 }
 
 function _dataRepairCommand(code) {
@@ -4311,7 +4384,7 @@ async function loadWatchlistTable() {
     const msg = apiSt.reason === "db_busy"
       ? "API 已启动，DuckDB 正被 daily_refresh 等脚本占用，请几分钟后再点「刷新」。"
       : "无法连接本地 API；登录后应由 launchd 自动启动，或执行 launchctl kickstart -k gui/$(id -u)/com.linearview.stockassistant.api";
-    tbody.innerHTML = `<tr><td colspan="9" class="px-3 py-8 text-center text-amber-800 text-sm">⚠️ ${_esc(msg)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="10" class="px-3 py-8 text-center text-amber-800 text-sm">⚠️ ${_esc(msg)}</td></tr>`;
     countEl.textContent = "";
     return;
   }
@@ -4392,7 +4465,7 @@ async function loadWatchlistTable() {
       ? `${filtered.length} / ${displayRows.length} 只 · 已合并 ${duplicateN} 条重复`
       : `${filtered.length} / ${displayRows.length} 只`;
     if (filtered.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="9" class="px-3 py-8 text-center text-slate-500 text-sm">没有匹配的记录</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="10" class="px-3 py-8 text-center text-slate-500 text-sm">没有匹配的记录</td></tr>`;
       return;
     }
     const groupSeen = {};
@@ -4410,7 +4483,7 @@ async function loadWatchlistTable() {
       let groupHead = "";
       if (grp.key !== lastGroupKey) {
         lastGroupKey = grp.key;
-        groupHead = `<tr class="bg-slate-100/80"><td colspan="9" class="px-3 py-1.5 text-[11px] font-bold text-slate-500 tracking-wider border-l-2 ${grp.key === "held" ? "border-rose-400" : grp.key === "research" ? "border-emerald-400" : "border-slate-300"}">${grp.label}（${groupSeen[grp.key] || 0}）</td></tr>`;
+        groupHead = `<tr class="bg-slate-100/80"><td colspan="10" class="px-3 py-1.5 text-[11px] font-bold text-slate-500 tracking-wider border-l-2 ${grp.key === "held" ? "border-rose-400" : grp.key === "research" ? "border-emerald-400" : "border-slate-300"}">${grp.label}（${groupSeen[grp.key] || 0}）</td></tr>`;
       }
       return groupHead + `
       <tr class="hover:bg-slate-50 align-top">
@@ -4420,6 +4493,7 @@ async function loadWatchlistTable() {
           <div class="text-[11px] text-slate-400 mt-0.5" title="${_esc(r.market || '')}">${_esc(_normWatchlistMarket(r.market))}</div>
         </td>
         <td class="px-3 py-3 min-w-[125px]">${_watchActionBadge(item)}</td>
+        <td class="px-3 py-3 min-w-[170px]">${_tradingPlanCompactHtml(code)}</td>
         <td class="px-3 py-3 min-w-[170px]">${_watchlistMetricsHtml(item)}${(item.rating && item.rating.rating) ? "" : `<div class="mt-1">${_wlRatingBadge(code)}</div>`}</td>
         <td class="px-3 py-3 text-xs text-slate-700 max-w-md leading-relaxed">
           ${why.map(w => `<div>${_esc(w)}</div>`).join("") || '<span class="text-slate-400">—</span>'}
@@ -4436,7 +4510,7 @@ async function loadWatchlistTable() {
       </tr>`;
     }).join("");
   } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="9" class="px-3 py-8 text-center text-rose-700 text-sm">加载失败：${_esc(e.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="10" class="px-3 py-8 text-center text-rose-700 text-sm">加载失败：${_esc(e.message)}</td></tr>`;
   }
 }
 async function forceReloadWatchlist() { _watchlistCache = []; await loadWatchlistTable(); }
@@ -13846,6 +13920,7 @@ function _reasonSummaryHtml(row) {
           <div class="mt-0.5 inline-flex items-center gap-1 flex-wrap">${_candidateMiniTags(c)}</div>
         </td>
         <td class="disc-sticky-policy px-2 py-1 text-xs whitespace-nowrap">${_policyActionBadge(c)}</td>
+        <td class="px-2 py-1 text-xs min-w-[170px]">${_tradingPlanCompactHtml(c.ticker || c.code)}</td>
         <td class="px-2 py-1 text-xs whitespace-nowrap">${_signalBadge(c)}</td>
         <td class="px-2 py-1 text-xs whitespace-nowrap">${market}</td>
         <td class="px-2 py-1 text-xs text-slate-600 whitespace-nowrap" title="${_esc(themeTitle || themeText)}">${_esc(themeText)}</td>
@@ -14988,6 +15063,366 @@ def _runtime_parse_dt(value) -> datetime | None:
         return datetime.fromisoformat(text)
     except Exception:
         return None
+
+
+def _trading_plan_config() -> dict:
+    source_rel = "stock_research/data/trading_plans.json"
+    payload = _runtime_load_json(source_rel)
+    if not payload:
+        source_rel = "data/manual/trading_plans.json"
+        payload = _runtime_load_json(source_rel)
+    if payload.get("_error"):
+        print(f"  ⚠️  交易计划配置读取失败({source_rel}): {payload.get('_error')}")
+        return {}
+    if payload:
+        payload["_source_rel"] = source_rel
+    return payload if isinstance(payload, dict) else {}
+
+
+def _latest_plan_prices(symbols: list[str]) -> dict[str, dict]:
+    if not symbols:
+        return {}
+    db_path = _duckdb_path()
+    if not os.path.exists(db_path):
+        return {}
+    try:
+        con = duckdb.connect(db_path, read_only=True)
+        tables = {str(r[0]) for r in con.execute("SHOW TABLES").fetchall()}
+        if "price_daily" not in tables:
+            con.close()
+            return {}
+        placeholders = ",".join(["?"] * len(symbols))
+        rows = con.execute(
+            """
+            SELECT symbol, market, trade_date, close, currency
+            FROM price_daily
+            WHERE upper(symbol) IN (""" + placeholders + """)
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY upper(symbol)
+                ORDER BY trade_date DESC, fetched_at DESC
+            ) = 1
+            """,
+            [str(s).upper() for s in symbols],
+        ).fetchall()
+        con.close()
+    except Exception as e:
+        print(f"  ⚠️  交易计划行情读取失败: {e}")
+        return {}
+    return {
+        str(sym or "").upper(): {
+            "symbol": sym,
+            "market": market,
+            "trade_date": str(trade_date)[:10] if trade_date is not None else None,
+            "current": float(close) if close is not None else None,
+            "currency": currency or "USD",
+        }
+        for sym, market, trade_date, close, currency in rows
+    }
+
+
+def _fmt_plan_price(value) -> str:
+    try:
+        n = float(value)
+    except Exception:
+        return "—"
+    return f"{n:.2f}".rstrip("0").rstrip(".")
+
+
+def _fmt_plan_range(level: dict) -> str:
+    low = level.get("low")
+    high = level.get("high")
+    if low is None and high is None:
+        return "—"
+    if high is None:
+        return f"{_fmt_plan_price(low)}+"
+    if low is None:
+        return f"≤{_fmt_plan_price(high)}"
+    return f"{_fmt_plan_price(low)}-{_fmt_plan_price(high)}"
+
+
+def _evaluate_trading_plan(plan: dict, price_info: dict | None) -> dict:
+    out = dict(plan)
+    symbol = str(plan.get("symbol") or "").upper()
+    out["symbol"] = symbol
+    out["current"] = (price_info or {}).get("current")
+    out["price_trade_date"] = (price_info or {}).get("trade_date")
+    out["currency"] = (price_info or {}).get("currency") or "USD"
+    out["display_levels"] = [
+        {
+            **level,
+            "range_text": _fmt_plan_range(level),
+        }
+        for level in (plan.get("levels") or [])
+        if isinstance(level, dict)
+    ]
+    out["display_invalidations"] = [
+        {
+            **inv,
+            "price_text": _fmt_plan_price(inv.get("price")),
+        }
+        for inv in (plan.get("invalidations") or [])
+        if isinstance(inv, dict)
+    ]
+
+    current = out.get("current")
+    if current is None:
+        out.update({
+            "status_key": "missing_price",
+            "status_label": "缺行情",
+            "status_tone": "slate",
+            "summary": "缺最新行情，先刷新数据。",
+            "next_line": "先补行情，再判断是否接近买点。",
+        })
+        return out
+
+    invalidations = out.get("display_invalidations") or []
+    hard_stop = None
+    for inv in invalidations:
+        try:
+            px = float(inv.get("price"))
+        except Exception:
+            continue
+        if hard_stop is None or px < hard_stop:
+            hard_stop = px
+    if hard_stop is not None and current < hard_stop:
+        out.update({
+            "status_key": "invalidated",
+            "status_label": "跌破失效线",
+            "status_tone": "rose",
+            "summary": f"当前 {_fmt_plan_price(current)} 已跌破 {_fmt_plan_price(hard_stop)}。",
+            "next_line": "暂停买入，重新做基本面和事件复查。",
+            "nearest_level": "失效线",
+            "distance_text": "已跌破",
+        })
+        return out
+
+    buy_levels = [
+        lv for lv in out.get("display_levels") or []
+        if lv.get("high") is not None and lv.get("low") is not None
+    ]
+    breakout_levels = [
+        lv for lv in out.get("display_levels") or []
+        if lv.get("high") is None and lv.get("low") is not None
+    ]
+    for lv in buy_levels:
+        try:
+            low, high = float(lv.get("low")), float(lv.get("high"))
+        except Exception:
+            continue
+        if low <= current <= high:
+            out.update({
+                "status_key": "in_buy_zone",
+                "status_label": "触发买点",
+                "status_tone": "emerald",
+                "summary": f"当前 {_fmt_plan_price(current)} 在 {lv.get('label')} {lv.get('range_text')} 内。",
+                "next_line": str(lv.get("action") or "先做买前研究，再分批。"),
+                "nearest_level": lv.get("label"),
+                "nearest_range": lv.get("range_text"),
+                "distance_text": "已到区间",
+            })
+            return out
+
+    nearest = None
+    nearest_abs = None
+    for lv in buy_levels:
+        try:
+            low, high = float(lv.get("low")), float(lv.get("high"))
+        except Exception:
+            continue
+        if current > high:
+            dist = (current - high) / current * 100.0
+            text = f"再跌 {dist:.1f}% 到上沿"
+            abs_dist = current - high
+        elif current < low:
+            dist = (low - current) / current * 100.0
+            text = f"反弹 {dist:.1f}% 到下沿"
+            abs_dist = low - current
+        else:
+            text = "已到区间"
+            abs_dist = 0
+        item = (abs_dist, lv, text)
+        if nearest is None or item[0] < nearest_abs:
+            nearest = item
+            nearest_abs = item[0]
+
+    breakout = breakout_levels[0] if breakout_levels else None
+    if breakout:
+        try:
+            breakout_px = float(breakout.get("low"))
+        except Exception:
+            breakout_px = None
+        if breakout_px is not None and current >= breakout_px:
+            out.update({
+                "status_key": "breakout_watch",
+                "status_label": "突破确认区",
+                "status_tone": "sky",
+                "summary": f"当前 {_fmt_plan_price(current)} 已高于突破线 {_fmt_plan_price(breakout_px)}。",
+                "next_line": str(breakout.get("action") or "等站稳后再小仓确认。"),
+                "nearest_level": breakout.get("label"),
+                "nearest_range": breakout.get("range_text"),
+                "distance_text": "已突破",
+            })
+            return out
+
+    if nearest:
+        _, lv, dist_text = nearest
+        first_level = buy_levels[0] if buy_levels else lv
+        if first_level and current > float(first_level.get("high")):
+            label = "等待回踩"
+            tone = "amber"
+            key = "above_zone_wait"
+        else:
+            label = "靠近买点"
+            tone = "amber"
+            key = "near_zone"
+        out.update({
+            "status_key": key,
+            "status_label": label,
+            "status_tone": tone,
+            "summary": f"当前 {_fmt_plan_price(current)}，最近是 {lv.get('label')} {lv.get('range_text')}。",
+            "next_line": str(lv.get("action") or "等价格进入区间再复查。"),
+            "nearest_level": lv.get("label"),
+            "nearest_range": lv.get("range_text"),
+            "distance_text": dist_text,
+        })
+        return out
+
+    out.update({
+        "status_key": "watching",
+        "status_label": "观察",
+        "status_tone": "slate",
+        "summary": f"当前 {_fmt_plan_price(current)}，未触发计划。",
+        "next_line": "等待价格进入计划区间。",
+    })
+    return out
+
+
+def _trading_plan_payload() -> dict:
+    config = _trading_plan_config()
+    plans = [p for p in (config.get("plans") or []) if isinstance(p, dict) and p.get("symbol")]
+    symbols = [str(p.get("symbol")).upper() for p in plans]
+    prices = _latest_plan_prices(symbols)
+    evaluated = [
+        _evaluate_trading_plan(p, prices.get(str(p.get("symbol") or "").upper()))
+        for p in plans
+    ]
+    return {
+        "schema_version": config.get("schema_version") or "trading_plan_v1",
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "source": config.get("_source_rel") or "stock_research/data/trading_plans.json",
+        "safety_boundary": config.get("safety_boundary") or "Display-only research reminder.",
+        "plans": evaluated,
+    }
+
+
+def _buy_zone_payload() -> dict:
+    """构建期给「美股自选+推荐+瓶颈」算全量可买区间，注入成 BUY_ZONES 全局。
+
+    用途：「买点计划」列没有人工 trading_plan 时，兜底显示自动可买区间
+    （单一来源 stock_research/core/buy_zone）。US-only —— 港股/A股 buy_zone 待接
+    （memory: project_buy_zone_feature），非美票不收录，列仍显示「—」。
+    撞写锁/无数据时返回 {} 优雅降级（列回到「—」），不让 dashboard 构建失败。
+    """
+    try:
+        from stock_research.core import buy_zone
+        from stock_research.core import premarket_buy_signals as pbs
+        conn, ok = buy_zone._open_conn()
+        if not ok or conn is None:
+            print("  ⚠️  buy_zone 兜底：DB 不可读（可能撞写锁），「买点计划」列本次无自动区间")
+            return {}
+        try:
+            uni = pbs._gather_universe(conn)
+            us_syms = [
+                s for s, m in uni.items()
+                if not pbs._is_hk(s, m.get("market")) and not pbs._is_a_share(s, m.get("market"))
+            ]
+            zones = buy_zone.compute_buy_zones(us_syms, conn)
+        finally:
+            conn.close()
+    except Exception as exc:  # pragma: no cover - 防御
+        print(f"  ⚠️  buy_zone 兜底计算失败：{exc}")
+        return {}
+    out: dict[str, dict] = {}
+    for sym, z in (zones or {}).items():
+        if not z or z.get("low") is None or z.get("high") is None:
+            continue
+        discount = None
+        if z.get("target") and z.get("current"):
+            try:
+                discount = round((float(z["current"]) / float(z["target"]) - 1) * 100, 1)
+            except Exception:
+                discount = None
+        out[str(sym).upper()] = {
+            "low": z.get("low"),
+            "high": z.get("high"),
+            "current": z.get("current"),
+            "position": z.get("position"),
+            "method": z.get("method"),
+            "discount_pct": discount,
+        }
+    return out
+
+
+def trading_plan_today_panel_html(payload: dict | None = None) -> str:
+    payload = payload or _trading_plan_payload()
+    plans = payload.get("plans") or []
+    if not plans:
+        return ""
+    tone_cls = {
+        "emerald": "border-emerald-200 bg-emerald-50 text-emerald-900",
+        "amber": "border-amber-200 bg-amber-50 text-amber-900",
+        "rose": "border-rose-200 bg-rose-50 text-rose-900",
+        "sky": "border-sky-200 bg-sky-50 text-sky-900",
+        "slate": "border-slate-200 bg-slate-50 text-slate-800",
+    }
+    rows = []
+    for p in plans[:6]:
+        tone = tone_cls.get(str(p.get("status_tone") or "slate"), tone_cls["slate"])
+        levels = p.get("display_levels") or []
+        first = levels[0] if levels else {}
+        second = levels[1] if len(levels) > 1 else {}
+        support = levels[2] if len(levels) > 2 else {}
+        breakout = next((lv for lv in levels if lv.get("kind") == "breakout_confirmation"), None)
+        invalid = (p.get("display_invalidations") or [{}])[0]
+        current = p.get("current")
+        price_line = (
+            f"{_fmt_plan_price(current)} {p.get('currency') or 'USD'} · {p.get('price_trade_date') or '—'}"
+            if current is not None else "缺行情"
+        )
+        rows.append(f"""
+          <div class="rounded-lg border {tone} px-3 py-3">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <div class="font-mono font-bold text-slate-950">{html_lib.escape(str(p.get('symbol') or ''))}</div>
+                <div class="text-[11px] text-slate-500">{html_lib.escape(str(p.get('name') or ''))}</div>
+              </div>
+              <span class="inline-flex px-2 py-0.5 rounded-full border border-current/20 bg-white/60 text-xs font-bold">{html_lib.escape(str(p.get('status_label') or '观察'))}</span>
+            </div>
+            <div class="mt-2 text-sm font-semibold">{html_lib.escape(str(p.get('summary') or ''))}</div>
+            <div class="mt-1 text-xs text-slate-700">{html_lib.escape(str(p.get('distance_text') or ''))} · {html_lib.escape(str(p.get('next_line') or ''))}</div>
+            <div class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-slate-600">
+              <div>当前 <span class="font-mono text-slate-900">{html_lib.escape(price_line)}</span></div>
+              <div>第一买点 <span class="font-mono text-slate-900">{html_lib.escape(str(first.get('range_text') or '—'))}</span></div>
+              <div>第二买点 <span class="font-mono text-slate-900">{html_lib.escape(str(second.get('range_text') or '—'))}</span></div>
+              <div>强支撑 <span class="font-mono text-slate-900">{html_lib.escape(str(support.get('range_text') or '—'))}</span></div>
+              <div>突破确认 <span class="font-mono text-slate-900">{html_lib.escape(str((breakout or {}).get('range_text') or '—'))}</span></div>
+              <div>失效线 <span class="font-mono text-slate-900">{html_lib.escape(str(invalid.get('price_text') or '—'))}</span></div>
+            </div>
+          </div>
+        """)
+    return f"""
+  <section class="bg-white rounded-xl border border-slate-200 p-4 mb-5">
+    <div class="flex items-center justify-between gap-3 mb-3">
+      <div>
+        <h3 class="font-bold text-slate-900">买点纪律 / 再买入计划</h3>
+        <p class="text-xs text-slate-500">人工确认的价格计划，每天按最新行情刷新；只提醒，不改排名、不写持仓。</p>
+      </div>
+      <a href="#watchlist-hub" class="text-xs text-violet-700 hover:text-violet-900 whitespace-nowrap">去股票池 →</a>
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">{''.join(rows)}</div>
+    <p class="text-[11px] text-slate-400 mt-3">来源：{html_lib.escape(str(payload.get('source') or ''))} · 研究参考，不构成任何买卖建议。</p>
+  </section>
+"""
 
 
 def early_growth_radar_section_html(payload: dict | None = None) -> str:
@@ -17704,6 +18139,7 @@ def today_decision_panel_html() -> str:
         or discovery.get("generated_at")
         or datetime.now().isoformat(timespec="minutes")
     )
+    trading_plan_panel = trading_plan_today_panel_html()
 
     return f"""
   <div class="mb-5">
@@ -17738,6 +18174,8 @@ def today_decision_panel_html() -> str:
       </div>
     </div>
   </section>
+
+  {trading_plan_panel}
 
   <section class="grid grid-cols-1 xl:grid-cols-3 gap-5 mb-5">
     <div class="xl:col-span-2 bg-white rounded-xl border border-slate-200 p-4">
@@ -20207,7 +20645,9 @@ def compute_plan_forward_track(plan: dict, history: dict, benchmark: str = "SPY"
     bench_nav = []
     bench_d = tickers_data.get(benchmark)
     if bench_d and bench_d.get("ts") and bench_d.get("close"):
-        bts_to_close = dict(zip(bench_d["ts"], [float(c) for c in bench_d["close"]]))
+        # 跳过 None 收盘（enhancement_refresh 写基准价中途可能留半行，prior：
+        # incident_price_daily_multi_writer_clobber）→ 否则 float(None) 崩整个构建。
+        bts_to_close = {ts: float(c) for ts, c in zip(bench_d["ts"], bench_d["close"]) if c is not None}
         baseline_date = common_dates[baseline_idx]
         b_anchor = bts_to_close.get(baseline_date)
         if b_anchor:
@@ -21475,6 +21915,8 @@ def build():
     html = html.replace("{OPTIMIZATION_JSON_DB}", json.dumps(optimization_db, ensure_ascii=False))
     html = html.replace("{PLAN_A_V6_JSON_DB}", json.dumps(plan_a_v6_runtime, ensure_ascii=False))
     html = html.replace("{DISCOVERY_JSON}", json.dumps(discovery, ensure_ascii=False))
+    html = html.replace("{TRADING_PLANS_JSON}", json.dumps(_trading_plan_payload(), ensure_ascii=False, default=str))
+    html = html.replace("{BUY_ZONES_JSON}", json.dumps(_buy_zone_payload(), ensure_ascii=False, default=str))
     html = html.replace("{DB_EXPLORER_JSON}", json.dumps(db_explorer_snapshot, ensure_ascii=False))
 
     review_embed_path = os.path.join(_REPO, "data", "latest", "real_holding_review.json")
