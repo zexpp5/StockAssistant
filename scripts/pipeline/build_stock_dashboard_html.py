@@ -15363,10 +15363,65 @@ def _buy_zone_payload() -> dict:
     return out
 
 
+def _auto_zone_holding_rows() -> list[str]:
+    """你的持仓的自动可买区间（与「买点计划」表格列同源 buy_zone）。
+
+    港股/A股 buy_zone 待接 → 这些持仓显示「暂无自动区间」而非凭空消失，
+    让用户明白为什么只有美股有自动买点。"""
+    rows: list[str] = []
+    try:
+        review = _runtime_load_json("data/latest/real_holding_review.json")
+        holdings = review.get("items") or []
+        zones = _buy_zone_payload()
+    except Exception:
+        return rows
+    pos_meta = {
+        "便宜": ("🟢", "border-emerald-200 bg-emerald-50"),
+        "区间内": ("🟡", "border-amber-200 bg-amber-50"),
+        "偏贵": ("🔴", "border-rose-200 bg-rose-50"),
+    }
+    for h in holdings:
+        sym = str(h.get("symbol") or "").upper()
+        if not sym:
+            continue
+        z = zones.get(sym)
+        if z and z.get("low") is not None and z.get("high") is not None:
+            dot, cls = pos_meta.get(str(z.get("position")), ("🟡", "border-slate-200 bg-slate-50"))
+            cur = f"现价 ${round(z['current'])}" if z.get("current") is not None else ""
+            dpct = z.get("discount_pct")
+            disc = f" · 比目标价{'低' if (dpct or 0) < 0 else '高'}{abs(dpct)}%" if dpct is not None else ""
+            anchor = "锚:分析师目标价" if z.get("method") == "估值" else "锚:均线回撤"
+            rows.append(
+                f"""<div class="rounded-lg border {cls} px-3 py-2">
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="font-mono font-bold text-slate-900">{html_lib.escape(sym)}</span>
+                    <span class="text-xs font-semibold whitespace-nowrap">{dot} 可买 ${round(z['low'])}~${round(z['high'])}</span>
+                  </div>
+                  <div class="text-[11px] text-slate-500 mt-0.5">{html_lib.escape(cur)}{html_lib.escape(disc)} · {anchor} · 自动</div>
+                </div>"""
+            )
+        else:
+            mkt = str(h.get("market") or "")
+            note = ("港股暂无自动区间（buy_zone 待接）" if mkt == "HK"
+                    else "A股暂无自动区间（buy_zone 待接）" if mkt == "CN"
+                    else "暂无目标价/均线数据")
+            rows.append(
+                f"""<div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="font-mono font-bold text-slate-600">{html_lib.escape(sym)}</span>
+                    <span class="text-[11px] text-slate-400">—</span>
+                  </div>
+                  <div class="text-[11px] text-slate-400 mt-0.5">{html_lib.escape(note)}</div>
+                </div>"""
+            )
+    return rows
+
+
 def trading_plan_today_panel_html(payload: dict | None = None) -> str:
     payload = payload or _trading_plan_payload()
     plans = payload.get("plans") or []
-    if not plans:
+    auto_rows = _auto_zone_holding_rows()
+    if not plans and not auto_rows:
         return ""
     tone_cls = {
         "emerald": "border-emerald-200 bg-emerald-50 text-emerald-900",
@@ -15410,17 +15465,29 @@ def trading_plan_today_panel_html(payload: dict | None = None) -> str:
             </div>
           </div>
         """)
+    manual_block = (
+        f"""
+    <div class="text-[11px] font-semibold text-slate-500 mb-2">✍️ 人工确认的详细计划 <span class="font-normal text-slate-400">· 多档位买点/失效线，手工维护</span></div>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-4">{''.join(rows)}</div>"""
+        if rows else ""
+    )
+    auto_block = (
+        f"""
+    <div class="text-[11px] font-semibold text-slate-500 mb-2">🤖 自动可买区间 · 你的持仓 <span class="font-normal text-slate-400">· 系统按目标价/均线自动算，与「买点计划」列同源</span></div>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-2">{''.join(auto_rows)}</div>"""
+        if auto_rows else ""
+    )
     return f"""
   <section class="bg-white rounded-xl border border-slate-200 p-4 mb-5">
     <div class="flex items-center justify-between gap-3 mb-3">
       <div>
-        <h3 class="font-bold text-slate-900">买点纪律 / 再买入计划</h3>
-        <p class="text-xs text-slate-500">人工确认的价格计划，每天按最新行情刷新；只提醒，不改排名、不写持仓。</p>
+        <h3 class="font-bold text-slate-900">买点参考</h3>
+        <p class="text-xs text-slate-500">两类：✍️ 人工确认的详细计划（如 MRVL，手工录） + 🤖 系统自动算的可买区间。每天按最新行情刷新；只提醒，不改排名、不写持仓。</p>
       </div>
       <a href="#watchlist-hub" class="text-xs text-violet-700 hover:text-violet-900 whitespace-nowrap">去股票池 →</a>
     </div>
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">{''.join(rows)}</div>
-    <p class="text-[11px] text-slate-400 mt-3">来源：{html_lib.escape(str(payload.get('source') or ''))} · 研究参考，不构成任何买卖建议。</p>
+    {manual_block}{auto_block}
+    <p class="text-[11px] text-slate-400 mt-3">来源：人工计划 {html_lib.escape(str(payload.get('source') or ''))} ｜ 自动区间 stock_research/core/buy_zone（美股，港股/A股待接） · 研究参考，不构成任何买卖建议。</p>
   </section>
 """
 
