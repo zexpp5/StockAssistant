@@ -1576,7 +1576,7 @@ function openDiscoveryHistoryFromRadar(event) {
           <th class="px-3 py-2 text-center whitespace-nowrap w-[145px]" title="这只股票用哪种方式分析：有没有美股组合建议、算不算因子分、还是只看仓位盈亏">分析方式</th>
           <th class="px-3 py-2 text-center whitespace-nowrap w-[118px]" title="GICS 板块 ETF 近 60 日涨跌 · 来自 openbb_intel 行业轮动">板块热度</th>
           <th class="px-3 py-2 text-left whitespace-nowrap w-[180px]" title="已持有的票：跌破关键位（如50/200日线）提醒你复查、考虑减仓或撤出；涨回目标位提醒你可落袋一点。卖出/防守侧，只提醒，不自动交易，不写推荐池">减仓/复查提醒</th>
-          <th class="px-3 py-2 text-left whitespace-nowrap w-[170px]" title="买入侧：已持有想加仓时的低吸参考价位，每个交易日收盘后自动重算。50日线=中期趋势支撑（正常小回调，小笔参与档）；200日线=长期趋势支撑（情绪降温，认真考虑档）；半年低点=恐慌价（一年只出现一两次）。仅参考不是指令：跌到价位先核对下跌原因——大盘普跌带下来=按计划，公司自身坏消息=先停手">加仓价位参考</th>
+          <th class="px-3 py-2 text-left whitespace-nowrap w-[170px]" title="买入侧（对已持有的票=加仓）。顶部🟢🟡🔴=可买区间快速判断（现价 vs 分析师目标价，便宜/合理/偏贵）；下方=具体低吸位（50日线中期支撑/200日线长期支撑/半年低点恐慌价），每个交易日收盘后自动重算。仅参考不是指令：跌到价位先核对下跌原因——大盘普跌=按计划分批，公司自身坏消息=先停手">买入/加仓价位</th>
           <th class="px-3 py-2 text-center whitespace-nowrap w-[120px]" title="空头拥挤度提示灯（只看风险、不看买卖）：只回答'这只票现在有没有额外空头风险'，不回答'该不该买'。数据=FINRA 双月短仓披露（约两周滞后的慢数据，抓不住盘中突发逼空）。低/中/高 看空头占流通股+回补天数；环比看空头在增还是减。借券费/实时短仓需付费数据，本灯不含。港股/A股无此披露=不适用">空头拥挤度</th>
           <th class="px-3 py-2 text-right whitespace-nowrap w-[150px]">成本/数量</th>
           <th class="px-3 py-2 text-right whitespace-nowrap w-[150px]">现价/市值</th>
@@ -8743,12 +8743,26 @@ function _suggestedSizeCell(item) {
   </td>`;
 }
 
+function _buyZoneVerdictLine(code) {
+  // 可买区间(vs 分析师目标价)的快速判断,显示在「加仓价位参考」列顶部。
+  const key = String(code || "").trim().toUpperCase();
+  const z = (typeof BUY_ZONES !== "undefined" && BUY_ZONES) ? BUY_ZONES[key] : null;
+  if (!z || z.low == null || z.high == null) return "";
+  const pos = String(z.position || "");
+  const dot = pos === "便宜" ? "🟢" : (pos === "偏贵" ? "🔴" : "🟡");
+  const tone = pos === "便宜" ? "text-emerald-700" : (pos === "偏贵" ? "text-rose-600" : "text-amber-700");
+  const label = pos === "便宜" ? "偏便宜可研究" : (pos === "偏贵" ? "偏贵别追" : "区间内");
+  return `<div class="${tone} font-semibold mb-1 pb-1 border-b border-slate-100 whitespace-nowrap" title="可买区间（锚分析师目标价，研究参考非买入信号）：$${z.low}~$${z.high}。现价低于下沿🟢偏便宜/区间内🟡/高于上沿🔴偏贵别追。">${dot} 可买 $${Math.round(z.low)}~$${Math.round(z.high)} · ${label}</div>`;
+}
+
 function _entryLevelsCell(item) {
   // 加仓参考价位:后端 real_holding_review 每日算好(50日线/200日线/半年低点),前端只渲染
+  // 顶部叠加「可买区间」快速判断(buy_zone),让持仓页买入侧与股票池/推荐页同源。
+  const bzLine = _buyZoneVerdictLine(item && (item.code || item.symbol));
   const el = item && item.entry_levels;
-  if (!el) return `<td class="px-3 py-2 text-[11px] text-slate-300">—</td>`;
+  if (!el) return `<td class="px-3 py-2 text-[11px]">${bzLine || '<span class="text-slate-300">—</span>'}</td>`;
   if (!el.levels || !el.levels.length) {
-    return `<td class="px-3 py-2 text-[11px] text-slate-400" title="本地价格库只有 ${el.history_rows || 0} 个交易日历史,算不出 50/200 日均线和半年低点——是数据没回补,不代表这只票没有支撑位">历史不足<div class="text-[10px] text-slate-300">仅${el.history_rows || 0}个交易日</div></td>`;
+    return `<td class="px-3 py-2 text-[11px] text-slate-400" title="本地价格库只有 ${el.history_rows || 0} 个交易日历史,算不出 50/200 日均线和半年低点——是数据没回补,不代表这只票没有支撑位">${bzLine}历史不足<div class="text-[10px] text-slate-300">仅${el.history_rows || 0}个交易日</div></td>`;
   }
   const cur = Number(el.basis_close);
   const sizeGuarded = el.size_guard === "over_25pct";
@@ -8764,7 +8778,7 @@ function _entryLevelsCell(item) {
   const guardLine = sizeGuarded
     ? `<div class="text-[10px] text-rose-700 font-semibold mb-0.5" title="这只票市值已超过总资产的 25%(系统集中度警戒线)。对超限仓位,任何回调价位都不构成加仓理由;下列数字只用来看支撑/减仓参照。">⚠️ 仓位超25%线·不作加仓用</div>`
     : "";
-  return `<td class="px-3 py-2 text-[11px] leading-relaxed" title="按 ${_esc(el.basis_trade_date || "")} 收盘价计算,每个交易日自动重算。仅参考不是指令:跌到价位先核对下跌原因(大盘普跌=按计划分批,公司自身坏消息=先停手)。">${guardLine}${lines}</td>`;
+  return `<td class="px-3 py-2 text-[11px] leading-relaxed" title="按 ${_esc(el.basis_trade_date || "")} 收盘价计算,每个交易日自动重算。仅参考不是指令:跌到价位先核对下跌原因(大盘普跌=按计划分批,公司自身坏消息=先停手)。">${bzLine}${guardLine}${lines}</td>`;
 }
 
 function _shortCrowdingCell(item) {
