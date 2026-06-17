@@ -273,6 +273,7 @@ pipeline_sink_for_label() {
         *"shadow 调权模拟"*) echo "data/latest/shadow_tuning_run.json + data/reports/shadow_tuning_run.md" ;;
         *"shadow 生产门禁"*) echo "data/latest/shadow_tuning_evidence.json + data/reports/shadow_tuning_evidence.md" ;;
         *"US shadow 预检"*) echo "data/latest/us_shadow_preflight_check.json + data/reports/us_shadow_preflight_check.md" ;;
+        *"冲高退出验证"*) echo "data/latest/grade_reversal_exit_validation.json" ;;
         *"US-only 生产验收"*) echo "data/latest/us_production_acceptance_check.json + data/reports/us_production_acceptance_check.md" ;;
         *"推荐规则快速体检"*) echo "data/latest/recommendation_readiness_check.json + data/reports/recommendation_readiness_check.md" ;;
         *"DuckDB pipeline"*) echo "DuckDB.snapshots(category='pipeline')" ;;
@@ -750,6 +751,7 @@ is_research_step && run_step "23d4e/25 权重变体 shadow（分市场权重·�
 is_research_step && run_step "23d4f/25 权重变体 shadow（纯验证因子·反转+评级 50/50·只读）" "scripts/tools/build_shadow_tuning_run.py --weight-variant rev_grade_5050" enhance 180
 is_research_step && run_step "23d5/25 shadow 生产门禁（只读证据）" "scripts/tools/evaluate_shadow_tuning_run.py" enhance 120
 is_research_step && run_step "23d6/25 US shadow 预检（唯一 source run · 只读）" "scripts/tools/us_shadow_preflight_check.py" enhance 120
+is_research_step && run_step "23d6b/25 评级+反转 冲高退出验证（1日vs5日持有 · 只读）" "scripts/tools/validate_grade_reversal_exit.py" enhance 120
 is_research_step && run_step "23d7/25 US-only 生产验收（先上线美股 · 只读）" "scripts/tools/us_production_acceptance_check.py" enhance 120
 is_research_step && run_step "23d8/25 推荐规则快速体检（US 优先 · 只读）" "scripts/tools/recommendation_readiness_check.py" enhance 120
 is_research_step && run_step "23d9/25 US 严筛试运行（只读研究队列）" "scripts/tools/us_strict_trial.py" enhance 180
