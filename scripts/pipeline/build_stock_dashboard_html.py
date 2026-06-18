@@ -430,8 +430,7 @@ window.echarts = window.echarts || {
 </head>
 <body class="bg-gradient-to-b from-slate-50 to-white" style="padding-left: 14rem;">
 
-<!-- 🔴 统一重大事件红警：最高级别单一红条，只在 is_major 时显示；major_event_alert job 写 JSON，本 JS 实时拉。平时绝不打扰。 -->
-<div id="major-event-banner" style="display:none;padding:12px 18px 0"></div>
+<!-- 🔴 统一重大事件红警：渲染进「今日决策台」顶部(#major-event-banner 在该 section 内)；major_event_alert job 写 JSON，本 JS 实时拉。平时绝不打扰。 -->
 <script>
 (function(){
   var API="http://127.0.0.1:8765";
@@ -769,6 +768,8 @@ window.echarts = window.echarts || {
 
 <!-- ============ 今日决策台 ============ -->
 <section id="today-decision" class="max-w-7xl mx-auto px-6 py-10">
+  <!-- 🔴 统一重大事件红警：固定在今日决策台顶部，只在 is_major/有机会 时显示 -->
+  <div id="major-event-banner" style="display:none;margin-bottom:16px"></div>
   {TODAY_DECISION_PANEL}
 </section>
 
