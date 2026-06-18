@@ -414,6 +414,23 @@ def create_app():
             "errors": payload.get("errors") or [],
         }
 
+    @app.get("/api/major-event-alert")
+    def get_major_event_alert() -> dict[str, Any]:
+        """统一重大事件红警的最新聚合状态（major_event_alert job 写）。
+
+        前端首页顶部红条实时拉它；只在 is_major=true(🔴) 时显示红条，平时不打扰。
+        文件不存在(还没跑过 job)时返回平静态，前端不渲染红条。
+        """
+        p = _REPO_ROOT / "data" / "latest" / "major_event_alert.json"
+        if not p.exists():
+            return {"is_major": False, "severity": "NONE", "major_events": [],
+                    "headline": "", "generated_at": None}
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception as e:
+            return {"is_major": False, "severity": "NONE", "major_events": [],
+                    "headline": "", "error": str(e)}
+
     # ────────── 13F 查询 ──────────
     @app.get("/api/13f/investors")
     def list_investors() -> dict[str, str]:

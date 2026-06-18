@@ -559,6 +559,15 @@ def main() -> int:
     state["holding_alert_count"] = len(hold_alerts)
 
     _save_state(state)
+
+    # 状态刚更新 → 顺手跑统一重大事件红警聚合（读各源最新状态，只在🔴推一条）。
+    # best-effort：不让聚合失败影响 defense_watcher 主流程。
+    try:
+        from stock_research.jobs import major_event_alert as _mea
+        _mea.run()
+    except Exception as _exc:  # pragma: no cover - 防御
+        logger.warning("统一重大事件聚合跳过: %s", _exc)
+
     return 0
 
 

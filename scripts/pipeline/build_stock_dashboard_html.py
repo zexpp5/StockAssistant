@@ -430,6 +430,35 @@ window.echarts = window.echarts || {
 </head>
 <body class="bg-gradient-to-b from-slate-50 to-white" style="padding-left: 14rem;">
 
+<!-- 🔴 统一重大事件红警：最高级别单一红条，只在 is_major 时显示；major_event_alert job 写 JSON，本 JS 实时拉。平时绝不打扰。 -->
+<div id="major-event-banner" style="display:none;padding:12px 18px 0"></div>
+<script>
+(function(){
+  var API="http://127.0.0.1:8765";
+  function esc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+  function render(d){
+    var el=document.getElementById("major-event-banner"); if(!el) return;
+    if(!d||!d.is_major){ el.style.display="none"; return; }
+    var evs=(d.major_events||[]).slice(0,6).map(function(e){
+      return '<div style="margin-top:4px">🔴 <b>'+esc(e.source)+'</b>：'+esc(e.headline)+'</div>';
+    }).join("");
+    var when=d.generated_at?(' · '+esc(String(d.generated_at).slice(0,16).replace("T"," "))):"";
+    el.innerHTML='<div style="background:#fef2f2;border:2px solid #dc2626;border-radius:12px;padding:14px 18px">'
+      +'<div style="font-size:15px;font-weight:800;color:#b91c1c">'+esc(d.headline||"🔴 重大事件")+when+'</div>'
+      +evs
+      +'<div style="font-size:11px;color:#94a3b8;margin-top:8px">收敛自 大盘防御/盘前/持仓日内/财报 · 只在🔴级别显示 · 风控提示非交易指令</div></div>';
+    el.style.display="block";
+  }
+  function load(){
+    try{
+      fetch(API+"/api/major-event-alert").then(function(r){return r.json();}).then(render)
+        .catch(function(){ if(typeof MAJOR_EVENT_ALERT!=="undefined") render(MAJOR_EVENT_ALERT); });
+    }catch(e){ if(typeof MAJOR_EVENT_ALERT!=="undefined") render(MAJOR_EVENT_ALERT); }
+  }
+  if(document.readyState!=="loading") load(); else document.addEventListener("DOMContentLoaded", load);
+  setInterval(load, 120000);  // 每2分钟刷新（red 一响很快看到）
+})();
+</script>
 <!-- 🚦 盘前预警：顶部条幅 + 右侧抽屉（点击原地滑出，不跳页）— premarket_gate job 写 JSON，本 JS 实时拉 -->
 <div id="pm-alert-banner" style="display:none;padding:12px 18px 0"></div>
 <div id="pm-backdrop" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.35);z-index:90"></div>
@@ -3739,6 +3768,7 @@ const CATALYST_VALIDATION = {CATALYST_VALIDATION_JSON};
 const RECOMMENDATION_EVIDENCE = {RECOMMENDATION_EVIDENCE_JSON};  // 推荐有效性证据(evidence_grade + 成熟样本数) — 喂「今天 AI 推荐的组合」证据 gate
 const RECOMMENDATION_READINESS = {RECOMMENDATION_READINESS_JSON};  // 月度动作清单：研究/试探/阻断状态
 const MONTHLY_ACTIONS_PLAN = {MONTHLY_ACTIONS_PLAN_JSON};  // 后端 monthly_actions 判定结果（单一来源），前端只渲染
+const MAJOR_EVENT_ALERT = {MAJOR_EVENT_ALERT_JSON};  // 统一重大事件红警兜底（API 拉不到时用此构建期快照）
 let _watchlistCache = [];
 let _watchlistEditCode = null;  // null = 新增模式；非空 = 编辑该 code
 // 2026-05-14: 自动评级状态
@@ -22595,6 +22625,8 @@ def build():
     html = html.replace("{MONTHLY_ACTIONS_PLAN_JSON}", json.dumps(
         _monthly_actions_payload(plan_a_v6_runtime, discovery, _readiness_runtime, _buy_zones_runtime),
         ensure_ascii=False, default=str))
+    html = html.replace("{MAJOR_EVENT_ALERT_JSON}", json.dumps(
+        _runtime_load_json("data/latest/major_event_alert.json") or {"is_major": False}, ensure_ascii=False, default=str))
     html = html.replace("{DB_EXPLORER_JSON}", json.dumps(db_explorer_snapshot, ensure_ascii=False))
 
     review_embed_path = os.path.join(_REPO, "data", "latest", "real_holding_review.json")
