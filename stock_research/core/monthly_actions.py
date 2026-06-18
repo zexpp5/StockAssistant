@@ -25,8 +25,11 @@ THEME_OVERRIDE: dict[str, str] = {
     "AMKR": "半导体/AI硬件",
     "VECO": "半导体设备", "ACMR": "半导体设备", "ICHR": "半导体设备",
     "GOOGL": "云与AI平台", "MSFT": "云与AI平台", "META": "云与AI平台", "AMZN": "云与AI平台",
+    "ORCL": "云与AI平台",
+    "HPE": "服务器/数据中心", "GDS": "服务器/数据中心",
     "AAPL": "端侧AI/消费电子",
     "9992.HK": "消费/潮玩",
+    "IAUM": "黄金/避险",
 }
 
 _THEME_PATTERNS = [

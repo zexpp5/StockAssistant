@@ -138,14 +138,31 @@ def _rank_industry_lookup() -> dict:
         from stock_research.core.monthly_actions import classify_theme
     except Exception:
         classify_theme = lambda tk, raw: ""  # noqa: E731
+
+    # 行业兜底源：全宇宙 symbol→industry（含 US/HK/A股，比 top20 全得多）。
+    industry_by_tk: dict[str, str] = {}
+    audit = _read_json(_REPO / "data" / "latest" / "recommendation_data_usability_audit.json")
+    for bucket in ("selected", "attention", "blocked", "review_gated"):
+        for it in (audit.get(bucket) or []):
+            tk = str(it.get("symbol") or it.get("ticker") or it.get("code") or "").upper()
+            ind = it.get("industry") or it.get("sector")
+            if tk and ind and tk not in industry_by_tk:
+                industry_by_tk[tk] = str(ind)
+
+    # 排名 + 行业（行业优先 candidate.sector）。
     d = _read_json(_REPO / "data" / "discovery_candidates.json")
     for c in (d.get("candidates") or d.get("items") or []):
         tk = str(c.get("ticker") or c.get("code") or "").upper()
         if not tk:
             continue
         sector = c.get("sector") or c.get("industry") or c.get("theme")
-        industry = sector or classify_theme(tk, str(c.get("name") or ""))
+        industry = sector or industry_by_tk.get(tk) or classify_theme(tk, str(c.get("name") or ""))
         out[tk] = {"rank": c.get("rank"), "industry": industry}
+
+    # 不在 top20 但有行业的，也补进来（rank=None）。
+    for tk, ind in industry_by_tk.items():
+        if tk not in out:
+            out[tk] = {"rank": None, "industry": ind}
     return out
 
 
