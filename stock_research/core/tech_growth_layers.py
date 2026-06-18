@@ -60,12 +60,26 @@ _AI_CORE_BY_SYMBOL = {
     "ON",
     "ALAB",
     "CRDO",
+    "WDC",
+    "STX",
+    "SNDK",
+    "SIMO",
+    "COHR",
+    "LITE",
+    "FN",
+    "CIEN",
+    "AAOI",
+    "ASX",
+    "ACLS",
+    "COHU",
     "MSFT",
     "ORCL",
     "IBM",
 }
 
-_AI_NETWORK_BY_SYMBOL = {"AVGO", "MRVL", "ALAB", "CRDO"}
+_AI_NETWORK_BY_SYMBOL = {"AVGO", "MRVL", "ALAB", "CRDO", "COHR", "LITE", "FN", "CIEN", "AAOI"}
+_AI_STORAGE_BY_SYMBOL = {"MU", "WDC", "STX", "SNDK", "SIMO"}
+_AI_PACKAGING_BY_SYMBOL = {"AMKR", "ASX", "ACLS", "COHU"}
 _CUSTOM_SILICON_BY_SYMBOL = {"AVGO", "MRVL", "GOOGL", "AMZN", "META", "MSFT"}
 _AI_INFRA_BY_SYMBOL = {"SMCI", "DELL", "HPE", "CRWV", "NBIS", "IREN", "APLD"}
 _INTERNET_PLATFORM_BY_SYMBOL = {"GOOGL", "GOOG", "META", "AMZN", "NFLX", "UBER", "SHOP", "AAPL", "TSLA"}
@@ -194,10 +208,18 @@ def classify_tech_growth_layer(
             rationale="AI 服务器、云基础设施或数据中心硬件集成",
         )
 
-    if sym in _AI_CORE_BY_SYMBOL or any(k in text for k in ("ai compute", "asic", "networking", "foundry", "semiconductor")):
+    if sym in _AI_CORE_BY_SYMBOL or any(k in text for k in (
+        "ai compute", "asic", "networking", "foundry", "semiconductor",
+        "memory", "storage", "nand", "ssd", "optical", "interconnect",
+        "packaging", "osat",
+    )):
         secondary: list[str] = []
         if sym in _AI_NETWORK_BY_SYMBOL or "connectivity" in text or "network" in text:
             secondary.append("ai_network")
+        if sym in _AI_STORAGE_BY_SYMBOL or "memory" in text or "storage" in text or "nand" in text or "ssd" in text:
+            secondary.append("memory_storage")
+        if sym in _AI_PACKAGING_BY_SYMBOL or "packaging" in text or "osat" in text:
+            secondary.append("advanced_packaging")
         if sym in _CUSTOM_SILICON_BY_SYMBOL or "asic" in text:
             secondary.append("custom_silicon")
         if "cloud" in text or sym in {"MSFT", "ORCL", "IBM"}:

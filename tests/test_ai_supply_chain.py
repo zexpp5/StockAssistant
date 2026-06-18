@@ -23,6 +23,7 @@ from stock_research.core.ai_supply_chain import (  # noqa: E402
     GAP,
     THIN,
     ChainSegment,
+    build_coverage_audit_payload,
     compute_chain_coverage,
     coverage_gaps,
     coverage_summary,
@@ -111,9 +112,26 @@ class TestHelpers(unittest.TestCase):
         self.assertEqual(s["total"], len(AI_SUPPLY_CHAIN_SEGMENTS))
         self.assertEqual(s["covered"] + s["thin"] + s["gap"], s["total"])
 
+    def test_audit_payload_count_is_segment_issues_not_stocks(self):
+        segs = [
+            ChainSegment("thin_one", "偏薄环节", ("AAA", "BBB"), min_covered=2),
+            ChainSegment("gap_one", "盲区环节", ("CCC", "DDD"), min_covered=2),
+            ChainSegment("covered_one", "已覆盖环节", ("EEE", "FFF"), min_covered=2),
+        ]
+        payload = build_coverage_audit_payload(
+            ["AAA", "EEE", "FFF"],
+            universe_scope="unit-test",
+            segments=segs,
+        )
+        self.assertEqual(payload["count"], 2, "count 应是 thin+gap 环节数，不是 missing 股票数")
+        self.assertEqual(payload["summary"]["thin"], 1)
+        self.assertEqual(payload["summary"]["gap"], 1)
+        self.assertEqual(payload["universe_scope"], "unit-test")
+        self.assertIn("不是买入/入池清单", payload["rule"])
 
-class TestSeedBaselineGaps(unittest.TestCase):
-    """T4：用真实 us_universe 种子跑，固化当前已知缺口（补桶后会翻绿 = tripwire）。"""
+
+class TestSeedCoverageBaseline(unittest.TestCase):
+    """T4：用真实 us_universe 种子跑，固化已补齐的关键链覆盖。"""
 
     def _coverage_by_key(self):
         from stock_research.core.us_universe import US_AI_TECH_UNIVERSE
@@ -125,27 +143,51 @@ class TestSeedBaselineGaps(unittest.TestCase):
         cov = self._coverage_by_key()
         self.assertEqual(cov["ai_compute_chips"]["status"], COVERED, "算力链应已覆盖")
 
-    def test_storage_optical_packaging_are_known_gaps(self):
+    def test_storage_optical_packaging_are_now_covered(self):
         cov = self._coverage_by_key()
-        # 存储：种子里仅 MU → 未覆盖
-        self.assertNotEqual(
-            cov["memory_storage"]["status"], COVERED,
-            "存储链当前应未覆盖；若已补桶请更新此基线断言",
-        )
-        self.assertIn("MU", cov["memory_storage"]["present"])
-        # 光互联：种子里 0 只纯光 → 盲区
+        self.assertEqual(cov["memory_storage"]["status"], COVERED, "存储链补桶后应已覆盖")
+        for sym in ("MU", "WDC", "STX", "SNDK", "SIMO"):
+            self.assertIn(sym, cov["memory_storage"]["present"])
         self.assertEqual(
-            cov["optical_interconnect"]["status"], GAP,
-            "光互联当前应为盲区；若已补桶请更新此基线断言",
+            cov["optical_interconnect"]["status"], COVERED,
+            "光互联补桶后不应再是盲区；若失败说明 US universe 光模块桶被删或 ticker 改了",
         )
+        self.assertEqual(cov["advanced_packaging"]["status"], COVERED)
 
-    def test_gaps_listed_for_morning_report(self):
+    def test_storage_optical_packaging_no_longer_listed_as_gaps(self):
         from stock_research.core.us_universe import US_AI_TECH_UNIVERSE
 
         syms = [row["ticker"] for row in US_AI_TECH_UNIVERSE]
         gap_keys = {g["key"] for g in coverage_gaps(syms)}
-        self.assertIn("memory_storage", gap_keys)
-        self.assertIn("optical_interconnect", gap_keys)
+        self.assertNotIn("memory_storage", gap_keys)
+        self.assertNotIn("optical_interconnect", gap_keys)
+        self.assertNotIn("advanced_packaging", gap_keys)
+
+    def test_new_bucket_symbols_get_ai_identity_and_chain_tags(self):
+        from stock_research.core.chain_classifier import classify_one
+        from stock_research.core.tech_growth_layers import classify_tech_growth_layer
+
+        samples = [
+            ("WDC", "Western Digital", "memory_storage", "NAND/HDD/SSD 控制器"),
+            ("COHR", "Coherent", "ai_network", "光模块/CPO"),
+            ("ASX", "ASE Technology Holding", "advanced_packaging", "先进封装/测试设备"),
+        ]
+        for symbol, name, expected_secondary, expected_role in samples:
+            with self.subTest(symbol=symbol):
+                layer = classify_tech_growth_layer(
+                    market="US",
+                    symbol=symbol,
+                    source="unit_test",
+                    theme="AI supply chain",
+                    industry="Semiconductors",
+                    name=name,
+                )
+                self.assertEqual(layer.primary_layer, "ai_core")
+                self.assertIn(expected_secondary, layer.secondary_layers)
+
+                tag = classify_one(name, "AI supply chain", "Semiconductors")
+                self.assertEqual(tag.chain, "AI 算力")
+                self.assertEqual(tag.chain_role, expected_role)
 
 
 if __name__ == "__main__":

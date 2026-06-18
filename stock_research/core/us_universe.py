@@ -30,6 +30,25 @@ US_AI_TECH_UNIVERSE: list[dict] = [
     {"ticker": "ON", "name": "ON Semiconductor", "sector": "power semiconductors", "source": "us_ai_compute"},
     {"ticker": "ALAB", "name": "Astera Labs", "sector": "AI connectivity", "source": "us_ai_connectivity"},
     {"ticker": "CRDO", "name": "Credo Technology", "sector": "AI connectivity", "source": "us_ai_connectivity"},
+
+    # AI memory / storage bottleneck
+    {"ticker": "WDC", "name": "Western Digital", "sector": "AI memory / storage", "source": "us_ai_memory_storage"},
+    {"ticker": "STX", "name": "Seagate Technology", "sector": "AI memory / storage", "source": "us_ai_memory_storage"},
+    {"ticker": "SNDK", "name": "SanDisk Corporation", "sector": "AI NAND storage", "source": "us_ai_memory_storage"},
+    {"ticker": "SIMO", "name": "Silicon Motion Technology", "sector": "SSD controllers", "source": "us_ai_memory_storage"},
+
+    # AI optical interconnect / modules
+    {"ticker": "COHR", "name": "Coherent", "sector": "AI optical interconnect", "source": "us_ai_optical_interconnect"},
+    {"ticker": "LITE", "name": "Lumentum Holdings", "sector": "AI optical interconnect", "source": "us_ai_optical_interconnect"},
+    {"ticker": "FN", "name": "Fabrinet", "sector": "AI optical interconnect", "source": "us_ai_optical_interconnect"},
+    {"ticker": "CIEN", "name": "Ciena", "sector": "AI optical networking", "source": "us_ai_optical_interconnect"},
+    {"ticker": "AAOI", "name": "Applied Optoelectronics", "sector": "AI optical modules", "source": "us_ai_optical_interconnect"},
+
+    # AI advanced packaging / semiconductor process equipment
+    {"ticker": "ASX", "name": "ASE Technology Holding", "sector": "advanced packaging / OSAT", "source": "us_ai_advanced_packaging"},
+    {"ticker": "ACLS", "name": "Axcelis Technologies", "sector": "semiconductor process equipment", "source": "us_ai_advanced_packaging"},
+    {"ticker": "COHU", "name": "Cohu", "sector": "semiconductor test equipment", "source": "us_ai_advanced_packaging"},
+
     {"ticker": "SMCI", "name": "Super Micro Computer", "sector": "AI servers", "source": "us_ai_hardware"},
     {"ticker": "DELL", "name": "Dell Technologies", "sector": "AI servers", "source": "us_ai_hardware"},
     {"ticker": "HPE", "name": "Hewlett Packard Enterprise", "sector": "AI servers", "source": "us_ai_hardware"},

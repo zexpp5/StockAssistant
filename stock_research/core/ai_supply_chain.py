@@ -57,19 +57,19 @@ AI_SUPPLY_CHAIN_SEGMENTS: list[ChainSegment] = [
         "memory_storage", "存储/内存(HBM/NAND/控制器)",
         ("MU", "WDC", "STX", "SNDK", "SIMO"),
         min_covered=2,
-        note="2026-06 内存税主线；当前仅 MU 一只 → 盲区",
+        note="2026-06 内存税主线；HBM/NAND/HDD/SSD 控制器都属于数据增长瓶颈",
     ),
     ChainSegment(
         "optical_interconnect", "光互联/光模块(收发/激光)",
         ("COHR", "LITE", "FN", "CIEN", "AAOI"),
         min_covered=2,
-        note="800G→1.6T 光模块；当前 0 只纯光 → 盲区",
+        note="800G→1.6T 光模块；AI 集群扩张需要高速光互联",
     ),
     ChainSegment(
         "advanced_packaging", "先进封装/OSAT(CoWoS/HBM封装)",
         ("AMKR", "ASX", "ACLS", "COHU"),
         min_covered=2,
-        note="AI 芯片真正产能卡点；当前仅 AMKR → 偏薄",
+        note="AI 芯片封装、测试和制程设备是产能约束环节",
     ),
     ChainSegment(
         "semi_equipment", "半导体设备(光刻/沉积/刻蚀/测试)",
@@ -167,4 +167,42 @@ def coverage_summary(
         "thin": sum(1 for r in rows if r["status"] == THIN),
         "gap": sum(1 for r in rows if r["status"] == GAP),
         "rows": rows,
+    }
+
+
+def build_coverage_audit_payload(
+    universe_symbols: Iterable[str],
+    *,
+    universe_scope: str = "system_universe active US",
+    segments: Iterable[ChainSegment] | None = None,
+) -> dict:
+    """生成给 audit JSON / dashboard 共用的覆盖体检 payload。
+
+    注意：这里的 count 是 thin + gap 的环节数，代表"覆盖不足"，不是股票数量；
+    anchors 仍然只是覆盖参照，不是买入清单或自动入池清单。
+    """
+    universe = _norm(universe_symbols)
+    summary = coverage_summary(universe, segments=segments)
+    items = coverage_gaps(universe, segments=segments)
+    return {
+        "count": summary["thin"] + summary["gap"],
+        "universe_scope": universe_scope,
+        "universe_size": len(universe),
+        "summary": {
+            "total": summary["total"],
+            "covered": summary["covered"],
+            "thin": summary["thin"],
+            "gap": summary["gap"],
+        },
+        "segments": summary["rows"],
+        "items": items,
+        "rule": (
+            "按 AI_SUPPLY_CHAIN_SEGMENTS 体检 system_universe 的 AI 产业链覆盖；"
+            "anchors 是覆盖参照，不是买入/入池清单"
+        ),
+        "status_legend": {
+            COVERED: "命中数量 >= 该环节 min_covered",
+            THIN: "已命中但低于 min_covered，代表覆盖偏薄",
+            GAP: "该环节 anchor 0 命中，代表盲区",
+        },
     }

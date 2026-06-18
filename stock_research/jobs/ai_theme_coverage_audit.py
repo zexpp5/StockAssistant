@@ -5,6 +5,7 @@
   2. 有 chain 但无公司证据的主题票（chain 关联到主题但 evidence 空）
   3. confirmed 但超过 180 天的票（stale 风险）
   4. ticker 映射冲突（同 symbol 多 market 或 evidence vs picks 不一致）
+  5. AI 产业链覆盖不足环节（system_universe active US 对 taxonomy 的 thin/gap）
 
 设计原则：
   - 只读，不写任何数据表
@@ -25,6 +26,7 @@ sys.path.insert(0, str(REPO / "scripts" / "lib"))
 
 from stock_db import get_db  # noqa: E402  # type: ignore
 from stock_research.core.ai_radar import AI_RELEVANT_THEME_KEYWORDS  # noqa: E402
+from stock_research.core.ai_supply_chain import build_coverage_audit_payload  # noqa: E402
 
 
 OUTPUT_PATH = REPO / "data" / "latest" / "ai_theme_coverage_audit.json"
@@ -135,17 +137,45 @@ def _audit_ticker_conflicts(con) -> list[dict]:
     ]
 
 
+def _active_us_universe_symbols(con) -> list[str]:
+    """读取 system_universe 的 active US symbols；只读，不扩池。
+
+    只看 US 是因为当前 AI 产业链 anchors 以美股/ADR 可交易标的为口径。
+    非美或 inactive 行不能被算作"已覆盖"，否则会把不可跟踪标的误当保护。
+    """
+    rows = con.execute("""
+        SELECT DISTINCT symbol
+        FROM system_universe
+        WHERE market = 'US'
+          AND COALESCE(active, TRUE) = TRUE
+          AND symbol IS NOT NULL
+          AND TRIM(symbol) <> ''
+    """).fetchall()
+    return sorted({str(sym).strip().upper() for (sym,) in rows if sym})
+
+
+def _audit_ai_supply_chain_coverage(con) -> dict:
+    """AI 产业链覆盖体检 — 只度量，不新增候选、不写入 universe。"""
+    symbols = _active_us_universe_symbols(con)
+    return build_coverage_audit_payload(
+        symbols,
+        universe_scope="system_universe active US",
+    )
+
+
 def run_audit(con) -> dict[str, Any]:
     high_score_no_chain = _audit_high_score_no_chain(con)
     theme_no_evidence = _audit_theme_chain_no_evidence(con)
     confirmed_stale = _audit_confirmed_stale_risk(con)
     ticker_conflicts = _audit_ticker_conflicts(con)
+    ai_supply_chain_coverage = _audit_ai_supply_chain_coverage(con)
 
     n_total_issues = (
         len(high_score_no_chain)
         + len(theme_no_evidence)
         + len(confirmed_stale)
         + len(ticker_conflicts)
+        + int(ai_supply_chain_coverage["count"])
     )
 
     return {
@@ -153,6 +183,7 @@ def run_audit(con) -> dict[str, Any]:
         "thresholds": {
             "high_score": HIGH_SCORE_THRESHOLD,
             "confirmed_stale_days": CONFIRMED_STALE_DAYS,
+            "ai_supply_chain_min_covered": "per AI_SUPPLY_CHAIN_SEGMENTS",
         },
         "n_total_issues": n_total_issues,
         "high_score_no_chain": {
@@ -175,6 +206,7 @@ def run_audit(con) -> dict[str, Any]:
             "items": ticker_conflicts,
             "rule": "同 symbol 在 evidence 表里出现多个不同 market",
         },
+        "ai_supply_chain_coverage": ai_supply_chain_coverage,
     }
 
 
@@ -212,7 +244,8 @@ def main():
 
     print(f"\n✅ 审计完成，{audit['n_total_issues']} 个 issue 写入 {OUTPUT_PATH}")
     for key in ("high_score_no_chain", "theme_no_evidence",
-                "confirmed_stale_risk", "ticker_conflicts"):
+                "confirmed_stale_risk", "ticker_conflicts",
+                "ai_supply_chain_coverage"):
         c = audit[key]["count"]
         print(f"  {key:<25} {c:>3} 个")
     return 0
