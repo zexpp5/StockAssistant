@@ -22,6 +22,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from stock_research.core.ai_supply_chain import build_coverage_audit_payload
+
 
 # ─────────────── AI 关联强度映射 ───────────────
 # 规则（首版）：按 chain 反推；后续可升级为独立字段或 LLM 评分
@@ -369,6 +371,16 @@ ORDER BY chain, pick_date
 
 _SQL_WATCHLIST = """
 SELECT market, symbol FROM manual_watchlist
+"""
+
+
+_SQL_ACTIVE_US_SYSTEM_UNIVERSE = """
+SELECT DISTINCT symbol
+FROM system_universe
+WHERE market = 'US'
+  AND COALESCE(active, TRUE) = TRUE
+  AND symbol IS NOT NULL
+  AND TRIM(symbol) <> ''
 """
 
 
@@ -977,6 +989,28 @@ def build_theme_evidence_panel(con) -> dict[str, Any]:
 
 # ─────────────── 主聚合函数 ───────────────
 
+def _build_supply_chain_coverage_panel(con) -> dict[str, Any]:
+    """AI 产业链覆盖体检（只读）。
+
+    这个 panel 只回答"system_universe 对关键环节有没有盲区"；
+    不新增候选、不写 watchlist、不影响今日推荐分。
+    """
+    try:
+        rows = con.execute(_SQL_ACTIVE_US_SYSTEM_UNIVERSE).fetchall()
+        symbols = [str(sym).strip().upper() for (sym,) in rows if sym]
+        return build_coverage_audit_payload(
+            symbols,
+            universe_scope="system_universe active US",
+        )
+    except Exception as e:
+        panel = build_coverage_audit_payload(
+            [],
+            universe_scope="system_universe active US",
+        )
+        panel["error"] = str(e)
+        return panel
+
+
 def build_ai_radar_payload(con) -> dict[str, Any]:
     """构建 AI 主题雷达页面的渲染数据。
 
@@ -1085,6 +1119,8 @@ def build_ai_radar_payload(con) -> dict[str, Any]:
     ]
     uncovered.sort(key=lambda p: -p["total_score"])
 
+    supply_chain_coverage = _build_supply_chain_coverage_panel(con)
+
     # run 元信息
     run_id = picks[0]["run_id"] if picks else None
     generated_at = picks[0]["generated_at"] if picks else None
@@ -1115,6 +1151,7 @@ def build_ai_radar_payload(con) -> dict[str, Any]:
                 for p in uncovered
             ],
         },
+        "supply_chain_coverage": supply_chain_coverage,
         # 硬规则：本模块不写 watchlist，watchlist 数据仅用于打标
         "watchlist_readonly": True,
     }
@@ -1408,6 +1445,16 @@ def _render_ai_radar_focus(payload: dict[str, Any],
             "text-amber-700",
             f"{n_uncovered} 只 AI 高分票缺 chain（运维补规则）"
         ))
+    # 缺口 2b: AI 产业链 coverage audit（环节覆盖，不是个股推荐）
+    supply_cov = payload.get("supply_chain_coverage") or {}
+    n_supply_issues = int(supply_cov.get("count") or 0)
+    if n_supply_issues:
+        supply_summary = supply_cov.get("summary") or {}
+        gap_lines.append((
+            "text-amber-700",
+            f"AI 产业链覆盖 {int(supply_summary.get('thin') or 0)} 条偏薄 / "
+            f"{int(supply_summary.get('gap') or 0)} 条盲区"
+        ))
     # 缺口 3: 数据源 stale/degraded
     if n_stale:
         gap_lines.append((
@@ -1652,6 +1699,9 @@ def _render_ai_radar_reader_guide(payload: dict[str, Any],
     themes_done = int(phase.get("phase_1_themes_with_confirmed") or 0)
     themes_total = int(phase.get("phase_1_themes_total") or 5)
     production_warn_reasons = _production_warn_reasons(production_panel)
+    supply_cov = payload.get("supply_chain_coverage") or {}
+    supply_summary = supply_cov.get("summary") or {}
+    n_supply_issues = int(supply_cov.get("count") or 0)
 
     read_rows = [
         ("先看结论灯", "黄灯表示只能观察主线，不能拿来交易；红灯表示先别用。"),
@@ -1717,6 +1767,13 @@ def _render_ai_radar_reader_guide(payload: dict[str, Any],
             "高分票缺价值链标签",
             f"{n_uncovered} 只高分票还不知道属于哪条 AI 价值链。",
             "补 chain_metadata 规则或人工 override，然后重跑 classify_chain_v2.py。"
+        ))
+    if n_supply_issues:
+        fix_rows.append((
+            "AI 产业链覆盖不足",
+            f"{int(supply_summary.get('thin') or 0)} 条子链偏薄，"
+            f"{int(supply_summary.get('gap') or 0)} 条子链是盲区。",
+            "先看覆盖审计里的 missing anchors；确认可交易和 AI 证据后，再考虑扩 system_universe。"
         ))
 
     if not fix_rows:
@@ -1820,6 +1877,97 @@ def _render_freshness_panel(panel: dict[str, Any]) -> str:
     {summary}
   </div>
   <div class="flex flex-wrap gap-1.5">{"".join(chips)}</div>
+</div>
+"""
+
+
+def _render_supply_chain_coverage_panel(panel: dict[str, Any] | None) -> str:
+    """渲染 AI 产业链覆盖审计。
+
+    这块只展示 system_universe 的覆盖盲区，不代表这些 missing anchors 已可交易或应进入推荐。
+    """
+    if not panel:
+        return ""
+
+    summary = panel.get("summary") or {}
+    n_total = int(summary.get("total") or 0)
+    n_covered = int(summary.get("covered") or 0)
+    n_thin = int(summary.get("thin") or 0)
+    n_gap = int(summary.get("gap") or 0)
+    n_issues = int(panel.get("count") or 0)
+    universe_size = int(panel.get("universe_size") or 0)
+    scope = panel.get("universe_scope") or "system_universe active US"
+
+    error_html = ""
+    if panel.get("error"):
+        error_html = (
+            '<div class="text-[11px] text-rose-700 mt-1">'
+            f'覆盖审计读取失败：{_esc(panel["error"])}</div>'
+        )
+
+    if not n_issues:
+        return f"""
+<div class="bg-emerald-50 ring-1 ring-emerald-200 rounded-xl p-3 mb-3 text-[12px] text-emerald-800">
+  <div class="font-bold">AI 产业链覆盖审计通过</div>
+  <div class="mt-0.5">口径：{_esc(scope)} · universe {universe_size} 只 · {n_covered}/{n_total} 条关键环节达标。anchors 只是覆盖参照，不是入池或买入清单。</div>
+  {error_html}
+</div>
+"""
+
+    rows = []
+    status_label = {
+        "gap": ("盲区", "text-rose-700 bg-rose-50 ring-rose-200"),
+        "thin": ("偏薄", "text-amber-700 bg-amber-50 ring-amber-200"),
+    }
+    for it in panel.get("items") or []:
+        label, cls = status_label.get(
+            it.get("status"),
+            (str(it.get("status") or "未知"), "text-slate-700 bg-slate-50 ring-slate-200"),
+        )
+        present = ", ".join(it.get("present") or []) or "-"
+        missing = ", ".join(it.get("missing") or []) or "-"
+        note = it.get("note") or ""
+        rows.append(f"""
+<tr class="border-t border-amber-100">
+  <td class="py-1.5 pr-2 align-top whitespace-nowrap">
+    <span class="inline-flex items-center px-1.5 py-0.5 rounded ring-1 text-[11px] {cls}">{_esc(label)}</span>
+  </td>
+  <td class="py-1.5 pr-2 align-top text-[12px] font-semibold text-slate-900">{_esc(it.get("name") or it.get("key") or "")}
+    <div class="text-[10px] text-slate-500 mt-0.5">{_esc(note)}</div>
+  </td>
+  <td class="py-1.5 pr-2 align-top text-[12px] font-mono text-slate-700">{_esc(present)}</td>
+  <td class="py-1.5 pr-2 align-top text-[12px] font-mono text-slate-700">{_esc(missing)}</td>
+  <td class="py-1.5 pl-2 align-top text-right text-[12px] text-slate-600 whitespace-nowrap">{int(it.get("present_count") or 0)}/{int(it.get("min_covered") or 0)}</td>
+</tr>
+""")
+
+    return f"""
+<div class="bg-amber-50 ring-1 ring-amber-200 rounded-xl p-4 mb-3">
+  <div class="flex items-start justify-between gap-3 flex-wrap mb-2">
+    <div>
+      <div class="text-sm font-bold text-amber-900">AI 产业链覆盖审计 · {n_issues} 条环节未达标</div>
+      <div class="text-[12px] text-amber-800 mt-0.5">
+        口径：{_esc(scope)} · universe {universe_size} 只 · covered {n_covered}/{n_total}，
+        thin {n_thin}，gap {n_gap}。这是覆盖体检，不是股票推荐。
+      </div>
+      {error_html}
+    </div>
+    <div class="text-[11px] text-amber-700">anchors 只作参照；入池前仍要过可交易、抓价、AI 证据闸门。</div>
+  </div>
+  <div class="overflow-x-auto">
+    <table class="w-full min-w-[780px]">
+      <thead>
+        <tr class="text-[10px] text-amber-700 uppercase tracking-wide">
+          <th class="py-1 pr-2 text-left font-normal">状态</th>
+          <th class="py-1 pr-2 text-left font-normal">环节</th>
+          <th class="py-1 pr-2 text-left font-normal">已覆盖 anchors</th>
+          <th class="py-1 pr-2 text-left font-normal">缺失 anchors</th>
+          <th class="py-1 pl-2 text-right font-normal">命中/门槛</th>
+        </tr>
+      </thead>
+      <tbody>{"".join(rows)}</tbody>
+    </table>
+  </div>
 </div>
 """
 
@@ -2383,6 +2531,7 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
     )
     etf_panel_html = _render_etf_consensus_panel(etf_panel) if etf_panel else ""
     freshness_html = _render_freshness_panel(freshness_panel) if freshness_panel else ""
+    supply_chain_html = _render_supply_chain_coverage_panel(payload.get("supply_chain_coverage"))
     shortlist_html = _render_research_shortlist(shortlist) if shortlist else ""
     focus_html = _render_ai_radar_focus(payload, shortlist, freshness_panel, theme_panel,
                                          production_panel=production_panel)
@@ -2612,10 +2761,10 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
 """
 
     evidence_details_html = f"""
-<details class="group mb-3">
-  <summary class="cursor-pointer select-none list-none flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-white ring-1 ring-slate-200 hover:bg-slate-50 transition">
+<details class="group mb-3 rounded-xl bg-sky-50/50 ring-1 ring-sky-200 overflow-hidden">
+  <summary class="cursor-pointer select-none list-none flex items-center justify-between gap-3 px-4 py-3 hover:bg-sky-100/50 transition">
     <div class="flex items-center gap-3 min-w-0">
-      <span class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-500 text-base leading-none transition-transform group-open:rotate-90">›</span>
+      <span class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sky-600 text-base leading-none transition-transform group-open:rotate-90">›</span>
       <div class="min-w-0">
         <div class="text-sm font-bold text-slate-900">数据健康与证据底座</div>
         <div class="text-[11px] text-slate-500 mt-0.5">数据源、主题证据、覆盖率审计</div>
@@ -2623,7 +2772,7 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
     </div>
     <span class="text-[11px] text-slate-400 whitespace-nowrap">点击展开</span>
   </summary>
-  <div class="mt-3">
+  <div class="px-4 pb-4 mt-1">
     {freshness_html}
     {theme_panel_html}
     {audit_html}
@@ -2631,11 +2780,48 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
 </details>
 """
 
-    etf_details_html = f"""
-<details class="group mb-3">
-  <summary class="cursor-pointer select-none list-none flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-white ring-1 ring-slate-200 hover:bg-slate-50 transition">
+    # AI 产业链覆盖：顶部常驻芯片(一眼验证) + 单独成模块(祖母绿底色)
+    _sc = payload.get("supply_chain_coverage") or {}
+    _sc_sum = _sc.get("summary") or {}
+    _sc_total = int(_sc_sum.get("total") or 0)
+    _sc_cov = int(_sc_sum.get("covered") or 0)
+    _sc_gap = int(_sc.get("count") or 0)
+    if _sc_total and not _sc_gap:
+        supply_chip_html = (
+            '<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg ring-1 '
+            'bg-emerald-50 text-emerald-800 ring-emerald-200 text-[12px] font-semibold">'
+            f'🧬 产业链覆盖 {_sc_cov}/{_sc_total} ✅</span>'
+        )
+    elif _sc_total:
+        supply_chip_html = (
+            '<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg ring-1 '
+            'bg-amber-50 text-amber-800 ring-amber-200 text-[12px] font-semibold">'
+            f'⚠️ 产业链覆盖 {_sc_cov}/{_sc_total}（{_sc_gap} 条待补）</span>'
+        )
+    else:
+        supply_chip_html = ""
+
+    supply_details_html = f"""
+<details class="group mb-3 rounded-xl bg-emerald-50/50 ring-1 ring-emerald-200 overflow-hidden">
+  <summary class="cursor-pointer select-none list-none flex items-center justify-between gap-3 px-4 py-3 hover:bg-emerald-100/50 transition">
     <div class="flex items-center gap-3 min-w-0">
-      <span class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-500 text-base leading-none transition-transform group-open:rotate-90">›</span>
+      <span class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-600 text-base leading-none transition-transform group-open:rotate-90">›</span>
+      <div class="min-w-0">
+        <div class="text-sm font-bold text-slate-900">🧬 AI 产业链覆盖</div>
+        <div class="text-[11px] text-slate-500 mt-0.5">9 条关键环节 · system_universe 盲区体检</div>
+      </div>
+    </div>
+    {supply_chip_html or '<span class="text-[11px] text-slate-400 whitespace-nowrap">点击展开</span>'}
+  </summary>
+  <div class="px-4 pb-4 mt-1">{supply_chain_html}</div>
+</details>
+""" if supply_chain_html else ""
+
+    etf_details_html = f"""
+<details class="group mb-3 rounded-xl bg-amber-50/40 ring-1 ring-amber-200 overflow-hidden">
+  <summary class="cursor-pointer select-none list-none flex items-center justify-between gap-3 px-4 py-3 hover:bg-amber-100/40 transition">
+    <div class="flex items-center gap-3 min-w-0">
+      <span class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-600 text-base leading-none transition-transform group-open:rotate-90">›</span>
       <div class="min-w-0">
         <div class="text-sm font-bold text-slate-900">ETF 共识</div>
         <div class="text-[11px] text-slate-500 mt-0.5">主题 ETF 持仓与系统 universe 命中</div>
@@ -2643,15 +2829,15 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
     </div>
     <span class="text-[11px] text-slate-400 whitespace-nowrap">点击展开</span>
   </summary>
-  <div class="mt-3">{etf_panel_html}</div>
+  <div class="px-4 pb-4 mt-1">{etf_panel_html}</div>
 </details>
 """ if etf_panel_html else ""
 
     chain_details_html = f"""
-<details class="group mb-4">
-  <summary class="cursor-pointer select-none list-none flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-white ring-1 ring-slate-200 hover:bg-slate-50 transition">
+<details class="group mb-4 rounded-xl bg-indigo-50/40 ring-1 ring-indigo-200 overflow-hidden">
+  <summary class="cursor-pointer select-none list-none flex items-center justify-between gap-3 px-4 py-3 hover:bg-indigo-100/40 transition">
     <div class="flex items-center gap-3 min-w-0">
-      <span class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-500 text-base leading-none transition-transform group-open:rotate-90">›</span>
+      <span class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-indigo-600 text-base leading-none transition-transform group-open:rotate-90">›</span>
       <div class="min-w-0">
         <div class="text-sm font-bold text-slate-900">AI 价值链明细</div>
         <div class="text-[11px] text-slate-500 mt-0.5">每条链、近 7 天趋势、链内股票</div>
@@ -2659,7 +2845,7 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
     </div>
     <span class="text-[11px] text-slate-400 whitespace-nowrap">点击展开</span>
   </summary>
-  <div class="mt-3">
+  <div class="px-4 pb-4 mt-1">
     {trend_html}
     {kpi_html}
     {chains_html}
@@ -2671,8 +2857,13 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
     return f"""
 <section id="ai-radar" class="max-w-7xl mx-auto px-6 py-10" style="display:none">
   <div class="mb-4">
-    <h1 class="text-2xl font-bold text-slate-900 flex items-center gap-2">📡 AI 主题雷达</h1>
-    <p class="text-sm text-slate-600 mt-1">AI 价值链全景 · 行业理解层 · 不构成买入建议</p>
+    <div class="flex items-start justify-between gap-3 flex-wrap">
+      <div>
+        <h1 class="text-2xl font-bold text-slate-900 flex items-center gap-2">📡 AI 主题雷达</h1>
+        <p class="text-sm text-slate-600 mt-1">AI 价值链全景 · 行业理解层 · 不构成买入建议</p>
+      </div>
+      {supply_chip_html}
+    </div>
   </div>
   {trust_gate_html}
   {reader_guide_html}
@@ -2680,6 +2871,7 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
   {head_html}
   {shortlist_html}
   {evidence_details_html}
+  {supply_details_html}
   {etf_details_html}
   {chain_details_html}
   {footer_html}
