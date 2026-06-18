@@ -438,15 +438,24 @@ window.echarts = window.echarts || {
   function esc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
   function render(d){
     var el=document.getElementById("major-event-banner"); if(!el) return;
-    if(!d||!d.is_major){ el.style.display="none"; return; }
-    var evs=(d.major_events||[]).slice(0,6).map(function(e){
+    var active=d&&(d.is_active||d.is_major||(d.opportunities&&d.opportunities.length));
+    if(!active){ el.style.display="none"; return; }
+    var majors=(d.major_events||[]), opps=(d.opportunities||[]);
+    var risk=majors.slice(0,6).map(function(e){
       return '<div style="margin-top:4px">🔴 <b>'+esc(e.source)+'</b>：'+esc(e.headline)+'</div>';
     }).join("");
+    var opp=opps.slice(0,6).map(function(o){
+      return '<div style="margin-top:4px">🟢 '+esc(o.headline)+'</div>';
+    }).join("");
+    var hasRisk=majors.length>0;
+    var border=hasRisk?"#dc2626":"#0d9488", bg=hasRisk?"#fef2f2":"#f0fdfa", titleColor=hasRisk?"#b91c1c":"#0f766e";
     var when=d.generated_at?(' · '+esc(String(d.generated_at).slice(0,16).replace("T"," "))):"";
-    el.innerHTML='<div style="background:#fef2f2;border:2px solid #dc2626;border-radius:12px;padding:14px 18px">'
-      +'<div style="font-size:15px;font-weight:800;color:#b91c1c">'+esc(d.headline||"🔴 重大事件")+when+'</div>'
-      +evs
-      +'<div style="font-size:11px;color:#94a3b8;margin-top:8px">收敛自 大盘防御/盘前/持仓日内/财报 · 只在🔴级别显示 · 风控提示非交易指令</div></div>';
+    var oppHdr=(hasRisk&&opp)?'<div style="margin-top:8px;font-weight:700;color:#0f766e">💡 机会</div>':"";
+    var riskHdr=(hasRisk&&risk)?'<div style="margin-top:4px;font-weight:700;color:#b91c1c">🔴 风险</div>':"";
+    el.innerHTML='<div style="background:'+bg+';border:2px solid '+border+';border-radius:12px;padding:14px 18px">'
+      +'<div style="font-size:15px;font-weight:800;color:'+titleColor+'">'+esc(d.headline||"重大事件")+when+'</div>'
+      +riskHdr+risk+oppHdr+opp
+      +'<div style="font-size:11px;color:#94a3b8;margin-top:8px">收敛自 大盘防御/盘前/持仓/财报/可买区 · 🔴风险 + 🟢机会 · 平时不显示 · 研究参考非交易指令</div></div>';
     el.style.display="block";
   }
   function load(){

@@ -77,11 +77,14 @@ def _holding_signal(state: dict) -> dict | None:
     fp = str(state.get("holding_alert_fingerprint") or "")
     if not fp or not state.get("last_holding_alert_at"):
         return None
-    nums = [float(x) for x in re.findall(r"-?\d+\.?\d*", fp)]
-    worst = min(nums) if nums else 0.0
+    # 只认百分比数字（避免把 167.00/447.00 这种价格线误当跌幅）。
+    pct_nums = [float(x) for x in re.findall(r"(-?\d+(?:\.\d+)?)%", fp)]
+    worst = min(pct_nums) if pct_nums else 0.0
     is_portfolio = "PORTFOLIO" in fp.upper() or "组合" in fp
-    crit = (is_portfolio and worst <= HOLDING_PORTFOLIO_CRITICAL) or \
-           (not is_portfolio and worst <= HOLDING_SINGLE_CRITICAL)
+    discipline_hit = ("纪律线" in fp and "触发" in fp) or ("止损" in fp)
+    crit = (discipline_hit
+            or (is_portfolio and worst <= HOLDING_PORTFOLIO_CRITICAL)
+            or (not is_portfolio and worst <= HOLDING_SINGLE_CRITICAL))
     sev = "CRITICAL" if crit else "HIGH"
     return {"source": "持仓异动", "severity": sev,
             "headline": fp, "detail": "组合加权 ≤-3% 或单票 ≤-8% 入红警",
@@ -124,16 +127,79 @@ def collect_signals() -> list[dict]:
     return signals
 
 
+def _rank_industry_lookup() -> dict:
+    """{ticker: {rank, industry}} —— 来自 discovery_candidates（系统当前推荐榜）。
+
+    行业优先用 candidate.sector，缺失退赛道分类（classify_theme，中文标签）。
+    不在榜里的（自选/未入榜）→ rank=None。
+    """
+    out: dict[str, dict] = {}
+    try:
+        from stock_research.core.monthly_actions import classify_theme
+    except Exception:
+        classify_theme = lambda tk, raw: ""  # noqa: E731
+    d = _read_json(_REPO / "data" / "discovery_candidates.json")
+    for c in (d.get("candidates") or d.get("items") or []):
+        tk = str(c.get("ticker") or c.get("code") or "").upper()
+        if not tk:
+            continue
+        sector = c.get("sector") or c.get("industry") or c.get("theme")
+        industry = sector or classify_theme(tk, str(c.get("name") or ""))
+        out[tk] = {"rank": c.get("rank"), "industry": industry}
+    return out
+
+
+def collect_opportunities() -> list[dict]:
+    """🟢 机会：盘前 buy_signals 里"便宜"(跌进可买区)的票。按代码去重(新便宜才提醒)。
+
+    每只附带系统当前排名 + 行业（用户要求：知道它现在排第几、属哪个行业）。
+    """
+    from stock_research.core.monthly_actions import classify_theme
+    opps: list[dict] = []
+    pg = _read_json(LATEST_DIR / "premarket_gate.json")
+    green = ((pg.get("buy_signals") or {}).get("green")) or []
+    ri = _rank_industry_lookup()
+    for g in green:
+        sym = str(g.get("symbol") or "").upper()
+        if not sym:
+            continue
+        low, high, cur = g.get("low"), g.get("high"), g.get("current")
+        disc = g.get("discount_pct")
+        src = "/".join(g.get("sources") or []) or "票池"
+        zone = f"${low:g}~${high:g}" if (low is not None and high is not None) else ""
+        curtxt = f"现价${cur:g}" if cur is not None else ""
+        disctxt = f"，比目标低{abs(disc):g}%" if isinstance(disc, (int, float)) else ""
+        meta = ri.get(sym) or {}
+        rank = meta.get("rank")
+        industry = meta.get("industry") or classify_theme(sym, "")
+        rank_txt = f"系统排名#{rank}" if rank is not None else "未进今日Top20"
+        ind_txt = f" · 行业 {industry}" if industry else ""
+        opps.append({
+            "source": f"机会·{src}",
+            "headline": f"{sym}（{rank_txt}{ind_txt}） 跌进可买区 {zone}（{curtxt}{disctxt}）".replace("（）", ""),
+            "key": f"opp:{sym}",
+        })
+    return opps
+
+
 def _build_card(result: dict) -> dict:
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    majors = result.get("major_events", [])
+    opps = result.get("opportunities", [])
     if result.get("recovered"):
-        content = "**重大警报已解除**，市场/持仓/盘前回到常态。\n之前的红色事件不再活跃。"
+        content = "**已恢复常态**，风险与机会均已解除。\n之前的红警/机会不再活跃。"
         template = "green"
-        title = f"🟢 重大警报解除 · {now_str}"
+        title = f"🟢 已恢复常态 · {now_str}"
     else:
-        lines = ["**触发统一重大事件红警（只在真·重大时响）**\n"]
-        for ev in result.get("major_events", [])[:8]:
-            lines.append(f"• 🔴 **{ev['source']}**：{ev['headline']}")
+        lines = ["**统一重大事件提醒（只在真·重大时响，平时不打扰）**"]
+        if majors:
+            lines.append("\n**🔴 风险**")
+            for ev in majors[:8]:
+                lines.append(f"• 🔴 **{ev['source']}**：{ev['headline']}")
+        if opps:
+            lines.append("\n**💡 机会**（跌进可买区，研究参考非买入信号）")
+            for o in opps[:8]:
+                lines.append(f"• 🟢 {o['headline']}")
         others = [s for s in result.get("all_signals", [])
                   if core._order(s["severity"]) < core._order(result.get("threshold", "CRITICAL"))
                   and s["severity"] != "NONE"]
@@ -141,8 +207,8 @@ def _build_card(result: dict) -> dict:
             lines.append("\n_次级（未达红线，仅参考）_：" +
                          "；".join(f"{o['source']}{core.ICON.get(o['severity'],'')}" for o in others[:5]))
         content = "\n".join(lines)
-        template = "red"
-        title = f"🔴 重大事件 · {len(result.get('major_events', []))} 项 · {now_str}"
+        template = "red" if majors else "turquoise"
+        title = f"{result.get('headline', '重大事件')} · {now_str}"
     return {
         "msg_type": "interactive",
         "card": {
@@ -183,7 +249,9 @@ def _push(card: dict) -> bool:
 def run(*, dry_run: bool = False, force: bool = False, threshold: str = core.DEFAULT_THRESHOLD) -> dict:
     prev_state = _read_json(STATE_FILE)
     signals = collect_signals()
-    result = core.aggregate_major_alert(signals, prev_state, threshold=threshold)
+    opportunities = collect_opportunities()
+    result = core.aggregate_major_alert(signals, prev_state, threshold=threshold,
+                                        opportunities=opportunities)
     result["generated_at"] = datetime.now().isoformat(timespec="seconds")
 
     do_push = force or result["should_push"] or result["recovered"]

@@ -86,5 +86,41 @@ class AggregateMajorAlertTest(unittest.TestCase):
         self.assertTrue(out["is_major"])
 
 
+class OpportunityTest(unittest.TestCase):
+    def _opp(self, sym):
+        return {"source": "机会", "headline": f"{sym} 跌进可买区", "key": f"opp:{sym}"}
+
+    def test_opportunity_alone_is_active_and_pushes(self):
+        out = mea.aggregate_major_alert([], opportunities=[self._opp("ORCL")])
+        self.assertFalse(out["is_major"])
+        self.assertTrue(out["has_opportunities"])
+        self.assertTrue(out["is_active"])
+        self.assertTrue(out["should_push"])
+        self.assertIn("💡", out["headline"])
+
+    def test_same_opportunity_not_repushed(self):
+        first = mea.aggregate_major_alert([], opportunities=[self._opp("ORCL")])
+        again = mea.aggregate_major_alert([], opportunities=[self._opp("ORCL")], prev_state=first["state"])
+        self.assertFalse(again["should_push"], "同一只便宜票不应每天重推")
+
+    def test_new_opportunity_pushes_again(self):
+        first = mea.aggregate_major_alert([], opportunities=[self._opp("ORCL")])
+        second = mea.aggregate_major_alert(
+            [], opportunities=[self._opp("ORCL"), self._opp("RXRX")], prev_state=first["state"])
+        self.assertTrue(second["should_push"], "出现新便宜票应再提醒")
+
+    def test_risk_and_opportunity_together(self):
+        out = mea.aggregate_major_alert(
+            [_sig("大盘防御", "CRITICAL")], opportunities=[self._opp("ORCL")])
+        self.assertTrue(out["is_major"] and out["has_opportunities"])
+        self.assertIn("🔴", out["headline"])
+        self.assertIn("💡", out["headline"])
+
+    def test_recovery_when_both_clear(self):
+        active = mea.aggregate_major_alert([], opportunities=[self._opp("ORCL")])
+        calm = mea.aggregate_major_alert([], opportunities=[], prev_state=active["state"])
+        self.assertTrue(calm["recovered"])
+
+
 if __name__ == "__main__":
     unittest.main()

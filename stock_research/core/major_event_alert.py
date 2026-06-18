@@ -31,28 +31,38 @@ def aggregate_major_alert(
     prev_state: dict[str, Any] | None = None,
     *,
     threshold: str = DEFAULT_THRESHOLD,
+    opportunities: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """收敛多路信号 → 是否重大事件 + 是否该推送（升档/新事件才推）。
+    """收敛多路信号 → 双向提醒：🔴重大风险 + 🟢重大机会。只在"新"出现时推。
 
-    signals: [{source, severity, headline, detail?, key?}, ...]
-    prev_state: 上次的 {fingerprint:[...], is_major:bool}（去重 + 判恢复）。
-    返回 dict：is_major / severity / major_events / all_signals / headline /
-    should_push / recovered / state（新的待持久化状态）。
+    signals: 风险类 [{source, severity, headline, detail?, key?}, ...]（≥threshold 才算重大）。
+    opportunities: 机会类 [{source, headline, key, detail?}, ...]（如 跌进可买区的票）。
+    prev_state: {risk_fp:[...], opp_fp:[...], is_active:bool}（指纹去重 + 判恢复）。
+    返回：is_major / has_opportunities / is_active / major_events / opportunities /
+    severity / headline / should_push / recovered / state。
     """
     prev_state = prev_state or {}
     thr = _order(threshold)
 
     norm: list[dict[str, Any]] = []
     for s in signals or []:
-        sev = _norm_sev(s.get("severity"))
         if not str(s.get("source") or "").strip():
             continue
+        sev = _norm_sev(s.get("severity"))
         norm.append({
-            "source": str(s.get("source")),
-            "severity": sev,
-            "headline": str(s.get("headline") or ""),
-            "detail": str(s.get("detail") or ""),
+            "source": str(s.get("source")), "severity": sev,
+            "headline": str(s.get("headline") or ""), "detail": str(s.get("detail") or ""),
             "key": str(s.get("key") or f"{s.get('source')}:{sev}"),
+        })
+
+    opps: list[dict[str, Any]] = []
+    for o in opportunities or []:
+        if not str(o.get("headline") or o.get("key") or "").strip():
+            continue
+        opps.append({
+            "source": str(o.get("source") or "机会"),
+            "headline": str(o.get("headline") or ""), "detail": str(o.get("detail") or ""),
+            "key": str(o.get("key") or o.get("headline")),
         })
 
     max_sev = "NONE"
@@ -62,32 +72,45 @@ def aggregate_major_alert(
 
     major_events = [s for s in norm if _order(s["severity"]) >= thr]
     is_major = bool(major_events)
+    has_opp = bool(opps)
+    is_active = is_major or has_opp
 
-    fingerprint = sorted({s["key"] for s in major_events})
-    prev_fp = sorted(prev_state.get("fingerprint") or [])
-    prev_major = bool(prev_state.get("is_major"))
+    risk_fp = sorted({s["key"] for s in major_events})
+    opp_fp = sorted({o["key"] for o in opps})
+    prev_risk = sorted(prev_state.get("risk_fp") or prev_state.get("fingerprint") or [])
+    prev_opp = sorted(prev_state.get("opp_fp") or [])
+    prev_active = bool(prev_state.get("is_active") if "is_active" in prev_state
+                       else prev_state.get("is_major"))
 
-    # 升档/出现新重大事件才推；同一批指纹不重复轰炸（平时绝不打扰）。
-    should_push = is_major and (fingerprint != prev_fp)
-    # 从重大恢复到平静：推一条"已解除"（只在真的从 major→非 major 时）。
-    recovered = (not is_major) and prev_major
+    # 出现"新"风险或"新"机会才推；同一批指纹不重复轰炸（平时绝不打扰）。
+    should_push = (is_major and risk_fp != prev_risk) or (has_opp and opp_fp != prev_opp)
+    recovered = (not is_active) and prev_active
 
-    if is_major:
+    if is_major and has_opp:
+        headline = f"🔴 风险 {len(major_events)} 项 ＋ 💡 机会 {len(opps)} 项"
+    elif is_major:
         srcs = "、".join(dict.fromkeys(s["source"] for s in major_events))
-        headline = f"🔴 重大事件 · {len(major_events)} 项 · {srcs}"
+        headline = f"🔴 重大风险 · {len(major_events)} 项 · {srcs}"
+    elif has_opp:
+        headline = f"💡 机会提醒 · {len(opps)} 项（跌进可买区等）"
     elif recovered:
-        headline = "🟢 重大警报已解除 · 恢复常态"
+        headline = "🟢 已恢复常态 · 风险/机会均已解除"
     else:
         headline = f"{ICON.get(max_sev, '🟢')} 无重大事件（当前最高 {max_sev}）"
 
     return {
         "is_major": is_major,
+        "has_opportunities": has_opp,
+        "is_active": is_active,
         "severity": max_sev,
         "major_events": major_events,
+        "opportunities": opps,
         "all_signals": norm,
         "headline": headline,
         "should_push": should_push,
         "recovered": recovered,
         "threshold": _norm_sev(threshold),
-        "state": {"fingerprint": fingerprint, "is_major": is_major},
+        "state": {"risk_fp": risk_fp, "opp_fp": opp_fp, "is_active": is_active,
+                  # 兼容旧字段
+                  "fingerprint": risk_fp, "is_major": is_major},
     }
