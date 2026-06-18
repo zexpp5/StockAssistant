@@ -659,6 +659,7 @@ window.echarts = window.echarts || {
     <div class="mb-4">
       <div class="text-base font-bold text-slate-800 mb-2 px-2">🧠 AI 工作台</div>
       <a href="#discovery" data-tab="discovery" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">AI 推荐</a>
+      <a href="#monthly-actions" data-tab="monthly-actions" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">本月动作</a>
       <a href="#backtest" data-tab="backtest" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">AI 配仓</a>
       <a href="#portfolio" data-tab="portfolio" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">AI 跟踪</a>
       <a href="#ai-radar" data-tab="ai-radar" class="tab-link block pl-7 pr-3 py-1.5 text-[13px] text-slate-600 hover:text-violet-600 hover:bg-violet-50 rounded transition">AI 主题雷达</a>
@@ -2107,6 +2108,141 @@ function openDiscoveryHistoryFromRadar(event) {
   </p>
 
   </div>  <!-- /#portfolio-sub-sim -->
+</section>
+
+<!-- ============ 🗓 本月动作 Tab：月度真钱动作清单（只读，不写持仓） ============ -->
+<section id="monthly-actions" class="max-w-7xl mx-auto px-6 pt-6 pb-8 my-3" style="display:none">
+  <div class="mb-4 rounded-xl border border-violet-200 bg-violet-50 px-4 py-2.5">
+    <div class="flex items-center gap-1.5 flex-wrap">
+      <span class="text-[12px] font-bold text-slate-700 mr-1">🧭 AI 工作台：</span>
+      <a href="#discovery" class="px-2.5 py-1 rounded-md text-[12px] font-semibold bg-white text-slate-500 hover:text-violet-700 border border-slate-200">① AI 推荐</a>
+      <span class="text-slate-300">→</span>
+      <a href="#monthly-actions" class="px-2.5 py-1 rounded-md text-[12px] font-semibold bg-violet-600 text-white">② 本月动作</a>
+      <span class="text-slate-300">→</span>
+      <a href="#backtest" class="px-2.5 py-1 rounded-md text-[12px] font-semibold bg-white text-slate-500 hover:text-violet-700 border border-slate-200">③ AI 配仓</a>
+      <span class="text-slate-300">→</span>
+      <a href="#portfolio" class="px-2.5 py-1 rounded-md text-[12px] font-semibold bg-white text-slate-500 hover:text-violet-700 border border-slate-200">④ AI 跟踪</a>
+    </div>
+    <div class="text-[12px] text-slate-600 mt-1.5">
+      本页 = <b>把最新 AI 推荐 / AI 配仓 / 真实持仓 / 买入区间压成一个月度动作清单</b>。
+      <span class="text-rose-700">只读 advisory，不自动写真实持仓，不自动交易。</span>
+    </div>
+  </div>
+
+  <div class="mb-5 flex items-start justify-between gap-4 flex-wrap">
+    <div>
+      <div class="text-xs font-semibold text-violet-700 mb-2">每月入口 · 最多 3 个动作，否则现金等待</div>
+      <h2 class="text-3xl font-bold text-slate-900">本月动作清单</h2>
+      <p class="text-sm text-slate-600 mt-2 max-w-3xl">
+        给真钱操作用的收敛页：每月固定一天打开，看是否有 1-3 只可小笔加仓，以及是否有持仓过度集中需要纠偏。
+      </p>
+    </div>
+    <div class="text-right text-xs text-slate-500">
+      <div id="monthly-actions-generated">—</div>
+      <div class="mt-1">本金口径 <span id="monthly-actions-capital" class="font-mono">—</span></div>
+    </div>
+  </div>
+
+  <section id="monthly-actions-verdict" class="rounded-xl border px-5 py-4 mb-5 bg-white border-slate-200"></section>
+
+  <div class="grid grid-cols-1 xl:grid-cols-[1.2fr_0.8fr] gap-5 mb-5">
+    <section class="bg-white rounded-xl border border-slate-200 overflow-hidden">
+      <div class="px-4 py-3 border-b border-slate-200 bg-slate-50">
+        <h3 class="font-bold text-slate-900">当前 / 动作后快照</h3>
+        <p class="text-xs text-slate-500">看本月动作是否真的改善组合，而不是只多买几只股票。</p>
+      </div>
+      <div id="monthly-actions-snapshot" class="p-4"></div>
+    </section>
+
+    <section class="bg-white rounded-xl border border-slate-200 overflow-hidden">
+      <div class="px-4 py-3 border-b border-slate-200 bg-slate-50">
+        <h3 class="font-bold text-slate-900">赛道护栏</h3>
+        <p class="text-xs text-slate-500">单赛道上限 15%；同一赛道本月只保留一个新买动作。</p>
+      </div>
+      <div id="monthly-actions-theme-guard" class="p-4"></div>
+    </section>
+  </div>
+
+  <div class="grid grid-cols-1 xl:grid-cols-3 gap-5 mb-5">
+    <section class="xl:col-span-2 bg-white rounded-xl border border-slate-200 overflow-hidden">
+      <div class="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-3">
+        <div>
+          <h3 class="font-bold text-slate-900">可加仓（最多 3 只）</h3>
+          <p class="text-xs text-slate-500">来自 AI 组合方案，且价格合适、无明显红旗、没有超配、没有重复押同赛道。</p>
+        </div>
+        <a href="#backtest" class="text-xs text-violet-700 hover:text-violet-900 whitespace-nowrap">完整配仓 →</a>
+      </div>
+      <div class="overflow-x-auto px-4 py-2">
+        <table class="w-full text-sm">
+          <thead class="text-xs text-slate-500 border-b border-slate-100">
+            <tr>
+              <th class="py-2 pr-3 text-left">股票</th>
+              <th class="py-2 pr-3 text-left">为什么可买</th>
+              <th class="py-2 pr-3 text-right" title="最新收盘参考价，不是实时成交价">参考价</th>
+              <th class="py-2 pr-3 text-right">本月上限</th>
+              <th class="py-2 text-left">为什么不是更多</th>
+              <th class="py-2 pl-3 text-right whitespace-nowrap">推荐时间</th>
+            </tr>
+          </thead>
+          <tbody id="monthly-actions-buy-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="bg-white rounded-xl border border-slate-200 overflow-hidden">
+      <div class="px-4 py-3 border-b border-slate-200 bg-slate-50">
+        <h3 class="font-bold text-slate-900">纠偏 / 不再加</h3>
+        <p class="text-xs text-slate-500">真实持仓集中度、持仓体检红旗。这里给主动纠偏参考，但不自动卖。</p>
+      </div>
+      <div id="monthly-actions-correction" class="px-4 py-3 space-y-2"></div>
+    </section>
+  </div>
+
+  <section class="bg-white rounded-xl border border-slate-200 overflow-hidden mb-5">
+    <div class="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-3">
+      <div>
+        <h3 class="font-bold text-slate-900">本月不买原因</h3>
+        <p class="text-xs text-slate-500">同样来自最新组合候选：偏贵、过热、证据/风险或持仓超配就不进入本月动作。</p>
+      </div>
+      <a href="#discovery" class="text-xs text-violet-700 hover:text-violet-900 whitespace-nowrap">看推荐详情 →</a>
+    </div>
+    <div class="overflow-x-auto px-4 py-2">
+      <table class="w-full text-sm">
+        <thead class="text-xs text-slate-500 border-b border-slate-100">
+          <tr>
+            <th class="py-2 pr-3 text-left">股票</th>
+            <th class="py-2 pr-3 text-left">状态</th>
+            <th class="py-2 pr-3 text-right" title="最新收盘参考价，不是实时成交价">参考价</th>
+            <th class="py-2 text-left">跳过原因</th>
+            <th class="py-2 pl-3 text-right whitespace-nowrap">推荐时间</th>
+          </tr>
+        </thead>
+        <tbody id="monthly-actions-skip-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="rounded-xl border border-slate-200 bg-white p-4">
+    <h3 class="font-bold text-slate-900 mb-2">月度纪律</h3>
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+      <div class="rounded-lg bg-slate-50 border border-slate-200 p-3">
+        <div class="font-semibold text-slate-800">固定日</div>
+        <div class="text-xs text-slate-600 mt-1">每月固定一天看本页，不每天追信号。</div>
+      </div>
+      <div class="rounded-lg bg-slate-50 border border-slate-200 p-3">
+        <div class="font-semibold text-slate-800">先核心后卫星</div>
+        <div class="text-xs text-slate-600 mt-1">核心仓按你的长期计划；本页只管 AI 卫星仓。</div>
+      </div>
+      <div class="rounded-lg bg-slate-50 border border-slate-200 p-3">
+        <div class="font-semibold text-slate-800">不追高</div>
+        <div class="text-xs text-slate-600 mt-1">偏贵/过热/证据不足，宁可现金等待。</div>
+      </div>
+      <div class="rounded-lg bg-slate-50 border border-slate-200 p-3">
+        <div class="font-semibold text-slate-800">先纠偏</div>
+        <div class="text-xs text-slate-600 mt-1">单只超 40% 要有主动季度减仓计划，不靠新钱慢慢稀释。</div>
+      </div>
+    </div>
+  </section>
 </section>
 
 <!-- ============ 🤖 AI 配仓 Tab ============ -->
@@ -3601,6 +3737,8 @@ const DB_EXPLORER_EMBEDDED = {DB_EXPLORER_JSON};
 const REAL_HOLDING_REVIEW_EMBEDDED = {REAL_HOLDING_REVIEW_JSON};
 const CATALYST_VALIDATION = {CATALYST_VALIDATION_JSON};
 const RECOMMENDATION_EVIDENCE = {RECOMMENDATION_EVIDENCE_JSON};  // 推荐有效性证据(evidence_grade + 成熟样本数) — 喂「今天 AI 推荐的组合」证据 gate
+const RECOMMENDATION_READINESS = {RECOMMENDATION_READINESS_JSON};  // 月度动作清单：研究/试探/阻断状态
+const MONTHLY_ACTIONS_PLAN = {MONTHLY_ACTIONS_PLAN_JSON};  // 后端 monthly_actions 判定结果（单一来源），前端只渲染
 let _watchlistCache = [];
 let _watchlistEditCode = null;  // null = 新增模式；非空 = 编辑该 code
 // 2026-05-14: 自动评级状态
@@ -6346,6 +6484,7 @@ const TAB_SECTIONS = {
   // 🧠 AI 工作台 (2026-05-27 三独立子 tab, header 各自 1 行 banner)
   portfolio: ["portfolio"],
   discovery: ["discovery"],
+  "monthly-actions": ["monthly-actions"],
   backtest: ["backtest"],
   // ai-radar = 「📡 AI 主题雷达」· 行业理解层（非推荐池）· 见 docs/V2/AI主题雷达_产品定位.md
   "ai-radar": ["ai-radar"],
@@ -6841,6 +6980,7 @@ function switchTab(tab) {
   // tab 特定的延迟初始化
   if (tab === "real-holdings") setTimeout(async () => { await _ensureHoldingsLoaded(); renderRealHoldings(); }, 50);
   if (tab === "portfolio") setTimeout(async () => { switchPortfolioSub(_ptfSubCurrent); await _ensureHoldingsLoaded(); renderPortfolio(); renderPlanBacktest(); }, 50);
+  if (tab === "monthly-actions") setTimeout(async () => { await _ensureHoldingsLoaded(); renderMonthlyActions(); }, 50);
   if (tab === "backtest") setTimeout(renderPlanBacktest, 100);
   if (tab === "professional") setTimeout(renderProfessional, 50);
   if (tab === "db-explorer") setTimeout(loadDbExplorer, 50);
@@ -6868,7 +7008,7 @@ function getTabFromHash() {
   // 🧠 AI 工作台 (2026-05-27 R 方案): 三独立子 tab; 老 ai-workbench/* 短暂存在的链接兜底
   if (h.startsWith("ai-workbench/")) {
     const sub = h.split("/")[1];
-    if (sub === "discovery" || sub === "backtest" || sub === "portfolio") return sub;
+    if (sub === "discovery" || sub === "monthly-actions" || sub === "backtest" || sub === "portfolio") return sub;
   }
   if (h === "ai-workbench") return "discovery";  // 默认进 ① 选股
   // 老 hash 兼容：个股研究 / 买前审查 → 买前研究工作台
@@ -7895,6 +8035,10 @@ function _recomputePortfolioLines() {
       const realEl = document.getElementById("real-holdings");
       if (realEl && realEl.style.display !== "none") renderRealHoldings();
     }
+    if (typeof renderMonthlyActions === "function") {
+      const monthlyEl = document.getElementById("monthly-actions");
+      if (monthlyEl && monthlyEl.style.display !== "none") renderMonthlyActions();
+    }
     // 系统介绍页里的金额展示也刷新
     _refreshAboutPageNumbers();
   } catch (e) {
@@ -8020,6 +8164,10 @@ async function savePortfolioConfig() {
     if (typeof renderRealHoldings === "function") {
       const realEl = document.getElementById("real-holdings");
       if (realEl && realEl.style.display !== "none") renderRealHoldings();
+    }
+    if (typeof renderMonthlyActions === "function") {
+      const monthlyEl = document.getElementById("monthly-actions");
+      if (monthlyEl && monthlyEl.style.display !== "none") renderMonthlyActions();
     }
     if (banner) {
       banner.className = "mb-4 px-4 py-3 rounded-lg text-sm bg-emerald-50 border border-emerald-200 text-emerald-800";
@@ -9178,6 +9326,401 @@ function _targetWeightFor(code) {
   if (!hit) return null;
   const w = hit.target_weight ?? hit.v6_weight ?? hit.v5_weight ?? hit.capped_weight ?? hit.weight ?? 0;
   return Number(w) || 0;
+}
+
+function renderMonthlyActions() {
+  const verdictEl = document.getElementById("monthly-actions-verdict");
+  const snapshotEl = document.getElementById("monthly-actions-snapshot");
+  const themeGuardEl = document.getElementById("monthly-actions-theme-guard");
+  const buyBody = document.getElementById("monthly-actions-buy-body");
+  const correctionEl = document.getElementById("monthly-actions-correction");
+  const skipBody = document.getElementById("monthly-actions-skip-body");
+  const generatedEl = document.getElementById("monthly-actions-generated");
+  const capitalEl = document.getElementById("monthly-actions-capital");
+  if (!verdictEl || !buyBody || !correctionEl || !skipBody) return;
+
+  const plan = (typeof PLAN_A_V6 !== "undefined" && PLAN_A_V6) || {};
+  const rows = Array.isArray(plan.plan_v6) ? plan.plan_v6
+    : (Array.isArray(plan.plan_v5) ? plan.plan_v5
+    : (Array.isArray(plan.plan) ? plan.plan : []));
+  const readiness = (typeof RECOMMENDATION_READINESS !== "undefined" && RECOMMENDATION_READINESS) || {};
+  const decision = readiness.decision || {};
+  const decisionCode = String(decision.code || "").toUpperCase();
+  const decisionLabel = decision.label || decision.code || "策略状态待同步";
+  const allowedUse = decision.allowed_use || "只读研究参考";
+  const us = readiness.us || {};
+  // 判定单一来源：后端 monthly_actions（见 stock_research/core/monthly_actions.py）。
+  // 前端只渲染，不再自己跑闸门/≤3/赛道判定，避免双引擎。
+  const mp = (typeof MONTHLY_ACTIONS_PLAN !== "undefined" && MONTHLY_ACTIONS_PLAN) || {};
+  const mpCaps = mp.caps || {};
+  const trialReady = mpCaps.trial_ready === true;
+  const blocked = mpCaps.blocked === true;
+  const perNameCap = Number(mpCaps.per_name || 0);
+  const totalMonthCap = Number(mpCaps.total_month || 0);
+  const gen = (plan.generated_at || readiness.generated_at || "").slice(0, 16).replace("T", " ");
+  if (generatedEl) generatedEl.textContent = gen ? `数据生成 ${gen}` : "数据生成 —";
+  if (capitalEl) capitalEl.textContent = `¥${Math.round(TOTAL_CAPITAL).toLocaleString()}`;
+
+  const candLookup = {};
+  try {
+    const cands = (DISCOVERY && Array.isArray(DISCOVERY.candidates)) ? DISCOVERY.candidates : [];
+    cands.forEach(c => {
+      const k = String(c.ticker || c.code || "").toUpperCase();
+      if (k) candLookup[k] = c;
+    });
+  } catch (e) {}
+
+  const recordLookup = {};
+  try {
+    (Array.isArray(RECORDS) ? RECORDS : []).forEach(r => {
+      const k = String(r.code || r.ticker || "").toUpperCase();
+      if (k) recordLookup[k] = r;
+    });
+  } catch (e) {}
+
+  const reviewItems = (REAL_HOLDING_REVIEW_EMBEDDED && Array.isArray(REAL_HOLDING_REVIEW_EMBEDDED.items))
+    ? REAL_HOLDING_REVIEW_EMBEDDED.items : [];
+  const realWeight = {};
+  const holdingLookup = {};
+  reviewItems.forEach(it => {
+    const k = String(it.symbol || it.code || "").toUpperCase();
+    const w = Number(it.current_weight);
+    if (k && Number.isFinite(w)) realWeight[k] = Math.max(realWeight[k] || 0, w);
+    if (k) holdingLookup[k] = it;
+  });
+  (_realHoldingsCache || []).forEach(h => {
+    const k = String(h.symbol || h.code || "").toUpperCase();
+    const v = Number(h.current_value_rmb ?? h.value_rmb ?? h.market_value_rmb ?? h.amount_rmb ?? 0);
+    if (k && Number.isFinite(v) && TOTAL_CAPITAL > 0 && realWeight[k] == null) {
+      realWeight[k] = v / TOTAL_CAPITAL;
+    }
+  });
+
+  const money = v => `¥${Math.round(v || 0).toLocaleString()}`;
+  const pct = v => `${(Number(v || 0) * 100).toFixed(1)}%`;
+  const zoneOf = tk => (BUY_ZONES && BUY_ZONES[String(tk || "").toUpperCase()]) || null;
+  const zoneChip = z => {
+    if (!z) return '<span class="inline-flex px-2 py-0.5 rounded-full border border-slate-200 bg-slate-50 text-slate-500 text-[11px]">无买入区</span>';
+    const pos = String(z.position || "");
+    const cls = pos === "便宜" ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+      : pos === "区间内" ? "border-amber-200 bg-amber-50 text-amber-700"
+      : "border-rose-200 bg-rose-50 text-rose-700";
+    const range = (z.low != null && z.high != null) ? ` · ${Number(z.low).toFixed(2)}-${Number(z.high).toFixed(2)}` : "";
+    return `<span class="inline-flex px-2 py-0.5 rounded-full border ${cls} text-[11px]" title="自动买入区间：${_esc(range || "—")}">${_esc(pos || "未知")}${_esc(range)}</span>`;
+  };
+  // 参考价（取 buy_zone 的 latest close，回退 RECORDS.latest_price）+ 推荐批次时间（精确到秒）
+  const recAtRaw = String(plan.generated_at || readiness.generated_at || "");
+  const recAtStr = recAtRaw ? recAtRaw.slice(0, 19).replace("T", " ") : "—";
+  const recAtHtml = `<span class="font-mono text-[11px] text-slate-500" title="该批 AI 推荐/配仓的生成时间">${_esc(recAtStr)}</span>`;
+  const _ccySym = tk => { let c = "USD"; try { c = _currencyForTicker(tk); } catch (e) {} return c === "HKD" ? "HK$" : (c === "CNY" ? "¥" : "$"); };
+  const curPriceHtml = tk => {
+    const z = zoneOf(tk);
+    let p = (z && z.current != null) ? Number(z.current) : null;
+    let d = z && (z.current_trade_date || z.trade_date || z.price_trade_date);
+    if (p == null || !Number.isFinite(p)) {
+      const r = recordLookup[tk];
+      const raw = r && (typeof r.latest_price === "number" ? r.latest_price : parseFloat(String(r.latest_price || "").replace(/,/g, "")));
+      if (Number.isFinite(raw)) p = raw;
+      d = d || (r && (r.trade_date || r.price_trade_date || r.latest_trade_date || r.updated_at));
+    }
+    if (p == null || !Number.isFinite(p)) return '<span class="text-slate-400">—</span>';
+    const day = d ? String(d).slice(0, 10) : "";
+    const dayHtml = day
+      ? `<div class="text-[10px] text-slate-400" title="参考价对应的交易日">${_esc(day)} 收盘</div>`
+      : '<div class="text-[10px] text-amber-500" title="缺少交易日，只能当非实时参考">收盘参考</div>';
+    return `<div class="text-right"><span class="font-mono">${_ccySym(tk)}${p.toFixed(2)}</span>${dayHtml}</div>`;
+  };
+  const nameOf = (tk, cand) => _esc((cand && cand.name) || tk);
+  const riskText = f => (typeof f === "string" ? f : ((f && (f.message || f.code)) || ""));
+  const riskFlagsOf = (cand) => Array.isArray(cand && cand.risk_flags) ? cand.risk_flags : [];
+  const themeLimit = 0.15;
+  const themeOverride = {
+    GEV: "电力/核能基础设施",
+    VST: "电力/核能基础设施",
+    BWXT: "电力/核能基础设施",
+    CEG: "电力/核能基础设施",
+    OKLO: "电力/核能基础设施",
+    SMR: "电力/核能基础设施",
+    NNE: "电力/核能基础设施",
+    NVDA: "半导体/AI硬件",
+    AVGO: "半导体/AI硬件",
+    AMD: "半导体/AI硬件",
+    TSM: "半导体/AI硬件",
+    QCOM: "半导体/AI硬件",
+    NXPI: "半导体/AI硬件",
+    ADI: "半导体/AI硬件",
+    MU: "半导体/AI硬件",
+    MRVL: "半导体/AI硬件",
+    AMKR: "半导体/AI硬件",
+    VECO: "半导体设备",
+    ACMR: "半导体设备",
+    ICHR: "半导体设备",
+    GOOGL: "云与AI平台",
+    MSFT: "云与AI平台",
+    META: "云与AI平台",
+    AMZN: "云与AI平台",
+    AAPL: "端侧AI/消费电子",
+    "9992.HK": "消费/潮玩",
+  };
+  const normalizeTheme = (raw, tk, cand, holding) => {
+    if (themeOverride[tk]) return themeOverride[tk];
+    const record = recordLookup[tk] || {};
+    const parts = [
+      raw,
+      cand && cand.name,
+      cand && cand.sector,
+      cand && cand.industry,
+      cand && cand.theme,
+      cand && cand.chain,
+      cand && cand.chain_role,
+      cand && cand.detail && cand.detail.theme,
+      record.theme,
+      record.industry,
+      record.sector,
+      holding && holding.industry_heat && holding.industry_heat.theme_used,
+    ].filter(Boolean).join(" ");
+    const s = parts.toLowerCase();
+    if (/nuclear|uranium|utility|utilities|power|electric|energy|grid|reactor|vernova|vistra|bwxt|核|电力|电网|能源|发电|公用事业/.test(s)) return "电力/核能基础设施";
+    if (/semi|semiconductor|chip|gpu|asic|networking|foundry|memory|ai compute|半导体|芯片|存储|算力/.test(s)) return "半导体/AI硬件";
+    if (/equipment|tool|etch|deposition|process|wafer|封测|设备|专用设备/.test(s)) return "半导体设备";
+    if (/cloud|platform|software|llm|search|advertising|ai platform|云|平台|软件|搜索/.test(s)) return "云与AI平台";
+    if (/server|datacenter|data center|infrastructure|服务器|数据中心/.test(s)) return "服务器/数据中心";
+    if (/consumer|discretionary|brand|toy|pop mart|消费|潮玩|品牌/.test(s)) return "消费/品牌";
+    return (parts || "未分类").split(/[|/·,，;；]/)[0].trim().slice(0, 18) || "未分类";
+  };
+  const themeOf = (tk, cand) => {
+    const holding = holdingLookup[tk] || {};
+    const record = recordLookup[tk] || {};
+    const raw = (cand && (cand.theme || cand.industry || cand.sector || cand.chain || cand.chain_role))
+      || (cand && cand.detail && (cand.detail.theme || cand.detail.ai_relevance))
+      || record.theme || record.industry || record.sector
+      || (holding.industry_heat && holding.industry_heat.theme_used)
+      || "";
+    return normalizeTheme(raw, tk, cand || {}, holding);
+  };
+  // 赛道当前暴露取后端结果（与买/跳判定同源），缺失时回退本地聚合。
+  const themeCurrentWeight = {};
+  if (mp.theme_exposure && Object.keys(mp.theme_exposure).length) {
+    Object.entries(mp.theme_exposure).forEach(([th, v]) => {
+      if (Number(v.current || 0) > 0) themeCurrentWeight[th] = Number(v.current);
+    });
+  } else {
+    reviewItems.forEach(it => {
+      const tk = String(it.symbol || it.code || "").toUpperCase();
+      const w = Number(it.current_weight || 0);
+      if (!tk || !Number.isFinite(w) || w <= 0) return;
+      const th = themeOf(tk, candLookup[tk] || {});
+      themeCurrentWeight[th] = (themeCurrentWeight[th] || 0) + w;
+    });
+  }
+  const correctionPlanFor = w => {
+    if (w > 0.50) {
+      return {
+        label: "严重集中",
+        target: 0.45,
+        action: `本季度主动减至 45% 以内，参考减仓约 ${money((w - 0.45) * TOTAL_CAPITAL)}；下季度再评估是否继续降到 40%。`,
+      };
+    }
+    if (w > 0.40) {
+      return {
+        label: "高度集中",
+        target: 0.40,
+        action: `本季度主动减至 40% 以内，参考减仓约 ${money((w - 0.40) * TOTAL_CAPITAL)}；不要只靠新钱稀释。`,
+      };
+    }
+    if (w > 0.25) {
+      return {
+        label: "超过 25%",
+        target: 0.25,
+        action: `本月停止加仓；季度复盘若仍高于 25%，参考减至 25%-30% 区间（到 25% 约需减 ${money((w - 0.25) * TOTAL_CAPITAL)}）。`,
+      };
+    }
+    return null;
+  };
+  const disciplineHint = it => {
+    const ds = (it && it.discipline) || {};
+    const triggers = Array.isArray(ds.next_triggers) ? ds.next_triggers
+      : (Array.isArray(ds.all_triggers) ? ds.all_triggers : []);
+    return triggers
+      .filter(t => t && (t.action_label || t.suggested_size_text))
+      .slice(0, 2)
+      .map(t => `${t.action_label || ""}${t.suggested_size_text ? " · " + t.suggested_size_text : ""}`.trim())
+      .join("；");
+  };
+
+  // 判定来自后端 mp（monthly_actions），前端只把字段渲染成展示 HTML。
+  const buyRows = (mp.buy_rows || []).map(b => {
+    const tk = String(b.ticker || "").toUpperCase();
+    const z = zoneOf(tk) || { position: b.position, low: b.low, high: b.high, current: b.current };
+    const themeNote = b.theme_room_used_up ? `；${b.theme} 赛道额度已用满` : "";
+    return {
+      tk, cand: candLookup[tk] || {}, zone: z, capPct: Number(b.cap_pct || 0), theme: b.theme,
+      why: `${zoneChip(z)} <span class="text-slate-500">· ${_esc(b.theme || "")} · 模型目标 ${pct(b.target_w)} · 当前 ${pct(b.cur_w)}</span>`,
+      limit: `${money(TOTAL_CAPITAL * Number(b.cap_pct || 0))} <span class="text-slate-400 text-[11px]">(${pct(b.cap_pct)})</span>`,
+      capReason: `${b.basis || ""}；剩余仓位下月再看，不一次买满${themeNote}。`,
+    };
+  });
+  const skipRows = (mp.skip_rows || []).map(s => {
+    const tk = String(s.ticker || "").toUpperCase();
+    const z = zoneOf(tk) || (s.has_zone ? { position: s.position, low: s.low, high: s.high } : null);
+    return {
+      tk, cand: candLookup[tk] || {},
+      status: z ? zoneChip(z) : zoneChip(null),
+      reason: (s.reasons || []).join("；") || "买点未到",
+    };
+  });
+  // 赛道暴露 / 已选（供下方赛道护栏渲染），同样取后端结果。
+  const themeReserved = {};
+  const themePicked = {};
+  Object.entries(mp.theme_exposure || {}).forEach(([th, v]) => {
+    if (Number(v.reserved || 0) > 0) themeReserved[th] = Number(v.reserved);
+    if (Array.isArray(v.picked) && v.picked.length) themePicked[th] = v.picked;
+  });
+
+  const tone = blocked ? "rose" : (trialReady ? "emerald" : "amber");
+  const toneCls = {
+    rose: { box: "bg-rose-50 border-rose-300", text: "text-rose-900", sub: "text-rose-700" },
+    emerald: { box: "bg-emerald-50 border-emerald-300", text: "text-emerald-900", sub: "text-emerald-700" },
+    amber: { box: "bg-amber-50 border-amber-300", text: "text-amber-900", sub: "text-amber-700" },
+  }[tone];
+  const title = blocked ? "本月默认不买，现金等待"
+    : (trialReady ? "可小仓月度执行，但仍须你确认" : "研究可用，小仓试探未达标");
+  const budgetLine = blocked
+    ? "本月 AI 卫星仓新买额度：0。"
+    : `本月 AI 卫星仓上限：合计 ${pct(totalMonthCap)}，单只 ${pct(perNameCap)}${trialReady ? "" : "（未达试探门槛，从严）"}。`;
+  const shadow = us.shadow_1d || {};
+  const shadowAlpha = Number(shadow.alpha_pct);
+  const shadowLine = Number.isFinite(shadowAlpha) ? `US shadow alpha ${shadowAlpha.toFixed(2)}%，` : "";
+  const gaps = Array.isArray(us.gaps_to_trial) && us.gaps_to_trial.length ? `未过项：${us.gaps_to_trial.join("；")}` : "";
+  const plainStatus = blocked
+    ? "策略被阻断：本页只允许看，不给新买动作。"
+    : (trialReady
+      ? "策略已过小仓试探门槛，但仍不是自动买入命令，真钱执行要你确认。"
+      : `策略尚未达到真钱级验证；${shadowLine}当前只是研究候选，不是已证明买点。${gaps}`);
+  verdictEl.className = `rounded-xl border px-5 py-4 mb-5 ${toneCls.box}`;
+  verdictEl.innerHTML = `
+    <div class="grid grid-cols-1 lg:grid-cols-[1.4fr_1fr] gap-4 items-start">
+      <div>
+        <div class="text-xs font-semibold ${toneCls.sub} mb-1">策略验证状态</div>
+        <div class="text-2xl font-bold ${toneCls.text}">${_esc(title)}</div>
+        <div class="text-sm text-slate-700 mt-1">${_esc(decisionLabel)} · ${_esc(allowedUse)}</div>
+        <div class="mt-3 rounded-lg bg-white/75 border border-white px-3 py-2 text-sm text-slate-800">
+          <strong>大白话：</strong>${_esc(plainStatus)}
+        </div>
+      </div>
+      <div class="rounded-lg bg-white/70 border border-white px-3 py-2 text-sm text-slate-700">
+        <div class="font-semibold text-slate-900">本月预算护栏</div>
+        <div class="mt-1">${_esc(budgetLine)}</div>
+        <div class="text-xs text-slate-500 mt-1">这只是月度动作上限，不是自动下单金额。真实执行仍需你确认。</div>
+      </div>
+    </div>`;
+
+  const newBuyPct = buyRows.reduce((s, x) => s + Number(x.capPct || 0), 0);
+  if (snapshotEl) {
+    const focusHoldings = reviewItems
+      .map(it => ({ tk: String(it.symbol || it.code || "").toUpperCase(), name: it.name || "", w: Number(it.current_weight || 0), plan: correctionPlanFor(Number(it.current_weight || 0)) }))
+      .filter(x => x.tk && x.w > 0.05)
+      .sort((a, b) => b.w - a.w)
+      .slice(0, 4);
+    const buyLine = buyRows.length
+      ? buyRows.map(x => `${x.tk} ${pct(x.capPct)}`).join(" · ")
+      : "本月无新增买入";
+    const rowsHtml = focusHoldings.length ? focusHoldings.map(x => {
+      const addOnly = newBuyPct > 0 ? x.w / (1 + newBuyPct) : x.w;
+      const target = x.plan ? x.plan.target : null;
+      return `<div class="grid grid-cols-[84px_1fr] gap-2 py-1.5 border-b border-slate-100 last:border-b-0">
+        <div class="font-mono font-bold text-slate-800">${_esc(x.tk)}</div>
+        <div class="text-xs text-slate-600">
+          当前 <b class="text-slate-900">${pct(x.w)}</b> → 只买不卖约 <b>${pct(addOnly)}</b>${target != null ? ` → 执行纠偏参考 <b class="text-rose-700">${pct(target)}</b>` : ""}
+        </div>
+      </div>`;
+    }).join("") : '<div class="text-sm text-slate-500">暂无超过 5% 的持仓可展示。</div>';
+    snapshotEl.innerHTML = `
+      <div class="grid grid-cols-1 md:grid-cols-[0.9fr_1.1fr] gap-4">
+        <div class="rounded-lg bg-slate-50 border border-slate-200 p-3">
+          <div class="text-xs text-slate-500">本月新增动作</div>
+          <div class="mt-1 font-semibold text-slate-900">${_esc(buyLine)}</div>
+          <div class="text-xs text-slate-500 mt-1">合计 ${pct(newBuyPct)} · 按新增资金近似测算，不代表自动下单。</div>
+        </div>
+        <div class="rounded-lg bg-slate-50 border border-slate-200 p-3">
+          <div class="text-xs text-slate-500 mb-1">集中度变化</div>
+          ${rowsHtml}
+        </div>
+      </div>`;
+  }
+
+  if (themeGuardEl) {
+    const themeNames = new Set([...Object.keys(themeCurrentWeight), ...Object.keys(themeReserved)]);
+    const themeRows = [...themeNames].map(th => ({
+      theme: th,
+      current: themeCurrentWeight[th] || 0,
+      reserved: themeReserved[th] || 0,
+      picked: themePicked[th] || [],
+    })).filter(x => x.current > 0.001 || x.reserved > 0.0001)
+      .sort((a, b) => (b.current + b.reserved) - (a.current + a.reserved))
+      .slice(0, 6);
+    themeGuardEl.innerHTML = themeRows.length ? themeRows.map(x => {
+      const after = x.current + x.reserved;
+      const over = after > themeLimit;
+      const cls = over ? "border-rose-200 bg-rose-50 text-rose-800" : "border-slate-200 bg-slate-50 text-slate-700";
+      const picked = x.picked.length ? ` · 本月 ${x.picked.join("/")}` : "";
+      return `<div class="mb-2 last:mb-0 rounded-lg border ${cls} px-3 py-2">
+        <div class="flex items-center justify-between gap-2">
+          <div class="font-semibold text-sm">${_esc(x.theme)}</div>
+          <div class="font-mono text-xs">${pct(x.current)} → ${pct(after)}</div>
+        </div>
+        <div class="text-xs mt-1">${over ? "超过 15% 赛道上限，本月不再重复加。" : "未超赛道上限；同赛道本月最多一个新买动作。"}${_esc(picked)}</div>
+      </div>`;
+    }).join("") : '<div class="text-sm text-slate-500">暂无赛道暴露可计算。</div>';
+  }
+
+  buyBody.innerHTML = buyRows.length ? buyRows.map(x => `
+    <tr class="border-b border-slate-100 align-top hover:bg-slate-50">
+      <td class="py-3 pr-3 whitespace-nowrap"><div class="font-mono font-bold text-violet-700">${_esc(x.tk)}</div><div class="text-xs text-slate-500">${nameOf(x.tk, x.cand)}</div></td>
+      <td class="py-3 pr-3 text-slate-700">${x.why}</td>
+      <td class="py-3 pr-3 text-right whitespace-nowrap">${curPriceHtml(x.tk)}</td>
+      <td class="py-3 pr-3 text-right font-semibold text-slate-900 whitespace-nowrap">${x.limit}</td>
+      <td class="py-3 text-xs text-slate-600 leading-relaxed">${_esc(x.capReason)}</td>
+      <td class="py-3 pl-3 text-right whitespace-nowrap">${recAtHtml}</td>
+    </tr>`).join("") : `
+    <tr><td colspan="6" class="py-6 text-center text-sm text-slate-500">
+      本月没有同时满足「推荐内 + 价格合适 + 无红旗 + 未超配」的标的。现金等待。
+    </td></tr>`;
+
+  // 集中度纠偏来自后端 mp.corrections（哪只/触发原因/目标）；前端拼动作文案+金额。
+  const correctionAction = (plan) => {
+    if (!plan) return "进入持仓复查。";
+    const cut = money(TOTAL_CAPITAL * Number(plan.reduce_pct || 0));
+    if (plan.tier === "severe") return `本季度主动减至 45% 以内，参考减仓约 ${cut}；下季度再评估是否继续降到 40%。`;
+    if (plan.tier === "high") return `本季度主动减至 40% 以内，参考减仓约 ${cut}；不要只靠新钱稀释。`;
+    if (plan.tier === "over25") return `本月停止加仓；季度复盘若仍高于 25%，参考减至 25%-30% 区间（到 25% 约需减 ${cut}）。`;
+    return "进入持仓复查。";
+  };
+  const corrections = (mp.corrections || []).map(c => {
+    const tk = String(c.ticker || "").toUpperCase();
+    const hint = disciplineHint(holdingLookup[tk] || {});
+    const action = correctionAction(c.plan);
+    return `<div class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2">
+      <div class="flex items-center justify-between gap-2">
+        <div><span class="font-mono font-bold text-rose-800">${_esc(tk)}</span><span class="text-xs text-slate-500 ml-1">${_esc(c.name || "")}</span></div>
+        <span class="text-xs font-semibold text-rose-700">${_esc((c.triggers || []).join("；"))}</span>
+      </div>
+      <div class="text-xs text-slate-700 mt-1">${_esc(action)}</div>
+      <div class="text-[11px] text-slate-500 mt-1">赛道：${_esc(c.theme || "")}${hint ? ` · 已有纪律：${_esc(hint)}` : ""}</div>
+    </div>`;
+  });
+  correctionEl.innerHTML = corrections.length ? corrections.join("") :
+    '<div class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-800">当前真实持仓没有命中单只超 25% 或主要持仓红旗。</div>';
+
+  skipBody.innerHTML = skipRows.length ? skipRows.slice(0, 10).map(x => `
+    <tr class="border-b border-slate-100 align-top hover:bg-slate-50">
+      <td class="py-2 pr-3 whitespace-nowrap"><div class="font-mono font-bold text-slate-800">${_esc(x.tk)}</div><div class="text-xs text-slate-500">${nameOf(x.tk, x.cand)}</div></td>
+      <td class="py-2 pr-3">${x.status}</td>
+      <td class="py-2 pr-3 text-right whitespace-nowrap">${curPriceHtml(x.tk)}</td>
+      <td class="py-2 text-xs text-slate-600 leading-relaxed">${_esc(x.reason)}</td>
+      <td class="py-2 pl-3 text-right whitespace-nowrap">${recAtHtml}</td>
+    </tr>`).join("") : `
+    <tr><td colspan="5" class="py-4 text-center text-sm text-slate-500">没有额外跳过项。</td></tr>`;
 }
 
 function _renderAccountRiskLine(containerId, portfolioValue, emptyText, accountLabel) {
@@ -15370,11 +15913,56 @@ def _buy_zone_payload() -> dict:
             "low": z.get("low"),
             "high": z.get("high"),
             "current": z.get("current"),
+            "current_trade_date": z.get("current_trade_date"),
             "position": z.get("position"),
             "method": z.get("method"),
             "discount_pct": discount,
         }
     return out
+
+
+def _monthly_actions_payload(plan_a_v6: dict, discovery: dict, readiness: dict,
+                             buy_zones: dict) -> dict:
+    """构建期算「本月动作」判定（单一来源 stock_research.core.monthly_actions）。
+
+    前端 renderMonthlyActions 只渲染本函数结果，不再自己跑判定（避免双引擎）。
+    撞错/缺数据返回空结构，前端回退「数据待同步」而非崩。
+    """
+    try:
+        from stock_research.core import monthly_actions as ma
+        plan = plan_a_v6 or {}
+        plan_rows = (plan.get("plan_v6") if isinstance(plan.get("plan_v6"), list)
+                     else plan.get("plan_v5") if isinstance(plan.get("plan_v5"), list)
+                     else plan.get("plan") if isinstance(plan.get("plan"), list) else [])
+        cands = {}
+        try:
+            for c in ((discovery or {}).get("candidates") or []):
+                k = str(c.get("ticker") or c.get("code") or "").upper()
+                if k:
+                    cands[k] = c
+        except Exception:
+            cands = {}
+        review = _runtime_load_json("data/latest/real_holding_review.json") or {}
+        review_items = review.get("items") or []
+        real_weights = {}
+        for it in review_items:
+            k = str(it.get("symbol") or it.get("code") or "").upper()
+            w = it.get("current_weight")
+            if k and w is not None:
+                try:
+                    real_weights[k] = max(float(real_weights.get(k, 0)), float(w))
+                except Exception:
+                    pass
+        result = ma.build_monthly_plan(
+            plan_rows=plan_rows, readiness=readiness or {}, real_weights=real_weights,
+            buy_zones=buy_zones or {}, candidates=cands, review_items=review_items,
+        )
+        result["generated_at"] = (plan.get("generated_at") or (readiness or {}).get("generated_at") or "")
+        return result
+    except Exception as exc:  # pragma: no cover - 防御
+        print(f"  ⚠️  月度动作判定失败：{exc}")
+        return {"caps": {}, "buy_rows": [], "skip_rows": [], "corrections": [],
+                "theme_exposure": {}, "new_buy_pct": 0.0, "error": str(exc)}
 
 
 def _auto_zone_holding_rows() -> list[str]:
@@ -15740,11 +16328,12 @@ def early_growth_radar_section_html(payload: dict | None = None) -> str:
     if overheated_body:
         overheated_count = int(counts.get("overheated") or len(overheated_rows))
         overheated_block = f"""
-          <details class="mt-3 rounded-lg border border-amber-200 bg-amber-50/70">
-            <summary class="cursor-pointer px-3 py-2 text-sm font-bold text-amber-900">
-              已涨太多，先别追：{overheated_count} 只
-            </summary>
-            <div class="overflow-x-auto bg-white border-t border-amber-100">
+          <section class="mt-4 rounded-lg border border-amber-200 bg-amber-50/70 overflow-hidden">
+            <div class="px-3 py-2 border-b border-amber-100">
+              <div class="text-sm font-bold text-amber-900">已涨太多，先别追：{overheated_count} 只</div>
+              <div class="mt-0.5 text-[11px] text-amber-800">这些票仍可做买前研究，但不再归入“早发现低位”；先看风险和回撤位置。</div>
+            </div>
+            <div class="overflow-x-auto bg-white">
               <table class="w-full text-sm">
                 <thead class="bg-amber-50/60 text-[10px] text-amber-900 uppercase tracking-wide">
                   <tr>
@@ -15761,7 +16350,7 @@ def early_growth_radar_section_html(payload: dict | None = None) -> str:
                 <tbody>{overheated_body}</tbody>
               </table>
             </div>
-          </details>
+          </section>
         """
 
     early_count = counts.get('early_or_watch') or len(early_rows)
@@ -15789,6 +16378,7 @@ def early_growth_radar_section_html(payload: dict | None = None) -> str:
       <div class="mb-2 flex flex-wrap gap-2 text-xs text-slate-600">
         <span class="px-2 py-1 rounded bg-emerald-50 text-emerald-700">可研究 {early_count} 只</span>
         <span class="px-2 py-1 rounded bg-amber-50 text-amber-800">已涨太多 {overheated_count} 只</span>
+        <span class="px-2 py-1 rounded bg-sky-50 text-sky-700">只做研究提醒</span>
         <span class="px-2 py-1 rounded bg-slate-50 text-slate-600">不进入正式推荐主榜统计</span>
       </div>
       <div class="overflow-x-auto">
@@ -18465,26 +19055,27 @@ def holdings_sell_alert_html() -> str:
 
 
 def ai_workbench_nav_html(step: int) -> str:
-    """🧭 AI 工作台 3 步工作流导航（2026-06-12）：推荐(找)→配仓(配)→跟踪(验证)。
+    """🧭 AI 工作台工作流导航：推荐(找)→月度动作(收敛)→配仓(配)→跟踪(验证)。
     每页顶部标"你在第几步 + 本页职责 + 诚实状态"，治"忘了这页干啥用的"。纯展示。"""
     steps = [
         ("①", "AI 推荐", "找候选：哪些值得看、未来可能买", "#discovery"),
-        ("②", "AI 配仓", "配组合：要买的话买哪几只、各多少仓位", "#backtest"),
-        ("③", "AI 跟踪", "验业绩：这套到底赚不赚、值不值得信", "#portfolio"),
+        ("②", "本月动作", "收敛动作：本月买/不买、哪里要纠偏", "#monthly-actions"),
+        ("③", "AI 配仓", "配组合：要买的话买哪几只、各多少仓位", "#backtest"),
+        ("④", "AI 跟踪", "验业绩：这套到底赚不赚、值不值得信", "#portfolio"),
     ]
-    step = max(1, min(3, step))
+    step = max(1, min(4, step))
     chips: list[str] = []
     for i, (num, name_i, _job, href) in enumerate(steps, 1):
         cls = "bg-violet-600 text-white" if i == step else "bg-white text-slate-500 hover:text-violet-700 border border-slate-200"
         chips.append(f'<a href="{href}" class="px-2.5 py-1 rounded-md text-[12px] font-semibold {cls}">{num} {name_i}</a>')
-        if i < 3:
+        if i < len(steps):
             chips.append('<span class="text-slate-300">→</span>')
     job = steps[step - 1][2]
     name = steps[step - 1][1]
     return (
         '<div class="mb-4 rounded-xl border border-violet-200 bg-violet-50 px-4 py-2.5">'
         '<div class="flex items-center gap-1.5 flex-wrap">'
-        '<span class="text-[12px] font-bold text-slate-700 mr-1">🧭 AI 工作台 3 步：</span>'
+        '<span class="text-[12px] font-bold text-slate-700 mr-1">🧭 AI 工作台：</span>'
         + "".join(chips)
         + '</div>'
         f'<div class="text-[12px] text-slate-600 mt-1.5">本页（{name}）= <b>{job}</b>。'
@@ -21864,8 +22455,8 @@ def build():
     html = html.replace("{ALLOCATION_FRAMEWORK_CARD}", allocation_framework_card_html())
     html = html.replace("{HOLDINGS_SELL_ALERT}", holdings_sell_alert_html())
     html = html.replace("{AI_NAV_DISCOVERY}", ai_workbench_nav_html(1))
-    html = html.replace("{AI_NAV_BACKTEST}", ai_workbench_nav_html(2))
-    html = html.replace("{AI_NAV_PORTFOLIO}", ai_workbench_nav_html(3))
+    html = html.replace("{AI_NAV_BACKTEST}", ai_workbench_nav_html(3))
+    html = html.replace("{AI_NAV_PORTFOLIO}", ai_workbench_nav_html(4))
     html = html.replace("{TRUST_VERDICT_PANEL}", trust_verdict_panel_html())
     html = html.replace("{US_VALIDATION_PROGRESS}", us_validation_progress_html())
     html = html.replace("{P0_POLICY_VALIDATION_PANEL}", p0_policy_validation_panel_html())
@@ -21997,7 +22588,13 @@ def build():
     html = html.replace("{PLAN_A_V6_JSON_DB}", json.dumps(plan_a_v6_runtime, ensure_ascii=False))
     html = html.replace("{DISCOVERY_JSON}", json.dumps(discovery, ensure_ascii=False))
     html = html.replace("{TRADING_PLANS_JSON}", json.dumps(_trading_plan_payload(), ensure_ascii=False, default=str))
-    html = html.replace("{BUY_ZONES_JSON}", json.dumps(_buy_zone_payload(), ensure_ascii=False, default=str))
+    _buy_zones_runtime = _buy_zone_payload()
+    _readiness_runtime = _runtime_load_json("data/latest/recommendation_readiness_check.json") or {}
+    html = html.replace("{BUY_ZONES_JSON}", json.dumps(_buy_zones_runtime, ensure_ascii=False, default=str))
+    html = html.replace("{RECOMMENDATION_READINESS_JSON}", json.dumps(_readiness_runtime, ensure_ascii=False, default=str))
+    html = html.replace("{MONTHLY_ACTIONS_PLAN_JSON}", json.dumps(
+        _monthly_actions_payload(plan_a_v6_runtime, discovery, _readiness_runtime, _buy_zones_runtime),
+        ensure_ascii=False, default=str))
     html = html.replace("{DB_EXPLORER_JSON}", json.dumps(db_explorer_snapshot, ensure_ascii=False))
 
     review_embed_path = os.path.join(_REPO, "data", "latest", "real_holding_review.json")
@@ -22107,6 +22704,7 @@ def build():
         n_picks = radar_payload.get("n_picks_total") or 0
         n_covered = radar_payload.get("n_picks_with_chain") or 0
         n_uncov = (radar_payload.get("coverage_audit") or {}).get("n_uncovered") or 0
+        n_supply_gap = (radar_payload.get("supply_chain_coverage") or {}).get("count") or 0
         n_themes = len((theme_panel or {}).get("themes") or [])
         n_src_ok = sum(t.get("sources_ok", 0) for t in (theme_panel or {}).get("themes") or [])
         n_src_tot = sum(t.get("sources_total", 0) for t in (theme_panel or {}).get("themes") or [])
@@ -22114,6 +22712,7 @@ def build():
         n_etf_uni = (etf_panel or {}).get("summary", {}).get("n_holdings_in_universe", 0)
         n_etf_tot = (etf_panel or {}).get("summary", {}).get("n_holdings_total", 0)
         print(f"  AI 主题雷达: {n_chains} 条链 · picks {n_covered}/{n_picks} 已分类 · 覆盖率审计 {n_uncov} 只 · "
+              f"产业链覆盖不足 {n_supply_gap} 条 · "
               f"主题证据卡 {n_themes} 张 · 数据源 {n_src_ok}/{n_src_tot} ok · "
               f"ETF 共识 {n_etfs} 个 · universe 命中 {n_etf_uni}/{n_etf_tot}")
     except Exception as _e:
