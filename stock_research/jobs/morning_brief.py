@@ -1768,10 +1768,24 @@ def _rise_marker(ticker: str) -> str:
 DETAIL_TOP_N = 8
 
 
+def _star_score(e: dict) -> float:
+    """⭐ 排序键 = composite 打分（看系统最看好谁，不看配仓权重）。
+
+    2026-06-19：原按 v5_weight 排，但权重来自 risk-aware optimizer，受分散/
+    相关性/单票上限稀释——"下注最重"≠"最被看好"（NVDA/META 分最高却因封顶被
+    压到 4.3%，反而排在低分票后面）。改用 composite_z（缺则 composite_neutral），
+    回答"哪只更好"。仅作 ⭐ 排序，不改组合配仓本身。
+    """
+    for k in ("composite_z", "composite_neutral", "composite", "score"):
+        v = e.get(k)
+        if isinstance(v, (int, float)):
+            return float(v)
+    return -1.0
+
+
 def _star_weight_tickers(plan: list[dict], top_n: int = DETAIL_TOP_N) -> set[str]:
-    """⭐ 重点 = 按仓位 top_n（看下注最重的，不看打分名次）。"""
-    ranked = sorted(plan, key=lambda e: (e.get("v5_weight") or e.get("weight") or 0),
-                    reverse=True)
+    """⭐ 重点 = 按打分 top_n（系统最看好的，不看配仓名次）。"""
+    ranked = sorted(plan, key=_star_score, reverse=True)
     return {(e.get("ticker") or "").upper() for e in ranked[:top_n]}
 
 
@@ -2046,9 +2060,10 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
             if split:
                 star = _star_weight_tickers(us_entries)
                 detail_entries = [e for e in us_entries if (e.get("ticker") or "").upper() in star]
+                detail_entries.sort(key=_star_score, reverse=True)
                 rest_entries = [e for e in us_entries if (e.get("ticker") or "").upper() not in star]
                 bz = _compute_us_buy_zones(detail_entries)
-                lines.append(f"⭐ **重点 {len(detail_entries)} 只（按仓位）**")
+                lines.append(f"⭐ **重点 {len(detail_entries)} 只（按打分·系统最看好）**")
                 lines.extend(_humanize_picks(detail_entries, a_share=False, history=history,
                                              factor_scores=factor_scores, buy_zones=bz))
                 lines.append(f"**其余 {len(rest_entries)} 只 · 一行速览**（完整理由见 dashboard）")

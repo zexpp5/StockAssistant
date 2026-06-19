@@ -2317,9 +2317,9 @@ function openDiscoveryHistoryFromRadar(event) {
     </header>
     <!-- 2026-06-11: 说明本页排序口径,避免和「AI 推荐」页按分排序对不上被误以为出错。 -->
     <div class="mx-5 mt-3 rounded-lg bg-violet-50 border border-violet-200 px-3 py-2 text-[12px] text-slate-700 leading-relaxed">
-      📌 本页按<strong>「仓位%」</strong>排序（<strong>该押多少注</strong>），不是按分数。
-      <strong>高分 ≠ 重仓</strong>——高波动的票（如 NVDA）会被风险优化器压小仓、稳的票放大仓；
-      想看"谁分最高"请去左侧「AI 推荐」页（那页按综合分排）。
+      📌 本页按<strong>「综合分」</strong>排序（<strong>系统最看好谁</strong>），⭐ = 分最高的前几只。
+      <strong>高分 ≠ 重仓</strong>——看右边「仓位%」列：高波动的票（如 NVDA）分虽最高，
+      但会被风险优化器压小仓、稳的票放大仓。<strong>分数=谁更好，仓位=该买多少，是两回事。</strong>
     </div>
     <!-- 证据不足 gate (2026-06-01): 当前策略成熟样本不足时,顶部强制"仅研究观察"横幅,
          防止下方 PASS / 回测 Sharpe / 回测年化 被误读成"可以照着买"。
@@ -2357,7 +2357,7 @@ function openDiscoveryHistoryFromRadar(event) {
           展开完整组合（其余 <span id="today-plan-extra-cnt">—</span> 只）▾
         </button>
         <p class="text-[11px] text-slate-400 mt-1.5 leading-relaxed">
-          ⭐ = <strong>你手动操作就持有这 8 只</strong>（AI 下注最重的 8 只）—— 实测 6-8 只已拿到 AI 内大部分分散、且管得过来；
+          ⭐ = <strong>系统综合分最高的 8 只</strong>（最被看好的，仓位多少看「仓位%」列）—— 实测 6-8 只已拿到 AI 内大部分分散、且管得过来；
           下方完整组合那 15 只是<strong>测策略用的「量筒」，不是叫你全买</strong>。能不能真买，看页面顶部的红绿灯。
         </p>
       </div>
@@ -2458,9 +2458,9 @@ function openDiscoveryHistoryFromRadar(event) {
               class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-sm leading-none px-1">✕</button>
     </div>
     <span id="db-explorer-result-count" class="text-xs text-slate-500 whitespace-nowrap"></span>
-    <span id="db-explorer-as-of" class="text-[11px] font-mono text-slate-400 whitespace-nowrap"></span>
+    <span id="db-explorer-as-of" class="ml-auto text-[11px] font-mono text-slate-500 whitespace-nowrap px-2 py-1 rounded-md bg-slate-100 border border-slate-200"></span>
     <button onclick="forceReloadDbExplorer()" title="重新从数据库拉取最新数据"
-            class="ml-auto text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-500">🔄</button>
+            class="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 text-slate-500">🔄</button>
   </div>
 
   <!-- 市场 tab + 评级筛选 chip 合并成一行（左:市场上下文 / 右:质量筛选）-->
@@ -5262,8 +5262,11 @@ async function loadDbExplorer() {
     }
     const asOfEl = document.getElementById("db-explorer-as-of");
     if (asOfEl && data.as_of) {
-      asOfEl.textContent = `行情 ${data.as_of.prices_date || "—"}`;
-      asOfEl.title = `行情数据 = prices 表最新一行日期 (${data.as_of.prices_date || "—"}); AI 评级 = picks 表最新入选日 (${data.as_of.picks_date || "—"}); 全库 ${data.counts.total} 只`;
+      const fetched = String(data.as_of.prices_fetched_at || "").replace("T", " ").slice(0, 16);
+      asOfEl.innerHTML = fetched
+        ? `🕐 数据拉取 <span class="text-slate-600">${fetched}</span>`
+        : `行情 ${data.as_of.prices_date || "—"}`;
+      asOfEl.title = `数据拉取时间 = prices 表最新一次抓取 (${data.as_of.prices_fetched_at || "—"}); 行情交易日 = prices 表最新一行日期 (${data.as_of.prices_date || "—"}); AI 评级 = picks 表最新入选日 (${data.as_of.picks_date || "—"}); 全库 ${data.counts.total} 只`;
     }
     ["美股","A股","港股","其他"].forEach(m => {
       const cntEl = document.getElementById("db-mkt-cnt-" + m);
@@ -11995,14 +11998,20 @@ function renderTodayPlan() {
   // 按 capped_weight 降序;权重并列时(常见:多只同时顶到单只上限)用 V2 总分破平,
   // 让「重点观察 Top5」的内部先后也有依据,而非任意顺序。
   const _scoreOf = r => {
+    // 优先用 plan entry 自带的 composite_z（plan_v6 已带），回退 discovery 查表
+    if (r && r.composite_z != null) return Number(r.composite_z);
+    if (r && r.composite_neutral != null) return Number(r.composite_neutral);
     const c = discoveryLookup[String(r.ticker || '').toUpperCase()] || {};
     return (c.composite_z != null) ? Number(c.composite_z) : -1;
   };
+  const _weightOf = r => r.capped_weight || r.target_weight || r.weight || 0;
+  // 2026-06-19：⭐ 排序改回「按打分」(系统最看好谁)，不再按仓位。
+  // 原因：仓位来自 risk-aware optimizer，受分散/相关/单票封顶稀释——「下注最重」≠「最被看好」
+  // (NVDA/META 分最高却被压到 4.3%)。仓位仍保留为列，让「高分≠重仓」一眼可见。
   const sortedRows = rows.slice().sort((a, b) => {
-    const wa = a.capped_weight || a.target_weight || a.weight || 0;
-    const wb = b.capped_weight || b.target_weight || b.weight || 0;
-    if (wb !== wa) return wb - wa;
-    return _scoreOf(b) - _scoreOf(a);
+    const sb = _scoreOf(b), sa = _scoreOf(a);
+    if (sb !== sa) return sb - sa;
+    return _weightOf(b) - _weightOf(a);
   });
 
   const fmtPct = v => (v == null) ? '—' : (Number(v) * 100).toFixed(2) + '%';
@@ -12041,11 +12050,11 @@ function renderTodayPlan() {
     return c.recommendation_reason || '';
   };
 
-  // 2026-06-01→06-11: 「重点观察 Top8」层 —— 宽篮子 15 只是测策略量筒,你手动只持有下注最重的 8 只,
-  // 让新手把注意力收敛到看得过来的范围;剩余仓位折叠,「展开完整组合」随时可看全。
-  // 纯展示层:Top8 = 已按 capped_weight 降序后的前 8 行,不改打分/不改策略/不破坏锁定回测。
-  // 2026-06-11 5→8：用真实相关性实测,AI 内 6-8 只已拿到大部分分散(头 5 只砍掉波动大头,
-  // 9-14 只仅再降 ~4 个点),且手动可管。详见规则文档 §19 / 集中度分析。
+  // 2026-06-01→06-11: 「重点观察 Top8」层 —— 宽篮子 15 只是测策略量筒,你手动只关注最看好的 8 只,
+  // 让新手把注意力收敛到看得过来的范围;其余折叠,「展开完整组合」随时可看全。
+  // 2026-06-19: Top8 改为「按综合分」降序后的前 8 行(系统最看好谁),不再按仓位。
+  //   纯展示层,不改打分/不改策略/不破坏锁定回测。
+  // 2026-06-11 5→8：用真实相关性实测,AI 内 6-8 只已拿到大部分分散,且手动可管。详见规则文档 §19。
   const TOP_N_WATCH = 8;
   tbody.innerHTML = sortedRows.map((r, i) => {
     const ticker = (r.ticker || '').toUpperCase();
@@ -12061,7 +12070,7 @@ function renderTodayPlan() {
       ? 'today-plan-row today-plan-top align-top bg-amber-50/40 hover:bg-amber-50/70'
       : 'today-plan-row today-plan-extra align-top hover:bg-slate-50 hidden';
     const rankCell = isTop
-      ? `<span class="text-amber-500" title="重点观察 — AI 下注最重的 ${TOP_N_WATCH} 只">⭐</span> ${i + 1}`
+      ? `<span class="text-amber-500" title="重点观察 — 系统综合分最高的 ${TOP_N_WATCH} 只">⭐</span> ${i + 1}`
       : `${i + 1}`;
     return `
       <tr class="${rowCls}">
@@ -12109,7 +12118,7 @@ function _applyTodayPlanToggle() {
   });
   if (btn) {
     btn.innerHTML = _todayPlanExpanded
-      ? '收起 — 只看重点 5 只 ▴'
+      ? '收起 — 只看重点 8 只 ▴'
       : `展开完整组合（其余 ${_todayPlanExtraCount} 只）▾`;
   }
 }
@@ -22162,12 +22171,19 @@ def _runtime_db_explorer_snapshot() -> dict:
             groups[market_label].append(merged)
 
         prices_date = None
+        prices_fetched_at = None
         if prices_by_code:
             prices_date = max(str(v.get("trade_date") or "")[:10] for v in prices_by_code.values())
+            # 全库最近一次行情/估值抓取时间 = 所有标的 fetched_at 的最大值（=「拉数据的时间」）
+            fetched_vals = [str(v.get("fetched_at") or "") for v in prices_by_code.values()]
+            fetched_vals = [t for t in fetched_vals if t]
+            if fetched_vals:
+                prices_fetched_at = max(fetched_vals)[:19]
         picks_date = latest_run[1] if latest_run else None
         return {
             "as_of": {
                 "prices_date": _jsonify(prices_date),
+                "prices_fetched_at": _jsonify(prices_fetched_at),
                 "picks_date": _jsonify(picks_date),
             },
             "counts": {k: len(v) for k, v in groups.items()} | {"total": sum(len(v) for v in groups.values())},
