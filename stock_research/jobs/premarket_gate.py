@@ -668,6 +668,13 @@ def main() -> int:
         _bottleneck_reminder(now=now)
     except Exception as e:
         logger.warning("瓶颈财报提醒失败（不影响闸门）: %s", e)
+
+    # 财报前 1 周预告：自选股 earnings_upcoming 提前一周飞书提醒，每家每季最多一次。
+    try:
+        from stock_research.jobs.earnings_preview_reminder import run as _earnings_preview
+        _earnings_preview(now=now)
+    except Exception as e:
+        logger.warning("财报前预告失败（不影响闸门）: %s", e)
     return 0
 
 

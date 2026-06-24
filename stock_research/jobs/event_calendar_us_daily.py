@@ -48,7 +48,8 @@ def _gather_universe() -> dict[str, str]:
                 # manual_watchlist 美股
                 try:
                     rows = con.execute(
-                        "SELECT symbol, name FROM manual_watchlist WHERE market = 'US' OR market IS NULL"
+                        # market 列取值不统一：'US' 与 '美股' 都是美股（_is_non_us 再兜底剔除港/A）
+                        "SELECT symbol, name FROM manual_watchlist WHERE market IN ('US', '美股') OR market IS NULL"
                     ).fetchall()
                     for sym, name in rows:
                         s = (sym or "").upper()
