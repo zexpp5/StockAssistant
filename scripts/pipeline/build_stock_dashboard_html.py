@@ -307,6 +307,130 @@ def _load_key_events_for_dashboard():
     return []
 
 
+def _load_upcoming_earnings_for_dashboard(within_days: int = 120):
+    """加载自选股/信号组的「近期财报」(关键事件页用)。
+
+    源:  data/event_calendar_us.json (event_calendar_us_daily.py 拉 yfinance 财报日)。
+    范围: manual_watchlist[US] ∪ 财报信号组(瓶颈/capex) 的 earnings_upcoming,
+          只保留今天起 within_days 天内,每只取最近一条,按日期升序。
+    财报信号组的票额外标 group 标签(瓶颈组走飞书提醒+次日 AI 体检)。
+    """
+    import pathlib
+    from datetime import date as _date, timedelta
+    repo = pathlib.Path(__file__).resolve().parents[2]
+    cal = repo / "data" / "event_calendar_us.json"
+    if not cal.exists():
+        return []
+    try:
+        doc = json.loads(cal.read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(f"  [warn] 解析 event_calendar_us.json 失败: {exc}")
+        return []
+
+    # 自选股(美股)代码 + 名字
+    wl: dict[str, str] = {}
+    try:
+        import time
+        con = None
+        for _ in range(15):  # read_only 遇写锁退避重试
+            try:
+                con = duckdb.connect(_duckdb_path(), read_only=True)
+                break
+            except Exception:
+                time.sleep(2)
+        if con is None:
+            raise RuntimeError("DB 持续被写锁占用")
+        try:
+            for sym, name in con.execute(
+                # market 列取值不统一：'US' 与 '美股' 都是美股（HK 排除）
+                "SELECT symbol, name FROM manual_watchlist WHERE market IN ('US', '美股') OR market IS NULL"
+            ).fetchall():
+                if sym:
+                    wl[str(sym).upper()] = name or ""
+        finally:
+            con.close()
+    except Exception as exc:
+        print(f"  [warn] 近期财报读自选股失败(降级只显示信号组): {exc}")
+
+    # 财报信号组 → ticker 标签
+    ticker_group: dict[str, str] = {}
+    try:
+        from stock_research.jobs.bottleneck_earnings_reminder import GROUPS as _EG
+        for gk, spec in _EG.items():
+            label = "瓶颈组" if "bottleneck" in gk else ("capex组" if "capex" in gk else gk)
+            for t in spec.get("tickers", {}):
+                ticker_group[str(t).upper()] = label
+    except Exception:
+        pass
+
+    keep = set(wl) | set(ticker_group)
+    today = _date.today()
+    horizon = today + timedelta(days=within_days)
+    best: dict[str, dict] = {}
+    for ev in doc.get("events") or []:
+        if ev.get("event_type") != "earnings_upcoming":
+            continue
+        sym = str(ev.get("ticker") or ev.get("symbol") or "").upper()
+        if sym not in keep:
+            continue
+        try:
+            ed = _date.fromisoformat(str(ev.get("event_date") or "")[:10])
+        except Exception:
+            continue
+        if not (today <= ed <= horizon):
+            continue
+        cur = best.get(sym)
+        if cur is None or ed < _date.fromisoformat(cur["date"]):
+            best[sym] = {
+                "date": ed.isoformat(),
+                "ticker": sym,
+                "name": wl.get(sym) or "",
+                "days_until": (ed - today).days,
+                "group": ticker_group.get(sym, ""),
+                "in_watchlist": sym in wl,
+            }
+    return sorted(best.values(), key=lambda x: x["date"])
+
+
+def _earnings_calendar_html(rows: list) -> str:
+    """把近期财报渲染成紧凑表格(关键事件页用)。"""
+    if not rows:
+        return ('<div class="text-sm text-slate-400 py-3">未来 120 天内，自选股/信号组暂无已知财报日'
+                '（或 event_calendar_us.json 待刷新）。</div>')
+
+    def _e(s: str) -> str:
+        return (str(s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+    trs = []
+    for r in rows:
+        d = r["days_until"]
+        # 越近越红：≤7 红 / ≤30 橙 / 其余灰
+        tone = "text-rose-600 font-semibold" if d <= 7 else ("text-amber-600 font-medium" if d <= 30 else "text-slate-500")
+        when = "今天" if d == 0 else (f"{d} 天后")
+        grp = ""
+        if r.get("group"):
+            grp = (f'<span class="ml-2 inline-block text-[10px] px-1.5 py-0.5 rounded '
+                   f'bg-violet-100 text-violet-700 align-middle">🔔 {_e(r["group"])}</span>')
+        wl = '' if r.get("in_watchlist") else '<span class="ml-1 text-[10px] text-slate-400">(信号组)</span>'
+        trs.append(
+            f'<tr class="border-b border-slate-100">'
+            f'<td class="py-2 pr-3 whitespace-nowrap text-slate-700">{_e(r["date"])}</td>'
+            f'<td class="py-2 pr-3 whitespace-nowrap {tone}">{when}</td>'
+            f'<td class="py-2 pr-3 whitespace-nowrap"><span class="font-mono font-semibold text-slate-800">{_e(r["ticker"])}</span>{grp}{wl}</td>'
+            f'<td class="py-2 text-slate-500 text-xs">{_e(r.get("name") or "")}</td>'
+            f'</tr>'
+        )
+    return (
+        '<div class="overflow-x-auto"><table class="w-full text-sm">'
+        '<thead><tr class="text-left text-xs text-slate-400 border-b border-slate-200">'
+        '<th class="py-1.5 pr-3 font-medium">财报日</th>'
+        '<th class="py-1.5 pr-3 font-medium">距今</th>'
+        '<th class="py-1.5 pr-3 font-medium">代码</th>'
+        '<th class="py-1.5 font-medium">名称</th>'
+        '</tr></thead><tbody>' + "".join(trs) + '</tbody></table></div>'
+    )
+
+
 # ============================================================
 # 百倍股的 5 个共同条件
 # ============================================================
@@ -1101,6 +1225,18 @@ window.echarts = window.echarts || {
     <p class="text-sm text-slate-600">每场事件:<strong class="text-violet-700">看点</strong>(盯什么数据点) · <strong class="text-emerald-700">利好情景</strong>(满足什么条件偏多) · <strong class="text-rose-700">风险情景</strong>(满足什么条件偏空) · <strong class="text-blue-700">怎么准备</strong>(持仓 / 加仓建议) · <strong class="text-slate-600">历史可比</strong>(上一届表现作锚点)</p>
     <p class="text-xs text-slate-400 mt-2">⚠️ 以下分析基于公开信息 + 历史规律，<strong>非内部消息</strong>，仅作研究参考，不构成投资建议</p>
   </div>
+
+  <!-- 📊 自选股·近期财报（earnings_upcoming，来自 event_calendar_us.json，自选 ∪ 信号组）-->
+  <div class="mb-8 bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+    <div class="flex items-center gap-2 mb-1 flex-wrap">
+      <span class="text-xl">📊</span>
+      <h3 class="text-lg font-bold text-slate-800">自选股·近期财报</h3>
+      <span class="text-xs text-slate-400">未来 120 天 · 自选股 + 财报信号组（瓶颈/capex）· 数据源 yfinance 财报日</span>
+    </div>
+    <p class="text-xs text-slate-500 mb-3">🔔 <strong>瓶颈组</strong>标记的票财报当天/盘后会推飞书提醒卡 + 次日早 08:30 AI 体检；其余只在此展示日期。日期可能因公司改期变动，以官方为准。</p>
+    {EARNINGS_CALENDAR}
+  </div>
+
   <div class="space-y-4">
     {EVENT_CARDS}
   </div>
@@ -3885,12 +4021,14 @@ function _buyZoneCompactHtml(code) {
   const pos = String(z.position || "");
   const dot = pos === "便宜" ? "🟢" : (pos === "偏贵" ? "🔴" : "🟡");
   const tone = pos === "便宜" ? "text-emerald-700" : (pos === "偏贵" ? "text-rose-600" : "text-amber-700");
+  // 判定词跟着颜色走，别让红点还写「可买」自相矛盾（现价高于上沿=偏贵别追，不是可以买）
+  const verdict = pos === "便宜" ? "偏便宜" : (pos === "偏贵" ? "偏贵·别追" : "区间内");
   const cur = (z.current != null) ? ("现价 $" + Math.round(z.current)) : "";
   const disc = (z.discount_pct != null) ? (" · 比目标价" + (z.discount_pct < 0 ? "低" : "高") + Math.abs(z.discount_pct) + "%") : "";
   const anchor = (z.method === "估值") ? "锚:分析师目标价" : "锚:均线回撤";
-  const title = `自动可买区间（${anchor}，研究参考·非买入信号）：$${z.low}~$${z.high}${disc}\n现价低于下沿=偏便宜🟢 / 区间内🟡 / 高于上沿=偏贵🔴 别追高。\n（无人工详细计划，自动兜底显示；不改 AI 排名、不自动交易）`;
+  const title = `合理买入区间（${anchor}，研究参考·非买入信号）：$${z.low}~$${z.high}${disc}\n现价低于下沿=偏便宜🟢 / 区间内🟡 / 高于上沿=偏贵🔴 别追高。\n（${verdict}；无人工详细计划，自动兜底显示；不改 AI 排名、不自动交易）`;
   return `<div class="text-[11px] leading-snug max-w-[190px] cursor-help" title="${_esc(title)}">
-    <span class="${tone} font-semibold">${dot} 可买 $${Math.round(z.low)}~$${Math.round(z.high)}</span>
+    <span class="${tone} font-semibold">${dot} ${verdict} · 合理$${Math.round(z.low)}~$${Math.round(z.high)}</span>
     <div class="text-slate-400">${_esc(cur)} · 自动区间</div>
   </div>`;
 }
@@ -5260,14 +5398,7 @@ async function loadDbExplorer() {
       statusEl.textContent = "✅ 已连接";
       statusEl.className = "px-2 py-0.5 rounded bg-emerald-100 text-emerald-700";
     }
-    const asOfEl = document.getElementById("db-explorer-as-of");
-    if (asOfEl && data.as_of) {
-      const fetched = String(data.as_of.prices_fetched_at || "").replace("T", " ").slice(0, 16);
-      asOfEl.innerHTML = fetched
-        ? `🕐 数据拉取 <span class="text-slate-600">${fetched}</span>`
-        : `行情 ${data.as_of.prices_date || "—"}`;
-      asOfEl.title = `数据拉取时间 = prices 表最新一次抓取 (${data.as_of.prices_fetched_at || "—"}); 行情交易日 = prices 表最新一行日期 (${data.as_of.prices_date || "—"}); AI 评级 = picks 表最新入选日 (${data.as_of.picks_date || "—"}); 全库 ${data.counts.total} 只`;
-    }
+    // 数据拉取时间药丸由 renderDbExplorerTable() 统一填充(离线/API 单一来源)
     ["美股","A股","港股","其他"].forEach(m => {
       const cntEl = document.getElementById("db-mkt-cnt-" + m);
       if (cntEl) cntEl.textContent = data.counts[m] || 0;
@@ -5428,6 +5559,16 @@ function renderDbExplorerTable() {
   const emptyEl = document.getElementById("db-explorer-empty");
   const countEl = document.getElementById("db-explorer-result-count");
   if (!tbody || !_dbExplorerData) return;
+  // 0. 数据拉取时间药丸 — 放这里(所有渲染路径都过), 离线快照/API 两种入口都能填上
+  const asOfEl = document.getElementById("db-explorer-as-of");
+  const asOf = _dbExplorerData.as_of;
+  if (asOfEl && asOf) {
+    const fetched = String(asOf.prices_fetched_at || "").replace("T", " ").slice(0, 16);
+    asOfEl.innerHTML = fetched
+      ? `🕐 数据拉取 <span class="text-slate-600">${fetched}</span>`
+      : `行情 ${asOf.prices_date || "—"}`;
+    asOfEl.title = `数据拉取时间 = prices 表最新一次抓取 (${asOf.prices_fetched_at || "—"}); 行情交易日 = prices 表最新一行日期 (${asOf.prices_date || "—"}); AI 评级 = picks 表最新入选日 (${asOf.picks_date || "—"}); 全库 ${(_dbExplorerData.counts || {}).total || "—"} 只`;
+  }
   // 1. 当前市场 tab 的所有行
   const rowsAll = (_dbExplorerData.groups[_dbExplorerMarket] || []).slice();
   // 2. origin filter（来源 chip）先过一遍
@@ -22481,6 +22622,10 @@ def build():
     _key_events = _load_key_events_for_dashboard()
     print(f"  关键事件 (L3 行业大会): {len(_key_events)} 条 · 主源 data/latest/key_events.json")
     html = html.replace("{EVENT_CARDS}", "\n".join(event_card_html(e) for e in _key_events))
+
+    _earnings_cal = _load_upcoming_earnings_for_dashboard()
+    print(f"  近期财报 (自选∪信号组 earnings_upcoming): {len(_earnings_cal)} 条 · 源 data/event_calendar_us.json")
+    html = html.replace("{EARNINGS_CALENDAR}", _earnings_calendar_html(_earnings_cal))
 
     theme_sections = "\n".join(theme_section_html(t, records) for t in THEMES)
     html = html.replace("{THEME_SECTIONS}", theme_sections)
