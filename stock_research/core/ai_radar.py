@@ -2816,7 +2816,7 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
       <span class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-600 text-base leading-none transition-transform group-open:rotate-90">›</span>
       <div class="min-w-0">
         <div class="text-sm font-bold text-slate-900">🧬 AI 产业链覆盖</div>
-        <div class="text-[11px] text-slate-500 mt-0.5">9 条关键环节 · system_universe 盲区体检</div>
+        <div class="text-[11px] text-slate-500 mt-0.5">{_sc_total} 条关键环节 · 产业链覆盖全景</div>
       </div>
     </div>
     {supply_chip_html or '<span class="text-[11px] text-slate-400 whitespace-nowrap">点击展开</span>'}
