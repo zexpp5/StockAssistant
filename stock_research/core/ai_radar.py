@@ -2841,23 +2841,36 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
 </details>
 """ if etf_panel_html else ""
 
-    chain_details_html = f"""
-<details class="group mb-4 rounded-xl bg-indigo-50/40 ring-1 ring-indigo-200 overflow-hidden">
-  <summary class="cursor-pointer select-none list-none flex items-center justify-between gap-3 px-4 py-3 hover:bg-indigo-100/40 transition">
+    # 板块热度区：原「AI 价值链明细」从底部折叠 → 提到顶部常驻，这是用户进来第一眼要看的
+    boards_html = f"""
+<div class="mb-2 mt-1">
+  <h2 class="text-base font-bold text-slate-900 flex items-center gap-2">🔥 AI 板块热度 · 哪条链在涨 / 在跌 + 代表股</h2>
+  <p class="text-[12px] text-slate-500 mt-0.5">按系统打分近 7 天变化排序；这是行业理解，不是买入清单。</p>
+</div>
+{trend_html}
+{chains_html}
+{other_chains_html}
+"""
+
+    # 诊断与数据健康：结论灯 / 这页怎么看 / 数据可信度 / 数据缺口 / 系统计数 —— 次要信息，
+    # 收进底部折叠，避免一进页面就被这些挡住主内容。
+    diag_details_html = f"""
+<details class="group mb-3 rounded-xl bg-slate-50 ring-1 ring-slate-200 overflow-hidden">
+  <summary class="cursor-pointer select-none list-none flex items-center justify-between gap-3 px-4 py-3 hover:bg-slate-100 transition">
     <div class="flex items-center gap-3 min-w-0">
-      <span class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-indigo-600 text-base leading-none transition-transform group-open:rotate-90">›</span>
+      <span class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-200 text-slate-600 text-base leading-none transition-transform group-open:rotate-90">›</span>
       <div class="min-w-0">
-        <div class="text-sm font-bold text-slate-900">AI 价值链明细</div>
-        <div class="text-[11px] text-slate-500 mt-0.5">每条链、近 7 天趋势、链内股票</div>
+        <div class="text-sm font-bold text-slate-900">🩺 诊断与数据健康</div>
+        <div class="text-[11px] text-slate-500 mt-0.5">结论灯 · 这页怎么看 · 数据可信度 · 数据缺口 · 系统计数</div>
       </div>
     </div>
     <span class="text-[11px] text-slate-400 whitespace-nowrap">点击展开</span>
   </summary>
-  <div class="px-4 pb-4 mt-1">
-    {trend_html}
+  <div class="px-4 pb-4 mt-1 space-y-3">
+    {trust_gate_html}
+    {reader_guide_html}
+    {focus_html}
     {kpi_html}
-    {chains_html}
-    {other_chains_html}
   </div>
 </details>
 """
@@ -2873,15 +2886,13 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
       {supply_chip_html}
     </div>
   </div>
-  {trust_gate_html}
-  {reader_guide_html}
-  {focus_html}
   {head_html}
+  {boards_html}
   {shortlist_html}
-  {evidence_details_html}
   {supply_details_html}
+  {evidence_details_html}
   {etf_details_html}
-  {chain_details_html}
+  {diag_details_html}
   {footer_html}
 </section>
 """
