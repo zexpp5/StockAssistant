@@ -1101,12 +1101,35 @@ def build_ai_radar_payload(con) -> dict[str, Any]:
                 for p in sorted(items, key=lambda x: -x["total_score"])[:5]
             ],
             "mapped_themes": chain_to_themes.get(chain, []),
+            "has_picks": True,
         })
 
-    # 按 AI 关联强度排序（强 → 中 → 弱），同档按平均分降序
+    # 补全系统认定的 AI 链：今天没命中 picks 的链也列出来（has_picks=False），
+    # 用「今日无票」标记区分，而不是直接隐藏 —— 用户要求一眼看到全部板块。
+    present_chains = {c["chain"] for c in chains}
+    for chain, strength in AI_STRENGTH_BY_CHAIN.items():
+        if strength not in AI_RADAR_VISIBLE_STRENGTHS or chain in present_chains:
+            continue
+        delta = chain_delta.get(chain)
+        chains.append({
+            "chain": chain,
+            "n_stocks": 0,
+            "avg_score": None,
+            "strong_count": 0,
+            "ai_strength": strength,
+            "delta_7d": round(delta, 2) if delta is not None else None,
+            "mainline_status": classify_mainline(delta),
+            "bottleneck_strength": derive_bottleneck_signal(chain, delta_7d=delta),
+            "top_picks": [],
+            "mapped_themes": chain_to_themes.get(chain, []),
+            "has_picks": False,
+        })
+
+    # 有票的链在前（按 AI 关联强度 强→中→弱，同档按均分降序），今日无票的链排在后
     chains.sort(key=lambda c: (
+        0 if c.get("has_picks") else 1,
         -AI_STRENGTH_RANK.get(c["ai_strength"], -1),
-        -c["avg_score"],
+        -(c["avg_score"] or 0),
     ))
 
     # 覆盖率审计：高分但 chain 为空 — 仅审计"AI 雷达视野内"的票
@@ -1365,7 +1388,7 @@ def _render_ai_radar_focus(payload: dict[str, Any],
                            theme_panel: dict[str, Any] | None,
                            production_panel: dict[str, Any] | None = None) -> str:
     """第一屏摘要：只回答用户今天打开后先看哪三件事。"""
-    chains = payload.get("chains") or []
+    chains = [c for c in (payload.get("chains") or []) if c.get("top_picks")]
     rising = sorted(
         [c for c in chains if (c.get("delta_7d") or 0) >= MAINLINE_RISE_DELTA],
         key=lambda c: -(c.get("delta_7d") or 0),
@@ -2550,8 +2573,8 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
         payload, freshness_panel, theme_panel, production_panel, quality_panel
     )
 
-    rise_chains = [c for c in payload["chains"] if (c.get("delta_7d") or 0) >= MAINLINE_RISE_DELTA]
-    fall_chains = [c for c in payload["chains"] if (c.get("delta_7d") or 0) <= MAINLINE_FALL_DELTA]
+    rise_chains = [c for c in payload["chains"] if c.get("top_picks") and (c.get("delta_7d") or 0) >= MAINLINE_RISE_DELTA]
+    fall_chains = [c for c in payload["chains"] if c.get("top_picks") and (c.get("delta_7d") or 0) <= MAINLINE_FALL_DELTA]
     rise_html = "、".join(f'<span class="font-semibold text-emerald-700">{_esc(c["chain"])}</span> (+{c["delta_7d"]})' for c in rise_chains) or '<span class="text-slate-400">无</span>'
     fall_html = "、".join(f'<span class="font-semibold text-rose-700">{_esc(c["chain"])}</span> ({c["delta_7d"]})' for c in fall_chains) or '<span class="text-slate-400">无</span>'
 
@@ -2583,14 +2606,29 @@ def render_ai_radar_section(payload: dict[str, Any], *, my_view_headline: str | 
   </div>
   <div class="bg-white ring-1 ring-slate-200 rounded-lg p-3">
     <div class="text-[11px] text-slate-500">AI 链层数</div>
-    <div class="text-lg font-semibold text-slate-800">{len(payload["chains"])}</div>
-    <div class="text-[10px] text-slate-400 mt-0.5">已命中 picks 的 AI 链</div>
+    <div class="text-lg font-semibold text-slate-800">{sum(1 for c in payload["chains"] if c.get("top_picks"))} <span class="text-xs text-slate-500">/ {len(payload["chains"])}</span></div>
+    <div class="text-[10px] text-slate-400 mt-0.5">今日有票命中 / 系统追踪</div>
   </div>
 </div>
 """
 
     chain_cards = []
     for c in payload["chains"]:
+        # 今日无 picks 命中的链：紧凑灰条，仍列出来让用户看到全部板块，不出股票表
+        if not c.get("top_picks"):
+            c_delta = c.get("delta_7d")
+            c_bottleneck = c.get("bottleneck_strength") or derive_bottleneck_signal(c.get("chain"), delta_7d=c_delta)
+            chain_cards.append(f"""
+<div class="bg-slate-50/70 ring-1 ring-slate-200 rounded-xl px-4 py-2.5 mb-3 flex items-center justify-between gap-2 flex-wrap">
+  <div class="flex items-center gap-2 flex-wrap min-w-0">
+    <span class="text-sm font-semibold text-slate-500">{_esc(c["chain"])}</span>
+    {_strength_badge(c["ai_strength"])}
+    {_signal_badge(c_bottleneck, "瓶颈")}
+  </div>
+  <span class="inline-flex items-center px-2 py-0.5 rounded text-[11px] bg-slate-200/70 text-slate-500" title="系统追踪此链，但最新一批 picks 没有票落在这条链上">今日无票命中</span>
+</div>
+""")
+            continue
         rows = []
         for p in c["top_picks"]:
             intro = p.get("layman_intro") or ""
