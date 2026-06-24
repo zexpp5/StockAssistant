@@ -1882,9 +1882,10 @@ def _render_freshness_panel(panel: dict[str, Any]) -> str:
 
 
 def _render_supply_chain_coverage_panel(panel: dict[str, Any] | None) -> str:
-    """渲染 AI 产业链覆盖审计。
+    """渲染 AI 产业链覆盖全景。
 
-    这块只展示 system_universe 的覆盖盲区，不代表这些 missing anchors 已可交易或应进入推荐。
+    始终列出全部关键环节（达标/偏薄/盲区都显示），让人一眼看到「系统覆盖了哪些
+    产业链、各覆盖几只、缺哪些龙头」。missing anchors 只是覆盖参照，不代表已可交易。
     """
     if not panel:
         return ""
@@ -1905,63 +1906,70 @@ def _render_supply_chain_coverage_panel(panel: dict[str, Any] | None) -> str:
             f'覆盖审计读取失败：{_esc(panel["error"])}</div>'
         )
 
-    if not n_issues:
-        return f"""
-<div class="bg-emerald-50 ring-1 ring-emerald-200 rounded-xl p-3 mb-3 text-[12px] text-emerald-800">
-  <div class="font-bold">AI 产业链覆盖审计通过</div>
-  <div class="mt-0.5">口径：{_esc(scope)} · universe {universe_size} 只 · {n_covered}/{n_total} 条关键环节达标。anchors 只是覆盖参照，不是入池或买入清单。</div>
-  {error_html}
-</div>
-"""
+    # 全部环节（segments），按 盲区→偏薄→达标 排序，问题在最上面
+    status_meta = {
+        "gap": ("盲区", "text-rose-700 bg-rose-50 ring-rose-200", 0),
+        "thin": ("偏薄", "text-amber-700 bg-amber-50 ring-amber-200", 1),
+        "covered": ("达标", "text-emerald-700 bg-emerald-50 ring-emerald-200", 2),
+    }
+    segments = sorted(
+        panel.get("segments") or [],
+        key=lambda s: (status_meta.get(s.get("status"), ("", "", 9))[2], s.get("key") or ""),
+    )
 
     rows = []
-    status_label = {
-        "gap": ("盲区", "text-rose-700 bg-rose-50 ring-rose-200"),
-        "thin": ("偏薄", "text-amber-700 bg-amber-50 ring-amber-200"),
-    }
-    for it in panel.get("items") or []:
-        label, cls = status_label.get(
+    for it in segments:
+        label, cls, _ = status_meta.get(
             it.get("status"),
-            (str(it.get("status") or "未知"), "text-slate-700 bg-slate-50 ring-slate-200"),
+            (str(it.get("status") or "未知"), "text-slate-700 bg-slate-50 ring-slate-200", 9),
         )
         present = ", ".join(it.get("present") or []) or "-"
         missing = ", ".join(it.get("missing") or []) or "-"
         note = it.get("note") or ""
+        note_html = (
+            f'<div class="text-[10px] text-slate-500 mt-0.5">{_esc(note)}</div>' if note else ""
+        )
         rows.append(f"""
-<tr class="border-t border-amber-100">
+<tr class="border-t border-slate-100">
   <td class="py-1.5 pr-2 align-top whitespace-nowrap">
     <span class="inline-flex items-center px-1.5 py-0.5 rounded ring-1 text-[11px] {cls}">{_esc(label)}</span>
   </td>
-  <td class="py-1.5 pr-2 align-top text-[12px] font-semibold text-slate-900">{_esc(it.get("name") or it.get("key") or "")}
-    <div class="text-[10px] text-slate-500 mt-0.5">{_esc(note)}</div>
-  </td>
+  <td class="py-1.5 pr-2 align-top text-[12px] font-semibold text-slate-900">{_esc(it.get("name") or it.get("key") or "")}{note_html}</td>
   <td class="py-1.5 pr-2 align-top text-[12px] font-mono text-slate-700">{_esc(present)}</td>
-  <td class="py-1.5 pr-2 align-top text-[12px] font-mono text-slate-700">{_esc(missing)}</td>
+  <td class="py-1.5 pr-2 align-top text-[12px] font-mono text-slate-400">{_esc(missing)}</td>
   <td class="py-1.5 pl-2 align-top text-right text-[12px] text-slate-600 whitespace-nowrap">{int(it.get("present_count") or 0)}/{int(it.get("min_covered") or 0)}</td>
 </tr>
 """)
 
+    # 头部色：有盲区→红，仅偏薄→黄，全达标→绿
+    if n_gap:
+        head_cls, title_cls, head = "bg-rose-50 ring-rose-200", "text-rose-900", f"{n_gap} 条盲区 / {n_thin} 条偏薄"
+    elif n_issues:
+        head_cls, title_cls, head = "bg-amber-50 ring-amber-200", "text-amber-900", f"{n_thin} 条偏薄，0 盲区"
+    else:
+        head_cls, title_cls, head = "bg-emerald-50 ring-emerald-200", "text-emerald-900", "全部达标"
+
     return f"""
-<div class="bg-amber-50 ring-1 ring-amber-200 rounded-xl p-4 mb-3">
-  <div class="flex items-start justify-between gap-3 flex-wrap mb-2">
+<div class="bg-white ring-1 ring-slate-200 rounded-xl p-4 mb-3">
+  <div class="{head_cls} ring-1 rounded-lg px-3 py-2 mb-3 flex items-start justify-between gap-3 flex-wrap">
     <div>
-      <div class="text-sm font-bold text-amber-900">AI 产业链覆盖审计 · {n_issues} 条环节未达标</div>
-      <div class="text-[12px] text-amber-800 mt-0.5">
-        口径：{_esc(scope)} · universe {universe_size} 只 · covered {n_covered}/{n_total}，
-        thin {n_thin}，gap {n_gap}。这是覆盖体检，不是股票推荐。
+      <div class="text-sm font-bold {title_cls}">🧬 AI 产业链覆盖全景 · {n_covered}/{n_total} 环节达标（{head}）</div>
+      <div class="text-[12px] text-slate-600 mt-0.5">
+        口径：{_esc(scope)} · universe {universe_size} 只。下表列出系统跟踪的全部关键环节及各自覆盖情况，
+        这是覆盖体检，不是股票推荐。
       </div>
       {error_html}
     </div>
-    <div class="text-[11px] text-amber-700">anchors 只作参照；入池前仍要过可交易、抓价、AI 证据闸门。</div>
+    <div class="text-[11px] text-slate-500">anchors 只作参照；入池前仍要过可交易、抓价、AI 证据闸门。</div>
   </div>
   <div class="overflow-x-auto">
     <table class="w-full min-w-[780px]">
       <thead>
-        <tr class="text-[10px] text-amber-700 uppercase tracking-wide">
+        <tr class="text-[10px] text-slate-500 uppercase tracking-wide">
           <th class="py-1 pr-2 text-left font-normal">状态</th>
-          <th class="py-1 pr-2 text-left font-normal">环节</th>
-          <th class="py-1 pr-2 text-left font-normal">已覆盖 anchors</th>
-          <th class="py-1 pr-2 text-left font-normal">缺失 anchors</th>
+          <th class="py-1 pr-2 text-left font-normal">环节（产业链）</th>
+          <th class="py-1 pr-2 text-left font-normal">已覆盖</th>
+          <th class="py-1 pr-2 text-left font-normal">缺失（参照）</th>
           <th class="py-1 pl-2 text-right font-normal">命中/门槛</th>
         </tr>
       </thead>
