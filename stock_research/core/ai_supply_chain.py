@@ -66,10 +66,11 @@ AI_SUPPLY_CHAIN_SEGMENTS: list[ChainSegment] = [
         note="800G→1.6T 光模块；AI 集群扩张需要高速光互联",
     ),
     ChainSegment(
-        "advanced_packaging", "先进封装/OSAT(CoWoS/HBM封装)",
-        ("AMKR", "ASX", "ACLS", "COHU"),
+        "advanced_packaging", "先进封装/OSAT(CoWoS/HBM封装/玻璃基板)",
+        ("AMKR", "ASX", "ACLS", "COHU", "GLW"),
         min_covered=2,
-        note="AI 芯片封装、测试和制程设备是产能约束环节",
+        note="AI 芯片封装、测试和制程设备是产能约束环节；玻璃基板(GLW 等)是下一代载板材料，"
+             "用来替代有机载板做更大更密封装，2025-2026 被炒成封装新方向，目前多为系统盲区",
     ),
     ChainSegment(
         "semi_equipment", "半导体设备(光刻/沉积/刻蚀/测试)",
@@ -82,9 +83,16 @@ AI_SUPPLY_CHAIN_SEGMENTS: list[ChainSegment] = [
         min_covered=2,
     ),
     ChainSegment(
-        "power_cooling_dc", "电力/散热/数据中心",
+        "power_cooling_dc", "电力/数据中心(供电/机柜/园区)",
         ("VRT", "ETN", "GEV", "VST", "CEG", "EQIX", "DLR"),
         min_covered=3,
+    ),
+    ChainSegment(
+        "liquid_cooling", "液冷/散热(数据中心热管理)",
+        ("VRT", "NVT", "MOD"),
+        min_covered=2,
+        note="AI 服务器功耗暴涨、风冷扛不住 → 液冷/散热需求；"
+             "纯液冷可交易标的稀少，目前主要靠 VRT(Vertiv) 覆盖，单独成环节以便监控覆盖薄弱",
     ),
     ChainSegment(
         "cloud_software", "云平台/软件",
