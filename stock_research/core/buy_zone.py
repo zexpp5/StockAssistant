@@ -67,13 +67,20 @@ def _position(current: float | None, low: float, high: float) -> str:
     return "区间内"
 
 
-def _latest_close(conn, symbol: str) -> float | None:
+def _latest_close_row(conn, symbol: str) -> tuple[float | None, str | None]:
     row = conn.execute(
-        "SELECT close FROM price_daily WHERE upper(symbol)=upper(?) AND close IS NOT NULL "
+        "SELECT close, trade_date FROM price_daily WHERE upper(symbol)=upper(?) AND close IS NOT NULL "
         "ORDER BY trade_date DESC LIMIT 1",
         [symbol],
     ).fetchone()
-    return float(row[0]) if row and row[0] is not None else None
+    if row and row[0] is not None:
+        return float(row[0]), str(row[1]) if row[1] is not None else None
+    return None, None
+
+
+def _latest_close(conn, symbol: str) -> float | None:
+    close, _trade_date = _latest_close_row(conn, symbol)
+    return close
 
 
 def _recent_target(conn, symbol: str, today: date):
@@ -112,7 +119,7 @@ def compute_buy_zone(symbol: str, conn=None, *, today: date | None = None) -> di
         if not ok or conn is None:
             return None
     try:
-        current = _latest_close(conn, symbol)
+        current, current_trade_date = _latest_close_row(conn, symbol)
         target, tdate = _recent_target(conn, symbol, today)
         if target:
             low = round(target * VAL_LOW_MULT, 2)
@@ -120,6 +127,7 @@ def compute_buy_zone(symbol: str, conn=None, *, today: date | None = None) -> di
             return {
                 "symbol": symbol.upper(), "method": "估值",
                 "low": low, "high": high, "current": current,
+                "current_trade_date": current_trade_date,
                 "target": target, "target_date": str(tdate) if tdate else None,
                 "position": _position(current, low, high),
             }
@@ -130,6 +138,7 @@ def compute_buy_zone(symbol: str, conn=None, *, today: date | None = None) -> di
             return {
                 "symbol": symbol.upper(), "method": "技术",
                 "low": low, "high": high, "current": current,
+                "current_trade_date": current_trade_date,
                 "target": None, "target_date": None,
                 "position": _position(current, low, high),
             }
@@ -178,8 +187,19 @@ _POS_ICON = {
 }
 
 
-def format_line(zone: dict | None) -> str | None:
-    """渲染成早报一行(缩进 2 空格, 与现有 reason 行对齐)。研究参考措辞。"""
+# 紧凑版位置标(飞书卡片瘦身用)——只留 icon + 2 字结论
+_POS_ICON_COMPACT = {
+    "便宜": "🟢便宜",
+    "区间内": "🟡区间内",
+    "偏贵": "🔴偏贵别追",
+}
+
+
+def format_line(zone: dict | None, compact: bool = False) -> str | None:
+    """渲染成早报一行(缩进 2 空格, 与现有 reason 行对齐)。研究参考措辞。
+
+    compact=True(2026-06-24 飞书卡片瘦身)：只留区间+现价+一眼结论,去掉口径/锚说明。
+    """
     if not zone:
         return None
     low, high = zone.get("low"), zone.get("high")
@@ -187,6 +207,10 @@ def format_line(zone: dict | None) -> str | None:
         return None
     method = zone.get("method")
     cur = zone.get("current")
+    if compact:
+        pos_icon = _POS_ICON_COMPACT.get(zone.get("position"), "")
+        cur_str = f"现价 ${cur:.0f} " if cur else ""
+        return f"  💰 ${low:.0f}~${high:.0f} · {cur_str}{pos_icon}"
     pos_icon = _POS_ICON.get(zone.get("position"), "")
     if method == "估值" and zone.get("target"):
         anchor = f"｜锚:分析师目标价 ${zone['target']:.0f}"

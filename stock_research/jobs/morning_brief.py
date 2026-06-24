@@ -1860,7 +1860,7 @@ def _compute_us_buy_zones(entries: list[dict]) -> dict:
         return {}
 
 
-def _buy_zone_line(ticker: str, buy_zones: dict | None) -> str | None:
+def _buy_zone_line(ticker: str, buy_zones: dict | None, compact: bool = False) -> str | None:
     """从预算好的 buy_zones map 取一行可买区间文案（buy_zone.format_line）。"""
     if not buy_zones:
         return None
@@ -1869,7 +1869,7 @@ def _buy_zone_line(ticker: str, buy_zones: dict | None) -> str | None:
         return None
     try:
         from stock_research.core import buy_zone as _bz
-        return _bz.format_line(zone)
+        return _bz.format_line(zone, compact=compact)
     except Exception:
         return None
 
@@ -1925,10 +1925,13 @@ def _humanize_picks(plan: list[dict], a_share: bool, history: dict | None = None
 
 def _humanize_picks_grouped(plan: list[dict], a_share: bool, history: dict | None = None,
                             factor_scores: dict | None = None,
-                            compact: bool = False, buy_zones: dict | None = None) -> list[str]:
+                            compact: bool = False, buy_zones: dict | None = None,
+                            slim: bool = False) -> list[str]:
     """每只股聚合成 1 个多行 markdown 块（含 ticker 主行 + 缩进 reasons）。供飞书卡片 2 列拆分用。
 
     compact=True 同 _humanize_picks：每块只剩主行（🆕 多一行催化）。
+    slim=True（2026-06-24 飞书卡片瘦身）：每只股只留主行 + 可买区间（最该看的"现在能不能买"），
+      事件信号/追涨标/✅⚠️理由全移 dashboard，避免卡片过长看不动。
     buy_zones：{TICKER: zone}，非 compact 美股块追加一行可买入区间。
     """
     factors_map, signals_map = _factor_scores_index(factor_scores)
@@ -1957,6 +1960,15 @@ def _humanize_picks_grouped(plan: list[dict], a_share: bool, history: dict | Non
                     block_lines.append(cat)
             out.append("\n".join(block_lines))
             continue
+        if slim:
+            # 飞书卡片瘦身：主行(带 🆕 异动标) + 紧凑可买区间，其余全去 dashboard
+            block_lines = [head + _rise_marker(ticker)]
+            if not a_share and buy_zones:
+                bz_line = _buy_zone_line(ticker, buy_zones, compact=True)
+                if bz_line:
+                    block_lines.append(bz_line)
+            out.append("\n".join(block_lines))
+            continue
         block_lines = [head]
         block_lines.extend(_ticker_signal_lines(ticker))
         if not a_share:
@@ -1974,7 +1986,7 @@ def _humanize_picks_grouped(plan: list[dict], a_share: bool, history: dict | Non
 
 
 def _v2_entry_block(entry: dict, history: dict | None, market: str,
-                    compact: bool = False) -> str:
+                    compact: bool = False, slim: bool = False) -> str:
     """港股/A 股 selected entry → 多行 markdown 块（markdown brief 与飞书卡片共用）。
 
     market: "hk" / "cn"，决定理由构造器与 quality_tag 口径。
@@ -1996,6 +2008,13 @@ def _v2_entry_block(entry: dict, history: dict | None, market: str,
             cat = _build_catalyst(ticker)
             if cat:
                 lines.append(cat)
+        return "\n".join(lines)
+    if slim:
+        # 飞书卡片瘦身(2026-06-24)：主行 + 最多 1 句 ✅ 理由，事件/追涨标/风险全去 dashboard
+        build_reasons = _build_hk_reasons if market == "hk" else _build_a_share_reasons
+        pros, _ = build_reasons(entry)
+        lines = [head + _rise_marker(ticker)]
+        lines.extend(_format_reason_lines(pros[:1], []))
         return "\n".join(lines)
     lines = [head]
     lines.extend(_ticker_signal_lines(ticker))
@@ -3063,17 +3082,9 @@ def _build_card_payload() -> dict:
                 "_系统科技/AI 股票池推荐；自选股池不自动混入_"
                 + ("\n🔴 **质量闸门 FAIL：本区只读观察，不作为买入/加仓清单。**" if trade_blocked else "")}}
         ]
-        if plan:
-            pm = plan.get("portfolio_metrics") or {}
-            if pm:
-                weight_src = _plan_weight_source(plan)
-                section2.append(_kpi_row([
-                    ("回测Sharpe", str(pm.get("annual_sharpe", "?"))),
-                    ("回测年化", f"{pm.get('annual_return_pct', '?')}%"),
-                    ("仓位来源", weight_src["kind"]),
-                ]))
+        # 2026-06-24: 回测Sharpe/回测年化/仓位来源 KPI 行移出每日卡片（术语噪音，见 dashboard）。
 
-        # 🇺🇸 美股 — ⭐ 仓位 top5 详解（2 列），其余一行速览
+        # 🇺🇸 美股 — ⭐ 打分 top 详解（2 列），其余一行速览
         plan_v5 = (plan or {}).get("plan_v5") or []
         us_entries = [e for e in plan_v5 if not _is_a_share(e.get("ticker", ""))] if plan else []
         if us_entries:
@@ -3083,19 +3094,20 @@ def _build_card_payload() -> dict:
                 us_detail = [e for e in us_entries if (e.get("ticker") or "").upper() in star]
                 us_rest = [e for e in us_entries if (e.get("ticker") or "").upper() not in star]
             else:
-                us_detail, us_rest = us_entries, []
+                us_detail, us_rest = list(us_entries), []
+            us_detail.sort(key=_star_score, reverse=True)
             us_blocks = _humanize_picks_grouped(us_detail, a_share=False, history=history,
                                                 factor_scores=factor_scores,
-                                                buy_zones=_compute_us_buy_zones(us_detail))
+                                                buy_zones=_compute_us_buy_zones(us_detail),
+                                                slim=True)
             ts_us = _fmt_ts((plan or {}).get("generated_at"))
             weight_src = _plan_weight_source(plan)
             section2.append({"tag": "div", "text": {"tag": "lark_md",
                 "content": (
-                    f"**🇺🇸 美股 ({len(us_entries)} 只 · {weight_src['label']})** · {ts_us}\n"
-                    + (f"_⭐ 重点 {len(us_detail)} 只（按仓位）详解；其余一行速览，完整理由见 dashboard_"
-                       if split else "_每只股附 ✅ 推荐理由 + ⚠️ 风险点_")
-                    + (f"\n⚠️ {weight_src['detail']}。这些百分比不是新鲜 risk-aware optimizer 输出。"
-                       if weight_src.get("is_fallback") else "")
+                    f"**🇺🇸 美股 ({len(us_entries)} 只)** · {ts_us}\n"
+                    + (f"_⭐ 重点 {len(us_detail)} 只（按打分·系统最看好）· %=仓位 · 完整理由见 dashboard_"
+                       if split else "_⭐ 按打分排 · %=仓位 · 完整理由见 dashboard_")
+                    + ("\n⚠️ 仓位为兜底输出（非新鲜 optimizer）" if weight_src.get("is_fallback") else "")
                 )}})
             half = (len(us_blocks) + 1) // 2
             # 块间用空行分隔，避免上下两只股的 reasons 粘连
@@ -3114,7 +3126,7 @@ def _build_card_payload() -> dict:
         # 🇭🇰 港股 — 前 5 详解 + 其余一行速览
         if hk_picks and hk_picks.get("selected"):
             hk_sel = hk_picks["selected"][:10]
-            hk_blocks = [_v2_entry_block(e, history, "hk") for e in hk_sel[:DETAIL_TOP_N]]
+            hk_blocks = [_v2_entry_block(e, history, "hk", slim=True) for e in hk_sel[:DETAIL_TOP_N]]
             hk_rest = hk_sel[DETAIL_TOP_N:]
             ts_hk = _fmt_ts(hk_picks.get("generated_at"))
             f_note = "" if any(_entry_f_score(e) is not None for e in hk_sel) else " · 个股 F-Score 值暂缺"
@@ -3145,7 +3157,7 @@ def _build_card_payload() -> dict:
                 )}})
         elif a_share_picks and a_share_picks.get("selected"):
             sel = a_share_picks["selected"][:10]
-            a_blocks = [_v2_entry_block(e, history, "cn") for e in sel[:DETAIL_TOP_N]]
+            a_blocks = [_v2_entry_block(e, history, "cn", slim=True) for e in sel[:DETAIL_TOP_N]]
             a_rest = sel[DETAIL_TOP_N:]
             ts_cn = _fmt_ts(a_share_picks.get("generated_at"))
             f_note = "" if any(_entry_f_score(e) is not None for e in sel) else " · 个股 F-Score 值暂缺"
@@ -3228,56 +3240,10 @@ def _build_card_payload() -> dict:
                 "content": "\n\n".join(rej_blocks)}})
         blocks.append({"tag": "hr"})
 
-    # ─── Section 3: 两个方案对比（核心 — 让新人一眼看懂"AI 有没有用"）───
-    inception_date = date(2026, 5, 10)
-    days_tracked = max(0, (today - inception_date).days - 1)
-
-    section3: list[dict] = [
-        {"tag": "div", "text": {"tag": "lark_md", "content":
-            "**🆚 系统在跑两个方案**\n_每周一同时跑两套策略，让数据自然分胜负_"}}
-    ]
-    # 2 列横向对比卡：A 静态 vs C 动态
-    section3.append({
-        "tag": "column_set",
-        "flex_mode": "stretch",
-        "horizontal_spacing": "default",
-        "columns": [
-            {"tag": "column", "width": "weighted", "weight": 1,
-             "elements": [{"tag": "div", "text": {"tag": "lark_md", "content":
-                "**📦 方案 A · 静态死守**\n5-10 锁定 12 只股\n从此不调仓\n_模拟「佛系投资者」_"}}]},
-            {"tag": "column", "width": "weighted", "weight": 1,
-             "elements": [{"tag": "div", "text": {"tag": "lark_md", "content":
-                "**🔄 方案 C · 动态调仓**\n每周一按 AI rebalance\n扣 10bps/换股 手续费\n_模拟「听 AI 调仓」_"}}]},
-        ],
-    })
-    if days_tracked < 7:
-        section3.append({"tag": "div", "text": {"tag": "lark_md", "content":
-            f"📅 **Forward tracking 累积中**：已 {days_tracked} / 7 天 — 等下周起每周一较量\n"
-            f"🆚 **C − A spread = AI 加的 alpha**（等数据累积）"}})
-    else:
-        section3.append({"tag": "div", "text": {"tag": "lark_md", "content":
-            f"📅 已 forward tracked {days_tracked} 天 — 真实曲线见 dashboard"}})
-
-    if risk_metrics:
-        rm = risk_metrics
-        section3.append({"tag": "div", "text": {"tag": "lark_md", "content":
-            "⚠️ **历史回测/模拟，不是实盘业绩；forward 样本仍很短，不能证明策略有效。**"}})
-        # NAV 净值趋势 — emoji 双时间窗（近 30d + 总累计）
-        nav = _nav_sparkline(rm)
-        if nav:
-            section3.append({"tag": "div", "text": {"tag": "lark_md", "content":
-                f"历史 NAV：近 30 天 {nav['spark_30d']} {nav['pct_30d']:+.1f}% · "
-                f"累计 {nav['spark']} {nav['total_pct']:+.1f}%\n"
-                f"_{nav['start_date']} → {nav['end_date']} ({nav['n_days']} 天)_"}})
-        section3.append(_kpi_row([
-            ("回测 Sharpe", _fmt_metric(rm.get("sharpe"))),
-            ("Max DD", _fmt_metric(rm.get("max_drawdown_pct"), "%")),
-            ("95% VaR", _fmt_metric(rm.get("var_95_pct"), "%")),
-        ]))
-        section3.append({"tag": "note", "elements": [
-            {"tag": "plain_text", "content": "回测含 survivorship bias 不代表未来；崩盘期实测 alpha = -9.77%，4/4 regime 3 跑输 SPY。"}
-        ]})
-    blocks.extend(section3)
+    # ─── Section 3: 两个方案对比（A 静态 vs C 动态）+ 回测指标 ───
+    # 2026-06-24: 用户反馈"没必要每天推、把卡片撑太长"——整块移出每日飞书卡片。
+    # 完整 A/C 对比曲线 + 回测 Sharpe/MaxDD/VaR 仍在 dashboard「策略验证」区,需要时去看。
+    # 此处刻意不再 append 任何 block。
 
     # ─── Section 3.7: 🎯 次新股触底候选 (junior_stock_watcher → 列 actionable + diff) ───
     radar = _load_junior_radar()
