@@ -470,7 +470,7 @@ def _dual_track_html() -> str:
             continue
         rows = blk["rows"]
         trs = []
-        for r in rows[:15]:  # 只显示候选规则前15
+        for r in rows:  # 候选规则全池选出的 Top20
             d = r["delta"]
             if d > 0:
                 arrow = f'<span class="text-emerald-600 font-semibold">↑{d}</span>'
@@ -478,19 +478,26 @@ def _dual_track_html() -> str:
                 arrow = f'<span class="text-rose-500 font-semibold">↓{-d}</span>'
             else:
                 arrow = '<span class="text-slate-300">—</span>'
-            hi = ' bg-emerald-50' if d >= 5 else (' bg-rose-50' if d <= -5 else '')
+            hi = ' bg-emerald-50' if r.get("is_new") else (' bg-rose-50' if d <= -5 else '')
+            newflag = ' <span class="text-[10px] px-1 rounded bg-emerald-100 text-emerald-700">🆕新捞入</span>' if r.get("is_new") else ''
+            prod_disp = r["prod_rank"] if r["prod_rank"] <= 20 else f'{r["prod_rank"]}(榜外)'
             trs.append(
                 f'<tr class="border-b border-slate-100{hi}">'
                 f'<td class="py-1.5 pr-3 text-center font-semibold text-violet-700">{r["new_rank"]}</td>'
-                f'<td class="py-1.5 pr-3 text-center text-slate-400">{r["prod_rank"]}</td>'
+                f'<td class="py-1.5 pr-3 text-center text-slate-400">{prod_disp}</td>'
                 f'<td class="py-1.5 pr-3 text-center">{arrow}</td>'
-                f'<td class="py-1.5 pr-3 font-mono font-semibold text-slate-800 whitespace-nowrap">{_e(r["symbol"])}</td>'
+                f'<td class="py-1.5 pr-3 font-mono font-semibold text-slate-800 whitespace-nowrap">{_e(r["symbol"])}{newflag}</td>'
                 f'<td class="py-1.5 text-slate-500 text-xs">{_e(r.get("name") or "")}</td>'
                 f'</tr>'
             )
+        dropped = blk.get("dropped") or []
+        drop_html = ''
+        if dropped:
+            chips = "、".join(f'{_e(x["symbol"])}(老{x["prod_rank"]}→新{x["new_rank"]})' for x in dropped)
+            drop_html = (f'<div class="text-[11px] text-rose-500 mt-1">⬇️ 被新公式挤出老 Top20：{chips}</div>')
         blocks.append(
-            f'<div class="mb-3"><div class="text-xs font-semibold text-slate-600 mb-1">'
-            f'{mkt_label.get(mkt, mkt)} · 批次 {_e(blk["run_date"])}</div>'
+            f'<div class="mb-4"><div class="text-xs font-semibold text-slate-600 mb-1">'
+            f'{mkt_label.get(mkt, mkt)} · 批次 {_e(blk["run_date"])} · 全池 {blk.get("pool_size","?")} 只 → 各选 Top20</div>'
             '<div class="overflow-x-auto"><table class="w-full text-sm">'
             '<thead><tr class="text-left text-[11px] text-slate-400 border-b border-slate-200">'
             '<th class="py-1 pr-3 text-center font-medium">新名次</th>'
@@ -498,19 +505,21 @@ def _dual_track_html() -> str:
             '<th class="py-1 pr-3 text-center font-medium">升降</th>'
             '<th class="py-1 pr-3 font-medium">代码</th>'
             '<th class="py-1 font-medium">名称</th>'
-            '</tr></thead><tbody>' + "".join(trs) + '</tbody></table></div></div>'
+            '</tr></thead><tbody>' + "".join(trs) + '</tbody></table></div>' + drop_html + '</div>'
         )
 
     return (
         '<details class="mb-5 bg-white rounded-xl shadow-sm border border-amber-200 p-4">'
         '<summary class="cursor-pointer select-none font-bold text-slate-800 flex items-center gap-2 flex-wrap">'
         '🧪 <span>规则试运行：现规则 vs 候选「降估值+评级」</span>'
-        '<span class="text-xs font-normal text-amber-600">（双轨并跑·纯观察·未改生产）</span></summary>'
+        '<span class="text-xs font-normal text-amber-600">（全池同池各选·纯观察·未改生产）</span></summary>'
         '<p class="text-xs text-slate-500 mt-2 mb-3">候选规则 val_down_grade = 估值权重 0.50→0.25 + 加入评级因子 0.20。'
-        '前向真金目前赢生产（美股5日 +3.14% vs +1.87%），但样本仍薄（n20-70），定为<strong>第一候选</strong>观察中，'
-        '<strong>未替换线上打分</strong>。下表＝候选规则会把谁提前(↑绿)/降级(↓红)。研究参考，非投资建议。</p>'
+        '<strong>两套公式在同一批全量候选池（factor_snapshot_universe）各自独立打分、各自选 Top20</strong>，'
+        '不是在生产 Top20 内重排——这才是公平对照。前向真金目前赢生产（美股5日 +3.14% vs +1.87%），但样本仍薄（n20-70），'
+        '定为<strong>第一候选</strong>观察中，<strong>未替换线上打分</strong>。'
+        '<span class="text-emerald-700">🆕新捞入</span>＝候选规则选进、现规则 Top20 没有的票；现名次「榜外」＝现规则把它排在 20 名开外。研究参考，非投资建议。</p>'
         + "".join(blocks) +
-        '<p class="text-[11px] text-slate-400 mt-1">现名次＝现规则权重复算（与线上大致一致）；评级因子美股专属，港/A 退化为估值/反转主导。</p>'
+        '<p class="text-[11px] text-slate-400 mt-1">现名次＝现规则权重在全池复算的排名；评级因子美股专属，港/A 退化为估值/反转主导。</p>'
         '</details>'
     )
 

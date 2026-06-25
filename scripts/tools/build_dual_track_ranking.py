@@ -1,11 +1,16 @@
-"""双轨并跑：现规则(prod_recheck) vs 候选规则(val_down_grade) 对最新一批 picks 重排。
+"""双轨并跑：现规则(prod_recheck) vs 候选规则(val_down_grade)。
 
-纯只读、纯展示——不改生产打分、不进 recommendation_picks。让用户看见候选规则
-把哪些票提前/降级，配合「先观察再切」的纪律（见记忆 project_weight_variant_shadow_pipeline）。
+🅿️0 公平对照硬要求（见 docs/V2/2026-06-25_推荐公式切换_val_down_grade_方案.md）：
+新旧公式**必须基于同一批「全量候选池」factor_snapshot_universe（截断前~全宇宙）
+各自独立打分、各自产出 Top20**，绝不在任一方 Top20 内重排——否则对照失真。
+
+纯只读、纯展示——不改生产打分、不进 recommendation_picks。
 
 产物：data/latest/dual_track_ranking.json
-  { generated_at, candidate, baseline, markets: { US: { run_date, rows: [
-       {symbol,name,prod_rank,new_rank,delta} ... ] } } }
+  { generated_at, candidate, baseline, pool_source, markets: { US: {
+      run_date, pool_size,
+      rows: [ {symbol,name,new_rank,prod_rank,delta,is_new} ...候选Top20 ],
+      dropped: [ {symbol,name,prod_rank,new_rank} ...老进新出 ] } } }
 
 用法:
   python3 -m scripts.tools.build_dual_track_ranking            # 写 JSON
@@ -17,7 +22,7 @@ import argparse
 import json
 import sys
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -27,6 +32,8 @@ sys.path.insert(0, str(REPO / "scripts" / "lib"))
 OUT = REPO / "data" / "latest" / "dual_track_ranking.json"
 BASELINE = "prod_recheck"      # 现规则复算
 CANDIDATE = "val_down_grade"   # 第一候选规则（降估值+评级）
+TOP_N = 20
+POOL_SOURCE = "factor_snapshot_universe"
 
 
 def _connect():
@@ -40,63 +47,135 @@ def _connect():
     return None
 
 
+def _names(conn) -> dict[str, str]:
+    """symbol → name（system_universe + manual_watchlist 兜底）。"""
+    out: dict[str, str] = {}
+    for tbl in ("system_universe", "manual_watchlist"):
+        try:
+            for sym, name in conn.execute(f"SELECT symbol, name FROM {tbl}").fetchall():
+                if sym and name and str(sym).upper() not in out:
+                    out[str(sym).upper()] = name
+        except Exception:
+            pass
+    return out
+
+
+def _inject_grade(conn, rows: list[dict], run_date: str) -> None:
+    """美股按 run_date PIT 注入评级分（复用 replay 的口径/常量）。"""
+    import scripts.tools.replay_weight_variants as rp
+    try:
+        ev = conn.execute(
+            """
+            SELECT symbol, event_date,
+                   CASE WHEN lower(coalesce(action,''))='upgrade' THEN 1 ELSE -1 END
+            FROM analyst_grade_events
+            WHERE market='US' AND lower(coalesce(action,'')) IN ('upgrade','downgrade')
+            """
+        ).fetchall()
+    except Exception:
+        return
+    from collections import defaultdict
+    bag: dict[str, list] = defaultdict(list)
+    for sym, d, sign in ev:
+        bag[str(sym)].append((d, int(sign)))
+    asof = date.fromisoformat(run_date)
+    start = asof - timedelta(days=rp.GRADE_LOOKBACK_DAYS)
+    for r in rows:
+        net = sum(s for d, s in bag.get(r["symbol"], ()) if start < d <= asof)
+        r["scores"]["grade"] = rp.grade_score_from_net(net)
+
+
 def compute() -> dict:
     import scripts.tools.replay_weight_variants as rp
     conn = _connect()
     if conn is None:
         raise RuntimeError("DB 持续被写锁占用")
     try:
-        picks = rp.load_picks(conn)
-        rp.inject_grade_scores(conn, picks)
+        names = _names(conn)
         base_w = rp.VARIANTS[BASELINE]
         cand_w = rp.VARIANTS[CANDIDATE]
         out: dict = {
             "generated_at": datetime.now().isoformat(timespec="seconds"),
             "baseline": BASELINE,
             "candidate": CANDIDATE,
-            "note": "纯展示，不改生产打分；grade 因子美股专属，港/A 退化为估值/反转主导",
+            "pool_source": POOL_SOURCE,
+            "top_n": TOP_N,
+            "note": "全量候选池同池各选再比；grade 美股专属，港/A 退化为估值/反转主导",
             "markets": {},
         }
         for mkt in ("US", "HK", "CN"):
-            pool = [p for p in picks if p["market"] == mkt]
+            last = conn.execute(
+                "SELECT max(run_date) FROM factor_snapshot_universe WHERE market=?", [mkt]
+            ).fetchone()[0]
+            if last is None:
+                continue
+            run_date = str(last)
+            recs = conn.execute(
+                """
+                SELECT symbol, momentum, valuation, reversal, data_usability, f_score
+                FROM factor_snapshot_universe
+                WHERE market=? AND run_date=?
+                """, [mkt, last]
+            ).fetchall()
+            pool = []
+            for sym, mom, val, rev, du, fs in recs:
+                pool.append({
+                    "symbol": str(sym).upper(),
+                    "scores": {"momentum": mom, "valuation": val, "reversal": rev,
+                               "data_usability": du, "f_score": fs},
+                })
             if not pool:
                 continue
-            last = max(p["run_date"] for p in pool)
-            pool = [p for p in pool if p["run_date"] == last]
+            _inject_grade(conn, pool, run_date)   # 美股注入评级；港/A 无表则 grade 缺→中性
+            bw = rp.weights_for_market(base_w, mkt)
+            cw = rp.weights_for_market(cand_w, mkt)
             for p in pool:
-                bw = rp.weights_for_market(base_w, mkt)
-                cw = rp.weights_for_market(cand_w, mkt)
                 p["_b"] = rp.variant_score(p["scores"], bw)[0]
                 p["_c"] = rp.variant_score(p["scores"], cw)[0]
-            b_rank = {p["symbol"]: i + 1 for i, p in enumerate(sorted(pool, key=lambda x: -x["_b"]))}
-            c_rank = {p["symbol"]: i + 1 for i, p in enumerate(sorted(pool, key=lambda x: -x["_c"]))}
+            # 全池各自排名
+            base_sorted = sorted(pool, key=lambda x: -x["_b"])
+            cand_sorted = sorted(pool, key=lambda x: -x["_c"])
+            b_rank = {p["symbol"]: i + 1 for i, p in enumerate(base_sorted)}
+            c_rank = {p["symbol"]: i + 1 for i, p in enumerate(cand_sorted)}
+            base_top = {p["symbol"] for p in base_sorted[:TOP_N]}
+            cand_top = [p["symbol"] for p in cand_sorted[:TOP_N]]
             rows = []
-            for p in sorted(pool, key=lambda x: c_rank[x["symbol"]]):
-                s = p["symbol"]
+            for s in cand_top:
                 rows.append({
-                    "symbol": s,
-                    "name": p.get("name") or "",
-                    "prod_rank": b_rank[s],
-                    "new_rank": c_rank[s],
-                    "delta": b_rank[s] - c_rank[s],  # >0 = 候选规则提前
+                    "symbol": s, "name": names.get(s, ""),
+                    "new_rank": c_rank[s], "prod_rank": b_rank[s],
+                    "delta": b_rank[s] - c_rank[s],
+                    "is_new": s not in base_top,   # 新公式捞进、老公式 Top20 没有
                 })
-            out["markets"][mkt] = {"run_date": last, "rows": rows}
+            dropped = [{
+                "symbol": s, "name": names.get(s, ""),
+                "prod_rank": b_rank[s], "new_rank": c_rank[s],
+            } for s in base_top if s not in set(cand_top)]
+            dropped.sort(key=lambda x: x["prod_rank"])
+            out["markets"][mkt] = {
+                "run_date": run_date, "pool_size": len(pool),
+                "rows": rows, "dropped": dropped,
+            }
         return out
     finally:
         conn.close()
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="双轨并跑 现规则 vs 候选规则 重排")
+    ap = argparse.ArgumentParser(description="双轨并跑 现规则 vs 候选规则（全池）")
     ap.add_argument("--show", action="store_true", help="打印不写")
     args = ap.parse_args()
     data = compute()
     for mkt, blk in data["markets"].items():
-        print(f"== {mkt} {blk['run_date']} ==")
+        print(f"== {mkt} {blk['run_date']} · 全池 {blk['pool_size']} 只 → 各选 Top{TOP_N} ==")
         for r in blk["rows"]:
             d = r["delta"]
             arrow = f"↑{d}" if d > 0 else (f"↓{-d}" if d < 0 else "—")
-            print(f"  {r['symbol']:<6} 现{r['prod_rank']:>2} 新{r['new_rank']:>2} {arrow}")
+            flag = " 🆕" if r["is_new"] else ""
+            print(f"  新{r['new_rank']:>2}  老{r['prod_rank']:>3}  {arrow:>5}  {r['symbol']:<8}{flag}")
+        if blk["dropped"]:
+            print(f"  -- 老 Top{TOP_N} 被新公式挤出: " +
+                  "、".join(f"{x['symbol']}(老{x['prod_rank']}→新{x['new_rank']})" for x in blk["dropped"]))
     if not args.show:
         OUT.parent.mkdir(parents=True, exist_ok=True)
         OUT.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
