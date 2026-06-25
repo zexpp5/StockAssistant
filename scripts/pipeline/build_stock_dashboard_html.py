@@ -431,6 +431,90 @@ def _earnings_calendar_html(rows: list) -> str:
     )
 
 
+def _dual_track_html() -> str:
+    """双轨并跑面板：现规则 vs 候选规则 val_down_grade 重排（纯展示，不改生产）。
+
+    构建期现算（import build_dual_track_ranking.compute），失败则读已有 JSON，
+    再不行返回空串（面板不显示，不拦构建）。
+    """
+    import pathlib
+    repo = pathlib.Path(__file__).resolve().parents[2]
+    data = None
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(repo))
+        from scripts.tools.build_dual_track_ranking import compute as _dt_compute
+        data = _dt_compute()
+        out = repo / "data" / "latest" / "dual_track_ranking.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as exc:
+        print(f"  [warn] 双轨面板现算失败({exc})，尝试读旧 JSON")
+        p = repo / "data" / "latest" / "dual_track_ranking.json"
+        if p.exists():
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                data = None
+    if not data or not data.get("markets"):
+        return ""
+
+    def _e(s):
+        return str(s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    mkt_label = {"US": "美股", "HK": "港股", "CN": "A股"}
+    blocks = []
+    for mkt in ("US", "HK", "CN"):
+        blk = data["markets"].get(mkt)
+        if not blk:
+            continue
+        rows = blk["rows"]
+        trs = []
+        for r in rows[:15]:  # 只显示候选规则前15
+            d = r["delta"]
+            if d > 0:
+                arrow = f'<span class="text-emerald-600 font-semibold">↑{d}</span>'
+            elif d < 0:
+                arrow = f'<span class="text-rose-500 font-semibold">↓{-d}</span>'
+            else:
+                arrow = '<span class="text-slate-300">—</span>'
+            hi = ' bg-emerald-50' if d >= 5 else (' bg-rose-50' if d <= -5 else '')
+            trs.append(
+                f'<tr class="border-b border-slate-100{hi}">'
+                f'<td class="py-1.5 pr-3 text-center font-semibold text-violet-700">{r["new_rank"]}</td>'
+                f'<td class="py-1.5 pr-3 text-center text-slate-400">{r["prod_rank"]}</td>'
+                f'<td class="py-1.5 pr-3 text-center">{arrow}</td>'
+                f'<td class="py-1.5 pr-3 font-mono font-semibold text-slate-800 whitespace-nowrap">{_e(r["symbol"])}</td>'
+                f'<td class="py-1.5 text-slate-500 text-xs">{_e(r.get("name") or "")}</td>'
+                f'</tr>'
+            )
+        blocks.append(
+            f'<div class="mb-3"><div class="text-xs font-semibold text-slate-600 mb-1">'
+            f'{mkt_label.get(mkt, mkt)} · 批次 {_e(blk["run_date"])}</div>'
+            '<div class="overflow-x-auto"><table class="w-full text-sm">'
+            '<thead><tr class="text-left text-[11px] text-slate-400 border-b border-slate-200">'
+            '<th class="py-1 pr-3 text-center font-medium">新名次</th>'
+            '<th class="py-1 pr-3 text-center font-medium">现名次</th>'
+            '<th class="py-1 pr-3 text-center font-medium">升降</th>'
+            '<th class="py-1 pr-3 font-medium">代码</th>'
+            '<th class="py-1 font-medium">名称</th>'
+            '</tr></thead><tbody>' + "".join(trs) + '</tbody></table></div></div>'
+        )
+
+    return (
+        '<details class="mb-5 bg-white rounded-xl shadow-sm border border-amber-200 p-4">'
+        '<summary class="cursor-pointer select-none font-bold text-slate-800 flex items-center gap-2 flex-wrap">'
+        '🧪 <span>规则试运行：现规则 vs 候选「降估值+评级」</span>'
+        '<span class="text-xs font-normal text-amber-600">（双轨并跑·纯观察·未改生产）</span></summary>'
+        '<p class="text-xs text-slate-500 mt-2 mb-3">候选规则 val_down_grade = 估值权重 0.50→0.25 + 加入评级因子 0.20。'
+        '前向真金目前赢生产（美股5日 +3.14% vs +1.87%），但样本仍薄（n20-70），定为<strong>第一候选</strong>观察中，'
+        '<strong>未替换线上打分</strong>。下表＝候选规则会把谁提前(↑绿)/降级(↓红)。研究参考，非投资建议。</p>'
+        + "".join(blocks) +
+        '<p class="text-[11px] text-slate-400 mt-1">现名次＝现规则权重复算（与线上大致一致）；评级因子美股专属，港/A 退化为估值/反转主导。</p>'
+        '</details>'
+    )
+
+
 # ============================================================
 # 百倍股的 5 个共同条件
 # ============================================================
@@ -1408,6 +1492,7 @@ window.echarts = window.echarts || {
 
   <!-- 今日候选 view -->
   <div id="disc-view-today">
+    {DUAL_TRACK_PANEL}
     <div id="discovery-empty" class="hidden text-center py-12 text-slate-500 bg-white rounded-xl">
       暂无AI 推荐数据(运行 <code class="text-xs bg-slate-200 px-1.5 py-0.5 rounded">python3 scripts/tools/build_pool_recommendations.py</code> 生成)
     </div>
@@ -22626,6 +22711,10 @@ def build():
     _earnings_cal = _load_upcoming_earnings_for_dashboard()
     print(f"  近期财报 (自选∪信号组 earnings_upcoming): {len(_earnings_cal)} 条 · 源 data/event_calendar_us.json")
     html = html.replace("{EARNINGS_CALENDAR}", _earnings_calendar_html(_earnings_cal))
+
+    _dual = _dual_track_html()
+    print(f"  双轨规则试运行面板: {'已渲染' if _dual else '空(无数据/现算失败)'}")
+    html = html.replace("{DUAL_TRACK_PANEL}", _dual)
 
     theme_sections = "\n".join(theme_section_html(t, records) for t in THEMES)
     html = html.replace("{THEME_SECTIONS}", theme_sections)
