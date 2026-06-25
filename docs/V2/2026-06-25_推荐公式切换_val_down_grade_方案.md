@@ -14,9 +14,23 @@
 
 ---
 
+## 🅿️0 前置硬约束：新旧公式必须在「全量候选池」同时打分（不补这条不许开工）
+
+**问题**：现双轨脚本 `build_dual_track_ranking.py`(L49) 走 `replay.load_picks` → 读 `recommendation_picks`（**生产 Top20**）再重排。一旦生产主规则切成 val_down_grade，`recommendation_picks` 里**已经是新公式预筛过的票**，老公式在这批里重排 = **「在新公式筛过的结果里比老公式」**，对照失真——你以为在比新旧公式，其实在比"新公式选剩的老公式"。前向 alpha 对照同理会被污染。
+
+**硬要求**：
+1. 新公式、老公式（legacy_baseline）**必须基于同一批「全量合格候选池」分别独立打分、各自产出 Top20**，绝不在任一方的 Top20 内做影子重排。
+2. 全量池数据源 = **`factor_snapshot_universe`**（build_v2 截断前的全宇宙快照，~370 只/天；实测表已存在、今日 6-25 有数）。**不是 `recommendation_picks`。**
+3. 影响两处实现，实施时一并改：
+   - `build_dual_track_ranking.py`：取数从 `load_picks`(recommendation_picks) 改为读 `factor_snapshot_universe` 当日全量，对每只算 新/老 两套分 → 各自排名 → 对照。
+   - `alpha_trend_logger` 双轨（§4 #5b）：新旧 alpha 必须来自各自在全量池选出的 Top-N，而非共享同一批 picks。
+4. 验证口径一句话：**「同池、各选、再比」**。
+
+---
+
 ## 1. 一句话
 
-把美股生产打分公式从「估值主导」换成 **val_down_grade（估值砍半 + 加入评级因子）**，老公式降级为影子 baseline 继续对照。港/A 是否切，见 §6 待决项。
+把美股生产打分公式从「估值主导」换成 **val_down_grade（估值砍半 + 加入评级因子）**，老公式降级为影子 baseline 继续对照。**港/A 暂不切**（见 §6）。
 
 ## 2. 为什么切（证据，按"前向优先"排序）
 
@@ -56,7 +70,7 @@
 | 0 | **「只切美股」不是天然支持，是本方案最大施工点**：现 `build_v2_recommendations.py` 是**全局单一** `STRATEGY_VERSION`(L47) + **统一打分入口** `_factor_scores(row)`(L252) **无分市场分支**。直接改权重会**三市场一起变**。必须改成分市场：`if market=='US' → val_down_grade else 老公式`，并在 **params_json / 结果说明里写清「混合版本：US=val_down_grade, HK/A=legacy」**，否则策略验证会把三市场当同一公式误读 | build_v2 | 🟡 中 |
 | 1 | 改权重 + F分入总分（**仅 US 分支**） | `scripts/tools/build_v2_recommendations.py` `_factor_scores`(约 L256-299) | 🟢 小 |
 | 2 | **接入评级因子到生产打分**：打分时 PIT 查 `analyst_grade_events` 算窗口内净上调 → `grade_score_from_net`，写入 scores 并入总分。逻辑复用 `replay_weight_variants.inject_grade_scores` / `grade_score_from_net`，建议下沉到 `stock_research/core/`（单一来源，replay 与生产共用） | build_v2 + 新 core 模块 | 🟡 中 |
-| 3 | F分/评级**缺失兜底**：F分美/港才有、评级美股专属 → 缺失记中性 50 或按市场归一化（见 §6） | build_v2 | 🟢 小 |
+| 3 | F分/评级**缺失兜底**：仅美股走新公式，**美股缺 F分/评级时记中性 50**；**港/A 不进入新公式、维持 legacy**（不做归一化，不切就不存在缺失问题） | build_v2 | 🟢 小 |
 | 4 | 老公式注册为**影子 baseline**：`prod_recheck` 已在 replay VARIANTS；夜班 shadow 跑它对照 | shadow 配置 | 🟢 小 |
 | 5 | **升 strategy_version → `tech_ai_v3_us_val_down_grade`** + 下游对齐：打分说明串(L1525-1526)、production_acceptance_check、strategy_eval 口径 | 多文件 | 🟡 中 |
 | 5b | **alpha_trend_logger 改双轨**：现只记"最新版本"，需改成同时记 **新公式 vs 老公式(legacy_baseline)** 的 1D/5D alpha，喂 §6 的回滚线判断；历史曲线保留旧版本不覆盖 | alpha_trend_logger.py | 🟢 小 |
@@ -72,6 +86,13 @@
 **只切美股 AI 推荐主排序，混合版本，试运行。** 具体：
 
 - **版本号**：`tech_ai_v3_us_val_down_grade`（名字里带 `us_`，自带"仅美股"语义）；混合版本里 HK/A 仍记为 legacy。
+- **⚠️ strategy_version 是 run 级别、不分市场**——同一批 run 里 HK/A 仍是旧公式，所以**必须在 `params_json` 里逐市场写清**，否则策略验证看见同一个 v3 会误以为三市场都换了：
+  ```
+  per_market_formula:
+    US = val_down_grade
+    HK = legacy
+    A  = legacy
+  ```
 - **美股**：上完整 val_down_grade（含评级 + F分入总分）。
 - **港股 / A股**：**暂不切**，维持现公式。理由：评级因子本就美股专属（analyst_grade_events 只有美股），A 股记忆判定是"池子问题，权重救不了"。
 - **页面标注**：AI 推荐页（美股）显示「当前主规则：tech_ai_v3_us_val_down_grade · 🧪试运行」。
@@ -88,7 +109,9 @@
 ## 8. 验收（实施后自测）
 
 - [ ] 新公式出单的美股 top10 与双轨面板「新名次」一致（同源校验）
-- [ ] 港/A 按选定方案正确处理（A：维持现公式；B：归一化无 grade）
+- [ ] **【P0】双轨对照基于 `factor_snapshot_universe` 全量池「同池各选再比」**，新旧公式各自独立产出 Top20，不在任一方 Top20 内重排（核 `build_dual_track_ranking.py` + alpha_logger 已改源）
+- [ ] 港/A 维持 legacy，结果**不因本次切换变化**（切换前后港/A 名单逐只一致）
+- [ ] `params_json` 已逐市场写 per_market_formula（US=val_down_grade / HK=legacy / A=legacy）
 - [ ] strategy_version 已升，alpha_trend_logger / dashboard 验证按新版本重新计数（从 0 起）
 - [ ] 老公式 baseline 在影子正常产出，可对照
 - [ ] `git revert` 演练一次确认可回滚
