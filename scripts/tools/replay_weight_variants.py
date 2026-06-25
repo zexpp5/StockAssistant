@@ -30,6 +30,12 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "scripts" / "lib"))
 
 from stock_db import get_db  # noqa: E402
+from stock_research.core.analyst_grade_factor import (  # noqa: E402
+    GRADE_LOOKBACK_DAYS,
+    fetch_grade_events,
+    grade_score_from_net,
+    score_symbol_from_events,
+)
 from stock_research.core.strategy_eval import summarize_distribution  # noqa: E402
 
 OUT_JSON = REPO / "data" / "latest" / "weight_replay_report.json"
@@ -51,17 +57,6 @@ FACTOR_KEYS: dict[str, tuple[str, ...]] = {
     # 2026-06-12 IC 验证 PASS: 20d IC=+0.042 t=2.25,五个半年切片全正
     "grade": ("grade",),
 }
-
-GRADE_LOOKBACK_DAYS = 30
-
-
-def grade_score_from_net(net_upgrades: int) -> float:
-    """评级净上调 → 0-100 分(预注册公式,单一来源,shadow 机器复用)。
-
-    net=±4 封顶:50 + 12.5×net。多数票多数日 net=0 → 中性 50。
-    """
-    return max(0.0, min(100.0, 50.0 + 12.5 * float(net_upgrades)))
-
 
 # 变体矩阵：生产基线 + 结构性改法 + 单因子消融
 VARIANTS: dict[str, dict[str, float]] = {
@@ -146,30 +141,16 @@ def inject_grade_scores(conn, picks: list[dict[str, Any]]) -> int:
 
     表不存在/为空时静默跳过(grade 因子缺失 → variant_score 记中性 50)。
     """
-    try:
-        rows = conn.execute(
-            """
-            SELECT symbol, event_date,
-                   CASE WHEN lower(coalesce(action,''))='upgrade' THEN 1 ELSE -1 END AS sign
-            FROM analyst_grade_events
-            WHERE market='US' AND lower(coalesce(action,'')) IN ('upgrade','downgrade')
-            """
-        ).fetchall()
-    except Exception:
+    ev = fetch_grade_events(conn, market="US")
+    if not ev:
         return 0
-    from collections import defaultdict as _dd
-    from datetime import date as _date, timedelta as _td
-    ev: dict[str, list[tuple[Any, int]]] = _dd(list)
-    for symbol, d, sign in rows:
-        ev[str(symbol)].append((d, int(sign)))
     injected = 0
     for pick in picks:
         if pick["market"] != "US":
             continue
-        asof = _date.fromisoformat(pick["run_date"])
-        start = asof - _td(days=GRADE_LOOKBACK_DAYS)
-        net = sum(s for d, s in ev.get(pick["symbol"], ()) if start < d <= asof)
-        pick["scores"]["grade"] = grade_score_from_net(net)
+        pick["scores"]["grade"] = score_symbol_from_events(
+            ev, pick["symbol"], pick["run_date"], lookback_days=GRADE_LOOKBACK_DAYS
+        )
         injected += 1
     return injected
 

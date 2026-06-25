@@ -5,6 +5,9 @@
 各自独立打分、各自产出 Top20**，绝不在任一方 Top20 内重排——否则对照失真。
 
 纯只读、纯展示——不改生产打分、不进 recommendation_picks。
+注意：池源是全量 factor_snapshot_universe；但 US 会先套共同资格闸
+eligibility in (buyable,research_only)，避免把已被身份/证据拦截的票
+重新拉进公式对照。
 
 产物：data/latest/dual_track_ranking.json
   { generated_at, candidate, baseline, pool_source, markets: { US: {
@@ -22,7 +25,7 @@ import argparse
 import json
 import sys
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -30,10 +33,13 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "scripts" / "lib"))
 
 OUT = REPO / "data" / "latest" / "dual_track_ranking.json"
-BASELINE = "prod_recheck"      # 现规则复算
+BASELINE = "legacy_baseline"   # 对外展示名：老公式影子基线
+BASELINE_VARIANT = "prod_recheck"      # replay 里的老公式复算权重
 CANDIDATE = "val_down_grade"   # 第一候选规则（降估值+评级）
 TOP_N = 20
 POOL_SOURCE = "factor_snapshot_universe"
+US_MARKET = "US"
+US_RECOMMENDABLE_ELIGIBILITY = {"buyable", "research_only"}
 
 
 def _connect():
@@ -60,29 +66,38 @@ def _names(conn) -> dict[str, str]:
     return out
 
 
-def _inject_grade(conn, rows: list[dict], run_date: str) -> None:
-    """美股按 run_date PIT 注入评级分（复用 replay 的口径/常量）。"""
-    import scripts.tools.replay_weight_variants as rp
+def _table_columns(conn, table: str) -> set[str]:
     try:
-        ev = conn.execute(
-            """
-            SELECT symbol, event_date,
-                   CASE WHEN lower(coalesce(action,''))='upgrade' THEN 1 ELSE -1 END
-            FROM analyst_grade_events
-            WHERE market='US' AND lower(coalesce(action,'')) IN ('upgrade','downgrade')
-            """
-        ).fetchall()
+        return {str(r[1]) for r in conn.execute(f"PRAGMA table_info('{table}')").fetchall()}
     except Exception:
-        return
-    from collections import defaultdict
-    bag: dict[str, list] = defaultdict(list)
-    for sym, d, sign in ev:
-        bag[str(sym)].append((d, int(sign)))
+        return set()
+
+
+def _inject_grade(conn, rows: list[dict], run_date: str) -> None:
+    """美股按 run_date PIT 注入评级分；已有快照 grade 时不覆盖。"""
+    from stock_research.core.analyst_grade_factor import (
+        NEUTRAL_GRADE_SCORE,
+        fetch_grade_events,
+        score_symbol_from_events,
+    )
+    ev = fetch_grade_events(conn, market=US_MARKET)
     asof = date.fromisoformat(run_date)
-    start = asof - timedelta(days=rp.GRADE_LOOKBACK_DAYS)
     for r in rows:
-        net = sum(s for d, s in bag.get(r["symbol"], ()) if start < d <= asof)
-        r["scores"]["grade"] = rp.grade_score_from_net(net)
+        if r.get("market") != US_MARKET:
+            continue
+        if r["scores"].get("grade") is not None:
+            continue
+        r["scores"]["grade"] = (
+            score_symbol_from_events(ev, r["symbol"], asof)
+            if ev else NEUTRAL_GRADE_SCORE
+        )
+
+
+def _candidate_weights_for_market(rp, market: str) -> dict[str, float]:
+    """只有 US 切候选公式；非 US 与 baseline 相同，用来证明港/A 未切。"""
+    if market == US_MARKET:
+        return rp.weights_for_market(rp.VARIANTS[CANDIDATE], market)
+    return rp.weights_for_market(rp.VARIANTS[BASELINE_VARIANT], market)
 
 
 def compute() -> dict:
@@ -92,15 +107,15 @@ def compute() -> dict:
         raise RuntimeError("DB 持续被写锁占用")
     try:
         names = _names(conn)
-        base_w = rp.VARIANTS[BASELINE]
-        cand_w = rp.VARIANTS[CANDIDATE]
+        base_w = rp.VARIANTS[BASELINE_VARIANT]
         out: dict = {
             "generated_at": datetime.now().isoformat(timespec="seconds"),
             "baseline": BASELINE,
+            "baseline_variant": BASELINE_VARIANT,
             "candidate": CANDIDATE,
             "pool_source": POOL_SOURCE,
             "top_n": TOP_N,
-            "note": "全量候选池同池各选再比；grade 美股专属，港/A 退化为估值/反转主导",
+            "note": "全量候选池同池各选再比；本切换只作用于 US，HK/CN candidate=baseline 用于证明未切。",
             "markets": {},
         }
         for mkt in ("US", "HK", "CN"):
@@ -110,25 +125,35 @@ def compute() -> dict:
             if last is None:
                 continue
             run_date = str(last)
+            cols = _table_columns(conn, "factor_snapshot_universe")
+            grade_expr = "grade" if "grade" in cols else "NULL AS grade"
+            formula_expr = "formula" if "formula" in cols else "NULL AS formula"
             recs = conn.execute(
-                """
-                SELECT symbol, momentum, valuation, reversal, data_usability, f_score
+                f"""
+                SELECT symbol, momentum, valuation, reversal, data_usability, f_score,
+                       {grade_expr}, {formula_expr}, eligibility, action
                 FROM factor_snapshot_universe
                 WHERE market=? AND run_date=?
                 """, [mkt, last]
             ).fetchall()
             pool = []
-            for sym, mom, val, rev, du, fs in recs:
+            for sym, mom, val, rev, du, fs, grade, formula, eligibility, action in recs:
+                if mkt == US_MARKET and str(eligibility or "") not in US_RECOMMENDABLE_ELIGIBILITY:
+                    continue
                 pool.append({
+                    "market": mkt,
                     "symbol": str(sym).upper(),
                     "scores": {"momentum": mom, "valuation": val, "reversal": rev,
-                               "data_usability": du, "f_score": fs},
+                               "data_usability": du, "f_score": fs, "grade": grade},
+                    "snapshot_formula": formula,
+                    "eligibility": eligibility,
+                    "action": action,
                 })
             if not pool:
                 continue
-            _inject_grade(conn, pool, run_date)   # 美股注入评级；港/A 无表则 grade 缺→中性
+            _inject_grade(conn, pool, run_date)
             bw = rp.weights_for_market(base_w, mkt)
-            cw = rp.weights_for_market(cand_w, mkt)
+            cw = _candidate_weights_for_market(rp, mkt)
             for p in pool:
                 p["_b"] = rp.variant_score(p["scores"], bw)[0]
                 p["_c"] = rp.variant_score(p["scores"], cw)[0]
@@ -154,6 +179,13 @@ def compute() -> dict:
             dropped.sort(key=lambda x: x["prod_rank"])
             out["markets"][mkt] = {
                 "run_date": run_date, "pool_size": len(pool),
+                "common_gate": (
+                    "US eligibility in buyable/research_only before each formula ranks"
+                    if mkt == US_MARKET else "legacy market: no P0 US eligibility filter"
+                ),
+                "candidate_active": mkt == US_MARKET,
+                "baseline_weights": bw,
+                "candidate_weights": cw,
                 "rows": rows, "dropped": dropped,
             }
         return out

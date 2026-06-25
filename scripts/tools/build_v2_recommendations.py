@@ -28,6 +28,10 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
 from stock_research import config  # noqa: E402
+from stock_research.core.analyst_grade_factor import (  # noqa: E402
+    NEUTRAL_GRADE_SCORE,
+    build_grade_score_map,
+)
 from stock_research.core.tech_growth_layers import (  # noqa: E402
     CLASSIFICATION_VERSION,
     classify_tech_growth_layer,
@@ -44,8 +48,12 @@ _PRICE_ACTION_REVIEW_SCORE_CAP = 59.99
 _DATA_USABILITY_REVIEW_SCORE_CAP = 59.99
 _DATA_USABILITY_MIN_BUY_SCORE = 70.0
 _STALE_SOURCE_DAYS = 10
-STRATEGY_VERSION = "tech_ai_v2_usable_data_gate"
-MODEL_VERSION = "v2_rule_factor_2026_06_usable_data_gate"
+LEGACY_STRATEGY_VERSION = "tech_ai_v2_usable_data_gate"
+US_VAL_DOWN_STRATEGY_VERSION = "tech_ai_v3_us_val_down_grade"
+LEGACY_MODEL_VERSION = "v2_rule_factor_usable_data_gate"
+US_VAL_DOWN_MODEL_VERSION = "v3_rule_factor_2026_06_us_val_down_grade"
+US_FORMULA_NAME = "val_down_grade"
+LEGACY_FORMULA_NAME = "legacy_usable_data_gate"
 DATA_USABILITY_AUDIT_PATH = REPO / "data" / "latest" / "recommendation_data_usability_audit.json"
 
 EVIDENCE_STATUSES = {"confirmed", "needs_review", "candidate", "stale", "missing"}
@@ -62,18 +70,49 @@ BLOCKING_RISK_CODES = {
 }
 WAIT_ENTRY_RISK_CODES = {
     "ACUTE_PRICE_PULLBACK",
+    "SHORT_TERM_RUNUP_CHASE_RISK",
+    "BIG_WINNER_PULLBACK_REVIEW",
     "OVERHEATED_1Y",
 }
 OVERHEATED_FLAG_CODE = "OVERHEATED_1Y"
 # ② 过热护栏·动作闸开关（2026-06-11，规则文档 §18.7）：
-#   shadow（默认）= OVERHEATED_1Y 仍计算并作为警示展示，但不下调 recommendation 的 action，
-#                   等 strategy_eval 历史回算追认其有效后再开（守"先验证再上"红线）；
+#   shadow        = OVERHEATED_1Y 仍计算并作为警示展示，但不下调 recommendation 的 action；
 #   active        = 过热把 buyable 下调为 wait_entry（同伙原行为）。
 # 真钱安全网：无论哪种模式，AI 组合方案(portfolio_plans)始终硬排除过热票，避免抛物线顶部进自动组合。
-OVERHEATED_ACTION_GATE_MODE = (os.environ.get("OVERHEATED_ACTION_GATE_MODE") or "shadow").strip().lower()
+OVERHEATED_ACTION_GATE_MODE = (os.environ.get("OVERHEATED_ACTION_GATE_MODE") or "active").strip().lower()
 MARKET_PHASE_ID = "ai_infra_buildout_to_inference"
 MARKET_PHASE_NAME = "AI 数据中心建设后半段 + 推理/Agent/企业集成前半段"
 MARKET_PHASE_SCOPE = "US/global_tech"
+
+
+def _use_us_val_down_grade() -> bool:
+    """Production activation guard.
+
+    New formula code and shadow comparison are available by default, but live US
+    production only flips when explicitly enabled. This prevents scheduled runs
+    from silently activating a formula that has not cleared full-pool dual-track
+    validation.
+    """
+    return str(os.environ.get("US_VAL_DOWN_GRADE_ACTIVE") or "").strip().lower() in {
+        "1", "true", "yes", "active", "on",
+    }
+
+
+def _current_strategy_version() -> str:
+    return US_VAL_DOWN_STRATEGY_VERSION if _use_us_val_down_grade() else LEGACY_STRATEGY_VERSION
+
+
+def _current_model_version() -> str:
+    return US_VAL_DOWN_MODEL_VERSION if _use_us_val_down_grade() else LEGACY_MODEL_VERSION
+
+
+def _current_per_market_formula() -> dict[str, str]:
+    return {
+        "US": US_FORMULA_NAME if _use_us_val_down_grade() else LEGACY_FORMULA_NAME,
+        "HK": LEGACY_FORMULA_NAME,
+        "CN": LEGACY_FORMULA_NAME,
+        "A": LEGACY_FORMULA_NAME,
+    }
 
 
 def _score_lower_better(value: Any, good: float, bad: float, missing: float = 30.0) -> float:
@@ -262,19 +301,41 @@ def _factor_scores(row: dict[str, Any]) -> dict[str, Any]:
     coverage = sum(1 for key in coverage_fields if row.get(key) is not None) / len(coverage_fields)
     field_coverage_quality = coverage * 100.0
     data_usability = _data_usability_score(row, coverage)
-    # 2026-05-26: momentum 0.42→0.15、valuation 0.38→0.65（IC 审计判 momentum 失效）。
-    # 2026-05-27: 引入 reversal 因子 — calibrated_factor_weights.json 判 reversal
-    # 🟢 strong (IC=0.062, hit=72.2%)，是 V2 唯一被独立验证的 alpha。reversal 子权重
-    # 0.15 由 _load_reversal_weight() 从 calibrated 读，IC 失效时自动归零、回到
-    # 旧公式 (0.15·mom + 0.65·val + 0.20·dq)，跟 IC audit 单一来源对齐。
-    rev_w = _load_reversal_weight()
-    val_w = 0.65 - rev_w  # reversal 从 valuation 切，保持总权重 1.0
-    total = (
-        0.15 * momentum
-        + val_w * valuation
-        + rev_w * reversal
-        + 0.20 * data_usability
-    )
+
+    f_score_raw = row.get("_factor_meta_f_score")
+    f_score_norm = None
+    if f_score_raw is not None:
+        f_score_norm = round(float(f_score_raw) / 9.0 * 100.0, 2)
+
+    market = str(row.get("market") or "").upper()
+    formula = LEGACY_FORMULA_NAME
+    grade_score = _as_float(row.get("_analyst_grade_score"))
+    if market == P0_US_MARKET and _use_us_val_down_grade():
+        # 2026-06-25: 美股 val_down_grade 候选公式。
+        # 默认只在 shadow/dual-track 验证；显式 US_VAL_DOWN_GRADE_ACTIVE=1 后才切生产。
+        # 只切 US；HK/CN 继续走 legacy。data_usability 不再进 US total，
+        # 但仍由 _apply_data_usability_gate 控制能否进入买入候选。
+        formula = US_FORMULA_NAME
+        f_component = f_score_norm if f_score_norm is not None else 50.0
+        grade_component = grade_score if grade_score is not None else NEUTRAL_GRADE_SCORE
+        total = (
+            0.15 * momentum
+            + 0.25 * valuation
+            + 0.20 * reversal
+            + 0.20 * f_component
+            + 0.20 * grade_component
+        )
+    else:
+        # legacy: 2026-05-26 momentum 0.42→0.15、valuation 0.38→0.65；
+        # 2026-05-27 引入 reversal，子权重由 _load_reversal_weight() 控制。
+        rev_w = _load_reversal_weight()
+        val_w = 0.65 - rev_w  # reversal 从 valuation 切，保持总权重 1.0
+        total = (
+            0.15 * momentum
+            + val_w * valuation
+            + rev_w * reversal
+            + 0.20 * data_usability
+        )
     scores: dict[str, Any] = {
         "valuation": round(valuation, 2),
         "momentum": round(momentum, 2),
@@ -285,13 +346,20 @@ def _factor_scores(row: dict[str, Any]) -> dict[str, Any]:
         "data_usability": round(data_usability, 2),
         "field_coverage_quality": round(field_coverage_quality, 2),
         "coverage": round(coverage, 4),
+        "formula": formula,
         "total": round(total, 2),
     }
     # F-Score / Piotroski 已计算入 factor_metadata 时透传（compute_piotroski_v2.py 写入）
-    # 当前数据接入：A 股 akshare 财报、美/港股 待 FMP/yfinance 财报源激活
-    f_score = row.get("_factor_meta_f_score")
-    if f_score is not None:
-        scores["f_score"] = round(float(f_score) / 9.0 * 100.0, 2)  # 标准化到 0-100
+    # US 新公式缺失时记中性 50，HK/CN legacy 只透传可用值。
+    if f_score_norm is not None:
+        scores["f_score"] = f_score_norm
+    elif market == P0_US_MARKET and _use_us_val_down_grade():
+        scores["f_score"] = 50.0
+        scores["f_score_missing_neutral"] = True
+    if market == P0_US_MARKET and _use_us_val_down_grade():
+        scores["grade"] = round(grade_score if grade_score is not None else NEUTRAL_GRADE_SCORE, 2)
+        if grade_score is None:
+            scores["grade_missing_neutral"] = True
     quality_score = row.get("_factor_meta_quality_score")
     if quality_score is not None:
         scores["quality"] = round(float(quality_score), 2)
@@ -873,6 +941,8 @@ def _build_data_usability_audit(
     selected: list[dict[str, Any]],
     *,
     run_id: str,
+    strategy_version: str,
+    model_version: str,
     generated_at: datetime,
 ) -> dict[str, Any]:
     selected_rank: dict[tuple[Any, Any], int] = {}
@@ -950,8 +1020,8 @@ def _build_data_usability_audit(
     return {
         "generated_at": generated_at.isoformat(timespec="seconds"),
         "run_id": run_id,
-        "strategy_version": STRATEGY_VERSION,
-        "model_version": MODEL_VERSION,
+        "strategy_version": strategy_version,
+        "model_version": model_version,
         "candidate_count": len(scored),
         "selected_count": len(selected),
         "blocked_count": len(blocked),
@@ -1072,6 +1142,19 @@ def _quality_flags(row: dict[str, Any]) -> list[dict[str, Any]]:
         y1 = float(row.get("one_year_pct"))
     except (TypeError, ValueError):
         y1 = None
+    m1 = _as_float(row.get("one_month_pct"))
+    if m1 is not None and m1 >= 40:
+        flags.append({
+            "code": "SHORT_TERM_RUNUP_CHASE_RISK",
+            "severity": "medium",
+            "message": f"近1月涨幅 {m1:.0f}%（短线已急涨，先等回撤/确认，不追高）",
+        })
+    if y1 is not None and y1 >= 100 and m1 is not None and m1 <= -15:
+        flags.append({
+            "code": "BIG_WINNER_PULLBACK_REVIEW",
+            "severity": "medium",
+            "message": f"1Y 涨幅 {y1:.0f}% 后近1月回撤 {m1:.0f}%（强势股急回撤，先等企稳）",
+        })
     if y1 is not None and y1 > 200:
         flags.append({
             "code": "OVERHEATED_1Y",
@@ -1115,9 +1198,13 @@ def _reason(row: dict[str, Any]) -> str:
     scores = row["factor_scores"]
     momentum_date = str(row.get("momentum_trade_date") or "")[:10] or "missing"
     fundamentals_date = str(row.get("fundamentals_trade_date") or "")[:10] or "missing"
+    grade_hint = ""
+    if str(row.get("market") or "").upper() == P0_US_MARKET:
+        grade_hint = f", grade={scores.get('grade', NEUTRAL_GRADE_SCORE)}"
     return (
+        f"formula={scores.get('formula', LEGACY_FORMULA_NAME)}; "
         f"momentum={scores['momentum']}, valuation={scores['valuation']}, "
-        f"coverage={scores['coverage']}; "
+        f"reversal={scores['reversal']}{grade_hint}, coverage={scores['coverage']}; "
         f"momentum_source=price_daily:{momentum_date}, "
         f"valuation_source=price_daily:{fundamentals_date}"
     )
@@ -1303,12 +1390,14 @@ def _archive_factor_snapshot(
             symbol VARCHAR NOT NULL,
             run_id VARCHAR,
             strategy_version VARCHAR,
+            formula VARCHAR,
             total_score DOUBLE,
             momentum DOUBLE,
             valuation DOUBLE,
             reversal DOUBLE,
             data_usability DOUBLE,
             f_score DOUBLE,
+            grade DOUBLE,
             quality DOUBLE,
             eligibility VARCHAR,
             action VARCHAR,
@@ -1318,6 +1407,8 @@ def _archive_factor_snapshot(
         )
         """
     )
+    conn.execute("ALTER TABLE factor_snapshot_universe ADD COLUMN IF NOT EXISTS formula VARCHAR")
+    conn.execute("ALTER TABLE factor_snapshot_universe ADD COLUMN IF NOT EXISTS grade DOUBLE")
     by_market: dict[str, list[dict[str, Any]]] = {}
     for row in scored:
         by_market.setdefault(str(row.get("market") or ""), []).append(row)
@@ -1329,17 +1420,17 @@ def _archive_factor_snapshot(
             conn.execute(
                 """
                 INSERT OR REPLACE INTO factor_snapshot_universe
-                (run_date, market, symbol, run_id, strategy_version, total_score,
-                 momentum, valuation, reversal, data_usability, f_score, quality,
+                (run_date, market, symbol, run_id, strategy_version, formula, total_score,
+                 momentum, valuation, reversal, data_usability, f_score, grade, quality,
                  eligibility, action, market_rank, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 """,
                 [
                     run_date, row.get("market"), row.get("symbol"), run_id,
-                    strategy_version, row.get("total_score"),
+                    strategy_version, scores.get("formula"), row.get("total_score"),
                     scores.get("momentum"), scores.get("valuation"), scores.get("reversal"),
                     scores.get("data_usability", scores.get("data_quality")),
-                    scores.get("f_score"), scores.get("quality"),
+                    scores.get("f_score"), scores.get("grade"), scores.get("quality"),
                     scores.get("eligibility"), scores.get("action"), rank,
                 ],
             )
@@ -1374,11 +1465,24 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
     ).fetchone()[0])
     price_daily_count = int(conn.execute("SELECT COUNT(*) FROM price_daily").fetchone()[0])
     candidates = _load_candidates(conn)
+    us_grade_scores = build_grade_score_map(
+        conn,
+        {str(r.get("symbol") or "").upper() for r in candidates if str(r.get("market") or "").upper() == P0_US_MARKET},
+        now.date(),
+        market=P0_US_MARKET,
+    )
+    for row in candidates:
+        if str(row.get("market") or "").upper() == P0_US_MARKET:
+            row["_analyst_grade_score"] = us_grade_scores.get(
+                str(row.get("symbol") or "").upper(),
+                NEUTRAL_GRADE_SCORE,
+            )
     if market_phase_snapshot_id is None:
         market_phase_snapshot_id = f"phase_{now.strftime('%Y%m%d')}_{MARKET_PHASE_ID}"
     run_id = f"rec_{now.strftime('%Y%m%d_%H%M%S')}_system_tech"
-    strategy_version = STRATEGY_VERSION
-    model_version = MODEL_VERSION
+    strategy_version = _current_strategy_version()
+    model_version = _current_model_version()
+    per_market_formula = _current_per_market_formula()
     scored: list[dict[str, Any]] = []
     for row in candidates:
         scores = _factor_scores(row)
@@ -1428,6 +1532,8 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
         scored,
         selected,
         run_id=run_id,
+        strategy_version=strategy_version,
+        model_version=model_version,
         generated_at=now,
     )
     data_usability_audit["p0_eligibility_gate"] = _build_p0_eligibility_gate_summary(selected, us_gated_out)
@@ -1438,6 +1544,10 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
             "db_path": str(db_path),
             "run_id": run_id,
             "dry_run": True,
+            "strategy_version": strategy_version,
+            "model_version": model_version,
+            "per_market_formula": per_market_formula,
+            "legacy_strategy_version": LEGACY_STRATEGY_VERSION,
             "pool_membership_count": pool_membership_count,
             "price_daily_count": price_daily_count,
             "candidate_count": len(candidates),
@@ -1483,12 +1593,36 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
         [
             strategy_version,
             (
-                "V2 system tech universe rule-factor strategy with usable-data gate, "
-                "price-action review gate, invalid valuation-ratio guard, and buy-only portfolio eligibility."
+                "V3 mixed-market system tech strategy: US production ranking uses val_down_grade "
+                "(lower valuation weight + f_score + analyst grade); HK/CN keep legacy usable-data gate. "
+                "Old US formula remains tracked as shadow baseline via full-pool dual track."
             ),
             json.dumps({
+                "previous_strategy_version": LEGACY_STRATEGY_VERSION,
+                "model_version": model_version,
                 "top_per_market": top_per_market,
                 "portfolio_size": portfolio_size,
+                "per_market_formula": per_market_formula,
+                "us_val_down_grade_active": _use_us_val_down_grade(),
+                "activation_guard": "set US_VAL_DOWN_GRADE_ACTIVE=1 to activate US val_down_grade in production",
+                "us_formula_weights": {
+                    "momentum": 0.15,
+                    "valuation": 0.25,
+                    "reversal": 0.20,
+                    "f_score": 0.20,
+                    "grade": 0.20,
+                },
+                "legacy_formula_weights": {
+                    "momentum": 0.15,
+                    "valuation": "0.65-reversal_w",
+                    "reversal": "reversal_w",
+                    "data_usability": 0.20,
+                },
+                "legacy_baseline_shadow": {
+                    "variant": "prod_recheck",
+                    "pool_source": "factor_snapshot_universe",
+                    "selection": "new and old formulas independently select TopN from the same full PIT pool",
+                },
                 "score_cap_price_action_review": _PRICE_ACTION_REVIEW_SCORE_CAP,
                 "score_cap_data_usability_review": _DATA_USABILITY_REVIEW_SCORE_CAP,
                 "data_usability_min_buy_score": _DATA_USABILITY_MIN_BUY_SCORE,
@@ -1507,11 +1641,7 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
                     "active=过热下调 buyable→wait_entry。两种模式下组合方案均硬排除过热票。"
                 ),
                 "structural_repair_requires": "one_month>=+5%, one_week>=0%, latest_day>-3%",
-                "formula": (
-                    "total=0.15*momentum+(0.65-reversal_w)*valuation+"
-                    "reversal_w*reversal+0.20*data_usability; "
-                    "data_usability gates buy eligibility"
-                ),
+                "formula": "US=val_down_grade; HK/CN=legacy_usable_data_gate; data_usability gates buy eligibility in all markets",
             }, ensure_ascii=False),
             now,
             now,
@@ -1537,8 +1667,10 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
                 f"pool_membership={pool_membership_count}; price_daily={price_daily_count}; "
                 f"market_phase_snapshot_id={market_phase_snapshot_id}; "
                 f"p0_evidence_seed_symbols={(evidence_seed_summary or {}).get('n_symbols')}; "
+                f"per_market_formula={json.dumps(per_market_formula, ensure_ascii=False)}; "
+                f"previous_strategy_version={LEGACY_STRATEGY_VERSION}; "
                 "scoring_change=usable_data_gate+price_action_review_gate+"
-                "structural_downtrend_gate+invalid_zero_valuation_guard; "
+                "structural_downtrend_gate+invalid_zero_valuation_guard+us_val_down_grade; "
                 "p0_gate=identity_layer+company_evidence+action"
             ),
         ],
@@ -1649,6 +1781,10 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
         "db_path": str(db_path),
         "run_id": run_id,
         "dry_run": False,
+        "strategy_version": strategy_version,
+        "model_version": model_version,
+        "per_market_formula": per_market_formula,
+        "legacy_strategy_version": LEGACY_STRATEGY_VERSION,
         "pool_membership_count": pool_membership_count,
         "price_daily_count": price_daily_count,
         "candidate_count": len(candidates),

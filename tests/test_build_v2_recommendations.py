@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 import types
 import unittest
@@ -75,6 +76,24 @@ class PriceActionReviewGateTest(unittest.TestCase):
 
         self.assertEqual(flags, [])
         self.assertNotIn("review_gate", scores)
+
+    def test_short_term_runup_gets_chase_risk_flag(self):
+        flags = build_v2._quality_flags({
+            **self._base_row(),
+            "one_month_pct": 45.0,
+            "one_year_pct": 120.0,
+        })
+
+        self.assertIn("SHORT_TERM_RUNUP_CHASE_RISK", {f["code"] for f in flags})
+
+    def test_big_winner_pullback_gets_wait_flag(self):
+        flags = build_v2._quality_flags({
+            **self._base_row(),
+            "one_month_pct": -16.0,
+            "one_year_pct": 120.0,
+        })
+
+        self.assertIn("BIG_WINNER_PULLBACK_REVIEW", {f["code"] for f in flags})
 
     def test_acute_one_day_drop_in_uptrend_is_warning_not_gate(self):
         row = {
@@ -194,6 +213,90 @@ class ValuationInputTest(unittest.TestCase):
         self.assertIn("不视为便宜", flags[0]["message"])
 
 
+class FormulaSwitchTest(unittest.TestCase):
+    def _row(self, *, market: str = "US") -> dict:
+        return {
+            "market": market,
+            "close": 100.0,
+            "prev_close": 99.0,
+            "market_cap": 85_000_000_000,
+            "forward_pe": 22.0,
+            "trailing_pe": 28.0,
+            "peg_ratio": 1.2,
+            "ytd_pct": 18.0,
+            "one_week_pct": 1.0,
+            "one_month_pct": -4.0,
+            "one_year_pct": 70.0,
+            "trade_date": "2026-06-25",
+            "momentum_trade_date": "2026-06-25",
+            "fundamentals_trade_date": "2026-06-25",
+            "_factor_meta_f_score": 9,
+            "_analyst_grade_score": 75.0,
+        }
+
+    def test_us_uses_val_down_grade_formula(self):
+        old = os.environ.get("US_VAL_DOWN_GRADE_ACTIVE")
+        os.environ["US_VAL_DOWN_GRADE_ACTIVE"] = "1"
+        try:
+            scores = build_v2._factor_scores(self._row(market="US"))
+        finally:
+            if old is None:
+                os.environ.pop("US_VAL_DOWN_GRADE_ACTIVE", None)
+            else:
+                os.environ["US_VAL_DOWN_GRADE_ACTIVE"] = old
+
+        expected = round(
+            0.15 * scores["momentum"]
+            + 0.25 * scores["valuation"]
+            + 0.20 * scores["reversal"]
+            + 0.20 * scores["f_score"]
+            + 0.20 * scores["grade"],
+            2,
+        )
+        self.assertEqual(scores["formula"], build_v2.US_FORMULA_NAME)
+        self.assertEqual(scores["grade"], 75.0)
+        self.assertEqual(scores["f_score"], 100.0)
+        self.assertAlmostEqual(scores["total"], expected)
+
+    def test_us_defaults_to_legacy_until_activation_guard_is_enabled(self):
+        old = os.environ.pop("US_VAL_DOWN_GRADE_ACTIVE", None)
+        try:
+            scores = build_v2._factor_scores(self._row(market="US"))
+        finally:
+            if old is not None:
+                os.environ["US_VAL_DOWN_GRADE_ACTIVE"] = old
+
+        self.assertEqual(scores["formula"], build_v2.LEGACY_FORMULA_NAME)
+        self.assertNotIn("grade", scores)
+
+    def test_us_missing_grade_and_f_score_are_neutral_not_missing_alpha(self):
+        row = self._row(market="US")
+        row.pop("_factor_meta_f_score")
+        row.pop("_analyst_grade_score")
+
+        old = os.environ.get("US_VAL_DOWN_GRADE_ACTIVE")
+        os.environ["US_VAL_DOWN_GRADE_ACTIVE"] = "1"
+        try:
+            scores = build_v2._factor_scores(row)
+        finally:
+            if old is None:
+                os.environ.pop("US_VAL_DOWN_GRADE_ACTIVE", None)
+            else:
+                os.environ["US_VAL_DOWN_GRADE_ACTIVE"] = old
+
+        self.assertEqual(scores["formula"], build_v2.US_FORMULA_NAME)
+        self.assertEqual(scores["grade"], 50.0)
+        self.assertEqual(scores["f_score"], 50.0)
+        self.assertTrue(scores["grade_missing_neutral"])
+        self.assertTrue(scores["f_score_missing_neutral"])
+
+    def test_non_us_keeps_legacy_formula_without_grade_weight(self):
+        scores = build_v2._factor_scores(self._row(market="HK"))
+
+        self.assertEqual(scores["formula"], build_v2.LEGACY_FORMULA_NAME)
+        self.assertNotIn("grade", scores)
+
+
 class DataUsabilityGateTest(unittest.TestCase):
     def _strong_row(self) -> dict:
         return {
@@ -300,6 +403,8 @@ class DataUsabilityGateTest(unittest.TestCase):
             scored,
             [scored[0], scored[2]],
             run_id="r1",
+            strategy_version=build_v2.LEGACY_STRATEGY_VERSION,
+            model_version=build_v2.LEGACY_MODEL_VERSION,
             generated_at=build_v2.datetime(2026, 6, 6, 9, 0, 0),
         )
 
@@ -348,6 +453,8 @@ class DataUsabilityGateTest(unittest.TestCase):
             scored,
             [scored[0]],
             run_id="r1",
+            strategy_version=build_v2.LEGACY_STRATEGY_VERSION,
+            model_version=build_v2.LEGACY_MODEL_VERSION,
             generated_at=build_v2.datetime(2026, 6, 12, 9, 0, 0),
         )
 
@@ -436,14 +543,18 @@ class TechGrowthEligibilityGateTest(unittest.TestCase):
         self.assertEqual(policy["eligibility_migration_status"], "data_usability_gate")
 
     def test_overheated_stock_shadow_mode_keeps_action_with_flag(self):
-        # ② 过热动作闸 2026-06-11 改 shadow 默认：不下调 action，只记 overheated_shadow，
-        # 等 strategy_eval 历史回算追认有效后才切 active。
+        # shadow 只用于回算/对照：不下调 action，只记 overheated_shadow。
         row = {
             **self._base_row(symbol="AVGO"),
             "risk_flags": [{"code": "OVERHEATED_1Y", "severity": "medium"}],
         }
 
-        policy = build_v2._derive_recommendation_policy(row)
+        original_mode = build_v2.OVERHEATED_ACTION_GATE_MODE
+        build_v2.OVERHEATED_ACTION_GATE_MODE = "shadow"
+        try:
+            policy = build_v2._derive_recommendation_policy(row)
+        finally:
+            build_v2.OVERHEATED_ACTION_GATE_MODE = original_mode
 
         self.assertEqual(policy["eligibility"], "buyable")
         self.assertEqual(policy["action"], "focus_research")
@@ -461,6 +572,28 @@ class TechGrowthEligibilityGateTest(unittest.TestCase):
             policy = build_v2._derive_recommendation_policy(row)
         finally:
             build_v2.OVERHEATED_ACTION_GATE_MODE = original_mode
+
+        self.assertEqual(policy["eligibility"], "buyable")
+        self.assertEqual(policy["action"], "wait_entry")
+
+    def test_short_term_chase_risk_waits_for_entry(self):
+        row = {
+            **self._base_row(symbol="HPE"),
+            "risk_flags": [{"code": "SHORT_TERM_RUNUP_CHASE_RISK", "severity": "medium"}],
+        }
+
+        policy = build_v2._derive_recommendation_policy(row)
+
+        self.assertEqual(policy["eligibility"], "buyable")
+        self.assertEqual(policy["action"], "wait_entry")
+
+    def test_big_winner_pullback_waits_for_entry(self):
+        row = {
+            **self._base_row(symbol="VRT"),
+            "risk_flags": [{"code": "BIG_WINNER_PULLBACK_REVIEW", "severity": "medium"}],
+        }
+
+        policy = build_v2._derive_recommendation_policy(row)
 
         self.assertEqual(policy["eligibility"], "buyable")
         self.assertEqual(policy["action"], "wait_entry")

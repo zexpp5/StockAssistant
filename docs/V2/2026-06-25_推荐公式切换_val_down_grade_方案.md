@@ -1,7 +1,19 @@
 # 推荐公式切换方案：现公式 → val_down_grade（降估值 + 加评级）
 
-> 2026-06-25 草拟 · v2（2026-06-25 评审补丁）· 状态：**待评审，未实施** · 决策人：用户（真钱相关，改打分公式必须用户拍板）
+> 2026-06-25 草拟 · v3（2026-06-25 执行后修订）· 状态：**影子能力已实施，生产默认未激活** · 决策人：用户（真钱相关，改打分公式必须用户拍板）
 > 关联：[[docs/V2/2026-06-09_AI与科技成长推荐规则.md]] §17-19、记忆 `project_weight_variant_shadow_pipeline` / `project_ai_strategy_unvalidated_and_concentration`
+
+---
+
+> ## ✅ 2026-06-25 执行结论（最新）
+> **代码能力已经就位，但今天不默认切生产。**
+> - 新公式 `val_down_grade` 已能在生产脚本里计算；但默认只作为 **shadow / dual-track 候选**。
+> - 生产默认仍是老公式 `tech_ai_v2_usable_data_gate`；只有显式设置 `US_VAL_DOWN_GRADE_ACTIVE=1` 才会激活美股新公式并写 `tech_ai_v3_us_val_down_grade`。
+> - 老公式继续作为 `legacy_baseline`，新旧公式对照改成从 `factor_snapshot_universe` 全量合格候选池各自选 Top20。
+> - 修正后的共同资格闸口径下，最新双轨结果显示新公式暂未胜出：
+>   - 1D：新公式 -0.06% vs 老公式 +0.05%，新-旧 **-0.10pp**
+>   - 5D：新公式 +0.76% vs 老公式 +1.03%，新-旧 **-0.27pp**
+> - 因此本次执行选择：**不让夜间生产任务自动切到一套尚未赢过老公式的规则**；继续前向观察，等新公式按全池合格口径连续胜出后再激活。
 
 ---
 
@@ -30,7 +42,7 @@
 
 ## 1. 一句话
 
-把美股生产打分公式从「估值主导」换成 **val_down_grade（估值砍半 + 加入评级因子）**，老公式降级为影子 baseline 继续对照。**港/A 暂不切**（见 §6）。
+原目标是把美股生产打分公式从「估值主导」换成 **val_down_grade（估值砍半 + 加入评级因子）**，老公式降级为影子 baseline 继续对照。**实际执行后因严格双轨未胜出，改为：生产保留老公式，新公式进入完整影子对照；港/A 暂不切**（见 §6）。
 
 ## 2. 为什么切（证据，按"前向优先"排序）
 
@@ -83,9 +95,10 @@
 
 ## 6. 拍板（评审后定稿的执行姿势）
 
-**只切美股 AI 推荐主排序，混合版本，试运行。** 具体：
+**执行后口径：只切影子，不默认切生产；保留显式激活开关。** 具体：
 
-- **版本号**：`tech_ai_v3_us_val_down_grade`（名字里带 `us_`，自带"仅美股"语义）；混合版本里 HK/A 仍记为 legacy。
+- **默认生产版本号**：`tech_ai_v2_usable_data_gate`。
+- **显式激活版本号**：`tech_ai_v3_us_val_down_grade`（设置 `US_VAL_DOWN_GRADE_ACTIVE=1` 后才使用；名字里带 `us_`，自带"仅美股"语义）；混合版本里 HK/A 仍记为 legacy。
 - **⚠️ strategy_version 是 run 级别、不分市场**——同一批 run 里 HK/A 仍是旧公式，所以**必须在 `params_json` 里逐市场写清**，否则策略验证看见同一个 v3 会误以为三市场都换了：
   ```
   per_market_formula:
@@ -93,11 +106,11 @@
     HK = legacy
     A  = legacy
   ```
-- **美股**：上完整 val_down_grade（含评级 + F分入总分）。
+- **美股**：默认仍上老公式；`val_down_grade` 在 shadow/dual-track 中完整计算（含评级 + F分入总分）。若用户强制激活，则生产使用该公式。
 - **港股 / A股**：**暂不切**，维持现公式。理由：评级因子本就美股专属（analyst_grade_events 只有美股），A 股记忆判定是"池子问题，权重救不了"。
-- **页面标注**：AI 推荐页（美股）显示「当前主规则：tech_ai_v3_us_val_down_grade · 🧪试运行」。
+- **页面标注**：AI 推荐页（美股）默认应显示「当前主规则：tech_ai_v2_usable_data_gate；候选规则：val_down_grade 影子观察」。强制激活后才显示「tech_ai_v3_us_val_down_grade · 🧪试运行」。
 - **老公式**：继续作为 `prod_recheck` / `legacy_baseline` 影子对照，**永久保留不删**。
-- **策略验证**：从新版本**重新计数**（n 归零重攒），但**历史页保留旧版本曲线**（别覆盖，要能对照"换公式前 vs 后"）。
+- **策略验证**：默认继续按旧生产版本计数；`alpha_trend_logger` 额外记录新旧公式全池对照。若强制激活 v3，再从新版本重新计数（n 归零重攒）。
 - **每日对照 + 回滚线**：alpha_trend_logger 每天记 新公式 vs 老公式 1D/5D alpha；**连续转差（如新公式 5D alpha 连续 3 个交易日 < 老公式）立即 git revert 回滚**。
 
 ## 7. 回滚方案
@@ -108,10 +121,11 @@
 
 ## 8. 验收（实施后自测）
 
-- [ ] 新公式出单的美股 top10 与双轨面板「新名次」一致（同源校验）
-- [ ] **【P0】双轨对照基于 `factor_snapshot_universe` 全量池「同池各选再比」**，新旧公式各自独立产出 Top20，不在任一方 Top20 内重排（核 `build_dual_track_ranking.py` + alpha_logger 已改源）
-- [ ] 港/A 维持 legacy，结果**不因本次切换变化**（切换前后港/A 名单逐只一致）
-- [ ] `params_json` 已逐市场写 per_market_formula（US=val_down_grade / HK=legacy / A=legacy）
-- [ ] strategy_version 已升，alpha_trend_logger / dashboard 验证按新版本重新计数（从 0 起）
-- [ ] 老公式 baseline 在影子正常产出，可对照
+- [x] 新公式可在强制激活 dry-run 下生成美股新排序（同源校验）
+- [x] **【P0】双轨对照基于 `factor_snapshot_universe` 全量池「同池各选再比」**，新旧公式各自独立产出 Top20，不在任一方 Top20 内重排；US 先套共同资格闸
+- [x] 港/A 维持 legacy，双轨候选=基线，结果不因本次切换变化
+- [x] 默认 `params_json` / dry-run 已逐市场写 per_market_formula（US=legacy / HK=legacy / A=legacy）；强制激活时 US=val_down_grade
+- [x] strategy_version 默认不升，避免未验证规则污染生产；强制激活时才升 `tech_ai_v3_us_val_down_grade`
+- [x] 老公式 baseline 在影子正常产出，可对照
+- [x] alpha_trend_logger 已增加新旧公式全池对照
 - [ ] `git revert` 演练一次确认可回滚
