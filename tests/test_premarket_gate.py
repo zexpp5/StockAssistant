@@ -261,6 +261,22 @@ def test_nfp_detected_on_first_friday():
     assert any(e["type"] == "NFP" for e in events)
 
 
+def test_cpi_uses_official_schedule_not_mid_month_heuristic():
+    """2026-06-15 在 10-15 号窗口内，但 BLS CPI 已于 2026-06-10 发布。"""
+    events = pg._macro_events_for(date(2026, 6, 15))
+    assert not any(e["type"] == "CPI" for e in events)
+
+
+def test_cpi_detected_on_bls_scheduled_release_date():
+    events = pg._macro_events_for(date(2026, 7, 14))
+    assert any(e["type"] == "CPI" for e in events)
+
+
+def test_fomc_detected_on_scheduled_decision_date():
+    events = pg._macro_events_for(date(2026, 6, 17))
+    assert any(e["type"] == "FOMC" for e in events)
+
+
 def test_macro_pending_before_release():
     """发布前（21 点前）事件应标 event_pending 且贡献压力。"""
     sig = pg._sig_macro(date(2026, 6, 5), now=datetime(2026, 6, 5, 20, 10))

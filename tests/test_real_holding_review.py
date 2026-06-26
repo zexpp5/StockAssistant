@@ -157,22 +157,37 @@ class RealHoldingReviewTest(unittest.TestCase):
 
     def test_underweight_add_has_size_advisory(self):
         rules = _default_rules()
-        item = _build_item(
-            {"symbol": "MCD", "market": "US", "entry_price": 280, "shares": 10,
-             "currency": "USD", "entry_fx_rate": 7.1},
-            rules=rules,
-            price={"close": 280, "currency": "USD", "trade_date": "2026-05-22"},
-            pick={"total_score": 75, "rating": "⭐⭐"},
-            verdict={"coverage_class": "ai_portfolio", "treatment_class": "portfolio_model",
-                     "asset_class": "equity"},
-            total_capital=500000,
-            target_weights={"MCD": 0.10},
-        )
+        with patch("stock_research.jobs.real_holding_review._market_local_date", return_value=date(2026, 5, 22)):
+            item = _build_item(
+                {"symbol": "MCD", "market": "US", "entry_price": 280, "shares": 10,
+                 "currency": "USD", "entry_fx_rate": 7.1},
+                rules=rules,
+                price={"close": 280, "currency": "USD", "trade_date": "2026-05-22"},
+                pick={"total_score": 75, "rating": "⭐⭐"},
+                verdict={"coverage_class": "ai_portfolio", "treatment_class": "portfolio_model",
+                         "asset_class": "equity"},
+                total_capital=500000,
+                target_weights={"MCD": 0.10},
+            )
         self.assertEqual(item["action_label"], "关注加仓")
         adv = item.get("size_advisory")
         self.assertIsNotNone(adv)
         self.assertEqual(adv.get("direction"), "add")
         self.assertTrue(adv.get("advisory_only"))
+
+    def test_prior_session_price_suppresses_add_watch(self):
+        item = _build_item(
+            {"symbol": "NVDA", "market": "US", "entry_price": 100, "shares": 10,
+             "currency": "USD", "entry_fx_rate": 7.1},
+            price={"close": 110, "currency": "USD", "trade_date": "2026-05-22"},
+            pick={"total_score": 88, "rating": "strong_buy"},
+            verdict={"coverage_class": "ai_portfolio", "treatment_class": "ai_portfolio", "asset_class": "equity"},
+            total_capital=500000,
+            target_weights={"NVDA": 0.08},
+        )
+        self.assertEqual(item["action_label"], "持有观察")
+        self.assertIsNone(item.get("size_advisory"))
+        self.assertTrue(any("上一交易日" in r for r in item["reasons"]))
 
     def test_over_25pct_has_trim_advisory(self):
         rules = _default_rules()
@@ -317,15 +332,16 @@ class RealHoldingReviewTest(unittest.TestCase):
         self.assertEqual(custom_item["action_label"], "持有观察")
 
     def test_underweight_high_score_can_be_add_watch(self):
-        item = _build_item(
-            {"symbol": "NVDA", "market": "US", "entry_price": 100, "shares": 10,
-             "currency": "USD", "entry_fx_rate": 7.1},
-            price={"close": 110, "currency": "USD", "trade_date": "2026-05-22"},
-            pick={"total_score": 88, "rating": "strong_buy"},
-            verdict={"coverage_class": "ai_portfolio", "treatment_class": "ai_portfolio", "asset_class": "equity"},
-            total_capital=500000,
-            target_weights={"NVDA": 0.08},
-        )
+        with patch("stock_research.jobs.real_holding_review._market_local_date", return_value=date(2026, 5, 22)):
+            item = _build_item(
+                {"symbol": "NVDA", "market": "US", "entry_price": 100, "shares": 10,
+                 "currency": "USD", "entry_fx_rate": 7.1},
+                price={"close": 110, "currency": "USD", "trade_date": "2026-05-22"},
+                pick={"total_score": 88, "rating": "strong_buy"},
+                verdict={"coverage_class": "ai_portfolio", "treatment_class": "ai_portfolio", "asset_class": "equity"},
+                total_capital=500000,
+                target_weights={"NVDA": 0.08},
+            )
         self.assertEqual(item["action_label"], "关注加仓")
 
     def test_save_fetch_review_roundtrip(self):

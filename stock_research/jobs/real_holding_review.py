@@ -987,7 +987,16 @@ def _build_item(
 
     is_fallback_pick = bool(pick and (pick.get("universe_scope") == "manual_watchlist"))
     if is_fallback_pick and action in DISOBEDIENT_ACTIONS:
-        reasons.append("⚠️ 该评分由因子缓存 fallback 算出（不在系统主推荐池），减仓动作降级为提示，决策请你自己判断")
+        label_kind = (verdict or {}).get("label_kind")
+        loss_breach = pnl_pct is not None and pnl_pct <= float(rules["loss_review_pct"])
+        if action == "减仓观察" and label_kind not in {"stop_watch", "stop_breach"} and not loss_breach:
+            action = "持有观察"
+            reasons.append("⚠️ 该评分由因子缓存 fallback 算出（不在系统主推荐池），模型转弱只作提示，不触发减仓动作")
+        else:
+            reasons.append("⚠️ 该评分由因子缓存 fallback 算出（不在系统主推荐池），减仓动作降级为提示，决策请你自己判断")
+    if price_is_prior_session and action == "关注加仓":
+        action = "持有观察"
+        reasons.append("行情仍是上一交易日收盘价，暂停加仓提示；等盘中/收盘价格刷新后再评估")
     size_advisory = _suggest_size_advisory(
         rules=rules,
         action=action,
@@ -1141,6 +1150,24 @@ def build_real_holding_review(*, persist: bool = True) -> dict[str, Any]:
                     price_is_stale=bool(item.get("price_is_prior_session")),
                 )
             items.append(item)
+
+        hard_cap = float(rules.get("hard_single_cap_pct", 0.25) or 0.25)
+        if any((i.get("current_weight") or 0.0) >= hard_cap for i in items):
+            for item in items:
+                adv = item.get("size_advisory") if isinstance(item.get("size_advisory"), dict) else None
+                if item.get("action_label") == "关注加仓":
+                    item["action_label"] = "持有观察"
+                    item["action_priority"] = ACTION_PRIORITY["持有观察"]
+                    item.setdefault("reasons", []).append(
+                        "组合已有单只持仓超过25%，先处理集中度；本轮不输出加仓动作"
+                    )
+                if adv and adv.get("direction") == "add":
+                    adv.update({
+                        "direction": "hold",
+                        "suggested_action_rmb": None,
+                        "suggested_shares": None,
+                        "suggested_batch_note": "组合已有单只持仓超过25%，先处理集中度，不给加仓数量",
+                    })
 
         today = date.today().isoformat()
         now = datetime.now()

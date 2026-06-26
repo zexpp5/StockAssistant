@@ -258,6 +258,9 @@ class TestEarlyGrowthRadarPayload(unittest.TestCase):
         self.assertIn("价格", html)
         self.assertIn("赛道", html)
         self.assertIn("已涨太多，先别追", html)
+        self.assertIn("ALAB", html)
+        self.assertIn("这些票仍可做买前研究", html)
+        self.assertNotIn("<details class=\"mt-3 rounded-lg border border-amber-200", html)
         self.assertNotIn('id="early-growth-radar"', html)
 
 

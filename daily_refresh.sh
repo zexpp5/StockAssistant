@@ -849,11 +849,10 @@ if [ ${#FAILED_STEPS[@]} -eq 0 ]; then
     if is_morning_step; then
         echo ""
         echo "[27b 状态回填重建 HTML] production_acceptance + pipeline_status 已刷新，回填运行状态页..."
-        if ! $PYTHON scripts/pipeline/build_stock_dashboard_html.py; then
-            echo "❌ 状态回填重建 HTML 失败 → pipeline 改写 FAIL"
-            FAILED_STEPS+=("27b 状态回填重建 HTML/scripts/pipeline/build_stock_dashboard_html.py")
-            write_pipeline_status "FAIL" "$DONE_TS"
-        else
+        run_step "27b/25 状态回填重建 HTML" "scripts/pipeline/build_stock_dashboard_html.py"
+        if [ ${#FAILED_STEPS[@]} -eq 0 ]; then
+            DONE_TS=$(date '+%Y-%m-%d %H:%M:%S')
+            write_pipeline_status "OK" "$DONE_TS"
             echo "  → runtime-status 已回填最新生产验收和 pipeline=OK"
         fi
     fi

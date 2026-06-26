@@ -73,6 +73,7 @@ class ComputeBuyZoneTest(unittest.TestCase):
         self.assertAlmostEqual(z["low"], 315.0, places=1)   # 450*0.70
         self.assertAlmostEqual(z["high"], 382.5, places=1)  # 450*0.85
         self.assertEqual(z["current"], 372)
+        self.assertEqual(z["current_trade_date"], "2026-06-15")
         self.assertEqual(z["position"], "区间内")
 
     def test_stale_target_falls_back_to_technical(self):
@@ -95,6 +96,7 @@ class ComputeBuyZoneTest(unittest.TestCase):
         self.assertEqual(z["method"], "技术")
         self.assertLessEqual(z["low"], z["high"])
         self.assertEqual(z["current"], 100)  # 最新(i=0)
+        self.assertEqual(z["current_trade_date"], "2026-06-15")
 
     def test_no_data_returns_none(self):
         z = buy_zone.compute_buy_zone("NODATA", self.con, today=self.today)

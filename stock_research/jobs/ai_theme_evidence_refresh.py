@@ -232,7 +232,8 @@ def _step_coverage_audit() -> dict:
             "counts": {
                 k: audit[k]["count"] for k in
                 ("high_score_no_chain", "theme_no_evidence",
-                 "confirmed_stale_risk", "ticker_conflicts")
+                 "confirmed_stale_risk", "ticker_conflicts",
+                 "ai_supply_chain_coverage")
             },
         }
     except Exception as e:
