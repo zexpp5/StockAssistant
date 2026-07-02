@@ -63,6 +63,36 @@ def _load_json(path: Path) -> dict | list | None:
         return None
 
 
+def _clip_text(value: Any, n: int = 42) -> str:
+    text = str(value or "").replace("\n", " ").strip()
+    return text if len(text) <= n else text[:n - 1] + "…"
+
+
+def _daily_strict_picks_lines() -> list[str]:
+    """今日严选 3 只：只读 dashboard 同源 JSON，不在早报里复算。"""
+    payload = _load_json(REPO / "data" / "latest" / "daily_strict_picks.json")
+    if not isinstance(payload, dict):
+        return []
+    rows = payload.get("picks") or []
+    if not isinstance(rows, list) or not rows:
+        return []
+    lines = [
+        "🎯 **今日严选 3 只**（研究优先级，不是买入指令；同源 `daily_strict_picks.json`）"
+    ]
+    for p in rows[:3]:
+        if not isinstance(p, dict):
+            continue
+        symbol = str(p.get("symbol") or "").upper()
+        name = str(p.get("name") or "")
+        intro = _clip_text(p.get("intro"), 34)
+        zone = str(p.get("buy_zone_line") or "💰 区间待补").strip()
+        risk = _clip_text(p.get("risk"), 36)
+        lines.append(f"• **{symbol} {name}**：{intro}；{zone}；{risk}")
+    if payload.get("empty_slots"):
+        lines.append(f"• 今日只筛出 {len(rows[:3])} 只，系统不硬凑。")
+    return lines
+
+
 def _a_share_enabled() -> bool:
     return bool(config.A_SHARE_PRODUCTION_ENABLED)
 
@@ -2048,6 +2078,9 @@ def section_picks(plan: dict | None, a_share_picks: dict | None,
     if read_only:
         head += "\n🔴 **质量闸门 FAIL：以下只读观察，不作为买入/加仓清单。**"
     lines = [head]
+    strict_lines = _daily_strict_picks_lines()
+    if strict_lines:
+        lines.extend(strict_lines)
 
     # 🇺🇸 美股（plan_v5 兼容字段 · v6 risk-aware optimize）
     if plan:
@@ -3083,6 +3116,9 @@ def _build_card_payload() -> dict:
                 + ("\n🔴 **质量闸门 FAIL：本区只读观察，不作为买入/加仓清单。**" if trade_blocked else "")}}
         ]
         # 2026-06-24: 回测Sharpe/回测年化/仓位来源 KPI 行移出每日卡片（术语噪音，见 dashboard）。
+        strict_lines = _daily_strict_picks_lines()
+        if strict_lines:
+            section2.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(strict_lines)}})
 
         # 🇺🇸 美股 — ⭐ 打分 top 详解（2 列），其余一行速览
         plan_v5 = (plan or {}).get("plan_v5") or []

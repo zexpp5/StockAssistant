@@ -444,10 +444,9 @@ def _dual_track_html() -> str:
         import sys as _sys
         _sys.path.insert(0, str(repo))
         from scripts.tools.build_dual_track_ranking import compute as _dt_compute
+        from scripts.tools.build_dual_track_ranking import write_outputs as _dt_write_outputs
         data = _dt_compute()
-        out = repo / "data" / "latest" / "dual_track_ranking.json"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        _dt_write_outputs(data)
     except Exception as exc:
         print(f"  [warn] 双轨面板现算失败({exc})，尝试读旧 JSON")
         p = repo / "data" / "latest" / "dual_track_ranking.json"
@@ -595,8 +594,36 @@ def _dual_track_html() -> str:
         chips = "、".join(f'{_e(x["symbol"])}(老{x["prod_rank"]}→新{x["new_rank"]})' for x in dropped20)
         drop20_html = f'<div class="mt-2 text-[11px] text-rose-500">老 Top20 被候选口径挤出：{chips}</div>'
 
+    def _summary_delta(top_n: int) -> str:
+        block = (((latest_alpha.get("dual_track_us") or {}).get("by_top_n") or {}).get(f"top{top_n}") or {})
+        h5 = (block.get("horizons") or {}).get("5d") or {}
+        delta = h5.get("delta_new_minus_old_avg_alpha_pct")
+        return f"Top{top_n} {delta:+.2f}pp" if isinstance(delta, (int, float)) else f"Top{top_n} 等样本"
+
+    sc = ((latest_alpha.get("dual_track_us") or {}).get("switch_criteria")) or {}
+    checks = sc.get("checks") or {}
+    n_pass = sum(1 for v in checks.values() if v)
+    n_all = len(checks) or 4
+    stop_gate_html = _stop_gate_strip(latest_alpha)
+    stop_gate_front = stop_gate_html if "止损闸告警" in stop_gate_html else ""
+    stop_gate_inside = "" if stop_gate_front else stop_gate_html
+    switch_html = _switch_criteria_strip(latest_alpha)
+    summary_line = (
+        f"美股规则双轨 · {_summary_delta(5)} / {_summary_delta(10)} / {_summary_delta(20)} "
+        f"· 切换标准 {n_pass}/{n_all} 🔒"
+    )
+
     return (
-        '<section class="mb-5 bg-white rounded-xl shadow-sm border border-amber-200 p-4">'
+        stop_gate_front +
+        '<details class="mb-5 bg-white rounded-xl shadow-sm border border-amber-200 overflow-hidden">'
+        '<summary class="cursor-pointer select-none px-4 py-3 bg-amber-50 hover:bg-amber-100">'
+        '<div class="flex items-center justify-between gap-3 flex-wrap">'
+        f'<h3 class="font-bold text-slate-900">{_e(summary_line)}</h3>'
+        '<span class="text-xs text-violet-700 font-semibold">展开看新旧公式对照 →</span>'
+        '</div>'
+        '<div class="text-[11px] text-slate-500 mt-1">只作为买前研究优先级，不写持仓、不写自选、不等于买入指令。</div>'
+        '</summary>'
+        '<div class="p-4">'
         '<div class="flex items-start justify-between gap-4 flex-wrap">'
         '<div>'
         '<h3 class="font-bold text-slate-900">美股规则双轨：主榜不变，精选看「降估值+评级」</h3>'
@@ -605,7 +632,7 @@ def _dual_track_html() -> str:
         '</div>'
         '<div class="text-xs text-slate-400">alpha 记录：' + _e(latest_date) + '</div>'
         '</div>'
-        + _stop_gate_strip(latest_alpha) + _switch_criteria_strip(latest_alpha) +
+        + stop_gate_inside + switch_html +
         '<div class="grid grid-cols-1 md:grid-cols-3 gap-3 my-3">'
         + _delta_card(5, latest_alpha) + _delta_card(10, latest_alpha) + _delta_card(20, latest_alpha) +
         '</div>'
@@ -641,8 +668,87 @@ def _dual_track_html() -> str:
         '<p class="mt-1">4. Top20 新公式还没稳定赢旧公式前，不做全榜替换。</p>'
         '<p class="mt-2 text-slate-400">评级因子目前美股专属；港股/A股仍保持旧规则，不在这里强行切换。</p>'
         '</div></div></details>'
-        '</section>'
+        '</div>'
+        '</details>'
     )
+
+
+def strict_picks_card_html() -> str:
+    """AI 推荐页首屏严选 3 只。单一来源 data/latest/daily_strict_picks.json。"""
+    data = _runtime_load_json("data/latest/daily_strict_picks.json") or {}
+    picks = data.get("picks") or []
+    empty_slots = int(data.get("empty_slots") or 0)
+    generated = str(data.get("generated_at") or "")[:16].replace("T", " ")
+    source_date = str(data.get("source_run_date") or "")
+
+    def _e(s: object) -> str:
+        return html_lib.escape(str(s or ""))
+
+    def _tone(pos: str) -> str:
+        if pos == "便宜":
+            return "border-emerald-200 bg-emerald-50 text-emerald-800"
+        if pos == "区间内":
+            return "border-amber-200 bg-amber-50 text-amber-800"
+        if pos == "偏贵":
+            return "border-rose-200 bg-rose-50 text-rose-800"
+        return "border-slate-200 bg-slate-50 text-slate-600"
+
+    cards: list[str] = []
+    for i, p in enumerate(picks[:3], start=1):
+        symbol = str(p.get("symbol") or "")
+        name = str(p.get("name") or "")
+        intro = str(p.get("intro") or "科技/AI 产业链候选")
+        reason = str(p.get("reason") or "")
+        bz_line = str(p.get("buy_zone_line") or "💰 价格区间待补")
+        risk = str(p.get("risk") or "仍需买前研究。")
+        pos = str(p.get("price_position") or "未知")
+        cards.append(f"""
+          <article class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <div class="text-[11px] text-slate-400">严选 #{i}</div>
+                <button class="font-mono text-xl font-black text-slate-900 hover:text-violet-700"
+                        data-code="{_e(symbol)}" data-name="{_e(name)}"
+                        onclick="openStockDetail(this.dataset.code, this.dataset.name)">{_e(symbol)}</button>
+                <div class="text-sm font-semibold text-slate-700">{_e(name)}</div>
+              </div>
+              <span class="shrink-0 rounded-full border px-2 py-1 text-[11px] font-bold {_tone(pos)}">{_e(pos)}</span>
+            </div>
+            <div class="mt-3 text-sm text-slate-700 leading-relaxed">{_e(intro)}</div>
+            <div class="mt-2 text-xs text-slate-600 leading-relaxed">{_e(reason)}</div>
+            <div class="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-700">{_e(bz_line)}</div>
+            <div class="mt-2 text-[11px] text-amber-700 leading-relaxed">{_e(risk)}</div>
+          </article>
+        """)
+    for i in range(empty_slots):
+        cards.append(f"""
+          <article class="rounded-xl border border-dashed border-slate-200 bg-white/70 p-4 text-slate-500">
+            <div class="text-[11px] text-slate-400">严选 #{len(cards) + 1}</div>
+            <div class="mt-2 text-sm font-semibold">今日无合格严选</div>
+            <div class="mt-1 text-xs">过滤偏贵和接飞刀后不足 3 只，系统不硬凑。</div>
+          </article>
+        """)
+    if not cards:
+        cards.append("""
+          <article class="rounded-xl border border-dashed border-slate-200 bg-white/70 p-4 text-slate-500">
+            <div class="text-sm font-semibold">今日严选暂不可用</div>
+            <div class="mt-1 text-xs">等待双轨脚本生成 daily_strict_picks.json。</div>
+          </article>
+        """)
+
+    return f"""
+  <section class="mb-4 rounded-xl border border-violet-200 bg-white p-4 shadow-sm">
+    <div class="mb-3 flex items-start justify-between gap-3 flex-wrap">
+      <div>
+        <h3 class="text-lg font-black text-slate-900">🎯 今日严选 3 只</h3>
+        <p class="text-xs text-slate-500 mt-1">从美股新公式精选 Top10 再过滤“偏贵”和“接飞刀”；研究严选 ≠ 买入指令。</p>
+      </div>
+      <div class="text-[11px] text-slate-400">批次 {html_lib.escape(source_date)} · 生成 {html_lib.escape(generated)}</div>
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">{"".join(cards)}</div>
+    <div class="mt-3 text-[11px] text-slate-500">固定提醒：整套策略样本外未达标前，所有严选只用于买前研究；下单前仍要看盘前预警、止损闸和个股研究。</div>
+  </section>
+"""
 
 
 # ============================================================
@@ -1590,13 +1696,14 @@ window.echarts = window.echarts || {
   <!-- 2026-06-11 顶部减负 + 信任红绿灯：最上面用大白话回答"能不能照着买"(数据驱动红/黄/绿)，
        技术自检面板折叠。纯展示，不改数据/逻辑。 -->
   {TRUST_VERDICT_PANEL}
-  {STRATEGY_MARKET_ADVISORY}
+  {STRICT_PICKS_CARD}
   <!-- 把 4 块技术自检面板折叠：策略验证进度 / P0验证 / 规则体检 / 严筛试运行。数据源不变，仅默认收起。 -->
   <details class="mb-4 rounded-xl border border-slate-200 bg-white">
     <summary class="cursor-pointer select-none px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 rounded-xl">
       🔧 系统自检与验证细节（点开看 · 不看也行）
     </summary>
     <div class="px-3 pb-3 pt-1 space-y-3">
+      {STRATEGY_MARKET_ADVISORY}
       {US_VALIDATION_PROGRESS}
       {P0_POLICY_VALIDATION_PANEL}
       {RECOMMENDATION_READINESS_PANEL}
@@ -14511,7 +14618,11 @@ function _reasonSummaryHtml(row) {
         ? "bg-slate-900 text-white border-slate-900"
         : "bg-white text-slate-700 border-slate-200 hover:border-slate-400";
       policySortEl.classList.remove("hidden");
-      policySortEl.innerHTML = `<div class="rounded-xl border border-slate-200 bg-white px-4 py-3">
+      policySortEl.innerHTML = `<details class="rounded-xl border border-slate-200 bg-white overflow-hidden">
+        <summary class="cursor-pointer select-none px-4 py-3 text-sm font-bold text-slate-900 hover:bg-slate-50">
+          ▸ 怎么看新规则：判定顺序、排序模式和各类数量
+        </summary>
+        <div class="px-4 pb-3">
         <div class="flex items-start justify-between gap-3 flex-col lg:flex-row">
           <div>
             <div class="text-sm font-bold text-slate-900">怎么看新规则：它先做筛选/降级，不直接改旧总分</div>
@@ -14555,7 +14666,8 @@ function _reasonSummaryHtml(row) {
             <button onclick="setDiscoverySortMode('rank')" class="px-3 py-1.5 rounded-md border text-xs font-semibold ${btnCls(mode === "rank")}">原始分数排序</button>
           </div>
         </div>
-      </div>`;
+        </div>
+      </details>`;
     }
 
     function _renderDiscoveryDataHealth() {
@@ -14770,7 +14882,12 @@ function _reasonSummaryHtml(row) {
         </details>` : "";
 
       dataHealthEl.classList.remove("hidden");
-      dataHealthEl.innerHTML = `<div class="rounded-xl border ${statusCls} px-4 py-3">
+      dataHealthEl.innerHTML = `<details class="rounded-xl border ${statusCls} overflow-hidden">
+        <summary class="cursor-pointer select-none px-4 py-3 text-sm font-bold hover:bg-white/50">
+          ▸ 数据够不够用：${statusTitle}
+          <span class="ml-2 text-xs font-normal opacity-75">可补 ${repairableRows.length} · 估值不适用 ${valuationRows.length} · 研究复查 ${researchRows.length}</span>
+        </summary>
+        <div class="px-4 pb-3">
         <div class="flex items-start md:items-center gap-3 justify-between flex-col md:flex-row">
           <div>
             <div class="text-sm font-bold">数据够不够用：${statusTitle}</div>
@@ -14792,7 +14909,8 @@ function _reasonSummaryHtml(row) {
         </div>
         ${bucketCardsHtml}
         ${detailsHtml}
-      </div>`;
+        </div>
+      </details>`;
     }
 
     function _renderDiscoveryMarketTabs() {
@@ -19376,53 +19494,76 @@ def today_decision_panel_html() -> str:
 def trust_verdict_panel_html() -> str:
     """🚦 能不能照着买 —— AI 推荐页顶部红绿灯。
 
-    读 shadow_tuning_evidence.json（单一可信源）的 activation_decision + 各市场样本外实测，
-    用大白话回答"现在能不能照着推荐买"。数据驱动：样本外 alpha 转正且达标前一律红灯，
-    达标自动转绿，不靠硬编码。口径 = strategy_eval 收盘价、样本外前瞻。规则文档 §19。"""
+    主口径只读 alpha_trend.json 最新一笔（strategy_eval 同源）；
+    shadow_tuning_evidence 的累计调参样本只放折叠技术区，避免同屏样本数打架。"""
+    trend_payload = _runtime_load_json("data/latest/alpha_trend.json") or {}
+    trend = trend_payload.get("trend") or []
+    latest = trend[-1] if trend else {}
+    markets = latest.get("markets") or {}
+    min_hit = 45.0
+    label_map = {"US": "美股", "HK": "港股", "CN": "A股", "A": "A股"}
+    rows, any_neg = [], False
+    all_pass = bool(markets)
+    for market in ("US", "HK", "CN"):
+        m = markets.get(market) or markets.get("A" if market == "CN" else market) or {}
+        one = m.get("1d") or {}
+        a = one.get("avg_alpha_pct")
+        h = one.get("win_rate_pct")
+        n = one.get("n") or 0
+        a_ok = isinstance(a, (int, float)) and a > 0
+        h_ok = isinstance(h, (int, float)) and h >= min_hit
+        if isinstance(a, (int, float)) and a <= 0:
+            any_neg = True
+        if n <= 0 or not (a_ok and h_ok):
+            all_pass = False
+        a_txt = f"{a:+.2f}%" if isinstance(a, (int, float)) else "—"
+        h_txt = f"{h:.0f}%" if isinstance(h, (int, float)) else "—"
+        mark = "✅" if (a_ok and h_ok and n > 0) else "❌"
+        rows.append(
+            f'<li>{mark} <b>{html_lib.escape(label_map.get(market, market))}</b>：1日 alpha {a_txt} · 命中 {h_txt} · 样本 {n}'
+            f'（达标线：alpha&gt;0、命中≥{min_hit:.0f}%）</li>'
+        )
+    blocked = any_neg or not latest or not markets
+    if blocked:
+        light, head, color = "🔴", "现在不能照着买", "rose"
+        gist = ("主口径样本外结果仍未稳定转正。<b>这页只能当研究线索，不能照着直接下单。</b>")
+    elif all_pass:
+        light, head, color = "🟢", "可小仓参照（仍须买前审查）", "emerald"
+        gist = ("三市场 1 日样本外同时达标。但仍须分散、按风险定仓位、设止损，并由你本人确认。")
+    else:
+        light, head, color = "🟡", "部分转好，仍不建议照着买", "amber"
+        gist = "有市场转正但没有全线达标，仍按研究工具使用。"
+
     ev = _runtime_load_json("data/latest/shadow_tuning_evidence.json") or {}
     mh = [m for m in (ev.get("market_horizon_summary") or []) if m.get("horizon") == "1d"]
-    decision = ev.get("activation_decision") or {}
-    crit = decision.get("criteria") or {}
-    min_hit = crit.get("min_hit_rate", 45.0)
-    rows, any_neg = [], False
-    all_pass = bool(mh)
+    tech_rows = []
     for m in mh:
         label = m.get("label") or m.get("market")
         a = m.get("shadow_avg_alpha_pct")
         h = m.get("shadow_win_rate")
         n = m.get("reviewed_shadow_buy_count")
-        a_ok = isinstance(a, (int, float)) and a > 0
-        h_ok = isinstance(h, (int, float)) and h >= min_hit
-        if isinstance(a, (int, float)) and a <= 0:
-            any_neg = True
-        if not (a_ok and h_ok):
-            all_pass = False
         a_txt = f"{a:+.2f}%" if isinstance(a, (int, float)) else "—"
         h_txt = f"{h:.0f}%" if isinstance(h, (int, float)) else "—"
-        mark = "✅" if (a_ok and h_ok) else "❌"
-        rows.append(
-            f'<li>{mark} <b>{html_lib.escape(str(label))}</b>：样本外 alpha {a_txt} · 命中 {h_txt} · 样本 {n or 0}'
-            f'（达标线：alpha&gt;0、命中≥{min_hit:.0f}%）</li>'
+        tech_rows.append(
+            f'<li><b>{html_lib.escape(str(label))}</b>：影子 alpha {a_txt} · 命中 {h_txt} · 样本 {n or 0}</li>'
         )
-    status = str(decision.get("status") or ev.get("status") or "").upper()
-    blocked = status == "BLOCKED" or any_neg or not mh
-    if blocked:
-        light, head, color = "🔴", "现在还不能照着买", "rose"
-        gist = ("各市场样本外实测目前还在亏 / 未达标，样本也不够。"
-                "<b>这套现在只能当研究线索，别照着直接下单。</b>等样本外 alpha 稳定转正再升级。")
-    elif all_pass:
-        light, head, color = "🟢", "可小仓参照（仍须你确认）", "emerald"
-        gist = ("样本外已达标。但仍须：<b>分散、按风险定仓位、设止损、你本人确认每一笔</b>——不是自动下单。")
-    else:
-        light, head, color = "🟡", "接近达标，仍不建议照着买", "amber"
-        gist = "部分指标转好但未全部达标。达标前仍当研究工具。"
+    tech_details = ""
+    if tech_rows:
+        tech_details = (
+            '<details class="mt-2 text-[11px] text-slate-500">'
+            '<summary class="cursor-pointer select-none font-semibold text-slate-600">展开技术口径：影子调参累计口径（不用于首屏判断）</summary>'
+            f'<ul class="mt-1 space-y-0.5">{"".join(tech_rows)}</ul>'
+            '<div class="mt-1">说明：这里含旧公式时期和调参样本，只用于研发自检；首屏灯以上方 strategy_eval / alpha_trend 口径为准。</div>'
+            '</details>'
+        )
+    as_of = html_lib.escape(str(latest.get("date") or "等待 alpha 记录"))
     return (
         f'<div class="mb-4 rounded-xl border border-{color}-300 bg-{color}-50 px-4 py-3">'
-        f'<div class="text-base font-bold text-{color}-900">{light} 能不能照着这页买？ — {head}</div>'
-        '<div class="text-[12px] text-slate-600 mt-0.5">这页是系统按规则挑的<b>候选股</b>（美股 / A股 / 港股各最多 20 只）。先回答最重要的问题：</div>'
-        f'<div class="text-sm text-slate-800 mt-1.5 leading-relaxed">{gist}</div>'
+        f'<div class="text-base font-bold text-{color}-900">{light} {head} <span class="text-xs font-medium text-slate-500">· 主口径 {as_of}</span></div>'
+        f'<div class="text-sm text-slate-800 mt-1 leading-relaxed">{gist}</div>'
         f'<ul class="text-[12px] text-slate-700 mt-2 leading-relaxed space-y-0.5">{"".join(rows)}</ul>'
-        '<div class="text-[11px] text-slate-500 mt-2">口径：strategy_eval 收盘价 · 单一来源 shadow_tuning_evidence.json · 样本外=用当时已知信息前瞻验证。详见规则文档 §19「策略可信度体检」。</div>'
+        '<div class="text-[11px] text-slate-500 mt-2">口径：strategy_eval 收盘价 · 单一来源 alpha_trend.json · 样本外=用当时已知信息前瞻验证。</div>'
+        f'{tech_details}'
         '</div>'
     )
 
@@ -22903,6 +23044,7 @@ def build():
     html = html.replace("{AI_NAV_BACKTEST}", ai_workbench_nav_html(3))
     html = html.replace("{AI_NAV_PORTFOLIO}", ai_workbench_nav_html(4))
     html = html.replace("{TRUST_VERDICT_PANEL}", trust_verdict_panel_html())
+    html = html.replace("{STRICT_PICKS_CARD}", strict_picks_card_html())
     html = html.replace("{US_VALIDATION_PROGRESS}", us_validation_progress_html())
     html = html.replace("{P0_POLICY_VALIDATION_PANEL}", p0_policy_validation_panel_html())
     html = html.replace("{RECOMMENDATION_READINESS_PANEL}", recommendation_readiness_panel_html(compact=True))

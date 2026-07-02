@@ -10,6 +10,7 @@ eligibility in (buyable,research_only)，避免把已被身份/证据拦截的�
 重新拉进公式对照。
 
 产物：data/latest/dual_track_ranking.json
+      data/latest/daily_strict_picks.json
   { generated_at, candidate, baseline, pool_source, markets: { US: {
       run_date, pool_size,
       rank_slices: {top5/top10/top20: {rows, dropped}},
@@ -35,6 +36,7 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "scripts" / "lib"))
 
 OUT = REPO / "data" / "latest" / "dual_track_ranking.json"
+STRICT_OUT = REPO / "data" / "latest" / "daily_strict_picks.json"
 BASELINE = "legacy_baseline"   # 对外展示名：老公式影子基线
 BASELINE_VARIANT = "prod_recheck"      # replay 里的老公式复算权重
 CANDIDATE = "val_down_grade"   # 第一候选规则（降估值+评级）
@@ -43,6 +45,176 @@ TOP_N = max(TOP_NS)
 POOL_SOURCE = "factor_snapshot_universe"
 US_MARKET = "US"
 US_RECOMMENDABLE_ELIGIBILITY = {"buyable", "research_only"}
+STRICT_PICK_N = 3
+STRICT_FALLING_KNIFE_PCT = -20.0
+STRICT_RISK_PULLBACK_PCT = -12.0
+
+_PLAIN_INTROS = {
+    "AMZN": "云计算和电商平台，AWS 是 AI 算力需求的核心承接方之一",
+    "AVGO": "AI 定制芯片和高速网络芯片供应商，帮大厂把算力连起来",
+    "NXPI": "车规和工业芯片公司，偏边缘计算和汽车电子",
+    "ADSK": "设计软件龙头，服务工程、建筑和制造业数字化",
+    "CRM": "企业软件平台，AI 助手和客户数据云是增长看点",
+    "MSFT": "云和企业软件平台，Azure 与 Copilot 是 AI 商业化主线",
+    "ORCL": "企业数据库和云基础设施供应商，受益 AI 云容量建设",
+    "ON": "功率和传感芯片公司，覆盖汽车、电源和工业场景",
+    "QCOM": "移动和边缘 AI 芯片公司，覆盖手机、车载和终端侧 AI",
+    "INTU": "财税和中小企业软件平台，AI 用于自动化财务工作流",
+}
+
+
+def _position_is_expensive(zone: dict | None) -> bool:
+    return str((zone or {}).get("position") or "") == "偏贵"
+
+
+def _plain_intro(symbol: str, chain_intro: str | None = None) -> str:
+    intro = str(chain_intro or "").strip()
+    if intro:
+        return intro
+    return _PLAIN_INTROS.get(symbol.upper(), "科技/AI 产业链候选，需要结合买前研究确认业务弹性")
+
+
+def _price_move_20d(conn, symbol: str) -> dict:
+    """近 20 个交易日收盘涨跌幅。用最近 20 条收盘价(含最新日)测这一段走势。"""
+    rows = conn.execute(
+        """
+        SELECT trade_date, close
+        FROM price_daily
+        WHERE market=? AND upper(symbol)=upper(?) AND close IS NOT NULL
+        ORDER BY trade_date DESC
+        LIMIT 20
+        """,
+        [US_MARKET, symbol],
+    ).fetchall()
+    if len(rows) < 20:
+        return {"symbol": symbol.upper(), "n": len(rows), "pct": None}
+    last_date, last_close = rows[0]
+    start_date, start_close = rows[-1]
+    try:
+        pct = (float(last_close) / float(start_close) - 1.0) * 100.0
+    except Exception:
+        pct = None
+    return {
+        "symbol": symbol.upper(),
+        "n": len(rows),
+        "latest_date": str(last_date),
+        "start_date": str(start_date),
+        "latest_close": round(float(last_close), 4),
+        "start_close": round(float(start_close), 4),
+        "pct": round(pct, 4) if pct is not None else None,
+    }
+
+
+def _chain_intro_map(conn) -> dict[str, str]:
+    try:
+        rows = conn.execute(
+            """
+            SELECT symbol, layman_intro
+            FROM chain_metadata
+            WHERE market=? AND layman_intro IS NOT NULL AND layman_intro <> ''
+            """,
+            [US_MARKET],
+        ).fetchall()
+    except Exception:
+        return {}
+    return {str(sym).upper(): str(intro) for sym, intro in rows if sym and intro}
+
+
+def _strict_reason(row: dict) -> str:
+    new_rank = row.get("new_rank")
+    prod_rank = row.get("prod_rank")
+    if prod_rank and int(prod_rank) <= 10:
+        agree = f"老公式也在前 10（第 {prod_rank}）"
+    elif prod_rank and int(prod_rank) <= 20:
+        agree = f"老公式也在前 20（第 {prod_rank}）"
+    else:
+        agree = f"老公式排第 {prod_rank or '—'}，属于新公式额外捞出"
+    return f"新公式精选第 {new_rank}；{agree}；估值闸和接飞刀闸通过。"
+
+
+def _strict_risk(move: dict) -> str:
+    pct = move.get("pct")
+    if isinstance(pct, (int, float)) and pct <= STRICT_RISK_PULLBACK_PCT:
+        return f"近 20 个交易日跌 {pct:.1f}%，板块仍在调整；只适合分批小仓做买前研究。"
+    return "未触发 20 日大跌过滤；仍需看盘前风险和买前研究。"
+
+
+def _strict_pick_payload(data: dict, conn) -> dict:
+    """从 US candidate_focus_top10 生成首屏严选 3 只。只读、只解释研究优先级。"""
+    from stock_research.core import buy_zone
+
+    us = (data.get("markets") or {}).get(US_MARKET) or {}
+    focus_rows = list(us.get("candidate_focus_top10") or [])
+    symbols = [str(r.get("symbol") or "").upper() for r in focus_rows if r.get("symbol")]
+    zones = buy_zone.compute_buy_zones(symbols, conn)
+    intros = _chain_intro_map(conn)
+    selected: list[dict] = []
+    excluded: list[dict] = []
+
+    for row in sorted(focus_rows, key=lambda r: int(r.get("new_rank") or 9999)):
+        symbol = str(row.get("symbol") or "").upper()
+        if not symbol:
+            continue
+        zone = zones.get(symbol)
+        move = _price_move_20d(conn, symbol)
+        if _position_is_expensive(zone):
+            excluded.append({
+                "symbol": symbol, "name": row.get("name") or "",
+                "reason": "剔贵", "detail": buy_zone.format_line(zone, compact=True),
+                "new_rank": row.get("new_rank"),
+            })
+            continue
+        if isinstance(move.get("pct"), (int, float)) and move["pct"] <= STRICT_FALLING_KNIFE_PCT:
+            excluded.append({
+                "symbol": symbol, "name": row.get("name") or "",
+                "reason": "接飞刀", "detail": f"近 20 日 {move['pct']:.1f}%",
+                "new_rank": row.get("new_rank"),
+            })
+            continue
+        selected.append({
+            "symbol": symbol,
+            "name": row.get("name") or "",
+            "new_rank": row.get("new_rank"),
+            "prod_rank": row.get("prod_rank"),
+            "candidate_score": row.get("candidate_score"),
+            "baseline_score": row.get("baseline_score"),
+            "intro": _plain_intro(symbol, intros.get(symbol)),
+            "reason": _strict_reason(row),
+            "buy_zone": zone,
+            "buy_zone_line": buy_zone.format_line(zone, compact=True),
+            "price_position": (zone or {}).get("position") or "未知",
+            "move_20d": move,
+            "risk": _strict_risk(move),
+        })
+        if len(selected) >= STRICT_PICK_N:
+            break
+
+    return {
+        "generated_at": data.get("generated_at"),
+        "market": US_MARKET,
+        "source": "dual_track_ranking.markets.US.candidate_focus_top10",
+        "source_run_date": us.get("run_date"),
+        "formula": CANDIDATE,
+        "advisory": "研究严选，不是买入指令；整套策略样本外未达标时仍需买前审查。",
+        "rules": {
+            "input": "candidate_focus_top10",
+            "exclude_expensive": "buy_zone.position == 偏贵",
+            "exclude_falling_knife": f"最近20条收盘价涨跌幅 <= {STRICT_FALLING_KNIFE_PCT}%",
+            "take": STRICT_PICK_N,
+        },
+        "picks": selected,
+        "excluded": excluded,
+        "empty_slots": max(0, STRICT_PICK_N - len(selected)),
+    }
+
+
+def write_outputs(data: dict) -> None:
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    strict = data.get("strict_picks")
+    if strict:
+        STRICT_OUT.parent.mkdir(parents=True, exist_ok=True)
+        STRICT_OUT.write_text(json.dumps(strict, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _connect():
@@ -216,6 +388,7 @@ def compute() -> dict:
                 # 兼容旧面板：顶层 rows/dropped 仍代表 Top20。
                 "rows": rows, "dropped": dropped,
             }
+        out["strict_picks"] = _strict_pick_payload(out, conn)
         return out
     finally:
         conn.close()
@@ -242,9 +415,9 @@ def main() -> int:
                 print(f"  -- 老 {top_key.upper()} 被新公式挤出: " +
                       "、".join(f"{x['symbol']}(老{x['prod_rank']}→新{x['new_rank']})" for x in sl["dropped"]))
     if not args.show:
-        OUT.parent.mkdir(parents=True, exist_ok=True)
-        OUT.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_outputs(data)
         print(f"已写 {OUT}")
+        print(f"已写 {STRICT_OUT}")
     return 0
 
 
