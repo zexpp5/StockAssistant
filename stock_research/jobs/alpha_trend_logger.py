@@ -355,6 +355,93 @@ def _dual_track_us(conn: Any) -> dict[str, Any]:
     return result
 
 
+# ── 推荐持有期止损闸（#4）────────────────────────────────────────────
+# 动机: 5d 最差单票 -32%, 一只破位票吃掉 Top10 一个月 alpha。
+# 口径: 扫最近 STOP_GATE_LOOKBACK_RUNS 个交易日内的生产 picks(三市场),
+#       自入榜日收盘价到最新收盘价回撤 ≤ STOP_GATE_DRAWDOWN_PCT → 记破位名单。
+# 只提示复查(advisory), 不自动卖出、不改榜单。
+STOP_GATE_DRAWDOWN_PCT = -20.0
+STOP_GATE_LOOKBACK_RUNS = 5
+
+
+def _pick_stop_gate(conn: Any) -> dict[str, Any]:
+    """持有期破位扫描。纯读; 失败返回 error 块, 不拦 alpha 记录主流程。"""
+    breaches: list[dict[str, Any]] = []
+    scanned = 0
+    try:
+        rows = conn.execute(
+            """
+            WITH recent_runs AS (
+                SELECT DISTINCT rp.market, DATE(rr.generated_at) AS run_day
+                FROM recommendation_runs rr
+                JOIN recommendation_picks rp ON rp.run_id = rr.run_id
+                WHERE rr.universe_scope = 'system_tech_universe'
+                  AND DATE(rr.generated_at) >= CURRENT_DATE - INTERVAL 14 DAY
+            ), ranked_runs AS (
+                SELECT market, run_day,
+                       ROW_NUMBER() OVER (PARTITION BY market ORDER BY run_day DESC) AS rn
+                FROM recent_runs
+            ), scope AS (
+                SELECT market, MIN(run_day) AS since FROM ranked_runs WHERE rn <= ? GROUP BY market
+            ), latest_batch AS (
+                SELECT rp.market, rp.symbol, rp.name, DATE(rr.generated_at) AS pick_day,
+                       ROW_NUMBER() OVER (PARTITION BY rp.market, rp.symbol
+                                          ORDER BY rr.generated_at ASC) AS first_seen
+                FROM recommendation_runs rr
+                JOIN recommendation_picks rp ON rp.run_id = rr.run_id
+                JOIN scope s ON s.market = rp.market AND DATE(rr.generated_at) >= s.since
+                WHERE rr.universe_scope = 'system_tech_universe'
+            )
+            SELECT market, symbol, name, pick_day FROM latest_batch WHERE first_seen = 1
+            """,
+            [STOP_GATE_LOOKBACK_RUNS],
+        ).fetchall()
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)[:200]}
+
+    for market, symbol, name, pick_day in rows:
+        pd = _as_date(pick_day)
+        if pd is None:
+            continue
+        try:
+            px = conn.execute(
+                """
+                SELECT
+                    (SELECT close FROM price_daily
+                     WHERE market=? AND symbol=? AND trade_date>=? AND close IS NOT NULL
+                     ORDER BY trade_date ASC LIMIT 1) AS entry_close,
+                    (SELECT close FROM price_daily
+                     WHERE market=? AND symbol=? AND close IS NOT NULL
+                     ORDER BY trade_date DESC LIMIT 1) AS last_close
+                """,
+                [market, symbol, pd, market, symbol],
+            ).fetchone()
+        except Exception:
+            continue
+        if not px or px[0] is None or px[1] is None or float(px[0]) <= 0:
+            continue
+        scanned += 1
+        dd = (float(px[1]) / float(px[0]) - 1.0) * 100.0
+        if dd <= STOP_GATE_DRAWDOWN_PCT:
+            breaches.append({
+                "market": market, "symbol": symbol, "name": name,
+                "pick_day": pd.isoformat(),
+                "drawdown_pct": round(dd, 2),
+                "entry_close": round(float(px[0]), 4),
+                "last_close": round(float(px[1]), 4),
+            })
+    breaches.sort(key=lambda b: b["drawdown_pct"])
+    return {
+        "status": "ok",
+        "threshold_pct": STOP_GATE_DRAWDOWN_PCT,
+        "lookback_runs": STOP_GATE_LOOKBACK_RUNS,
+        "scanned": scanned,
+        "n_breach": len(breaches),
+        "breaches": breaches,
+        "note": "advisory: 破位票建议复查基本面/催化, 不构成自动卖出指令",
+    }
+
+
 def compute(as_of: date | None = None) -> dict:
     sys.path.insert(0, str(_REPO / "scripts" / "lib"))
     import stock_research.core.strategy_eval as se
@@ -388,6 +475,7 @@ def compute(as_of: date | None = None) -> dict:
         prior = [r for r in _load_history() if str(r.get("date")) < rec["date"]]  # 同日重跑不重复计连胜
         dual["switch_criteria"] = _switch_criteria_verdict(dual, prior)
         rec["dual_track_us"] = dual
+        rec["pick_stop_gate"] = _pick_stop_gate(conn)
         return rec
     finally:
         conn.close()

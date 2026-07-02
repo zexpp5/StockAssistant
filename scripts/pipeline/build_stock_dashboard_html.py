@@ -462,65 +462,186 @@ def _dual_track_html() -> str:
     def _e(s):
         return str(s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    mkt_label = {"US": "美股", "HK": "港股", "CN": "A股"}
-    blocks = []
-    for mkt in ("US", "HK", "CN"):
-        blk = data["markets"].get(mkt)
-        if not blk:
-            continue
-        rows = blk["rows"]
-        trs = []
-        for r in rows:  # 候选规则全池选出的 Top20
-            d = r["delta"]
-            if d > 0:
-                arrow = f'<span class="text-emerald-600 font-semibold">↑{d}</span>'
-            elif d < 0:
-                arrow = f'<span class="text-rose-500 font-semibold">↓{-d}</span>'
-            else:
-                arrow = '<span class="text-slate-300">—</span>'
-            hi = ' bg-emerald-50' if r.get("is_new") else (' bg-rose-50' if d <= -5 else '')
-            newflag = ' <span class="text-[10px] px-1 rounded bg-emerald-100 text-emerald-700">🆕新捞入</span>' if r.get("is_new") else ''
-            prod_disp = r["prod_rank"] if r["prod_rank"] <= 20 else f'{r["prod_rank"]}(榜外)'
-            trs.append(
-                f'<tr class="border-b border-slate-100{hi}">'
-                f'<td class="py-1.5 pr-3 text-center font-semibold text-violet-700">{r["new_rank"]}</td>'
-                f'<td class="py-1.5 pr-3 text-center text-slate-400">{prod_disp}</td>'
-                f'<td class="py-1.5 pr-3 text-center">{arrow}</td>'
-                f'<td class="py-1.5 pr-3 font-mono font-semibold text-slate-800 whitespace-nowrap">{_e(r["symbol"])}{newflag}</td>'
-                f'<td class="py-1.5 text-slate-500 text-xs">{_e(r.get("name") or "")}</td>'
-                f'</tr>'
+    def _latest_alpha_dual() -> dict:
+        p = repo / "data" / "latest" / "alpha_trend.json"
+        if not p.exists():
+            return {}
+        try:
+            trend = (json.loads(p.read_text(encoding="utf-8")).get("trend") or [])
+            return trend[-1] if trend else {}
+        except Exception:
+            return {}
+
+    def _delta_card(top_n: int, latest: dict) -> str:
+        dual = latest.get("dual_track_us") or {}
+        block = ((dual.get("by_top_n") or {}).get(f"top{top_n}") or {})
+        h5 = (block.get("horizons") or {}).get("5d") or {}
+        delta = h5.get("delta_new_minus_old_avg_alpha_pct")
+        new = (h5.get("val_down_grade") or {})
+        old = (h5.get("legacy_baseline") or {})
+        if not isinstance(delta, (int, float)):
+            return (
+                '<div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">'
+                f'<div class="text-xs text-slate-500">Top{top_n}</div>'
+                '<div class="text-lg font-bold text-slate-400">等待样本</div>'
+                '<div class="text-[11px] text-slate-400">5日结果未成熟</div></div>'
             )
-        dropped = blk.get("dropped") or []
-        drop_html = ''
-        if dropped:
-            chips = "、".join(f'{_e(x["symbol"])}(老{x["prod_rank"]}→新{x["new_rank"]})' for x in dropped)
-            drop_html = (f'<div class="text-[11px] text-rose-500 mt-1">⬇️ 被新公式挤出老 Top20：{chips}</div>')
-        blocks.append(
-            f'<div class="mb-4"><div class="text-xs font-semibold text-slate-600 mb-1">'
-            f'{mkt_label.get(mkt, mkt)} · 批次 {_e(blk["run_date"])} · 全池 {blk.get("pool_size","?")} 只 → 各选 Top20</div>'
-            '<div class="overflow-x-auto"><table class="w-full text-sm">'
-            '<thead><tr class="text-left text-[11px] text-slate-400 border-b border-slate-200">'
-            '<th class="py-1 pr-3 text-center font-medium">新名次</th>'
-            '<th class="py-1 pr-3 text-center font-medium">现名次</th>'
-            '<th class="py-1 pr-3 text-center font-medium">升降</th>'
-            '<th class="py-1 pr-3 font-medium">代码</th>'
-            '<th class="py-1 font-medium">名称</th>'
-            '</tr></thead><tbody>' + "".join(trs) + '</tbody></table></div>' + drop_html + '</div>'
+        tone = "emerald" if delta > 0 else ("rose" if delta < 0 else "slate")
+        sign = "+" if delta > 0 else ""
+        label = "精选层" if top_n <= 10 else "全榜替换"
+        return (
+            f'<div class="rounded-lg border border-{tone}-200 bg-{tone}-50 px-3 py-2">'
+            f'<div class="text-xs text-{tone}-700">Top{top_n} · {label}</div>'
+            f'<div class="text-lg font-bold text-{tone}-700">{sign}{delta:.2f}pp</div>'
+            f'<div class="text-[11px] text-slate-500">新 {new.get("avg_alpha_pct", 0):+.2f}% / 旧 {old.get("avg_alpha_pct", 0):+.2f}% · n{new.get("n", 0)}</div>'
+            '</div>'
         )
 
+    def _rank_cell(r: dict, compare_n: int) -> str:
+        prod_rank = int(r.get("prod_rank") or 9999)
+        return str(prod_rank) if prod_rank <= compare_n else f'{prod_rank}(榜外)'
+
+    def _stop_gate_strip(latest: dict) -> str:
+        """#4 止损闸: 近期上榜票破位(-20%)红条; 无破位时一行灰字带扫描数, 证明闸在工作。"""
+        sg = latest.get("pick_stop_gate") or {}
+        if sg.get("status") != "ok":
+            return ""
+        breaches = sg.get("breaches") or []
+        if not breaches:
+            return (
+                '<div class="mt-2 text-[11px] text-slate-400">🛡️ 止损闸：近 '
+                f'{sg.get("lookback_runs", 5)} 个交易日上榜票 {sg.get("scanned", 0)} 只，无一破位（阈值 '
+                f'{sg.get("threshold_pct", -20)}%）。</div>'
+            )
+        chips = "、".join(
+            f'{_e(b["symbol"])}({b["drawdown_pct"]:+.1f}%)' for b in breaches[:8]
+        )
+        return (
+            '<div class="mt-2 rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-xs text-rose-800">'
+            f'🔴 <strong>止损闸告警</strong> · {len(breaches)} 只近期上榜票自入榜回撤破 '
+            f'{sg.get("threshold_pct", -20)}%：{chips} — 建议复查基本面/催化后再决定去留（advisory，不是自动卖出）。'
+            '</div>'
+        )
+
+    def _switch_criteria_strip(latest: dict) -> str:
+        """#3 预注册切换标准状态: 每天自动判定, 达标进度可见, 防止拍脑袋切主榜。"""
+        sc = ((latest.get("dual_track_us") or {}).get("switch_criteria")) or {}
+        if not sc:
+            return ""
+        checks = sc.get("checks") or {}
+        n_pass = sum(1 for v in checks.values() if v)
+        streak = sc.get("consecutive_met_days", 0)
+        need = ((sc.get("rule") or {}).get("consecutive_days_required")) or 10
+        if sc.get("switch_allowed"):
+            cls, icon, verdict = "border-emerald-300 bg-emerald-50 text-emerald-800", "✅", "达标 — 可以提请切换主榜（仍需人工拍板）"
+        elif sc.get("met_today"):
+            cls, icon, verdict = "border-amber-300 bg-amber-50 text-amber-800", "⏳", f"今日达标，连续 {streak}/{need} 天"
+        else:
+            cls, icon, verdict = "border-slate-200 bg-slate-50 text-slate-600", "🔒", f"未达标（{n_pass}/{len(checks)} 项通过）— 不允许切主榜"
+        return (
+            f'<div class="mt-2 rounded-lg border {cls} px-3 py-2 text-[11px]">'
+            f'{icon} <strong>主榜切换标准（预注册，2026-07-02 拍板）</strong>：{verdict} · '
+            '条件 = Top20 双周期Δ为正 + 新公式5日alpha自身为正 + n≥300 + 连续10个交易日。'
+            '</div>'
+        )
+
+    def _move_text(r: dict) -> str:
+        d = int(r.get("delta") or 0)
+        if r.get("is_new"):
+            return '<span class="text-emerald-700 font-semibold">新公式捞入</span>'
+        if d > 0:
+            return f'<span class="text-emerald-700">上调 {d} 名</span>'
+        if d < 0:
+            return f'<span class="text-rose-600">下调 {-d} 名</span>'
+        return '<span class="text-slate-400">不变</span>'
+
+    latest_alpha = _latest_alpha_dual()
+    latest_date = latest_alpha.get("date") or "等待记录"
+    us = data["markets"].get("US") or {}
+    slices = us.get("rank_slices") or {}
+    focus_rows = us.get("candidate_focus_top10") or (slices.get("top10", {}).get("rows") or us.get("rows") or [])[:10]
+    focus_trs = []
+    for r in focus_rows:
+        hi = " bg-emerald-50" if r.get("is_new") else ""
+        focus_trs.append(
+            f'<tr class="border-b border-slate-100{hi}">'
+            f'<td class="py-2 pr-3 text-center font-semibold text-violet-700">{r["new_rank"]}</td>'
+            f'<td class="py-2 pr-3 text-center text-slate-500">{_rank_cell(r, 10)}</td>'
+            f'<td class="py-2 pr-3 font-mono font-semibold text-slate-900 whitespace-nowrap">{_e(r["symbol"])}</td>'
+            f'<td class="py-2 pr-3 text-slate-500 text-xs">{_e(r.get("name") or "")}</td>'
+            f'<td class="py-2 text-xs">{_move_text(r)}</td>'
+            f'</tr>'
+        )
+    dropped10 = (slices.get("top10") or {}).get("dropped") or []
+    dropped20 = (slices.get("top20") or {}).get("dropped") or us.get("dropped") or []
+    drop10_html = ""
+    if dropped10:
+        chips = "、".join(f'{_e(x["symbol"])}(老{x["prod_rank"]}→新{x["new_rank"]})' for x in dropped10)
+        drop10_html = f'<div class="mt-2 text-[11px] text-rose-500">老 Top10 被精选口径挤出：{chips}</div>'
+
+    full20_rows = (slices.get("top20") or {}).get("rows") or us.get("rows") or []
+    full20_trs = []
+    for r in full20_rows:
+        full20_trs.append(
+            '<tr class="border-b border-slate-100">'
+            f'<td class="py-1.5 pr-3 text-center text-violet-700 font-semibold">{r["new_rank"]}</td>'
+            f'<td class="py-1.5 pr-3 text-center text-slate-400">{_rank_cell(r, 20)}</td>'
+            f'<td class="py-1.5 pr-3 font-mono font-semibold text-slate-800">{_e(r["symbol"])}</td>'
+            f'<td class="py-1.5 text-xs text-slate-500">{_move_text(r)}</td>'
+            '</tr>'
+        )
+    drop20_html = ""
+    if dropped20:
+        chips = "、".join(f'{_e(x["symbol"])}(老{x["prod_rank"]}→新{x["new_rank"]})' for x in dropped20)
+        drop20_html = f'<div class="mt-2 text-[11px] text-rose-500">老 Top20 被候选口径挤出：{chips}</div>'
+
     return (
-        '<details class="mb-5 bg-white rounded-xl shadow-sm border border-amber-200 p-4">'
-        '<summary class="cursor-pointer select-none font-bold text-slate-800 flex items-center gap-2 flex-wrap">'
-        '🧪 <span>规则试运行：现规则 vs 候选「降估值+评级」</span>'
-        '<span class="text-xs font-normal text-amber-600">（全池同池各选·纯观察·未改生产）</span></summary>'
-        '<p class="text-xs text-slate-500 mt-2 mb-3">候选规则 val_down_grade = 估值权重 0.50→0.25 + 加入评级因子 0.20。'
-        '<strong>两套公式在同一批全量候选池（factor_snapshot_universe）各自独立打分、各自选 Top20</strong>，'
-        '不是在生产 Top20 内重排——这才是公平对照。前向真金目前赢生产（美股5日 +3.14% vs +1.87%），但样本仍薄（n20-70），'
-        '定为<strong>第一候选</strong>观察中，<strong>未替换线上打分</strong>。'
-        '<span class="text-emerald-700">🆕新捞入</span>＝候选规则选进、现规则 Top20 没有的票；现名次「榜外」＝现规则把它排在 20 名开外。研究参考，非投资建议。</p>'
-        + "".join(blocks) +
-        '<p class="text-[11px] text-slate-400 mt-1">现名次＝现规则权重在全池复算的排名；评级因子美股专属，港/A 退化为估值/反转主导。</p>'
-        '</details>'
+        '<section class="mb-5 bg-white rounded-xl shadow-sm border border-amber-200 p-4">'
+        '<div class="flex items-start justify-between gap-4 flex-wrap">'
+        '<div>'
+        '<h3 class="font-bold text-slate-900">美股规则双轨：主榜不变，精选看「降估值+评级」</h3>'
+        '<p class="text-xs text-slate-500 mt-1">主列表仍用现规则 Top20；下面的精选 Top10 用候选公式 val_down_grade 从同一全量池独立排名，'
+        '只作为买前研究优先级，不写持仓、不写自选、不等于买入指令。</p>'
+        '</div>'
+        '<div class="text-xs text-slate-400">alpha 记录：' + _e(latest_date) + '</div>'
+        '</div>'
+        + _stop_gate_strip(latest_alpha) + _switch_criteria_strip(latest_alpha) +
+        '<div class="grid grid-cols-1 md:grid-cols-3 gap-3 my-3">'
+        + _delta_card(5, latest_alpha) + _delta_card(10, latest_alpha) + _delta_card(20, latest_alpha) +
+        '</div>'
+        '<div class="rounded-lg border border-slate-200 overflow-hidden">'
+        '<div class="px-3 py-2 bg-slate-50 border-b border-slate-200">'
+        f'<div class="text-sm font-semibold text-slate-800">美股精选 Top10 · 批次 {_e(us.get("run_date") or "")} · 全池 {us.get("pool_size","?")} 只</div>'
+        '<div class="text-[11px] text-slate-500">看法：Top5/Top10 如果持续跑赢，说明新公式适合做精选；Top20 如果不赢，就不能贸然替换整张主榜。</div>'
+        '</div>'
+        '<div class="overflow-x-auto"><table class="w-full text-sm">'
+        '<thead><tr class="text-left text-[11px] text-slate-400 border-b border-slate-200">'
+        '<th class="py-1.5 pr-3 text-center font-medium">精选名次</th>'
+        '<th class="py-1.5 pr-3 text-center font-medium">现规则名次</th>'
+        '<th class="py-1.5 pr-3 font-medium">代码</th>'
+        '<th class="py-1.5 pr-3 font-medium">名称</th>'
+        '<th class="py-1.5 font-medium">变化</th>'
+        '</tr></thead><tbody>' + "".join(focus_trs) + '</tbody></table></div>'
+        + drop10_html +
+        '</div>'
+        '<details class="mt-3 text-xs text-slate-500">'
+        '<summary class="cursor-pointer select-none text-violet-700 font-semibold">展开看完整 Top20 和规则说明</summary>'
+        '<div class="mt-2 grid grid-cols-1 lg:grid-cols-2 gap-3">'
+        '<div class="rounded-lg border border-slate-200 p-3">'
+        '<div class="font-semibold text-slate-700 mb-2">完整 Top20 对照</div>'
+        '<div class="overflow-x-auto"><table class="w-full text-xs">'
+        '<thead><tr class="text-left text-slate-400 border-b border-slate-200">'
+        '<th class="py-1 pr-2 text-center">新</th><th class="py-1 pr-2 text-center">现</th><th class="py-1 pr-2">代码</th><th class="py-1">变化</th>'
+        '</tr></thead><tbody>' + "".join(full20_trs) + '</tbody></table></div>' + drop20_html + '</div>'
+        '<div class="rounded-lg border border-slate-200 p-3">'
+        '<div class="font-semibold text-slate-700 mb-2">怎么用</div>'
+        '<p>1. 主榜 Top20 还是生产口径，避免把全市场排序一次性推翻。</p>'
+        '<p class="mt-1">2. 精选 Top10 用新公式，解决旧公式估值权重过重、忽略评级的问题。</p>'
+        '<p class="mt-1">3. 真要研究，优先看「主榜靠前 + 精选靠前 + 无盘前橙红风险」的交集。</p>'
+        '<p class="mt-1">4. Top20 新公式还没稳定赢旧公式前，不做全榜替换。</p>'
+        '<p class="mt-2 text-slate-400">评级因子目前美股专属；港股/A股仍保持旧规则，不在这里强行切换。</p>'
+        '</div></div></details>'
+        '</section>'
     )
 
 
@@ -14689,22 +14810,47 @@ function _reasonSummaryHtml(row) {
       }).join("");
     }
 
+    // 2026-07-02 主榜收敛: 前向验证两套公式在 Top20 口径都是负 alpha, 11-20 名无可证明 edge。
+    // 数据层照旧生成 Top20(验证样本不断), 展示层只把 rank>10 降级为「观察池」沉底折叠。
+    const MAIN_BOARD_N = 10;
+    const _isObservationRow = c => (c.rank || 9999) > MAIN_BOARD_N;
     function _visibleDiscoveryCandidates() {
       const rows = cands.filter(c => _candidateMarketCode(c) === window._activeDiscoveryMarket);
       if ((window._discoverySortMode || "policy") === "policy") {
-        return rows.sort((a, b) => {
+        rows.sort((a, b) => {
           const pa = _policyActionPriority(a);
           const pb = _policyActionPriority(b);
           if (pa !== pb) return pa - pb;
           return (a.rank || 9999) - (b.rank || 9999);
         });
+      } else {
+        rows.sort((a, b) => (a.rank || 9999) - (b.rank || 9999));
       }
-      return rows.sort((a, b) => (a.rank || 9999) - (b.rank || 9999));
+      // 主榜(rank≤10)在前, 观察池(rank>10)沉底 — 稳定分区, 不打乱各自内部顺序
+      return rows.filter(c => !_isObservationRow(c)).concat(rows.filter(_isObservationRow));
     }
+
+    window.toggleDiscoveryObsPool = function(btn) {
+      const rows = document.querySelectorAll("#discovery-table-wrap .disc-obs-row");
+      const nowHidden = rows.length && rows[0].classList.contains("hidden");
+      rows.forEach(r => r.classList.toggle("hidden", !nowHidden));
+      if (btn) btn.textContent = nowHidden ? "收起观察池 ▲" : "展开观察池 ▼";
+    };
 
     function _renderDiscoveryMarketRows() {
       const visibleCands = _visibleDiscoveryCandidates();
+      const nObs = visibleCands.filter(_isObservationRow).length;
+      let obsDividerDone = false;
       tbody.innerHTML = visibleCands.map((c, idx) => {
+      const isObs = _isObservationRow(c);
+      let obsDivider = "";
+      if (isObs && !obsDividerDone) {
+        obsDividerDone = true;
+        obsDivider = `<tr class="bg-slate-100"><td colspan="99" class="px-3 py-2 text-xs text-slate-600">
+          📂 <strong>观察池（原 11~${nObs + MAIN_BOARD_N} 名）</strong> · 前向验证 11-20 名无可证明超额收益，降级为观察、不建议按主榜对待
+          <button onclick="toggleDiscoveryObsPool(this)" class="ml-2 px-2 py-0.5 text-[11px] bg-white border border-slate-300 rounded hover:bg-slate-50">展开观察池 ▼</button>
+        </td></tr>`;
+      }
       const cap = c.market_cap_usd ? (c.market_cap_usd / 1e9).toFixed(1) : "-";
       const f = c.f_score == null ? "-" : Math.round(c.f_score);
       const fColor = c.f_score >= 7 ? "text-emerald-600" : (c.f_score >= 4 ? "text-amber-600" : "text-rose-600");
@@ -14748,9 +14894,9 @@ function _reasonSummaryHtml(row) {
       const alpha60 = track ? track.alpha_60d : null;
       const tk = _esc(c.ticker);
       const stockDetailAttrs = `data-code="${tk}" data-name="${_esc(displayName)}" onclick="openStockDetail(this.dataset.code, this.dataset.name)"`;
-      return `<tr class="hover:bg-slate-50">
+      return `${obsDivider}<tr class="hover:bg-slate-50${isObs ? " disc-obs-row hidden opacity-60" : ""}">
         <td class="disc-sticky-rank px-2 py-1 font-mono text-xs text-slate-500">
-          <span title="${window._discoverySortMode === "policy" ? "新规则视图排序；" : "原始分数排序；"}后端原始 rank #${c.rank}">${idx + 1}</span>
+          <span title="${window._discoverySortMode === "policy" ? "新规则视图排序；" : "原始分数排序；"}后端原始 rank #${c.rank}${isObs ? "（观察池）" : ""}">${isObs ? "📂 " : ""}${idx + 1}</span>
         </td>
         <td class="disc-sticky-code px-2 py-1 font-mono text-xs font-bold text-violet-700 cursor-pointer hover:underline"
             ${stockDetailAttrs} title="点击进入这只股票的完整详情页">${c.ticker}${_newBadge(c)}${_riseBadge(c)}${_appearanceBadge(c)}</td>

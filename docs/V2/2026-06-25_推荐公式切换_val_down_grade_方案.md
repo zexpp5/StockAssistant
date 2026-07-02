@@ -1,11 +1,46 @@
-# 推荐公式切换方案：现公式 → val_down_grade（降估值 + 加评级）
+# 推荐公式切换方案：现公式 + val_down_grade 精选层（降估值 + 加评级）
 
-> 2026-06-25 草拟 · v3（2026-06-25 执行后修订）· 状态：**影子能力已实施，生产默认未激活** · 决策人：用户（真钱相关，改打分公式必须用户拍板）
+> 2026-06-25 草拟 · v4（2026-06-26 混合方案落地后修订）· 状态：**生产主榜未切；美股精选层已上线；新旧双轨继续验证** · 决策人：用户（真钱相关，改打分公式必须用户拍板）
 > 关联：[[docs/V2/2026-06-09_AI与科技成长推荐规则.md]] §17-19、记忆 `project_weight_variant_shadow_pipeline` / `project_ai_strategy_unvalidated_and_concentration`
 
 ---
 
-> ## ✅ 2026-06-25 执行结论（最新）
+> ## ✅ 2026-07-02 收敛执行（最新）
+> 用户拍板「不留尾巴」，四件事一次做完：
+> 1. **beta tilt 体检通过**：val_down_grade 按大盘涨/跌日分组，跌市里赢老公式一样多甚至更多
+>    （Top5 1d 跌市 Δ+0.68pp / 5d 跌市 Δ+3.14pp）——是选股 edge 不是 beta 顺风车。
+> 2. **全变体前向锦标赛**（11 变体 × Top5/10 × 1d/5d，同池各选）：赢家全是「保留部分估值 +
+>    F分加重」结构（val_down_mild +2.06% / val_down_quality +1.74% / quality_heavy +1.66% @Top5 5d）；
+>    回测冠军 no_val_grade / rev_grade_5050 前向再次全负。按「海选每轮只提拔 1 个」纪律，
+>    注册 **challenger_quality_heavy**（f_score 0.40，四榜位全正+跌市最稳）进双轨前向追踪，只记账不碰生产。
+>    **精选层公式维持 val_down_grade 不换**——排第 4 但已上线+方向已验证，等挑战者攒够样本再说。
+> 3. **主榜切换标准预注册**（SWITCH_RULE @ alpha_trend_logger，不许事后挪门槛）：
+>    Top20 1d/5d Δ 同正 + 新公式 5d alpha 自身>0 + n≥300 + 连续 10 交易日 → 才允许切；
+>    切后 5d Δ 连续 5 日<0 → 回滚。每天自动判定写入 alpha_trend.json，双轨面板显示达标进度。
+>    今日实测 4 项只过 1 项 → 🔒 不允许切。
+> 4. **主榜展示收敛 Top10 + 止损闸**：前向验证两公式在 Top20 都是负 alpha → dashboard 主榜只显示
+>    rank≤10，11-20 降级「观察池」折叠；新增持有期止损闸（近 5 个交易日上榜票自入榜收盘价回撤
+>    ≤-20% → 双轨面板红条 advisory 复查），今日扫 77 只 0 破位。数据层 Top20 照旧生成，验证样本不断。
+
+> ## ✅ 2026-06-26 执行结论（历史）
+> **最终不是“全量切新公式”，而是“主榜稳住 + 新公式做美股精选层”。**
+> - 生产主榜继续使用老公式 `tech_ai_v2_usable_data_gate`，不把整张 Top20 一次性推翻。
+> - 新公式 `val_down_grade` 已上线为 **美股精选 Top10 / 买前研究优先级**，只读展示，不写 `watchlist`、不写真实持仓、不等于买入指令。
+> - 老公式继续作为 `legacy_baseline`；新公式作为 `val_down_grade`，两者从同一批 `factor_snapshot_universe` 全量合格候选池独立排名。
+> - 双轨验证不再只看 Top20，而是同时记录：
+>   - **Top5**：验证“最强精选层”是否有效。
+>   - **Top10**：验证“今晚优先研究/精选榜”是否有效。
+>   - **Top20**：验证“能否替换整张主榜”。
+> - 2026-06-26 最新 5D 结果：
+>   - Top5：新公式 +2.80% vs 老公式 -1.55%，新-旧 **+4.35pp**。
+>   - Top10：新公式 +1.51% vs 老公式 +0.00%，新-旧 **+1.51pp**。
+>   - Top20：新公式 +0.44% vs 老公式 +0.60%，新-旧 **-0.16pp**。
+> - 因此当前产品结论：**新公式可以用于“精选层/重点研究”，但还不能替换生产主榜 Top20。**
+> - 页面入口：`AI 推荐` → `今日 Top` 顶部模块 **“美股规则双轨：主榜不变，精选看「降估值+评级」”**。
+
+---
+
+> ## ✅ 2026-06-25 执行结论（历史）
 > **代码能力已经就位，但今天不默认切生产。**
 > - 新公式 `val_down_grade` 已能在生产脚本里计算；但默认只作为 **shadow / dual-track 候选**。
 > - 生产默认仍是老公式 `tech_ai_v2_usable_data_gate`；只有显式设置 `US_VAL_DOWN_GRADE_ACTIVE=1` 才会激活美股新公式并写 `tech_ai_v3_us_val_down_grade`。
@@ -18,11 +53,12 @@
 ---
 
 > ## ⚠️ 性质定性（评审硬规则，写在最前面）
-> **本次只切美股主排序，属于「试运行版」改善主排序——不是策略已被完全证明。**
+> **本次不默认切美股主排序，而是上线“精选层”试运行——不是策略已被完全证明。**
 > - 影子整体判定仍是 **BLOCKED**，样本薄：美股 **1D n=70 / 5D n=30**。
 > - **回测是近似代理**（省略了 f_score / data_usability 两个常数因子），只验证「降估值+评级」**方向**，≠ 完整新公式历史收益。
 > - **最终胜负看前向对照**：每天记新公式 vs 老公式 1D/5D alpha，**连续转差立即回滚**。
 > - 老公式不删，降级为影子 `legacy_baseline` 永久对照。
+> - **产品使用边界**：Top5/Top10 赢，只能说明“精选层优先研究”更合理；Top20 没赢之前，不允许把它解释成“全榜已可替换”。
 
 ---
 
@@ -31,7 +67,7 @@
 **问题**：现双轨脚本 `build_dual_track_ranking.py`(L49) 走 `replay.load_picks` → 读 `recommendation_picks`（**生产 Top20**）再重排。一旦生产主规则切成 val_down_grade，`recommendation_picks` 里**已经是新公式预筛过的票**，老公式在这批里重排 = **「在新公式筛过的结果里比老公式」**，对照失真——你以为在比新旧公式，其实在比"新公式选剩的老公式"。前向 alpha 对照同理会被污染。
 
 **硬要求**：
-1. 新公式、老公式（legacy_baseline）**必须基于同一批「全量合格候选池」分别独立打分、各自产出 Top20**，绝不在任一方的 Top20 内做影子重排。
+1. 新公式、老公式（legacy_baseline）**必须基于同一批「全量合格候选池」分别独立打分、各自产出 Top5/Top10/Top20**，绝不在任一方的 Top20 内做影子重排。
 2. 全量池数据源 = **`factor_snapshot_universe`**（build_v2 截断前的全宇宙快照，~370 只/天；实测表已存在、今日 6-25 有数）。**不是 `recommendation_picks`。**
 3. 影响两处实现，实施时一并改：
    - `build_dual_track_ranking.py`：取数从 `load_picks`(recommendation_picks) 改为读 `factor_snapshot_universe` 当日全量，对每只算 新/老 两套分 → 各自排名 → 对照。
@@ -42,7 +78,7 @@
 
 ## 1. 一句话
 
-原目标是把美股生产打分公式从「估值主导」换成 **val_down_grade（估值砍半 + 加入评级因子）**，老公式降级为影子 baseline 继续对照。**实际执行后因严格双轨未胜出，改为：生产保留老公式，新公式进入完整影子对照；港/A 暂不切**（见 §6）。
+原目标是把美股生产打分公式从「估值主导」换成 **val_down_grade（估值砍半 + 加入评级因子）**，老公式降级为影子 baseline 继续对照。**实际执行后因严格双轨显示“精选胜、全榜未胜”，改为：生产主榜保留老公式，新公式进入美股精选 Top10 + 完整影子对照；港/A 暂不切**（见 §6.1 / §6.2）。
 
 ## 2. 为什么切（证据，按"前向优先"排序）
 
@@ -95,7 +131,7 @@
 
 ## 6. 拍板（评审后定稿的执行姿势）
 
-**执行后口径：只切影子，不默认切生产；保留显式激活开关。** 具体：
+**执行后口径：主榜不切；精选层上线；保留显式激活开关。** 具体：
 
 - **默认生产版本号**：`tech_ai_v2_usable_data_gate`。
 - **显式激活版本号**：`tech_ai_v3_us_val_down_grade`（设置 `US_VAL_DOWN_GRADE_ACTIVE=1` 后才使用；名字里带 `us_`，自带"仅美股"语义）；混合版本里 HK/A 仍记为 legacy。
@@ -106,12 +142,60 @@
     HK = legacy
     A  = legacy
   ```
-- **美股**：默认仍上老公式；`val_down_grade` 在 shadow/dual-track 中完整计算（含评级 + F分入总分）。若用户强制激活，则生产使用该公式。
+- **美股主榜**：默认仍上老公式；`val_down_grade` 在 shadow/dual-track 中完整计算（含评级 + F分入总分）。若用户强制激活，则生产使用该公式。
+- **美股精选层**：`val_down_grade` 可用于 AI 推荐页顶部“美股精选 Top10 / 买前研究优先级”。这是只读研究层，不写 `recommendation_picks`、不写 `watchlist`、不写真实持仓。
 - **港股 / A股**：**暂不切**，维持现公式。理由：评级因子本就美股专属（analyst_grade_events 只有美股），A 股记忆判定是"池子问题，权重救不了"。
-- **页面标注**：AI 推荐页（美股）默认应显示「当前主规则：tech_ai_v2_usable_data_gate；候选规则：val_down_grade 影子观察」。强制激活后才显示「tech_ai_v3_us_val_down_grade · 🧪试运行」。
+- **页面标注**：AI 推荐页（美股）默认应显示「主榜不变：tech_ai_v2_usable_data_gate；精选层：val_down_grade」。强制激活后才显示「tech_ai_v3_us_val_down_grade · 🧪试运行」。
 - **老公式**：继续作为 `prod_recheck` / `legacy_baseline` 影子对照，**永久保留不删**。
 - **策略验证**：默认继续按旧生产版本计数；`alpha_trend_logger` 额外记录新旧公式全池对照。若强制激活 v3，再从新版本重新计数（n 归零重攒）。
-- **每日对照 + 回滚线**：alpha_trend_logger 每天记 新公式 vs 老公式 1D/5D alpha；**连续转差（如新公式 5D alpha 连续 3 个交易日 < 老公式）立即 git revert 回滚**。
+- **每日对照 + 回滚线**：alpha_trend_logger 每天记 新公式 vs 老公式 1D/5D alpha，并分别记录 Top5 / Top10 / Top20。
+  - Top5/Top10：决定精选层是否继续展示。
+  - Top20：决定能否全榜替换。
+  - 若 Top10 连续转差，应下线精选层；若强制激活生产后新公式 5D alpha 连续 3 个交易日 < 老公式，立即 git revert 回滚。
+
+## 6.1 当前混合方案的产品解释（给页面和用户看的话）
+
+| 层级 | 当前规则 | 用途 | 能不能当买入指令 |
+|---|---|---|---|
+| 生产主榜 Top20 | 老公式 `tech_ai_v2_usable_data_gate` | 保持稳定，不因薄样本改全榜 | 不能，仍需买前研究 |
+| 美股精选 Top10 | 新公式 `val_down_grade` | 优先研究名单，解决老公式“估值惩罚成长股”的问题 | 不能，只是研究优先级 |
+| 双轨 Top5/Top10/Top20 alpha | `alpha_trend_logger` 每日记录 | 判断新公式到底适合精选还是适合全榜替换 | 不能，是验证指标 |
+
+用户看到“精选 Top10”时，应理解为：**这 10 只是今晚更值得先研究的美股，不是系统已经建议买入这 10 只。**真钱动作仍要叠加盘前风险闸、个股买前研究、仓位纪律和用户确认。
+
+## 6.2 代码落地（2026-06-26）
+
+| 文件 | 落地内容 | 产品边界 |
+|---|---|---|
+| `stock_research/jobs/alpha_trend_logger.py` | 双轨 alpha 从单一 Top20 扩展为 Top5 / Top10 / Top20；日志行显示 `双轨5d Top5 ... / Top10 ... / Top20 ...` | 只读评估，不改推荐、不写持仓 |
+| `scripts/tools/build_dual_track_ranking.py` | 从同一 `factor_snapshot_universe` 全量池分别算老/新排名，输出 `rank_slices.top5/top10/top20` 和 `candidate_focus_top10` | 只读 JSON，供页面展示 |
+| `scripts/pipeline/build_stock_dashboard_html.py` | AI 推荐页顶部新增“美股规则双轨”面板，显示三张 alpha 卡 + 美股精选 Top10 + 完整 Top20 对照 | 不新增股票池，不写 `watchlist`，不写真实持仓 |
+
+当前人工验收命令：
+
+```bash
+/opt/homebrew/bin/python3 -m stock_research.jobs.alpha_trend_logger --dry-run
+/opt/homebrew/bin/python3 -m scripts.tools.build_dual_track_ranking --show
+/opt/homebrew/bin/python3 scripts/pipeline/build_stock_dashboard_html.py
+/opt/homebrew/bin/python3 -m unittest tests.test_build_v2_recommendations
+/opt/homebrew/bin/python3 scripts/tools/production_acceptance_check.py --allow-a-share-disabled
+```
+
+2026-06-26 验收摘要：
+
+```text
+alpha_trend_logger:
+  US 1d +0.16%/59%(n240)
+  US 5d +2.10%/59%(n160)
+  双轨5d Top5 +4.35pp / Top10 +1.51pp / Top20 -0.16pp
+
+unittest:
+  tests.test_build_v2_recommendations: 33 passed
+
+production_acceptance_check:
+  WARN, fail=0
+  WARN 为旧数据时钟/证据文件时钟问题，不是本次精选层改动导致。
+```
 
 ## 7. 回滚方案
 
@@ -122,10 +206,12 @@
 ## 8. 验收（实施后自测）
 
 - [x] 新公式可在强制激活 dry-run 下生成美股新排序（同源校验）
-- [x] **【P0】双轨对照基于 `factor_snapshot_universe` 全量池「同池各选再比」**，新旧公式各自独立产出 Top20，不在任一方 Top20 内重排；US 先套共同资格闸
+- [x] **【P0】双轨对照基于 `factor_snapshot_universe` 全量池「同池各选再比」**，新旧公式各自独立产出 Top5/Top10/Top20，不在任一方 Top20 内重排；US 先套共同资格闸
 - [x] 港/A 维持 legacy，双轨候选=基线，结果不因本次切换变化
 - [x] 默认 `params_json` / dry-run 已逐市场写 per_market_formula（US=legacy / HK=legacy / A=legacy）；强制激活时 US=val_down_grade
 - [x] strategy_version 默认不升，避免未验证规则污染生产；强制激活时才升 `tech_ai_v3_us_val_down_grade`
 - [x] 老公式 baseline 在影子正常产出，可对照
-- [x] alpha_trend_logger 已增加新旧公式全池对照
+- [x] alpha_trend_logger 已增加新旧公式全池对照，并拆分 Top5/Top10/Top20
+- [x] AI 推荐页已新增“美股规则双轨：主榜不变，精选看「降估值+评级」”面板
+- [x] 美股精选 Top10 已作为只读研究优先级展示，不写 watchlist / 持仓 / recommendation_picks
 - [ ] `git revert` 演练一次确认可回滚
