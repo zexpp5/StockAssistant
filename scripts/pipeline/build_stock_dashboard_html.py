@@ -1820,6 +1820,7 @@ window.echarts = window.echarts || {
         <tbody id="discovery-table-body" class="divide-y divide-slate-100"></tbody>
       </table>
     </div>
+    <div id="discovery-observation-note" class="hidden mt-2"></div>
     <p class="text-xs text-slate-500 mt-4">
       💡 <strong>怎么用</strong>: 这是科技/AI 股票池横向排名。未在「我关注的」里的标的可一键加关注；
       已关注的标的可回到详情页复核它为什么排在这里。
@@ -14329,6 +14330,7 @@ function _reasonSummaryHtml(row) {
   const marketTabsEl = document.getElementById("discovery-market-tabs");
   const policySortEl = document.getElementById("discovery-policy-sort-explain");
   const dataHealthEl = document.getElementById("discovery-data-health");
+  const observationNoteEl = document.getElementById("discovery-observation-note");
   const cands = (DISCOVERY && DISCOVERY.candidates) || [];
 
   // ── sub-tab 计数显示
@@ -14928,10 +14930,10 @@ function _reasonSummaryHtml(row) {
       }).join("");
     }
 
-    // 2026-07-02 主榜收敛: 前向验证两套公式在 Top20 口径都是负 alpha, 11-20 名无可证明 edge。
-    // 数据层照旧生成 Top20(验证样本不断), 展示层只把 rank>10 降级为「观察池」沉底折叠。
-    const MAIN_BOARD_N = 10;
-    const _isObservationRow = c => (c.rank || 9999) > MAIN_BOARD_N;
+    // 首屏严选 3 只是研究卡，不替代主榜。主表必须从第 1 名开始展示完整批次，
+    // 避免用户看到严选后下面直接从 11 名开始，误以为 1-10 被吞掉。
+    const PRIORITY_BOARD_N = 10;
+    const _isLowerPriorityRow = c => (c.rank || 9999) > PRIORITY_BOARD_N;
     function _visibleDiscoveryCandidates() {
       const rows = cands.filter(c => _candidateMarketCode(c) === window._activeDiscoveryMarket);
       if ((window._discoverySortMode || "policy") === "policy") {
@@ -14944,31 +14946,37 @@ function _reasonSummaryHtml(row) {
       } else {
         rows.sort((a, b) => (a.rank || 9999) - (b.rank || 9999));
       }
-      // 主榜(rank≤10)在前, 观察池(rank>10)沉底 — 稳定分区, 不打乱各自内部顺序
-      return rows.filter(c => !_isObservationRow(c)).concat(rows.filter(_isObservationRow));
+      return rows;
     }
 
-    window.toggleDiscoveryObsPool = function(btn) {
-      const rows = document.querySelectorAll("#discovery-table-wrap .disc-obs-row");
-      const nowHidden = rows.length && rows[0].classList.contains("hidden");
-      rows.forEach(r => r.classList.toggle("hidden", !nowHidden));
-      if (btn) btn.textContent = nowHidden ? "收起观察池 ▲" : "展开观察池 ▼";
-    };
+    function _renderDiscoveryObservationNote(visibleCands) {
+      if (!observationNoteEl) return;
+      const lower = visibleCands.filter(_isLowerPriorityRow);
+      if (!lower.length) {
+        observationNoteEl.classList.add("hidden");
+        observationNoteEl.innerHTML = "";
+        return;
+      }
+      const start = PRIORITY_BOARD_N + 1;
+      const end = Math.max(...lower.map(c => Number(c.rank) || start));
+      observationNoteEl.classList.remove("hidden");
+      observationNoteEl.innerHTML = `
+        <details class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+          <summary class="cursor-pointer select-none font-semibold text-slate-700">
+            关于第 ${start}-${end} 名：仍在完整主榜里，只是优先级低于前 ${PRIORITY_BOARD_N} 名
+          </summary>
+          <div class="mt-1 leading-relaxed text-slate-500">
+            上方「今日严选 3 只」是从新公式 Top10 里再过滤“偏贵”和“接飞刀”得到的研究卡；
+            下方表格从第 1 名开始展示当前市场完整批次。第 ${start}-${end} 名保留用于观察和验证，
+            但不建议按主榜核心标的同等优先级处理。
+          </div>
+        </details>`;
+    }
 
     function _renderDiscoveryMarketRows() {
       const visibleCands = _visibleDiscoveryCandidates();
-      const nObs = visibleCands.filter(_isObservationRow).length;
-      let obsDividerDone = false;
       tbody.innerHTML = visibleCands.map((c, idx) => {
-      const isObs = _isObservationRow(c);
-      let obsDivider = "";
-      if (isObs && !obsDividerDone) {
-        obsDividerDone = true;
-        obsDivider = `<tr class="bg-slate-100"><td colspan="99" class="px-3 py-2 text-xs text-slate-600">
-          📂 <strong>观察池（原 11~${nObs + MAIN_BOARD_N} 名）</strong> · 前向验证 11-20 名无可证明超额收益，降级为观察、不建议按主榜对待
-          <button onclick="toggleDiscoveryObsPool(this)" class="ml-2 px-2 py-0.5 text-[11px] bg-white border border-slate-300 rounded hover:bg-slate-50">展开观察池 ▼</button>
-        </td></tr>`;
-      }
+      const isLowerPriority = _isLowerPriorityRow(c);
       const cap = c.market_cap_usd ? (c.market_cap_usd / 1e9).toFixed(1) : "-";
       const f = c.f_score == null ? "-" : Math.round(c.f_score);
       const fColor = c.f_score >= 7 ? "text-emerald-600" : (c.f_score >= 4 ? "text-amber-600" : "text-rose-600");
@@ -15012,9 +15020,9 @@ function _reasonSummaryHtml(row) {
       const alpha60 = track ? track.alpha_60d : null;
       const tk = _esc(c.ticker);
       const stockDetailAttrs = `data-code="${tk}" data-name="${_esc(displayName)}" onclick="openStockDetail(this.dataset.code, this.dataset.name)"`;
-      return `${obsDivider}<tr class="hover:bg-slate-50${isObs ? " disc-obs-row hidden opacity-60" : ""}">
+      return `<tr class="hover:bg-slate-50${isLowerPriority ? " bg-slate-50/40" : ""}">
         <td class="disc-sticky-rank px-2 py-1 font-mono text-xs text-slate-500">
-          <span title="${window._discoverySortMode === "policy" ? "新规则视图排序；" : "原始分数排序；"}后端原始 rank #${c.rank}${isObs ? "（观察池）" : ""}">${isObs ? "📂 " : ""}${idx + 1}</span>
+          <span title="${window._discoverySortMode === "policy" ? "新规则视图排序；" : "原始分数排序；"}后端原始 rank #${c.rank}${isLowerPriority ? "（第11名以后，优先级低于前10）" : ""}">${idx + 1}</span>
         </td>
         <td class="disc-sticky-code px-2 py-1 font-mono text-xs font-bold text-violet-700 cursor-pointer hover:underline"
             ${stockDetailAttrs} title="点击进入这只股票的完整详情页">${c.ticker}${_newBadge(c)}${_riseBadge(c)}${_appearanceBadge(c)}</td>
@@ -15061,6 +15069,7 @@ function _reasonSummaryHtml(row) {
         </td>
       </tr>`;
       }).join("");
+      _renderDiscoveryObservationNote(visibleCands);
 
       // 异步加载 watchlist,把已在自选里的票按钮置灰
       _markDiscoveryAddedButtons();
