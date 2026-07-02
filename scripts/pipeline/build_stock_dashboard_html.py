@@ -14839,19 +14839,37 @@ function _reasonSummaryHtml(row) {
                     onclick="openStockDetail(this.dataset.code, this.dataset.name)"
                     class="px-2 py-1 rounded bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 text-[11px] whitespace-nowrap"
                     title="${_esc(bucket.action)}">买前研究</button>`;
-        return `<tr class="border-t border-slate-100">
-          <td class="py-2 pr-3 font-mono font-bold text-slate-900">${_esc(r.symbol || "")}</td>
-          <td class="py-2 pr-3 text-slate-700 min-w-[170px]">${_esc(r.name || "")}</td>
-          <td class="py-2 pr-3 text-xs"><span class="px-1.5 py-0.5 rounded border ${bucket.rowCls}" title="${_esc(bucket.action)}">${bucket.short}</span></td>
-          <td class="py-2 pr-3 text-xs text-slate-700 min-w-[280px]">${reasons}</td>
-          <td class="py-2 pr-3 text-xs font-mono whitespace-nowrap">${score} / 覆盖 ${coverage}</td>
-          <td class="py-2 pr-3 text-xs text-slate-500 whitespace-nowrap">行情 ${_esc(r.trade_date || "—")} · 动量 ${_esc(r.momentum_trade_date || "—")} · 估值 ${_esc(r.fundamentals_trade_date || "—")}</td>
-          <td class="py-2 pr-3 text-xs text-slate-700 min-w-[260px]">
-            <div>${_esc(r.next_action || "")}</div>
-            <div class="mt-0.5 text-[11px] text-slate-500">${_esc(bucket.action)}</div>
+        const theme = r.theme || r.industry || "未分类";
+        const signalMap = { buy: "买前研究", watch: "观察", avoid: "回避", strong_buy: "高分研究" };
+        const signalLabel = signalMap[String(r.signal || r.rating || "").toLowerCase()] || (r.signal || r.rating || "—");
+        return `<tr class="border-t border-slate-100 hover:bg-slate-50">
+          <td class="py-3 pl-3 pr-4 min-w-[250px]">
+            <button data-code="${symbol}" data-name="${nameAttr}"
+                    onclick="openStockDetail(this.dataset.code, this.dataset.name)"
+                    class="font-mono font-black text-slate-900 hover:text-violet-700 hover:underline">${_esc(r.symbol || "")}</button>
+            <div class="mt-0.5 text-sm font-medium text-slate-700 truncate max-w-[230px]" title="${nameAttr}">${_esc(r.name || "")}</div>
+            <div class="mt-1 flex flex-wrap gap-1 text-[11px]">
+              <span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">${_esc(_marketLabel(r.market || activeMarket))}</span>
+              <span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600" title="${_esc(theme)}">${_esc(theme)}</span>
+              ${rank}
+            </div>
           </td>
-          <td class="py-2 text-xs whitespace-nowrap">${rank}</td>
-          <td class="py-2 pl-3 text-xs whitespace-nowrap">${actionButtons}</td>
+          <td class="py-3 pr-4 text-xs min-w-[140px]">
+            <span class="inline-flex items-center whitespace-nowrap px-2 py-1 rounded-full border ${bucket.rowCls}" title="${_esc(bucket.action)}">${bucket.label}</span>
+            <div class="mt-1 text-[11px] text-slate-500">系统判断：${_esc(signalLabel)}</div>
+          </td>
+          <td class="py-3 pr-4 text-xs text-slate-700 min-w-[300px] leading-relaxed">${reasons}</td>
+          <td class="py-3 pr-4 text-xs min-w-[220px] leading-relaxed">
+            <div class="font-mono text-amber-900">${score} / 覆盖 ${coverage}</div>
+            <div class="mt-1 text-[11px] text-slate-500">
+              行情 ${_esc(r.trade_date || "—")} · 动量 ${_esc(r.momentum_trade_date || "—")} · 估值 ${_esc(r.fundamentals_trade_date || "—")}
+            </div>
+          </td>
+          <td class="py-3 pr-4 text-xs text-slate-700 min-w-[320px] leading-relaxed">
+            <div class="font-medium">${_esc(r.next_action || bucket.action)}</div>
+            <div class="mt-1 text-[11px] text-slate-500">${_esc(bucket.action)}</div>
+          </td>
+          <td class="py-3 pr-3 text-xs whitespace-nowrap text-right">${actionButtons}</td>
         </tr>`;
       }
 
@@ -14867,15 +14885,12 @@ function _reasonSummaryHtml(row) {
             <table class="w-full min-w-[1320px] text-xs bg-white">
               <thead class="text-slate-500 bg-slate-50">
                 <tr>
-                  <th class="py-2 pr-3 pl-3 text-left">代码</th>
-                  <th class="py-2 pr-3 text-left">名称</th>
-                  <th class="py-2 pr-3 text-left">类别</th>
-                  <th class="py-2 pr-3 text-left">原因 / 为什么提醒</th>
-                  <th class="py-2 pr-3 text-left">数据分</th>
-                  <th class="py-2 pr-3 text-left">数据日期</th>
+                  <th class="py-2 pr-4 pl-3 text-left">股票</th>
+                  <th class="py-2 pr-4 text-left">问题类型</th>
+                  <th class="py-2 pr-4 text-left">为什么拦截</th>
+                  <th class="py-2 pr-4 text-left">数据状态</th>
                   <th class="py-2 pr-3 text-left">处理建议</th>
-                  <th class="py-2 text-left">是否入榜</th>
-                  <th class="py-2 pl-3 text-left">动作</th>
+                  <th class="py-2 pr-3 text-right">动作</th>
                 </tr>
               </thead>
               <tbody>${blockedRows}${attentionRows}</tbody>
