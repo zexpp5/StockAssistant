@@ -1,6 +1,6 @@
 """账本 v2 迁移测试：回填 buy trade + 聚合合并 + holding_id remap（含 discipline 表）+ 幂等。
 
-对齐 docs/2026-06-02_卖出记录测试用例.md TC-MIG-001/002/003/004/005 + discipline 耦合。
+对齐 docs/archive/2026-06-02_卖出记录测试用例.md TC-MIG-001/002/003/004/005 + discipline 耦合。
 不触碰生产库，全部在临时库构造旧数据。
 """
 from __future__ import annotations

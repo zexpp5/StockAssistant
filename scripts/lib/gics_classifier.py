@@ -97,7 +97,7 @@ OVERRIDES = {
         "reason": "SMR 小型模块化反应堆制造，AI 数据中心电力下一波受益",
     },
 
-    # ─── 2026-05-10 watchlist 补股 11 只（详见 docs/2026-05-10_watchlist补股清单.md）───
+    # ─── 2026-05-10 watchlist 补股 11 只（详见 docs/archive/2026-05-10_watchlist补股清单.md）───
 
     # 必补 5 只（机构主流 AI 配置标配）
     "ASML": {

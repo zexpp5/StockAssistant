@@ -2,7 +2,7 @@
 
 🅿️0 公平对照硬要求（见 docs/V2/2026-06-25_推荐公式切换_val_down_grade_方案.md）：
 新旧公式**必须基于同一批「全量候选池」factor_snapshot_universe（截断前~全宇宙）
-各自独立打分、各自产出 Top20**，绝不在任一方 Top20 内重排——否则对照失真。
+各自独立打分、各自产出 Top5/Top10/Top20**，绝不在任一方 Top20 内重排——否则对照失真。
 
 纯只读、纯展示——不改生产打分、不进 recommendation_picks。
 注意：池源是全量 factor_snapshot_universe；但 US 会先套共同资格闸
@@ -12,6 +12,8 @@ eligibility in (buyable,research_only)，避免把已被身份/证据拦截的�
 产物：data/latest/dual_track_ranking.json
   { generated_at, candidate, baseline, pool_source, markets: { US: {
       run_date, pool_size,
+      rank_slices: {top5/top10/top20: {rows, dropped}},
+      candidate_focus_top10: [ ...候选Top10 ],
       rows: [ {symbol,name,new_rank,prod_rank,delta,is_new} ...候选Top20 ],
       dropped: [ {symbol,name,prod_rank,new_rank} ...老进新出 ] } } }
 
@@ -36,7 +38,8 @@ OUT = REPO / "data" / "latest" / "dual_track_ranking.json"
 BASELINE = "legacy_baseline"   # 对外展示名：老公式影子基线
 BASELINE_VARIANT = "prod_recheck"      # replay 里的老公式复算权重
 CANDIDATE = "val_down_grade"   # 第一候选规则（降估值+评级）
-TOP_N = 20
+TOP_NS = (5, 10, 20)
+TOP_N = max(TOP_NS)
 POOL_SOURCE = "factor_snapshot_universe"
 US_MARKET = "US"
 US_RECOMMENDABLE_ELIGIBILITY = {"buyable", "research_only"}
@@ -162,21 +165,40 @@ def compute() -> dict:
             cand_sorted = sorted(pool, key=lambda x: -x["_c"])
             b_rank = {p["symbol"]: i + 1 for i, p in enumerate(base_sorted)}
             c_rank = {p["symbol"]: i + 1 for i, p in enumerate(cand_sorted)}
-            base_top = {p["symbol"] for p in base_sorted[:TOP_N]}
-            cand_top = [p["symbol"] for p in cand_sorted[:TOP_N]]
-            rows = []
-            for s in cand_top:
-                rows.append({
+            by_symbol = {p["symbol"]: p for p in pool}
+
+            def _slice_payload(top_n: int) -> dict:
+                base_top = {p["symbol"] for p in base_sorted[:top_n]}
+                cand_top = [p["symbol"] for p in cand_sorted[:top_n]]
+                rows = []
+                for s in cand_top:
+                    item = by_symbol.get(s, {})
+                    rows.append({
+                        "symbol": s, "name": names.get(s, ""),
+                        "new_rank": c_rank[s], "prod_rank": b_rank[s],
+                        "delta": b_rank[s] - c_rank[s],
+                        "is_new": s not in base_top,   # 新公式捞进、老公式同档没有
+                        "candidate_score": round(float(item.get("_c") or 0), 4),
+                        "baseline_score": round(float(item.get("_b") or 0), 4),
+                    })
+                dropped = [{
                     "symbol": s, "name": names.get(s, ""),
-                    "new_rank": c_rank[s], "prod_rank": b_rank[s],
-                    "delta": b_rank[s] - c_rank[s],
-                    "is_new": s not in base_top,   # 新公式捞进、老公式 Top20 没有
-                })
-            dropped = [{
-                "symbol": s, "name": names.get(s, ""),
-                "prod_rank": b_rank[s], "new_rank": c_rank[s],
-            } for s in base_top if s not in set(cand_top)]
-            dropped.sort(key=lambda x: x["prod_rank"])
+                    "prod_rank": b_rank[s], "new_rank": c_rank[s],
+                    "candidate_score": round(float((by_symbol.get(s) or {}).get("_c") or 0), 4),
+                    "baseline_score": round(float((by_symbol.get(s) or {}).get("_b") or 0), 4),
+                } for s in sorted(base_top - set(cand_top), key=lambda x: b_rank[x])]
+                return {
+                    "top_n": top_n,
+                    "rows": rows,
+                    "dropped": dropped,
+                    "new_count": sum(1 for r in rows if r.get("is_new")),
+                    "candidate_symbols": cand_top,
+                    "baseline_symbols": [p["symbol"] for p in base_sorted[:top_n]],
+                }
+
+            rank_slices = {f"top{n}": _slice_payload(n) for n in TOP_NS}
+            rows = rank_slices[f"top{TOP_N}"]["rows"]
+            dropped = rank_slices[f"top{TOP_N}"]["dropped"]
             out["markets"][mkt] = {
                 "run_date": run_date, "pool_size": len(pool),
                 "common_gate": (
@@ -186,6 +208,12 @@ def compute() -> dict:
                 "candidate_active": mkt == US_MARKET,
                 "baseline_weights": bw,
                 "candidate_weights": cw,
+                "top_ns": list(TOP_NS),
+                "rank_slices": rank_slices,
+                "candidate_focus_top10": (
+                    rank_slices.get("top10", {}).get("rows", []) if mkt == US_MARKET else []
+                ),
+                # 兼容旧面板：顶层 rows/dropped 仍代表 Top20。
                 "rows": rows, "dropped": dropped,
             }
         return out
@@ -200,14 +228,19 @@ def main() -> int:
     data = compute()
     for mkt, blk in data["markets"].items():
         print(f"== {mkt} {blk['run_date']} · 全池 {blk['pool_size']} 只 → 各选 Top{TOP_N} ==")
-        for r in blk["rows"]:
-            d = r["delta"]
-            arrow = f"↑{d}" if d > 0 else (f"↓{-d}" if d < 0 else "—")
-            flag = " 🆕" if r["is_new"] else ""
-            print(f"  新{r['new_rank']:>2}  老{r['prod_rank']:>3}  {arrow:>5}  {r['symbol']:<8}{flag}")
-        if blk["dropped"]:
-            print(f"  -- 老 Top{TOP_N} 被新公式挤出: " +
-                  "、".join(f"{x['symbol']}(老{x['prod_rank']}→新{x['new_rank']})" for x in blk["dropped"]))
+        for top_key in ("top5", "top10", "top20"):
+            sl = (blk.get("rank_slices") or {}).get(top_key) or {}
+            if not sl:
+                continue
+            print(f"-- {top_key.upper()} · 新捞入 {sl.get('new_count', 0)} 只")
+            for r in sl.get("rows", []):
+                d = r["delta"]
+                arrow = f"↑{d}" if d > 0 else (f"↓{-d}" if d < 0 else "—")
+                flag = " 🆕" if r["is_new"] else ""
+                print(f"  新{r['new_rank']:>2}  老{r['prod_rank']:>3}  {arrow:>5}  {r['symbol']:<8}{flag}")
+            if sl.get("dropped"):
+                print(f"  -- 老 {top_key.upper()} 被新公式挤出: " +
+                      "、".join(f"{x['symbol']}(老{x['prod_rank']}→新{x['new_rank']})" for x in sl["dropped"]))
     if not args.show:
         OUT.parent.mkdir(parents=True, exist_ok=True)
         OUT.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

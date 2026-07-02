@@ -1,6 +1,6 @@
 """AI 叙事领先信号 · 财报复查提醒（订单级 + capex 级）。
 
-两组信号，来源 docs/2026-06-10_AI供给瓶颈行业与标的研究.md 及牛熊机制讨论：
+两组信号，来源 docs/archive/2026-06-10_AI供给瓶颈行业与标的研究.md 及牛熊机制讨论：
   bottleneck —— 供给侧订单信号：GEV 燃机槽位 / Vertiv book-to-bill / 美光 HBM 合约价。
   capex      —— 需求侧总阀门：MSFT/GOOGL/AMZN/META 的资本开支指引。
                 整条 AI 供应链(英伟达/台积电/电力链)的收入 = 这四家的钱包。

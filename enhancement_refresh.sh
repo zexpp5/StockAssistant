@@ -1,7 +1,7 @@
 #!/bin/bash
 # enhancement_refresh.sh — 早班异步增强子进程（2026-06-08 流水线改造）
 #
-# 设计见 docs/2026-06-08_早班快线_异步增强_流水线改造方案.md。
+# 设计见 docs/archive/2026-06-08_早班快线_异步增强_流水线改造方案.md。
 # 角色：早班核心快线在 28 push 之后 detached fork 本脚本（nohup ... &），核心不等它。
 #   本脚本慢慢抓 SEC/Form4/HKEX/主题证据/F-Score 全量/策略诊断/次新等重网络增强，
 #   抓完写回 JSON/DuckDB + 写 enhancement_status.json（各块新鲜度）+ 轻量重建 dashboard。

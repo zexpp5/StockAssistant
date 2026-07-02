@@ -213,6 +213,6 @@
 
 ## 后续文档关系
 
-- `docs/2026-05-26_catalyst_roadmap.md`：推荐解释 / 事件催化系统。
+- `docs/archive/2026-05-26_catalyst_roadmap.md`：推荐解释 / 事件催化系统。
 - 本文档：IPO / 次新股触底雷达。
 - 两者可以在 morning brief 里汇合，但数据源、状态和产品边界应保持独立。

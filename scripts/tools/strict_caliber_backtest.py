@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """B1 严筛口径影子回算 —— 只读，找"中位数转正、不靠极端赢家"的候选口径。
 
-见 docs/2026-06-08_严筛口径迭代_B1影子回算方案.md。
+见 docs/archive/2026-06-08_严筛口径迭代_B1影子回算方案.md。
 
 安全边界（只读）：
 - 只读 pick_outcomes / recommendation_picks / recommendation_runs；
