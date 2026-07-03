@@ -495,12 +495,13 @@ USER_CONFIG_DEFAULTS = {
 
 
 def _connect_with_lock_retry(path: str, read_only: bool, *, retry: bool,
-                             attempts: int = 8, backoff_s: float = 0.75) -> duckdb.DuckDBPyConnection:
+                             attempts: int = 40, backoff_s: float = 1.5) -> duckdb.DuckDBPyConnection:
     """打开 DuckDB 连接;retry=True 时对"被写锁挡住"做 backoff 重试。
 
     DuckDB 单写者文件锁:写连接持独占锁期间,只读连接也打不开(Conflicting lock)。
     retry 仅用于 force_read_only 的独立只读 CLI/cron 进程 —— 等正在写库的步骤释放锁。
-    非锁错误立刻抛;API/写路径 retry=False,绝不阻塞。
+    daily_refresh 里 event/benchmark 等步骤偶尔会持锁几十秒，默认给批处理 60s 级等待；
+    非锁错误立刻抛；API/写路径 retry=False，绝不阻塞。
     """
     if not retry:
         return duckdb.connect(path, read_only=read_only)

@@ -13,6 +13,7 @@ yfinance 价格抓取器
 """
 import sys
 import os
+import math
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
 sys.path.insert(0, _REPO)
 sys.path.insert(0, os.path.join(_REPO, "scripts", "lib"))  # 2026-05-11 lib 迁移
@@ -168,6 +169,49 @@ def _upsert_v2_price_daily(results: list[dict], db_path: str, *, total_count: in
         )
     con.close()
     return len(rows)
+
+
+def _is_duckdb_lock_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return (
+        "conflicting lock" in text
+        or "could not set lock" in text
+        or "database is locked" in text
+        or "lock on file" in text
+    )
+
+
+def _upsert_v2_price_daily_with_retry(
+    results: list[dict],
+    db_path: str,
+    *,
+    total_count: int,
+    fail_count: int,
+    attempts: int = 6,
+    wait_sec: float = 15.0,
+) -> int:
+    """写入 price_daily；遇到 DuckDB 写锁重试，最终失败则让 pipeline 变红。
+
+    旧逻辑把 DB 写入异常吞掉，会造成"抓到快照但数据库没更新"的假成功。
+    价格库是推荐和页面的事实源，写不进去必须显式失败。
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return _upsert_v2_price_daily(
+                results,
+                db_path,
+                total_count=total_count,
+                fail_count=fail_count,
+            )
+        except Exception as exc:
+            last_exc = exc
+            if _is_duckdb_lock_error(exc) and attempt < attempts:
+                print(f"  DuckDB 写锁冲突，{wait_sec:.0f}s 后重试 ({attempt}/{attempts})：{exc}")
+                time.sleep(wait_sec)
+                continue
+            raise
+    raise RuntimeError(f"DuckDB 写入失败：{last_exc}")
 
 
 # ============================================================
@@ -434,6 +478,51 @@ def _cache_entry_fresh(entry: dict | None, ttl_hours: float) -> bool:
     except Exception:
         return False
     return datetime.now() - ts <= timedelta(hours=ttl_hours)
+
+
+def _to_float(value) -> float | None:
+    """把外部源/缓存里的数字字段安全转成 float。
+
+    yfinance/FMP/cache 偶尔会把 PE、PEG、增长率这类字段以字符串落盘。
+    行情抓取是生产入口，字段脏了应该降级为空，而不是让整批价格任务崩掉。
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        v = float(value)
+        return v if math.isfinite(v) else None
+    text = str(value).strip().replace(",", "")
+    if not text:
+        return None
+    lowered = text.lower()
+    if lowered in {"nan", "none", "null", "n/a", "na", "--", "-"}:
+        return None
+    if text.endswith("%"):
+        text = text[:-1].strip()
+    try:
+        v = float(text)
+    except Exception:
+        return None
+    return v if math.isfinite(v) else None
+
+
+def _to_growth_decimal(value) -> float | None:
+    """增长率统一转成小数（0.12 = 12%）。"""
+    if value is None or isinstance(value, bool):
+        return None
+    text = str(value).strip()
+    is_percent = text.endswith("%")
+    v = _to_float(value)
+    if v is None:
+        return None
+    if is_percent or abs(v) > 1.5:
+        v = v / 100.0
+    return v if math.isfinite(v) else None
+
+
+def _round_optional(value, digits: int = 2) -> float | None:
+    v = _to_float(value)
+    return round(v, digits) if v is not None else None
 
 
 def _fetch_fmp_quote_fields(yf_ticker: str) -> dict:
@@ -818,11 +907,7 @@ def fetch_price_data(yf_ticker: str, *, hist: pd.DataFrame | None = None,
     if info_fields.get("error") and (hist is None or hist.empty):
         return None
 
-    info_price = info_fields.get("price")
-    try:
-        info_price = float(info_price) if info_price is not None else None
-    except Exception:
-        info_price = None
+    info_price = _to_float(info_fields.get("price"))
 
     # 2026-06-01 修复（popmart 184.40 事故）：price / prev_close 绝不能用 info 的
     # 12h TTL 缓存值 —— 这两个是快变量，被和慢变的估值字段（PE/市值）一起缓存后，
@@ -835,18 +920,20 @@ def fetch_price_data(yf_ticker: str, *, hist: pd.DataFrame | None = None,
         return None
 
     hist_metrics = _history_metrics(hist, price, yf_ticker)
-    prev_close = hist_metrics.get("history_prev_close") or info_fields.get("prev_close")
+    prev_close = _to_float(hist_metrics.get("history_prev_close"))
+    if prev_close is None:
+        prev_close = _to_float(info_fields.get("prev_close"))
     currency = info_fields.get("currency") or "USD"
-    market_cap = info_fields.get("market_cap")
-    forward_pe = info_fields.get("forward_pe")
-    trailing_pe = info_fields.get("trailing_pe")
-    peg_ratio = info_fields.get("peg_ratio")
-    earnings_growth = info_fields.get("earnings_growth")
-    revenue_growth = info_fields.get("revenue_growth")
+    market_cap = _to_float(info_fields.get("market_cap"))
+    forward_pe = _to_float(info_fields.get("forward_pe"))
+    trailing_pe = _to_float(info_fields.get("trailing_pe"))
+    peg_ratio = _to_float(info_fields.get("peg_ratio"))
+    earnings_growth = _to_growth_decimal(info_fields.get("earnings_growth"))
+    revenue_growth = _to_growth_decimal(info_fields.get("revenue_growth"))
 
     # PEG 兜底计算（pegRatio 不可用时用 forward PE / 利润增速）
     peg_calculated = None
-    if peg_ratio is None and forward_pe and earnings_growth and earnings_growth > 0:
+    if peg_ratio is None and forward_pe is not None and earnings_growth is not None and earnings_growth > 0:
         peg_calculated = round(forward_pe / (earnings_growth * 100), 2)
 
     return {
@@ -857,11 +944,11 @@ def fetch_price_data(yf_ticker: str, *, hist: pd.DataFrame | None = None,
         "bar_date": hist_metrics.get("history_trade_date") if hist_price is not None else None,
         "currency": currency,
         "market_cap": market_cap,
-        "forward_pe": round(forward_pe, 2) if forward_pe else None,
-        "trailing_pe": round(trailing_pe, 2) if trailing_pe else None,
-        "peg_ratio": round(peg_ratio, 2) if peg_ratio else peg_calculated,
-        "earnings_growth_pct": round(earnings_growth * 100, 2) if earnings_growth else None,
-        "revenue_growth_pct": round(revenue_growth * 100, 2) if revenue_growth else None,
+        "forward_pe": _round_optional(forward_pe),
+        "trailing_pe": _round_optional(trailing_pe),
+        "peg_ratio": _round_optional(peg_ratio) if peg_ratio is not None else peg_calculated,
+        "earnings_growth_pct": round(earnings_growth * 100, 2) if earnings_growth is not None else None,
+        "revenue_growth_pct": round(revenue_growth * 100, 2) if revenue_growth is not None else None,
         "ytd_pct": hist_metrics["ytd_pct"],
         "one_year_pct": hist_metrics["one_year_pct"],
         "one_month_pct": hist_metrics["one_month_pct"],
@@ -1139,12 +1226,16 @@ def main():
 
     # 落 DuckDB（按 fetched_at 的日期，同日多次抓取会覆盖）
     if results:
-        try:
-            # 2026-05-21 V1 cutover：永远只写 V2 price_daily（V1 prices 表已删）
-            n = _upsert_v2_price_daily(results, DB_PATH, total_count=attempted_count, fail_count=len(fail_codes))
-            print(f"  DuckDB：已写入 {n} 行 ({DB_PATH} · price_daily)")
-        except Exception as e:
-            print(f"  DuckDB 写入失败（不阻塞主流程）：{e}")
+        # 2026-05-21 V1 cutover：永远只写 V2 price_daily（V1 prices 表已删）
+        n = _upsert_v2_price_daily_with_retry(
+            results,
+            DB_PATH,
+            total_count=attempted_count,
+            fail_count=len(fail_codes),
+        )
+        print(f"  DuckDB：已写入 {n} 行 ({DB_PATH} · price_daily)")
+    elif attempted_count:
+        raise SystemExit("没有成功抓到任何行情，拒绝交付空结果")
 
 
 if __name__ == "__main__":

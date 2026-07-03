@@ -117,14 +117,16 @@ def _load_pool_rows() -> list[dict]:
     """V2 路径：system_universe + pool_membership 作为候选池；price_daily 取最新行情；
     最新 recommendation_picks 作为 pick_* 字段来源。
     V2 design (docs/V2/产品基线.md)：AI 推荐严禁读 watchlist。"""
-    universe = fetch_universe_for_ai_recommendations()
-    if not universe:
-        return []
-    picks = fetch_latest_recommendation_picks()
-    picks_by_symbol = {(p["market"], p["symbol"]): p for p in picks}
-
-    conn = get_db()
+    # 离线批处理只读任务：用 force_read_only 走 stock_db 的 DuckDB 锁重试路径。
+    # 之前这里分多次以默认写模式开库，事件日历等后台写库步骤持锁时会连续失败，
+    # 最终把整轮 daily_refresh 标红；一次只读连接也能减少锁竞争。
+    conn = get_db(force_read_only=True)
     try:
+        universe = fetch_universe_for_ai_recommendations(conn=conn)
+        if not universe:
+            return []
+        picks = fetch_latest_recommendation_picks(conn=conn)
+        picks_by_symbol = {(p["market"], p["symbol"]): p for p in picks}
         rows = conn.execute(
             """
             SELECT pd.market, pd.symbol,
