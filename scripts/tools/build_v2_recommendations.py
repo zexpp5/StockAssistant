@@ -48,6 +48,7 @@ _PRICE_ACTION_REVIEW_SCORE_CAP = 59.99
 _DATA_USABILITY_REVIEW_SCORE_CAP = 59.99
 _DATA_USABILITY_MIN_BUY_SCORE = 70.0
 _STALE_SOURCE_DAYS = 10
+_STALE_SOURCE_NOTICE_DAYS = 1
 LEGACY_STRATEGY_VERSION = "tech_ai_v2_usable_data_gate"
 US_VAL_DOWN_STRATEGY_VERSION = "tech_ai_v3_us_val_down_grade"
 LEGACY_MODEL_VERSION = "v2_rule_factor_usable_data_gate"
@@ -204,7 +205,31 @@ def _positive_valuation_count(row: dict[str, Any]) -> int:
     return count
 
 
-def _data_usability_score(row: dict[str, Any], coverage: float) -> float:
+def _growth_valuation_profile(row: dict[str, Any]) -> bool:
+    """Whether PE/PEG gaps are expected for a loss-making growth stock.
+
+    This is a data-usability distinction only. Valuation score still treats
+    losses / missing PE as not cheap; the row simply stops being misfiled as a
+    data-fetch failure when price, market cap, momentum and a fundamentals
+    snapshot are present.
+    """
+    if _positive_valuation_count(row) > 1:
+        return False
+    if not row.get("fundamentals_trade_date"):
+        return False
+    if row.get("close") is None or row.get("market_cap") is None:
+        return False
+    essentials = ("ytd_pct", "one_week_pct", "one_month_pct", "one_year_pct")
+    present = sum(1 for key in essentials if row.get(key) is not None)
+    return present >= 3
+
+
+def _growth_coverage(row: dict[str, Any]) -> float:
+    fields = ("close", "market_cap", "ytd_pct", "one_week_pct", "one_month_pct", "one_year_pct")
+    return sum(1 for key in fields if row.get(key) is not None) / len(fields)
+
+
+def _data_usability_score(row: dict[str, Any], coverage: float, *, growth_profile: bool = False) -> float:
     """Score whether this row is usable for real recommendations.
 
     Field coverage alone is not enough: a row can have many fields but no real
@@ -229,10 +254,11 @@ def _data_usability_score(row: dict[str, Any], coverage: float) -> float:
         score -= 15.0
 
     valuation_count = _positive_valuation_count(row)
-    if valuation_count == 0:
-        score -= 20.0
-    elif valuation_count == 1:
-        score -= 8.0
+    if not growth_profile:
+        if valuation_count == 0:
+            score -= 20.0
+        elif valuation_count == 1:
+            score -= 8.0
 
     if row.get("one_month_pct") is None and row.get("one_year_pct") is None:
         score -= 10.0
@@ -298,9 +324,11 @@ def _factor_scores(row: dict[str, Any]) -> dict[str, Any]:
         "close", "market_cap", "forward_pe", "trailing_pe", "peg_ratio",
         "ytd_pct", "one_week_pct", "one_month_pct", "one_year_pct",
     )
-    coverage = sum(1 for key in coverage_fields if row.get(key) is not None) / len(coverage_fields)
+    raw_coverage = sum(1 for key in coverage_fields if row.get(key) is not None) / len(coverage_fields)
+    growth_profile = _growth_valuation_profile(row)
+    coverage = max(raw_coverage, _growth_coverage(row)) if growth_profile else raw_coverage
     field_coverage_quality = coverage * 100.0
-    data_usability = _data_usability_score(row, coverage)
+    data_usability = _data_usability_score(row, coverage, growth_profile=growth_profile)
 
     f_score_raw = row.get("_factor_meta_f_score")
     f_score_norm = None
@@ -346,9 +374,15 @@ def _factor_scores(row: dict[str, Any]) -> dict[str, Any]:
         "data_usability": round(data_usability, 2),
         "field_coverage_quality": round(field_coverage_quality, 2),
         "coverage": round(coverage, 4),
+        "raw_field_coverage_quality": round(raw_coverage * 100.0, 2),
+        "raw_coverage": round(raw_coverage, 4),
+        "positive_valuation_count": _positive_valuation_count(row),
         "formula": formula,
         "total": round(total, 2),
     }
+    if growth_profile:
+        scores["data_usability_profile"] = "growth_valuation"
+        scores["data_usability_note"] = "亏损/早期成长股 PE/PEG 天然不可用，数据闸门改用成长口径；估值分仍不按便宜处理。"
     # F-Score / Piotroski 已计算入 factor_metadata 时透传（compute_piotroski_v2.py 写入）
     # US 新公式缺失时记中性 50，HK/CN legacy 只透传可用值。
     if f_score_norm is not None:
@@ -502,6 +536,7 @@ def _data_usability_review_reasons(row: dict[str, Any], scores: dict[str, Any]) 
     reasons: list[str] = []
     coverage = _as_float(scores.get("coverage"))
     usability = _as_float(scores.get("data_usability") or scores.get("data_quality"))
+    growth_profile = scores.get("data_usability_profile") == "growth_valuation"
 
     if row.get("close") is None:
         reasons.append("缺最新价格")
@@ -524,7 +559,7 @@ def _data_usability_review_reasons(row: dict[str, Any], scores: dict[str, Any]) 
         if gap is not None and gap > _STALE_SOURCE_DAYS:
             reasons.append(f"估值数据已过期 {gap} 天")
 
-    if _positive_valuation_count(row) == 0:
+    if _positive_valuation_count(row) == 0 and not growth_profile:
         reasons.append("没有可用正向估值字段")
 
     # Preserve order while removing duplicates caused by the generic usability line.
@@ -564,7 +599,7 @@ def _data_gap_next_action(reasons: list[str]) -> str:
     if "没有可用正向估值字段" in text:
         return "多半是亏损或估值口径不可用；只做研究观察，不直接按低估值买入。"
     if "核心字段覆盖不足" in text or "数据可用性" in text:
-        return "先查缺失字段来源，补齐后再允许进入买入候选。"
+        return "先查字段来源；亏损成长股不能靠补 PE/PEG，需改看收入增速、EV/Sales、订单和现金消耗。"
     return "进入买前研究前先核对行情、估值和财务来源。"
 
 
@@ -927,6 +962,13 @@ def _audit_row(row: dict[str, Any], selected_rank: int | None, reasons: list[str
         "rank": selected_rank,
         "data_usability": scores.get("data_usability") or scores.get("data_quality"),
         "field_coverage_quality": scores.get("field_coverage_quality"),
+        "raw_field_coverage_quality": scores.get("raw_field_coverage_quality"),
+        "raw_coverage_pct": (
+            round(float(scores.get("raw_coverage")) * 100.0, 1)
+            if scores.get("raw_coverage") is not None else None
+        ),
+        "data_usability_profile": scores.get("data_usability_profile"),
+        "positive_valuation_count": scores.get("positive_valuation_count"),
         "coverage_pct": round(coverage * 100.0, 1) if coverage is not None else None,
         "trade_date": str(row.get("trade_date"))[:10] if row.get("trade_date") else None,
         "momentum_trade_date": str(row.get("momentum_trade_date"))[:10] if row.get("momentum_trade_date") else None,
@@ -954,12 +996,11 @@ def _build_data_usability_audit(
     blocked: list[dict[str, Any]] = []
     attention: list[dict[str, Any]] = []
     review_gated: list[dict[str, Any]] = []
-    summary_by_market: dict[str, dict[str, int]] = {}
+    summary_by_market: dict[str, dict[str, Any]] = {}
 
     attention_codes = {
         "MOMENTUM_REUSED_RECENT_V2_SNAPSHOT",
         "FUNDAMENTALS_REUSED_RECENT_V2_SNAPSHOT",
-        "INVALID_VALUATION_RATIO",
         "ACUTE_PRICE_PULLBACK",
     }
     # 价格行为审查闸：分数被砍到 _PRICE_ACTION_REVIEW_SCORE_CAP 后自然跌出 Top N，
@@ -970,9 +1011,21 @@ def _build_data_usability_audit(
         market = str(row.get("market") or "UNKNOWN")
         bucket = summary_by_market.setdefault(
             market,
-            {"candidates": 0, "blocked": 0, "attention": 0, "selected_attention": 0},
+            {
+                "candidates": 0,
+                "blocked": 0,
+                "attention": 0,
+                "selected_attention": 0,
+                "latest_trade_date": None,
+                "latest_trade_lag_days": None,
+            },
         )
         bucket["candidates"] += 1
+        trade_date = _as_date(row.get("trade_date"))
+        latest_date = _as_date(bucket.get("latest_trade_date"))
+        if trade_date and (latest_date is None or trade_date > latest_date):
+            bucket["latest_trade_date"] = trade_date.isoformat()
+            bucket["latest_trade_lag_days"] = max((generated_at.date() - trade_date).days, 0)
         key = (row.get("market"), row.get("symbol"))
         rank = selected_rank.get(key)
         scores = row.get("factor_scores") or {}
@@ -995,9 +1048,9 @@ def _build_data_usability_audit(
         coverage = _as_float(scores.get("field_coverage_quality")) or 0.0
         codes = _risk_codes(row.get("risk_flags") or [])
         weak_reasons: list[str] = []
-        if usability < 90.0:
+        if usability < 80.0:
             weak_reasons.append(f"数据可用性 {usability:.1f} 分，未触发硬拦截但不算满格")
-        if coverage < 90.0:
+        if coverage < 80.0:
             weak_reasons.append(f"字段覆盖 {coverage:.1f}%")
         if codes & attention_codes:
             for flag in row.get("risk_flags") or []:
@@ -1017,6 +1070,10 @@ def _build_data_usability_audit(
         -(r.get("total_score") or 0),
         r.get("symbol") or "",
     ))
+    for bucket in summary_by_market.values():
+        lag = bucket.get("latest_trade_lag_days")
+        bucket["stale_notice"] = lag is not None and lag > _STALE_SOURCE_NOTICE_DAYS
+
     return {
         "generated_at": generated_at.isoformat(timespec="seconds"),
         "run_id": run_id,
@@ -1029,6 +1086,7 @@ def _build_data_usability_audit(
         "selected_attention_count": sum(1 for r in attention if r.get("in_recommendation_list")),
         "review_gated_count": len(review_gated),
         "summary_by_market": summary_by_market,
+        "stale_source_notice_days": _STALE_SOURCE_NOTICE_DAYS,
         "blocked": blocked[:120],
         "attention": attention[:120],
         # review_gated 不截断：dashboard 跌出 banner 按 (market, symbol) 全量查找，
@@ -1627,6 +1685,12 @@ def build(db_path: Path, *, top_per_market: int, portfolio_size: int, dry_run: b
                 "score_cap_data_usability_review": _DATA_USABILITY_REVIEW_SCORE_CAP,
                 "data_usability_min_buy_score": _DATA_USABILITY_MIN_BUY_SCORE,
                 "stale_source_days": _STALE_SOURCE_DAYS,
+                "stale_source_notice_days": _STALE_SOURCE_NOTICE_DAYS,
+                "data_usability_growth_profile": (
+                    "loss-making/early-growth names with usable price, market cap, momentum and fundamentals "
+                    "snapshots are not blocked merely because PE/PEG are naturally unavailable; valuation score "
+                    "still treats them as not cheap."
+                ),
                 "invalid_valuation_ratio_score": _NEGATIVE_VALUATION_SCORE,
                 "tech_growth_layer_version": CLASSIFICATION_VERSION,
                 "p0_evidence_seed": evidence_seed_summary,

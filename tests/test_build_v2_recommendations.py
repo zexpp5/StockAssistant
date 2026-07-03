@@ -344,6 +344,23 @@ class DataUsabilityGateTest(unittest.TestCase):
         self.assertIn("缺估值数据源", flags[0]["message"])
         self.assertIn("没有可用正向估值字段", flags[0]["message"])
 
+    def test_loss_making_growth_stock_uses_growth_data_profile(self):
+        row = {
+            **self._strong_row(),
+            "forward_pe": -18.0,
+            "trailing_pe": None,
+            "peg_ratio": None,
+        }
+        scores = build_v2._factor_scores(row)
+
+        flags = build_v2._apply_data_usability_gate(row, scores)
+
+        self.assertEqual(flags, [])
+        self.assertEqual(scores["data_usability_profile"], "growth_valuation")
+        self.assertEqual(scores["positive_valuation_count"], 0)
+        self.assertGreaterEqual(scores["data_usability"], 90.0)
+        self.assertLess(scores["valuation"], 50.0)
+
     def test_stale_factor_snapshot_cannot_be_buy(self):
         row = {
             **self._strong_row(),
@@ -414,6 +431,9 @@ class DataUsabilityGateTest(unittest.TestCase):
         self.assertEqual(audit["attention_count"], 1)
         self.assertEqual(audit["attention"][0]["symbol"], "REUSE")
         self.assertTrue(audit["attention"][0]["in_recommendation_list"])
+        self.assertEqual(audit["summary_by_market"]["US"]["latest_trade_date"], "2026-06-06")
+        self.assertEqual(audit["summary_by_market"]["US"]["latest_trade_lag_days"], 0)
+        self.assertFalse(audit["summary_by_market"]["US"]["stale_notice"])
 
     def test_audit_records_price_action_review_gated(self):
         # 2026-06-11 ADSK/SMCI/NRG 被结构性下跌闸砍分跌出 Top20，但审计里完全隐形，

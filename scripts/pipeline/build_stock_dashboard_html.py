@@ -14694,6 +14694,13 @@ function _reasonSummaryHtml(row) {
       const marketAttention = Number(marketSummary.attention || attention.length || 0);
       const marketSelectedAttention = Number(marketSummary.selected_attention || attention.filter(r => r.in_recommendation_list).length || 0);
       const generated = _fmtTs(audit.generated_at);
+      const latestTradeDate = marketSummary.latest_trade_date || "";
+      const lagDays = Number(marketSummary.latest_trade_lag_days);
+      const lagText = latestTradeDate
+        ? (Number.isFinite(lagDays) && lagDays > Number(audit.stale_source_notice_days || 1)
+            ? `⚠️ 行情截至 ${_esc(latestTradeDate)}（约 ${lagDays} 天前）`
+            : `行情 ${_esc(latestTradeDate)}`)
+        : "行情日期待补";
 
       function _dataHealthReasonText(r) {
         return [
@@ -14705,7 +14712,7 @@ function _reasonSummaryHtml(row) {
       function _dataHealthBucket(r, kind) {
         const text = _dataHealthReasonText(r);
         const hasExplicitRepairableGap = /缺最新价格|缺动量数据源|动量数据已过期|缺估值数据源|估值数据已过期/.test(text);
-        if (/没有可用正向估值字段|估值字段异常|Forward PE=-|PEG=0|亏损/.test(text)) {
+        if ((r && r.data_usability_profile === "growth_valuation") || /没有可用正向估值字段|估值字段异常|Forward PE=-|PEG=0|亏损/.test(text)) {
           return {
             key: "valuation",
             label: "估值口径不适用",
@@ -14746,7 +14753,7 @@ function _reasonSummaryHtml(row) {
             tone: "orange",
             cls: "border-orange-200 bg-orange-50 text-orange-900",
             rowCls: "bg-orange-100 text-orange-800 border-orange-200",
-            action: "行情已经拉到，但覆盖率/数据分没过闸；需要查具体字段来源，或确认这类股票是否应该换成长/订单口径。",
+            action: "行情已经拉到，但数据分没过闸；先查字段来源。亏损成长股不能靠补 PE/PEG，需改看收入增速、EV/Sales、订单和现金消耗。",
           };
         }
         return kind === "blocked"
@@ -14811,7 +14818,7 @@ function _reasonSummaryHtml(row) {
       const bucketCardsHtml = activeIssueCount > 0 ? `
         <div class="grid grid-cols-1 md:grid-cols-4 gap-2 mt-3">
           ${_bucketCard("可自动补数据", repairableRows, "border-amber-200 bg-white/70 text-amber-900", "明确缺行情、动量日期或估值快照。", "动作：点“全量补数据并重算”或明细里的“补这只”。")}
-          ${_bucketCard("数据质量待查", qualityCheckRows, "border-orange-200 bg-white/70 text-orange-900", "行情已拉到，但数据分/覆盖率没过闸。", "动作：展开明细，看缺口字段；不保证点按钮后必过。")}
+          ${_bucketCard("数据质量待查", qualityCheckRows, "border-orange-200 bg-white/70 text-orange-900", "行情已拉到，但数据分/覆盖率没过闸；不等于缺 PE。", "动作：查字段来源；亏损成长股改看成长证据，不保证点按钮后必过。")}
           ${_bucketCard("估值口径不适用", valuationRows, "border-purple-200 bg-white/70 text-purple-900", "公司亏损、Forward PE/PEG 无意义，不能靠补 PE 解决。", "动作：改看收入增速、EV/Sales、订单、现金消耗。")}
           ${_bucketCard("只适合研究/复查", researchRows, "border-rose-200 bg-white/70 text-rose-900", "短线异动、事件性下跌或原因不够结构化。", "动作：先进买前研究，不直接买。")}
         </div>` : "";
@@ -14821,6 +14828,10 @@ function _reasonSummaryHtml(row) {
         const reasons = (r.reasons || []).map(_esc).join("；") || "—";
         const score = r.data_usability == null ? "—" : `${Number(r.data_usability).toFixed(1)}分`;
         const coverage = r.coverage_pct == null ? "—" : `${Number(r.coverage_pct).toFixed(1)}%`;
+        const rawCoverage = r.raw_coverage_pct == null ? "" : ` · 原始覆盖 ${Number(r.raw_coverage_pct).toFixed(1)}%`;
+        const profile = r.data_usability_profile === "growth_valuation"
+          ? `<div class="mt-1 text-[11px] text-purple-700">成长口径：PE/PEG 天然不可用，不按缺字段处理${rawCoverage}</div>`
+          : "";
         const rank = r.in_recommendation_list
           ? `<span class="px-1.5 py-0.5 rounded bg-violet-50 text-violet-700 border border-violet-200">已入榜 #${_esc(String(r.rank || ""))}</span>`
           : `<span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">未入榜</span>`;
@@ -14861,6 +14872,7 @@ function _reasonSummaryHtml(row) {
           <td class="py-3 pr-4 text-xs text-slate-700 min-w-[300px] leading-relaxed">${reasons}</td>
           <td class="py-3 pr-4 text-xs min-w-[220px] leading-relaxed">
             <div class="font-mono text-amber-900">${score} / 覆盖 ${coverage}</div>
+            ${profile}
             <div class="mt-1 text-[11px] text-slate-500">
               行情 ${_esc(r.trade_date || "—")} · 动量 ${_esc(r.momentum_trade_date || "—")} · 估值 ${_esc(r.fundamentals_trade_date || "—")}
             </div>
@@ -14903,6 +14915,7 @@ function _reasonSummaryHtml(row) {
         <summary class="cursor-pointer select-none px-4 py-3 text-sm font-bold hover:bg-white/50">
           ▸ 数据够不够用：${statusTitle}
           <span class="ml-2 text-xs font-normal opacity-75">可补 ${repairableRows.length} · 估值不适用 ${valuationRows.length} · 研究复查 ${researchRows.length}</span>
+          <span class="ml-2 text-xs font-semibold ${Number.isFinite(lagDays) && lagDays > Number(audit.stale_source_notice_days || 1) ? "text-amber-700" : "text-slate-500"}">${lagText}</span>
         </summary>
         <div class="px-4 pb-3">
         <div class="flex items-start md:items-center gap-3 justify-between flex-col md:flex-row">
@@ -14921,6 +14934,7 @@ function _reasonSummaryHtml(row) {
               <a href="#runtime-status" class="px-2.5 py-1 rounded bg-white/70 hover:bg-white border border-slate-300 text-slate-700 text-[11px]">系统状态</a>
             </div>
             <div>当前市场 ${_marketLabel(activeMarket)}：可补 <b>${repairableRows.length}</b> · 估值不适用 <b>${valuationRows.length}</b> · 研究复查 <b>${researchRows.length}</b></div>
+            <div class="${Number.isFinite(lagDays) && lagDays > Number(audit.stale_source_notice_days || 1) ? "text-amber-700 font-semibold" : "text-slate-500"}">${lagText}</div>
             <div class="text-slate-500">全市场硬拦 ${blockedTotal} · 数据提醒 ${attentionTotal} · 全池 ${audit.candidate_count || "?"} 只 · 审计 ${_esc(generated.short)} ${_esc(generated.age)}</div>
           </div>
         </div>
