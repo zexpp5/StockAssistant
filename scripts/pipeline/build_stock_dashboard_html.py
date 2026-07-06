@@ -626,9 +626,9 @@ def _dual_track_html() -> str:
         '<div class="p-4">'
         '<div class="flex items-start justify-between gap-4 flex-wrap">'
         '<div>'
-        '<h3 class="font-bold text-slate-900">美股规则双轨：主榜不变，精选看「降估值+评级」</h3>'
-        '<p class="text-xs text-slate-500 mt-1">主列表仍用现规则 Top20；下面的精选 Top10 用候选公式 val_down_grade 从同一全量池独立排名，'
-        '只作为买前研究优先级，不写持仓、不写自选、不等于买入指令。</p>'
+        '<h3 class="font-bold text-slate-900">美股规则双轨：页面已全面切新公式视角，老公式降级影子对照</h3>'
+        '<p class="text-xs text-slate-500 mt-1">2026-07-06 用户拍板：主榜排序/分数/因子已切 val_down_grade 新公式视角；'
+        '老公式 tech_ai_v2 降级为影子基线（后台继续跑，只用于对照验证和候选池底座）。生产版本号待切换标准达标后升级。</p>'
         '</div>'
         '<div class="text-xs text-slate-400">alpha 记录：' + _e(latest_date) + '</div>'
         '</div>'
@@ -14087,6 +14087,20 @@ function _factorValue(row, keys) {
 }
 
 function _factorBreakdownHtml(row, compact = false) {
+  // 新公式视角(2026-07-06): 行带 new_factors 时展示新公式五因子(动量/估值/反转/F分/评级)
+  if (row && row.new_factors) {
+    const nf = row.new_factors;
+    const defs = [["动量","momentum"],["估值","valuation"],["反转","reversal"],["F分","f_score"],["评级","grade"]];
+    const chips = defs.map(([label,k]) => {
+      const v = (nf[k] === null || nf[k] === undefined) ? null : Number(nf[k]);
+      const color = v === null ? "text-slate-300"
+        : (label === "反转" ? (v >= 85 ? "text-amber-700" : v >= 50 ? "text-slate-600" : "text-emerald-700")
+                            : (v >= 70 ? "text-emerald-700" : v >= 50 ? "text-amber-700" : "text-rose-700"));
+      return `<span class="inline-flex items-center gap-1 rounded bg-violet-50/60 border border-violet-100 px-1.5 py-0.5 ${compact ? "text-[10px]" : "text-[11px]"}" title="新公式(val_down_grade)因子分">
+        <span class="text-slate-500">${label}</span><span class="font-mono ${color}">${v === null ? "—" : v.toFixed(0)}</span></span>`;
+    });
+    return `<div class="flex flex-wrap gap-1">${chips.join("")}</div>`;
+  }
   const items = [
     ["动量", _factorValue(row, ["momentum_score", "momentum"])],
     ["反转", _factorValue(row, ["reversal_score", "reversal"])],
@@ -15013,18 +15027,23 @@ function _reasonSummaryHtml(row) {
     // 首屏严选 3 只是研究卡，不替代主榜。主表必须从第 1 名开始展示完整批次，
     // 避免用户看到严选后下面直接从 11 名开始，误以为 1-10 被吞掉。
     const PRIORITY_BOARD_N = 10;
-    const _isLowerPriorityRow = c => (c.rank || 9999) > PRIORITY_BOARD_N;
+    // 2026-07-06 用户拍板「AI 推荐页全面用新公式」：美股行带 new_rank(新公式全池名次)，
+    // 排序/优先级分界一律按新公式名次；无 new_rank 的行(非美股或数据缺)按老名次沉底兜底。
+    const _effRank = c => Number(c.new_rank) || (900 + (Number(c.rank) || 9999));
+    const _isLowerPriorityRow = c => _effRank(c) > PRIORITY_BOARD_N;
     function _visibleDiscoveryCandidates() {
       const rows = cands.filter(c => _candidateMarketCode(c) === window._activeDiscoveryMarket);
+      const hasNew = rows.some(c => c.new_rank);
+      const rankOf = hasNew ? _effRank : (c => Number(c.rank) || 9999);
       if ((window._discoverySortMode || "policy") === "policy") {
         rows.sort((a, b) => {
           const pa = _policyActionPriority(a);
           const pb = _policyActionPriority(b);
           if (pa !== pb) return pa - pb;
-          return (a.rank || 9999) - (b.rank || 9999);
+          return rankOf(a) - rankOf(b);
         });
       } else {
-        rows.sort((a, b) => (a.rank || 9999) - (b.rank || 9999));
+        rows.sort((a, b) => rankOf(a) - rankOf(b));
       }
       return rows;
     }
@@ -15047,7 +15066,7 @@ function _reasonSummaryHtml(row) {
           </summary>
           <div class="mt-1 leading-relaxed text-slate-500">
             上方「今日严选 3 只」是从新公式 Top10 里再过滤“偏贵”和“接飞刀”得到的研究卡；
-            下方表格从第 1 名开始展示当前市场完整批次。第 ${start}-${end} 名保留用于观察和验证，
+            下方表格美股已按新公式(val_down_grade)名次排序，老公式名次收进悬停提示。第 ${start}-${end} 名保留用于观察和验证，
             但不建议按主榜核心标的同等优先级处理。
           </div>
         </details>`;
@@ -15062,8 +15081,15 @@ function _reasonSummaryHtml(row) {
       const fColor = c.f_score >= 7 ? "text-emerald-600" : (c.f_score >= 4 ? "text-amber-600" : "text-rose-600");
       const mom = c.momentum_12_1 == null ? "-" : (c.momentum_12_1 > 0 ? "+" : "") + c.momentum_12_1.toFixed(1) + "%";
       const momColor = (c.momentum_12_1 || 0) > 0 ? "text-emerald-600" : "text-rose-600";
-      const scoreNum = Number(c.composite_z);
-      const scoreText = Number.isFinite(scoreNum) ? (scoreNum >= 0 ? "+" : "") + scoreNum.toFixed(2) : "—";
+      // 新公式视角：有 new_score 用新公式分(0-100)，老分退 tooltip；无则回退老分
+      const hasNewScore = Number.isFinite(Number(c.new_score));
+      const scoreNum = hasNewScore ? Number(c.new_score) : Number(c.composite_z);
+      const scoreText = Number.isFinite(scoreNum)
+        ? (hasNewScore ? scoreNum.toFixed(1) : (scoreNum >= 0 ? "+" : "") + scoreNum.toFixed(2))
+        : "—";
+      const scoreTitle = hasNewScore
+        ? `新公式(val_down_grade)分 ${scoreNum.toFixed(1)}；老公式分 ${Number.isFinite(Number(c.composite_z)) ? Number(c.composite_z).toFixed(2) : "—"}`
+        : "老公式综合分";
       const zColor = scoreNum > 0 ? "text-emerald-600 font-bold" : (Number.isFinite(scoreNum) ? "text-rose-600" : "text-slate-400");
       const reasonText = _reasonSummaryHtml(c);
       const entryText = _fmtEntryPrice(c);
@@ -15100,12 +15126,18 @@ function _reasonSummaryHtml(row) {
       const alpha60 = track ? track.alpha_60d : null;
       const tk = _esc(c.ticker);
       const stockDetailAttrs = `data-code="${tk}" data-name="${_esc(displayName)}" onclick="openStockDetail(this.dataset.code, this.dataset.name)"`;
+      const rankTitle = c.new_rank
+        ? `新公式名次 #${c.new_rank}；老公式${c.legacy_rank ? `名次 #${c.legacy_rank}` : `全池第 ${c.rank || "—"}（老 Top20 外）`}${isLowerPriority ? "；第11名以后，优先级低于前10" : ""}`
+        : `${window._discoverySortMode === "policy" ? "新规则视图排序；" : "原始分数排序；"}后端原始 rank #${c.rank}${isLowerPriority ? "（第11名以后，优先级低于前10）" : ""}`;
+      const laoIn = c.synthetic_new_pick
+        ? '<span class="ml-1 inline-flex items-center px-1 py-0.5 rounded text-[10px] bg-violet-50 text-violet-700 ring-1 ring-violet-200" title="新公式从全量池捞入，老公式 Top20 没有这只；部分富字段待下批数据补齐">🆕捞入</span>'
+        : "";
       return `<tr class="hover:bg-slate-50${isLowerPriority ? " bg-slate-50/40" : ""}">
         <td class="disc-sticky-rank px-2 py-1 font-mono text-xs text-slate-500">
-          <span title="${window._discoverySortMode === "policy" ? "新规则视图排序；" : "原始分数排序；"}后端原始 rank #${c.rank}${isLowerPriority ? "（第11名以后，优先级低于前10）" : ""}">${idx + 1}</span>
+          <span title="${rankTitle}">${c.new_rank || idx + 1}</span>
         </td>
         <td class="disc-sticky-code px-2 py-1 font-mono text-xs font-bold text-violet-700 cursor-pointer hover:underline"
-            ${stockDetailAttrs} title="点击进入这只股票的完整详情页">${c.ticker}${_newBadge(c)}${_riseBadge(c)}${_appearanceBadge(c)}</td>
+            ${stockDetailAttrs} title="点击进入这只股票的完整详情页">${c.ticker}${laoIn}${_newBadge(c)}${_riseBadge(c)}${_appearanceBadge(c)}</td>
         <td class="disc-sticky-name px-2 py-1 text-xs text-slate-700 cursor-pointer"
             ${stockDetailAttrs} title="点击进入这只股票的完整详情页">
           <div class="truncate max-w-[220px]" title="${_esc(displayNameTitle)}">${_esc(displayName)}</div>
@@ -15117,7 +15149,7 @@ function _reasonSummaryHtml(row) {
         <td class="px-2 py-1 text-xs whitespace-nowrap">${_signalBadge(c)}</td>
         <td class="px-2 py-1 text-xs whitespace-nowrap">${market}</td>
         <td class="px-2 py-1 text-xs text-slate-600 whitespace-nowrap" title="${_esc(themeTitle || themeText)}">${_esc(themeText)}</td>
-        <td class="px-2 py-1 text-right text-xs font-mono ${zColor}">${scoreText}</td>
+        <td class="px-2 py-1 text-right text-xs font-mono ${zColor}" title="${scoreTitle}">${scoreText}</td>
         <td class="px-2 py-1 text-xs min-w-[190px]">${factorHtml}</td>
         <td class="px-2 py-1 text-right text-xs font-mono whitespace-nowrap">${entryText}</td>
         <td class="px-2 py-1 text-right text-xs font-mono text-slate-700">${cap}</td>
@@ -17080,6 +17112,61 @@ def _runtime_load_pipeline_status(role: str = "production", mode: str | None = N
         if best is None or candidate[:2] > best[:2]:
             best = candidate
     return best[2] if best else {}
+
+
+_NON_US_SUFFIXES = (".SS", ".SZ", ".HK", ".TW", ".TWO", ".KS", ".T", ".AX", ".L")
+
+
+def _apply_new_formula_view(candidates: list) -> list:
+    """美股主榜切新公式视角（2026-07-06 用户拍板）。
+
+    读 dual_track_ranking.json 的新公式全池排名，给美股候选行注入
+    new_rank / new_score / new_factors，老公式名次退 legacy_rank；
+    新公式 Top20 里老榜没有的「捞入票」补合成行（字段稀疏，前端已有 - 兜底）。
+    只改展示数据，不动 recommendation_picks / strategy_version。
+    """
+    dual = _runtime_load_json("data/latest/dual_track_ranking.json") or {}
+    us = (dual.get("markets") or {}).get("US") or {}
+    top20 = (us.get("rank_slices") or {}).get("top20") or {}
+    rows = top20.get("rows") or us.get("rows") or []
+    dropped = top20.get("dropped") or us.get("dropped") or []
+    info = {str(r.get("symbol") or "").upper(): r for r in list(rows) + list(dropped)}
+    if not info:
+        return candidates
+
+    out, seen = [], set()
+    for c in candidates:
+        tk = str(c.get("ticker") or c.get("code") or "").upper()
+        is_us = tk and not any(tk.endswith(sfx) for sfx in _NON_US_SUFFIXES)
+        r = info.get(tk) if is_us else None
+        if r:
+            c = dict(c)
+            c["legacy_rank"] = c.get("rank")
+            c["new_rank"] = r.get("new_rank")
+            c["new_score"] = r.get("candidate_score")
+            c["new_factors"] = r.get("factors")
+            seen.add(tk)
+        out.append(c)
+    # 新公式 Top20 里页面还没有的票 → 一律补合成行。
+    # 注意不能只补 is_new：baseline(老公式复算)Top20 ≠ 实际生产 picks(有闸门/churn 控制)，
+    # 只看 is_new 会把新公式头部票漏掉(实测漏过新 #1/#2)。
+    for r in rows:
+        sym = str(r.get("symbol") or "").upper()
+        if not sym or sym in seen:
+            continue
+        out.append({
+            "ticker": sym,
+            "name": r.get("name") or sym,
+            "rank": r.get("prod_rank"),          # 老公式全池名次(通常>20)
+            "legacy_rank": None,                  # 不在老 Top20
+            "new_rank": r.get("new_rank"),
+            "new_score": r.get("candidate_score"),
+            "new_factors": r.get("factors"),
+            "synthetic_new_pick": True,
+            "eligibility": "research_only",
+            "recommendation_reason": "新公式从全量池捞入（老公式 Top20 没有这只）；富字段待下批生产数据补齐。",
+        })
+    return out
 
 
 def _build_appearance_index(strategy_version: str | None = None) -> dict:
@@ -22975,6 +23062,10 @@ def build():
             if qtag:
                 item["quality_tag"] = qtag
             merged_candidates.append(item)
+        # 2026-07-06 用户拍板「AI 推荐页全面用新公式」：美股候选注入新公式视图
+        # (new_rank/new_score/new_factors，捞入票补合成行)；老公式名次退居 legacy_rank。
+        # 生产 strategy_version 不动(避免验证清零)，只改页面视角。
+        merged_candidates = _apply_new_formula_view(merged_candidates)
         v2_stats_main = _runtime_db_stats().get("v2") or {}
         dropouts = _build_dropouts(current_strategy_version)
         # Dump 给 morning_brief 复用（避免 morning_brief 自己连 DuckDB 锁冲突）。

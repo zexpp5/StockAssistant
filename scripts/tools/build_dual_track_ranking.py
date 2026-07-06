@@ -455,6 +455,7 @@ def compute() -> dict:
                 rows = []
                 for s in cand_top:
                     item = by_symbol.get(s, {})
+                    sc = item.get("scores") or {}
                     rows.append({
                         "symbol": s, "name": names.get(s, ""),
                         "new_rank": c_rank[s], "prod_rank": b_rank[s],
@@ -462,6 +463,9 @@ def compute() -> dict:
                         "is_new": s not in base_top,   # 新公式捞进、老公式同档没有
                         "candidate_score": round(float(item.get("_c") or 0), 4),
                         "baseline_score": round(float(item.get("_b") or 0), 4),
+                        # 新公式五因子(主榜切新公式视角后前端因子拆解用)
+                        "factors": {k: (round(float(v), 1) if v is not None else None)
+                                    for k, v in sc.items()},
                     })
                 dropped = [{
                     "symbol": s, "name": names.get(s, ""),
