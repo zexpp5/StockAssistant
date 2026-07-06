@@ -93,15 +93,19 @@ def expectation_meter(
         consumption = price_f / target_f
         tier = 2 if consumption >= TARGET_CONSUMPTION_HIGH else (
             1 if consumption >= TARGET_CONSUMPTION_MID else 0)
+        remaining_pct = (1 - consumption) * 100
         components["target_consumption"] = {
-            "value": round(consumption, 4), "pct": round(consumption * 100, 1), "tier": tier,
+            "value": round(consumption, 4), "pct": round(consumption * 100, 1),
+            "remaining_pct": round(remaining_pct, 1), "tier": tier,
         }
         score += tier
         max_score += 2
-        if tier == 2:
-            reasons.append(f"现价已吃掉分析师目标价 {consumption*100:.0f}%，上行空间所剩无几")
+        if consumption >= 1:
+            reasons.append(f"现价已超过分析师目标价 {(consumption-1)*100:.0f}%，再涨要靠分析师追加目标")
+        elif tier == 2:
+            reasons.append(f"离分析师目标价只剩 {remaining_pct:.0f}% 空间，上行所剩无几")
         elif tier == 1:
-            reasons.append(f"现价已消耗目标价 {consumption*100:.0f}%")
+            reasons.append(f"离分析师目标价还剩 {remaining_pct:.0f}% 空间")
 
     # ② 隐含增速压力（PEG）
     if peg_f is not None and peg_f > 0:
@@ -168,7 +172,11 @@ def format_meter_line(meter: dict[str, Any] | None) -> str:
     parts = [f'{meter["light"]} 预期消耗：{meter["label"]}']
     tc = (meter.get("components") or {}).get("target_consumption")
     if tc:
-        parts.append(f'已吃目标价 {tc["pct"]:.0f}%')
+        rem = tc.get("remaining_pct")
+        if isinstance(rem, (int, float)) and rem < 0:
+            parts.append(f'已超分析师目标 {-rem:.0f}%')
+        elif isinstance(rem, (int, float)):
+            parts.append(f'离分析师目标剩 {rem:.0f}% 空间')
     ru = (meter.get("components") or {}).get("runup")
     if ru:
         parts.append(f'一年 {ru["one_year_pct"]:+.0f}%')

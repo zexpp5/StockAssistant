@@ -96,9 +96,12 @@ class TestExpectationMeter(unittest.TestCase):
                               one_year_pct=135, industry_text="x")
         line = format_meter_line(m)
         self.assertIn("🟡", line)
-        self.assertIn("已吃目标价 72%", line)
+        self.assertIn("离分析师目标剩 28% 空间", line)
         self.assertIn("+135%", line)
         self.assertEqual(format_meter_line(None), "⚪ 预期消耗：数据不足")
+        # 现价超目标价时正着说"已超"
+        m2 = expectation_meter(price=110, target_price=100, one_year_pct=10)
+        self.assertIn("已超分析师目标 10%", format_meter_line(m2))
 
     def test_t11_cyclical_keyword_matching(self):
         self.assertTrue(is_cyclical_industry("HBM 内存"))
