@@ -206,10 +206,27 @@ def _revision_events_map(conn, symbols: list[str], as_of: date) -> dict[str, lis
     return out
 
 
+def _insider_events_map(symbols: list[str]) -> dict[str, list[dict]]:
+    out: dict[str, list[dict]] = {s: [] for s in symbols}
+    path = REPO / "data" / "event_calendar_us_form4.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return out
+    for event in payload.get("events") or []:
+        if not isinstance(event, dict):
+            continue
+        sym = str(event.get("ticker") or event.get("symbol") or "").upper()
+        if sym in out:
+            out[sym].append(event)
+    return out
+
+
 def _strict_pick_payload(data: dict, conn) -> dict:
     """从 US candidate_focus_top10 生成首屏严选 3 只。只读、只解释研究优先级。"""
     from stock_research.core import buy_zone
     from stock_research.core.expectation_meter import expectation_meter, format_meter_line
+    from stock_research.core.insider_summary import format_insider_line, summarize_insider_events
     from stock_research.core.revision_trend import format_revision_line, summarize_revision_trend
 
     us = (data.get("markets") or {}).get(US_MARKET) or {}
@@ -222,6 +239,7 @@ def _strict_pick_payload(data: dict, conn) -> dict:
     except Exception:
         as_of = date.today()
     revision_events = _revision_events_map(conn, symbols, as_of)
+    insider_events = _insider_events_map(symbols)
     selected: list[dict] = []
     excluded: list[dict] = []
 
@@ -255,6 +273,7 @@ def _strict_pick_payload(data: dict, conn) -> dict:
             industry_text=exp_in["industry_text"],
         )
         revision = summarize_revision_trend(revision_events.get(symbol) or [], as_of=as_of)
+        insider = summarize_insider_events(insider_events.get(symbol) or [], as_of=as_of)
         selected.append({
             "symbol": symbol,
             "name": row.get("name") or "",
@@ -273,6 +292,8 @@ def _strict_pick_payload(data: dict, conn) -> dict:
             "expectation_line": format_meter_line(meter),
             "revision_trend": revision,
             "revision_line": format_revision_line(revision),
+            "insider": insider,
+            "insider_line": format_insider_line(insider),
         })
         if len(selected) >= STRICT_PICK_N:
             break

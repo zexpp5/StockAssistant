@@ -104,6 +104,8 @@ class TestDailyStrictPicks(unittest.TestCase):
         self.assertEqual(payload["picks"][0]["intro"], "测试公司一句话")
         self.assertEqual(payload["picks"][0]["revision_trend"]["direction"], "上调中")
         self.assertIn("分析师风向", payload["picks"][0]["revision_line"])
+        self.assertEqual(payload["picks"][0]["insider"]["net_direction"], "无申报")
+        self.assertEqual(payload["picks"][0]["insider_line"], "👔 内部人：30 天无申报")
         self.assertEqual(payload["empty_slots"], 0)
 
 

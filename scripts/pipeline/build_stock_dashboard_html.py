@@ -706,6 +706,8 @@ def strict_picks_card_html() -> str:
         meter_line = str(p.get("expectation_line") or "")
         revision = p.get("revision_trend") or {}
         revision_line = str(p.get("revision_line") or "")
+        insider = p.get("insider") or {}
+        insider_line = str(p.get("insider_line") or "")
         revision_html = ""
         if revision_line:
             revision_tone = (
@@ -717,6 +719,21 @@ def strict_picks_card_html() -> str:
             revision_html = (
                 f'<div class="mt-2 text-xs font-semibold {revision_tone}" '
                 f'title="{_e(revision_title)}">{_e(revision_line)}</div>'
+            )
+        insider_html = ""
+        if insider_line:
+            insider_tone = (
+                "text-amber-700"
+                if str(insider.get("net_direction") or "") == "净卖出"
+                else "text-slate-600"
+            )
+            insider_title = str(
+                insider.get("disclaimer")
+                or "卖出常见于报税/行权，≠看空；买入信号权重大于卖出。"
+            )
+            insider_html = (
+                f'<div class="mt-1 text-xs font-semibold {insider_tone}" '
+                f'title="{_e(insider_title)}">{_e(insider_line)}</div>'
             )
         meter_html = ""
         if meter_line:
@@ -750,6 +767,7 @@ def strict_picks_card_html() -> str:
             <div class="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-700">{_e(bz_line)}</div>
             {meter_html}
             {revision_html}
+            {insider_html}
             <div class="mt-2 text-[11px] text-amber-700 leading-relaxed">{_e(risk)}</div>
           </article>
         """)
