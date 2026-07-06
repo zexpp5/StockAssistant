@@ -139,9 +139,46 @@ def _strict_risk(move: dict) -> str:
     return "未触发 20 日大跌过滤；仍需看盘前风险和买前研究。"
 
 
+def _expectation_inputs(conn, symbol: str) -> dict:
+    """拉预期消耗度的输入：最新估值行 + 行业文本。缺哪项返回哪项 None。"""
+    out = {"close": None, "forward_pe": None, "peg_ratio": None,
+           "one_year_pct": None, "industry_text": ""}
+    try:
+        row = conn.execute(
+            """
+            SELECT close, forward_pe, peg_ratio, one_year_pct
+            FROM price_daily
+            WHERE market=? AND upper(symbol)=upper(?) AND close IS NOT NULL
+            ORDER BY trade_date DESC LIMIT 1
+            """,
+            [US_MARKET, symbol],
+        ).fetchone()
+        if row:
+            out.update(close=row[0], forward_pe=row[1], peg_ratio=row[2], one_year_pct=row[3])
+    except Exception:
+        pass
+    try:
+        row = conn.execute(
+            """
+            SELECT COALESCE(su.theme,''), COALESCE(su.industry,''),
+                   COALESCE(cm.chain,''), COALESCE(cm.chain_role,'')
+            FROM system_universe su
+            LEFT JOIN chain_metadata cm ON cm.market=su.market AND cm.symbol=su.symbol
+            WHERE su.market=? AND upper(su.symbol)=upper(?) LIMIT 1
+            """,
+            [US_MARKET, symbol],
+        ).fetchone()
+        if row:
+            out["industry_text"] = " ".join(str(x) for x in row if x)
+    except Exception:
+        pass
+    return out
+
+
 def _strict_pick_payload(data: dict, conn) -> dict:
     """从 US candidate_focus_top10 生成首屏严选 3 只。只读、只解释研究优先级。"""
     from stock_research.core import buy_zone
+    from stock_research.core.expectation_meter import expectation_meter, format_meter_line
 
     us = (data.get("markets") or {}).get(US_MARKET) or {}
     focus_rows = list(us.get("candidate_focus_top10") or [])
@@ -171,6 +208,15 @@ def _strict_pick_payload(data: dict, conn) -> dict:
                 "new_rank": row.get("new_rank"),
             })
             continue
+        exp_in = _expectation_inputs(conn, symbol)
+        meter = expectation_meter(
+            price=exp_in["close"],
+            target_price=(zone or {}).get("target"),
+            peg_ratio=exp_in["peg_ratio"],
+            forward_pe=exp_in["forward_pe"],
+            one_year_pct=exp_in["one_year_pct"],
+            industry_text=exp_in["industry_text"],
+        )
         selected.append({
             "symbol": symbol,
             "name": row.get("name") or "",
@@ -185,6 +231,8 @@ def _strict_pick_payload(data: dict, conn) -> dict:
             "price_position": (zone or {}).get("position") or "未知",
             "move_20d": move,
             "risk": _strict_risk(move),
+            "expectation": meter,
+            "expectation_line": format_meter_line(meter),
         })
         if len(selected) >= STRICT_PICK_N:
             break

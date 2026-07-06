@@ -702,6 +702,23 @@ def strict_picks_card_html() -> str:
         bz_line = str(p.get("buy_zone_line") or "💰 价格区间待补")
         risk = str(p.get("risk") or "仍需买前研究。")
         pos = str(p.get("price_position") or "未知")
+        meter = p.get("expectation") or {}
+        meter_line = str(p.get("expectation_line") or "")
+        meter_html = ""
+        if meter_line:
+            meter_tone = {"🔴": "text-rose-700", "🟡": "text-amber-700",
+                          "🟢": "text-emerald-700"}.get(str(meter.get("light") or ""), "text-slate-500")
+            meter_title = "；".join(str(r) for r in (meter.get("reasons") or [])) \
+                or "预期消耗度：目标价消耗 / PEG / 一年涨幅 三代理合成"
+            meter_html = (
+                f'<div class="mt-2 text-xs font-semibold {meter_tone}" title="{_e(meter_title)}">{_e(meter_line)}</div>'
+            )
+            if meter.get("cyclical_top_risk"):
+                meter_html += (
+                    '<div class="mt-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1.5 '
+                    'text-[11px] font-semibold text-rose-700">⚠️ 周期股顶部风险：盈利高点 PE 最低，'
+                    '低 PE ≠ 便宜；不建议按"便宜"标签执行。</div>'
+                )
         cards.append(f"""
           <article class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
             <div class="flex items-start justify-between gap-3">
@@ -717,6 +734,7 @@ def strict_picks_card_html() -> str:
             <div class="mt-3 text-sm text-slate-700 leading-relaxed">{_e(intro)}</div>
             <div class="mt-2 text-xs text-slate-600 leading-relaxed">{_e(reason)}</div>
             <div class="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-700">{_e(bz_line)}</div>
+            {meter_html}
             <div class="mt-2 text-[11px] text-amber-700 leading-relaxed">{_e(risk)}</div>
           </article>
         """)
