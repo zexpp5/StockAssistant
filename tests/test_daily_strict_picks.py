@@ -35,9 +35,16 @@ class TestDailyStrictPicks(unittest.TestCase):
         conn.execute(
             """
             CREATE TABLE analyst_grade_events (
+                market VARCHAR,
                 symbol VARCHAR,
                 event_date DATE,
-                price_target DOUBLE
+                grading_company VARCHAR,
+                previous_grade VARCHAR,
+                new_grade VARCHAR,
+                action VARCHAR,
+                price_target_action VARCHAR,
+                price_target DOUBLE,
+                prior_price_target DOUBLE
             )
             """
         )
@@ -58,9 +65,20 @@ class TestDailyStrictPicks(unittest.TestCase):
         _insert_prices(conn, "OK3", 86, 80)
         for sym in ("PRICEY", "KNIFE", "OK1", "OK2", "OK3"):
             conn.execute(
-                "INSERT INTO analyst_grade_events VALUES (?, '2026-01-20', 100)",
+                """
+                INSERT INTO analyst_grade_events
+                VALUES ('US', ?, '2026-01-20', 'TestCo', 'Buy', 'Buy',
+                        'maintain', 'raises', 100, 90)
+                """,
                 [sym],
             )
+        conn.execute(
+            """
+            INSERT INTO analyst_grade_events
+            VALUES ('US', 'OK1', '2026-01-19', 'TestCo2', 'Buy', 'Buy',
+                    'maintain', 'raises', 110, 100)
+            """
+        )
         conn.execute("INSERT INTO chain_metadata VALUES ('US', 'OK1', '测试公司一句话')")
 
         rows = [
@@ -84,6 +102,8 @@ class TestDailyStrictPicks(unittest.TestCase):
             {"PRICEY": "剔贵", "KNIFE": "接飞刀"},
         )
         self.assertEqual(payload["picks"][0]["intro"], "测试公司一句话")
+        self.assertEqual(payload["picks"][0]["revision_trend"]["direction"], "上调中")
+        self.assertIn("分析师风向", payload["picks"][0]["revision_line"])
         self.assertEqual(payload["empty_slots"], 0)
 
 

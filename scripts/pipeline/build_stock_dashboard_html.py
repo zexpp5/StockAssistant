@@ -704,6 +704,20 @@ def strict_picks_card_html() -> str:
         pos = str(p.get("price_position") or "未知")
         meter = p.get("expectation") or {}
         meter_line = str(p.get("expectation_line") or "")
+        revision = p.get("revision_trend") or {}
+        revision_line = str(p.get("revision_line") or "")
+        revision_html = ""
+        if revision_line:
+            revision_tone = (
+                "text-amber-700"
+                if str(revision.get("direction") or "") == "下调中"
+                else "text-slate-600"
+            )
+            revision_title = "分析师 90 天目标价上调/下调事件；只做展示，不进打分。"
+            revision_html = (
+                f'<div class="mt-2 text-xs font-semibold {revision_tone}" '
+                f'title="{_e(revision_title)}">{_e(revision_line)}</div>'
+            )
         meter_html = ""
         if meter_line:
             meter_tone = {"🔴": "text-rose-700", "🟡": "text-amber-700",
@@ -735,6 +749,7 @@ def strict_picks_card_html() -> str:
             <div class="mt-2 text-xs text-slate-600 leading-relaxed">{_e(reason)}</div>
             <div class="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-700">{_e(bz_line)}</div>
             {meter_html}
+            {revision_html}
             <div class="mt-2 text-[11px] text-amber-700 leading-relaxed">{_e(risk)}</div>
           </article>
         """)

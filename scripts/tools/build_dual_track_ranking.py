@@ -175,16 +175,53 @@ def _expectation_inputs(conn, symbol: str) -> dict:
     return out
 
 
+def _revision_events_map(conn, symbols: list[str], as_of: date) -> dict[str, list[dict]]:
+    if not symbols:
+        return {}
+    placeholders = ",".join("?" for _ in symbols)
+    start = date.fromordinal(as_of.toordinal() - 90)
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT upper(symbol) AS symbol, event_date, action, price_target_action,
+                   price_target, prior_price_target
+            FROM analyst_grade_events
+            WHERE market=? AND upper(symbol) IN ({placeholders})
+              AND event_date BETWEEN ? AND ?
+            ORDER BY event_date DESC
+            """,
+            [US_MARKET, *symbols, start, as_of],
+        ).fetchall()
+    except Exception:
+        return {}
+    out: dict[str, list[dict]] = {s: [] for s in symbols}
+    for sym, event_date, action, pt_action, target, prior in rows:
+        out.setdefault(str(sym).upper(), []).append({
+            "event_date": event_date,
+            "action": action,
+            "price_target_action": pt_action,
+            "price_target": target,
+            "prior_price_target": prior,
+        })
+    return out
+
+
 def _strict_pick_payload(data: dict, conn) -> dict:
     """从 US candidate_focus_top10 生成首屏严选 3 只。只读、只解释研究优先级。"""
     from stock_research.core import buy_zone
     from stock_research.core.expectation_meter import expectation_meter, format_meter_line
+    from stock_research.core.revision_trend import format_revision_line, summarize_revision_trend
 
     us = (data.get("markets") or {}).get(US_MARKET) or {}
     focus_rows = list(us.get("candidate_focus_top10") or [])
     symbols = [str(r.get("symbol") or "").upper() for r in focus_rows if r.get("symbol")]
     zones = buy_zone.compute_buy_zones(symbols, conn)
     intros = _chain_intro_map(conn)
+    try:
+        as_of = date.fromisoformat(str(us.get("run_date") or data.get("generated_at") or "")[:10])
+    except Exception:
+        as_of = date.today()
+    revision_events = _revision_events_map(conn, symbols, as_of)
     selected: list[dict] = []
     excluded: list[dict] = []
 
@@ -217,6 +254,7 @@ def _strict_pick_payload(data: dict, conn) -> dict:
             one_year_pct=exp_in["one_year_pct"],
             industry_text=exp_in["industry_text"],
         )
+        revision = summarize_revision_trend(revision_events.get(symbol) or [], as_of=as_of)
         selected.append({
             "symbol": symbol,
             "name": row.get("name") or "",
@@ -233,6 +271,8 @@ def _strict_pick_payload(data: dict, conn) -> dict:
             "risk": _strict_risk(move),
             "expectation": meter,
             "expectation_line": format_meter_line(meter),
+            "revision_trend": revision,
+            "revision_line": format_revision_line(revision),
         })
         if len(selected) >= STRICT_PICK_N:
             break
