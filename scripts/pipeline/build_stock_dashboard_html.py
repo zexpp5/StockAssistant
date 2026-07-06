@@ -14646,7 +14646,7 @@ function _reasonSummaryHtml(row) {
       window._activeDiscoveryMarket = _availableMarkets[0] || "US";
     }
     if (!window._discoverySortMode) {
-      window._discoverySortMode = "policy";
+      window._discoverySortMode = "rank";  // 2026-07-06 默认按新公式名次,表从#1开始读
     }
 
     function _policyStats(rows) {
@@ -14729,8 +14729,8 @@ function _reasonSummaryHtml(row) {
           </div>
           <div class="flex items-center gap-2 whitespace-nowrap">
             <span class="text-xs text-slate-500">视图排序</span>
-            <button onclick="setDiscoverySortMode('policy')" class="px-3 py-1.5 rounded-md border text-xs font-semibold ${btnCls(mode === "policy")}">新规则优先</button>
-            <button onclick="setDiscoverySortMode('rank')" class="px-3 py-1.5 rounded-md border text-xs font-semibold ${btnCls(mode === "rank")}">原始分数排序</button>
+            <button onclick="setDiscoverySortMode('policy')" class="px-3 py-1.5 rounded-md border text-xs font-semibold ${btnCls(mode === "policy")}">按动作分组</button>
+            <button onclick="setDiscoverySortMode('rank')" class="px-3 py-1.5 rounded-md border text-xs font-semibold ${btnCls(mode === "rank")}">按名次排序</button>
           </div>
         </div>
         </div>
@@ -15074,7 +15074,20 @@ function _reasonSummaryHtml(row) {
 
     function _renderDiscoveryMarketRows() {
       const visibleCands = _visibleDiscoveryCandidates();
+      // 新公式 20 名外(或无新名次)的老公式候选默认收起, 主表只读新公式 Top20
+      const hasNewView = visibleCands.some(c => c.new_rank);
+      let tailDividerDone = false;
+      const nTail = hasNewView ? visibleCands.filter(c => _effRank(c) > 20).length : 0;
       tbody.innerHTML = visibleCands.map((c, idx) => {
+      const isTail = hasNewView && _effRank(c) > 20;
+      let tailDivider = "";
+      if (isTail && !tailDividerDone) {
+        tailDividerDone = true;
+        tailDivider = `<tr class="bg-slate-100"><td colspan="99" class="px-3 py-2 text-xs text-slate-600">
+          📁 <strong>还有 ${nTail} 只老公式候选</strong>（新公式 20 名外，仅供对照，不进主榜）
+          <button onclick="(function(btn){const rows=document.querySelectorAll('#discovery-table-wrap .disc-tail-row');const h=rows.length&&rows[0].classList.contains('hidden');rows.forEach(r=>r.classList.toggle('hidden',!h));btn.textContent=h?'收起 ▲':'展开 ▼';})(this)" class="ml-2 px-2 py-0.5 text-[11px] bg-white border border-slate-300 rounded hover:bg-slate-50">展开 ▼</button>
+        </td></tr>`;
+      }
       const isLowerPriority = _isLowerPriorityRow(c);
       const cap = c.market_cap_usd ? (c.market_cap_usd / 1e9).toFixed(1) : "-";
       const f = c.f_score == null ? "-" : Math.round(c.f_score);
@@ -15132,7 +15145,7 @@ function _reasonSummaryHtml(row) {
       const laoIn = c.synthetic_new_pick
         ? '<span class="ml-1 inline-flex items-center px-1 py-0.5 rounded text-[10px] bg-violet-50 text-violet-700 ring-1 ring-violet-200" title="新公式从全量池捞入，老公式 Top20 没有这只；部分富字段待下批数据补齐">🆕捞入</span>'
         : "";
-      return `<tr class="hover:bg-slate-50${isLowerPriority ? " bg-slate-50/40" : ""}">
+      return `${tailDivider}<tr class="hover:bg-slate-50${isLowerPriority ? " bg-slate-50/40" : ""}${isTail ? " disc-tail-row hidden opacity-60" : ""}">
         <td class="disc-sticky-rank px-2 py-1 font-mono text-xs text-slate-500">
           <span title="${rankTitle}">${c.new_rank || idx + 1}</span>
         </td>
@@ -17025,25 +17038,21 @@ def early_growth_radar_section_html(payload: dict | None = None) -> str:
     early_count = counts.get('early_or_watch') or len(early_rows)
     overheated_count = counts.get('overheated') or len(overheated_rows)
     return f"""
-  <details class="mb-4 rounded-xl border border-emerald-200 bg-white shadow-sm overflow-hidden">
-    <summary class="cursor-pointer select-none px-4 py-3 bg-emerald-50 border-b border-emerald-100">
-      <div class="flex flex-wrap items-center gap-2">
-        <div>
-          <h3 class="text-base font-bold text-slate-900">🌱 成长但不太热 · 早发现雷达 <span class="text-xs font-normal text-slate-500">找还没炒热的新兴成长票 · 点开看</span></h3>
-          <p class="text-xs text-slate-600 mt-0.5">✅ 可研究 <b>{early_count}</b> 只（成长 + 价格未过热）· ⚠️ 已涨太多 <b>{overheated_count}</b> 只（已过滤）；这就是你要的"不追热门的成长股"入口，展开可买前研究或加关注。</p>
-        </div>
-        <div class="ml-auto flex flex-col items-end gap-1 text-[11px]">
-          <div class="text-slate-500">雷达生成 {esc(generated)}</div>
-          <button type="button"
-                  class="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-white px-3 py-1 font-semibold text-emerald-700 shadow-sm hover:bg-emerald-100 hover:border-emerald-400 transition"
-                  title="系统内部批次编号：{run_id}"
-                  onclick="openDiscoveryHistoryFromRadar(event)">
-            {esc(batch_label)} <span aria-hidden="true">→</span>
-          </button>
-        </div>
-      </div>
+  <details class="mb-3 rounded-xl border border-slate-200 bg-white overflow-hidden">
+    <summary class="cursor-pointer select-none px-4 py-2.5 hover:bg-slate-50 transition">
+      <span class="text-sm font-bold text-slate-800">🌱 成长早发现雷达</span>
+      <span class="ml-2 text-xs text-slate-500">可研究 {early_count} 只 · 已过热 {overheated_count} 只已滤 · 点开看</span>
     </summary>
-    <div class="px-4 py-3 border-t border-emerald-100">
+    <div class="px-4 py-3 border-t border-slate-100">
+      <div class="mb-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+        <span class="text-slate-500">找还没炒热的新兴成长票 · 只做研究提醒，不进主榜 · 雷达生成 {esc(generated)}</span>
+        <button type="button"
+                class="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-white px-3 py-1 font-semibold text-emerald-700 hover:bg-emerald-50 transition"
+                title="系统内部批次编号：{run_id}"
+                onclick="openDiscoveryHistoryFromRadar(event)">
+          {esc(batch_label)} <span aria-hidden="true">→</span>
+        </button>
+      </div>
       <div class="mb-2 flex flex-wrap gap-2 text-xs text-slate-600">
         <span class="px-2 py-1 rounded bg-emerald-50 text-emerald-700">可研究 {early_count} 只</span>
         <span class="px-2 py-1 rounded bg-amber-50 text-amber-800">已涨太多 {overheated_count} 只</span>
