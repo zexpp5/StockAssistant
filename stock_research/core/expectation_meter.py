@@ -33,6 +33,14 @@ LABELS = {
     LIGHT_UNKNOWN: "数据不足",
 }
 
+# 🔴 票的持有纪律（2026-07-06 MU 反验后定稿：🔴 不做剔除闸只做警示，
+# 因为周期主升段远涨过"合理预期"——$285 就会踢掉后面还有 3 倍的美光。
+# 正确姿势是换纪律不换名单：趋势仓规矩拿，靠止损闸离场，不靠入场禁令。）
+TREND_DISCIPLINE_ADVICE = (
+    "预期已透支 → 只能按趋势仓玩法：仓位减半 + 跟踪止损，"
+    "跌破位就走，别因“它是好公司”扛单。"
+)
+
 # 周期性行业关键词（V1 启发式；毛利率历史分位是 P1 的精确化方向）
 _CYCLICAL_PATTERN = re.compile(
     r"内存|存储|闪存|晶圆|面板|航运|海运|钢铁|煤炭|有色|化工|锂|稀土|铀|油气|光伏|养殖|"
@@ -158,6 +166,7 @@ def expectation_meter(
         "cyclical_top_risk": cyclical_top,
         "components": components,
         "reasons": reasons,
+        "discipline": TREND_DISCIPLINE_ADVICE if light == LIGHT_HIGH else None,
         "caveats": [
             "目标价为最近一条分析师目标，周期顶分析师常集体追涨目标价",
             "研究参考，非买卖信号；V1 未含 EPS 历史分解与毛利率分位（P1）",

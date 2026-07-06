@@ -287,7 +287,8 @@ def _strict_pick_payload(data: dict, conn) -> dict:
             "buy_zone_line": buy_zone.format_line(zone, compact=True),
             "price_position": (zone or {}).get("position") or "未知",
             "move_20d": move,
-            "risk": _strict_risk(move),
+            # 🔴 预期透支票换成趋势仓纪律文案（MU 反验后定稿：警示+纪律，不做剔除闸）
+            "risk": meter.get("discipline") or _strict_risk(move),
             "expectation": meter,
             "expectation_line": format_meter_line(meter),
             "revision_trend": revision,

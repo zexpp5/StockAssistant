@@ -108,6 +108,17 @@ class TestExpectationMeter(unittest.TestCase):
         self.assertTrue(is_cyclical_industry(None, "NAND flash storage"))
         self.assertFalse(is_cyclical_industry("SaaS 软件", "云计算"))
 
+    def test_t12_red_light_carries_trend_discipline(self):
+        """T12 🔴 票带趋势仓纪律文案（警示+纪律，不做剔除闸）；🟢/🟡 无。"""
+        red = expectation_meter(price=976, target_price=2000, peg_ratio=0.14,
+                                forward_pe=6.5, one_year_pct=698, industry_text="内存")
+        self.assertEqual(red["light"], LIGHT_HIGH)
+        self.assertIn("趋势仓", red["discipline"])
+        self.assertIn("跟踪止损", red["discipline"])
+        mid = expectation_meter(price=301, target_price=416, peg_ratio=1.51,
+                                one_year_pct=135, industry_text="x")
+        self.assertIsNone(mid["discipline"])
+
 
 if __name__ == "__main__":
     unittest.main()
