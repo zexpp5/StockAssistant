@@ -2692,6 +2692,17 @@ function openDiscoveryHistoryFromRadar(event) {
     </div>
   </div>
 
+  <!-- 2026-07-06 用户问"每月哪天动/跌几次哪次买"：把用法写死在页面上，不挑日子挑价格 -->
+  <section class="rounded-xl border border-violet-200 bg-violet-50/50 px-5 py-4 mb-5">
+    <div class="text-sm font-bold text-slate-900 mb-2">📖 这页怎么用（口诀：月初定名单 · 价格定时机 · 区间分两批 · 破位就止损）</div>
+    <ol class="text-[13px] text-slate-700 space-y-1.5 list-decimal list-inside leading-relaxed">
+      <li><b>每月看一次</b>（建议月初第一个周末）：下面已替你过完闸——最多 3 笔可买 + 需要纠偏的持仓。</li>
+      <li><b>买的时机不挑日子，挑价格</b>：现价 🟢便宜/🟡区间内 → 当周买<b>第一半</b>仓位；<b>另一半</b>挂买点区间下沿等回调，月内没跌到就算了，不追。🔴偏贵 → 本月不动。</li>
+      <li><b>月中大跌</b>：跌到区间下沿 = 计划内的第二批买点；<b>跌破止损线（-15%~-20%）= 走人</b>，不加仓摊平。</li>
+      <li>本页只读不下单；下单前仍看盘前预警和个股买前研究。</li>
+    </ol>
+  </section>
+
   <section id="monthly-actions-verdict" class="rounded-xl border px-5 py-4 mb-5 bg-white border-slate-200"></section>
 
   <div class="grid grid-cols-1 xl:grid-cols-[1.2fr_0.8fr] gap-5 mb-5">
