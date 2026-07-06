@@ -14639,6 +14639,9 @@ function _reasonSummaryHtml(row) {
     const _marketCounts = {};
     cands.forEach(c => {
       const key = _candidateMarketCode(c);
+      // 主榜计数只算前 20(美股=新公式名次); 20 名外的老候选已折叠, 不计进 tab 数字
+      const mainRank = Number(c.new_rank) || Number(c.rank) || 9999;
+      if (mainRank > 20) return;
       _marketCounts[key] = (_marketCounts[key] || 0) + 1;
     });
     const _availableMarkets = _marketOrder.filter(k => _marketCounts[k]);
@@ -14666,75 +14669,8 @@ function _reasonSummaryHtml(row) {
     }
 
     function _renderDiscoveryPolicySortExplain() {
-      if (!policySortEl) return;
-      const activeMarket = window._activeDiscoveryMarket || "US";
-      const rows = cands.filter(c => _candidateMarketCode(c) === activeMarket);
-      const stats = _policyStats(rows);
-      const audit = (DISCOVERY && DISCOVERY.data_usability_audit) || {};
-      const summary = audit.summary_by_market || {};
-      const marketSummary = summary[activeMarket] || {};
-      const blockedTotal = Number(audit.blocked_count || 0);
-      const attentionTotal = Number(audit.attention_count || 0);
-      const marketBlocked = Number(marketSummary.blocked || 0);
-      const marketAttention = Number(marketSummary.attention || 0);
-      // 2026-06-11 去重：此处「排序可能被数据缺口影响」sub-note 与下方「数据够不够用」面板
-      // 展示的是同一组数据缺口数字 + 同款补数据按钮，重复。统一保留下方更完整的那块，这里不再渲染。
-      const repairHtml = "";
-      const mode = window._discoverySortMode || "policy";
-      const btnCls = isActive => isActive
-        ? "bg-slate-900 text-white border-slate-900"
-        : "bg-white text-slate-700 border-slate-200 hover:border-slate-400";
-      policySortEl.classList.remove("hidden");
-      policySortEl.innerHTML = `<details class="rounded-xl border border-slate-200 bg-white overflow-hidden">
-        <summary class="cursor-pointer select-none px-4 py-3 text-sm font-bold text-slate-900 hover:bg-slate-50">
-          ▸ 怎么看新规则：判定顺序、排序模式和各类数量
-        </summary>
-        <div class="px-4 pb-3">
-        <div class="flex items-start justify-between gap-3 flex-col lg:flex-row">
-          <div>
-            <div class="text-sm font-bold text-slate-900">怎么看新规则：它先做筛选/降级，不直接改旧总分</div>
-            <div class="text-xs text-slate-600 mt-1">
-              当前主表仍保留老 <span class="font-mono">rank/total_score</span>，方便后续验证新旧规则谁更好；
-              切到「新规则优先」时，只是页面排序把「重点研究」放前面。
-            </div>
-            <div class="flex flex-wrap gap-1.5 mt-2 text-[11px]">
-              <span class="px-2 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-emerald-800">重点研究 ${stats.focus_research}</span>
-              <span class="px-2 py-0.5 rounded border border-amber-200 bg-amber-50 text-amber-800">等买点 ${stats.wait_entry}</span>
-              <span class="px-2 py-0.5 rounded border border-sky-200 bg-sky-50 text-sky-800">只研究 ${stats.research_only}</span>
-              <span class="px-2 py-0.5 rounded border border-slate-200 bg-slate-50 text-slate-700">只观察 ${stats.watch_only}</span>
-              <span class="px-2 py-0.5 rounded border border-rose-200 bg-rose-50 text-rose-800">拦截/剔除 ${stats.blocked + stats.exclude}</span>
-            </div>
-            <details class="mt-2 text-xs">
-              <summary class="cursor-pointer text-slate-700 font-medium select-none">▸ 判定顺序（点开看这套新规则怎么判，从上往下，命中即停）</summary>
-              <ol class="mt-1.5 ml-4 list-decimal space-y-0.5 text-slate-600 leading-relaxed">
-                <li>身份不符（非科技成长主线 / 数据明显错）→ <span class="text-rose-700 font-medium">剔除</span></li>
-                <li>只有 ETF 主题来源、没有公司级证据 → <span class="text-slate-700 font-medium">只观察</span></li>
-                <li>核心数据不足（被数据可用性闸拦住）→ <span class="text-sky-700 font-medium">只研究</span></li>
-                <li>不在「可买分层」（如主题观察池）→ <span class="text-sky-700 font-medium">只研究 / 只观察</span></li>
-                <li>公司级证据未确认（证据非 confirmed）→ <span class="text-sky-700 font-medium">只研究</span></li>
-                <li>证据已确认 + 在可买分层 → <span class="text-emerald-700 font-medium">可买</span>，再看风险：
-                  <ul class="ml-3 list-disc">
-                    <li>触发盘前 / 全期限红旗 → <span class="text-rose-700 font-medium">红旗拦截</span>（今晚先别动）</li>
-                    <li>回调或买点确认没到 → <span class="text-amber-700 font-medium">等买点</span></li>
-                    <li>买点成立 → <span class="text-emerald-700 font-medium">重点研究</span></li>
-                  </ul>
-                </li>
-              </ol>
-              <div class="mt-1.5 ml-1 text-[11px] text-slate-500">
-                说明：当前只有<b>美股</b>走这套新规则；A 股 / 港股仍按老规则（标 legacy），后续单独迁移。
-                这套规则<b>只做筛选和降级，不改原始总分</b>。每只票的具体理由，把鼠标放到表里「新规则动作」那个标签上就能看到。
-              </div>
-            </details>
-            ${repairHtml}
-          </div>
-          <div class="flex items-center gap-2 whitespace-nowrap">
-            <span class="text-xs text-slate-500">视图排序</span>
-            <button onclick="setDiscoverySortMode('policy')" class="px-3 py-1.5 rounded-md border text-xs font-semibold ${btnCls(mode === "policy")}">按动作分组</button>
-            <button onclick="setDiscoverySortMode('rank')" class="px-3 py-1.5 rounded-md border text-xs font-semibold ${btnCls(mode === "rank")}">按名次排序</button>
-          </div>
-        </div>
-        </div>
-      </details>`;
+      // 2026-07-06 用户拍板: 双排序模式+判定说明块整体撤掉, 页面只留一种名次排序。
+      if (policySortEl) { policySortEl.classList.add("hidden"); policySortEl.innerHTML = ""; }
     }
 
     function _renderDiscoveryDataHealth() {
@@ -15033,18 +14969,10 @@ function _reasonSummaryHtml(row) {
     const _isLowerPriorityRow = c => _effRank(c) > PRIORITY_BOARD_N;
     function _visibleDiscoveryCandidates() {
       const rows = cands.filter(c => _candidateMarketCode(c) === window._activeDiscoveryMarket);
+      // 2026-07-06 用户拍板: 只有一种排序 — 按名次(美股=新公式名次)从 1 排到底。
       const hasNew = rows.some(c => c.new_rank);
       const rankOf = hasNew ? _effRank : (c => Number(c.rank) || 9999);
-      if ((window._discoverySortMode || "policy") === "policy") {
-        rows.sort((a, b) => {
-          const pa = _policyActionPriority(a);
-          const pb = _policyActionPriority(b);
-          if (pa !== pb) return pa - pb;
-          return rankOf(a) - rankOf(b);
-        });
-      } else {
-        rows.sort((a, b) => rankOf(a) - rankOf(b));
-      }
+      rows.sort((a, b) => rankOf(a) - rankOf(b));
       return rows;
     }
 
@@ -15141,7 +15069,7 @@ function _reasonSummaryHtml(row) {
       const stockDetailAttrs = `data-code="${tk}" data-name="${_esc(displayName)}" onclick="openStockDetail(this.dataset.code, this.dataset.name)"`;
       const rankTitle = c.new_rank
         ? `新公式名次 #${c.new_rank}；老公式${c.legacy_rank ? `名次 #${c.legacy_rank}` : `全池第 ${c.rank || "—"}（老 Top20 外）`}${isLowerPriority ? "；第11名以后，优先级低于前10" : ""}`
-        : `${window._discoverySortMode === "policy" ? "新规则视图排序；" : "原始分数排序；"}后端原始 rank #${c.rank}${isLowerPriority ? "（第11名以后，优先级低于前10）" : ""}`;
+        : `后端原始 rank #${c.rank}${isLowerPriority ? "（第11名以后，优先级低于前10）" : ""}`;
       const laoIn = c.synthetic_new_pick
         ? '<span class="ml-1 inline-flex items-center px-1 py-0.5 rounded text-[10px] bg-violet-50 text-violet-700 ring-1 ring-violet-200" title="新公式从全量池捞入，老公式 Top20 没有这只；部分富字段待下批数据补齐">🆕捞入</span>'
         : "";
