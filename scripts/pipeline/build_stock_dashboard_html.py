@@ -531,16 +531,17 @@ def _dual_track_html() -> str:
         n_pass = sum(1 for v in checks.values() if v)
         streak = sc.get("consecutive_met_days", 0)
         need = ((sc.get("rule") or {}).get("consecutive_days_required")) or 10
-        if sc.get("switch_allowed"):
-            cls, icon, verdict = "border-emerald-300 bg-emerald-50 text-emerald-800", "✅", "达标 — 可以提请切换主榜（仍需人工拍板）"
-        elif sc.get("met_today"):
-            cls, icon, verdict = "border-amber-300 bg-amber-50 text-amber-800", "⏳", f"今日达标，连续 {streak}/{need} 天"
+        # 2026-07-06 用户拍板已切换生产 → 此条从"切换审批"改为"回滚监控"
+        d5 = (sc.get("values") or {}).get("top20_5d_delta")
+        d5_txt = f"{d5:+.2f}pp" if isinstance(d5, (int, float)) else "—"
+        if isinstance(d5, (int, float)) and d5 < 0:
+            cls, icon, verdict = "border-rose-300 bg-rose-50 text-rose-800", "⚠️", f"当前 Top20 5日Δ {d5_txt} 为负 — 连续 5 日为负将触发回滚老公式"
         else:
-            cls, icon, verdict = "border-slate-200 bg-slate-50 text-slate-600", "🔒", f"未达标（{n_pass}/{len(checks)} 项通过）— 不允许切主榜"
+            cls, icon, verdict = "border-emerald-200 bg-emerald-50 text-emerald-800", "🔓", f"运行正常（Top20 5日Δ {d5_txt}）"
         return (
             f'<div class="mt-2 rounded-lg border {cls} px-3 py-2 text-[11px]">'
-            f'{icon} <strong>主榜切换标准（预注册，2026-07-02 拍板）</strong>：{verdict} · '
-            '条件 = Top20 双周期Δ为正 + 新公式5日alpha自身为正 + n≥300 + 连续10个交易日。'
+            f'{icon} <strong>新公式已接管美股生产（2026-07-06 用户拍板）· 回滚监控</strong>：{verdict} · '
+            '回滚线（预注册）：Top20 5日Δ 连续 5 日 &lt; 0 → 设 US_VAL_DOWN_GRADE_ACTIVE=0 回老公式。'
             '</div>'
         )
 

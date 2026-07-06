@@ -258,14 +258,28 @@ class FormulaSwitchTest(unittest.TestCase):
         self.assertEqual(scores["f_score"], 100.0)
         self.assertAlmostEqual(scores["total"], expected)
 
-    def test_us_defaults_to_legacy_until_activation_guard_is_enabled(self):
+    def test_us_defaults_to_val_down_grade_since_20260706(self):
+        """2026-07-06 用户拍板整系统切新公式: 美股默认 val_down_grade。"""
         old = os.environ.pop("US_VAL_DOWN_GRADE_ACTIVE", None)
         try:
             scores = build_v2._factor_scores(self._row(market="US"))
         finally:
             if old is not None:
                 os.environ["US_VAL_DOWN_GRADE_ACTIVE"] = old
+        self.assertEqual(scores["formula"], build_v2.US_FORMULA_NAME)
+        self.assertIn("grade", scores)
 
+    def test_us_rollback_env_restores_legacy(self):
+        """回退开关: US_VAL_DOWN_GRADE_ACTIVE=0 立即回老公式(回滚线执行路径)。"""
+        old = os.environ.get("US_VAL_DOWN_GRADE_ACTIVE")
+        os.environ["US_VAL_DOWN_GRADE_ACTIVE"] = "0"
+        try:
+            scores = build_v2._factor_scores(self._row(market="US"))
+        finally:
+            if old is None:
+                os.environ.pop("US_VAL_DOWN_GRADE_ACTIVE", None)
+            else:
+                os.environ["US_VAL_DOWN_GRADE_ACTIVE"] = old
         self.assertEqual(scores["formula"], build_v2.LEGACY_FORMULA_NAME)
         self.assertNotIn("grade", scores)
 

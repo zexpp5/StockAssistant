@@ -89,14 +89,15 @@ MARKET_PHASE_SCOPE = "US/global_tech"
 def _use_us_val_down_grade() -> bool:
     """Production activation guard.
 
-    New formula code and shadow comparison are available by default, but live US
-    production only flips when explicitly enabled. This prevents scheduled runs
-    from silently activating a formula that has not cleared full-pool dual-track
-    validation.
+    2026-07-06 用户二次拍板「整个系统都用新公式」→ 美股生产默认切 val_down_grade
+    （strategy_version 升 tech_ai_v3_us_val_down_grade，验证样本按新版本重攒）。
+    回退开关：显式设置 US_VAL_DOWN_GRADE_ACTIVE=0/off 立即回老公式；
+    回滚线（预注册不变）：Top20 5d Δ 连续 5 日 < 0 → 回滚。
     """
-    return str(os.environ.get("US_VAL_DOWN_GRADE_ACTIVE") or "").strip().lower() in {
-        "1", "true", "yes", "active", "on",
-    }
+    flag = str(os.environ.get("US_VAL_DOWN_GRADE_ACTIVE") or "").strip().lower()
+    if flag in {"0", "false", "no", "off", "inactive"}:
+        return False
+    return True
 
 
 def _current_strategy_version() -> str:
