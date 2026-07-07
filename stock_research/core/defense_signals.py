@@ -103,7 +103,14 @@ def check_market_regime(as_of: str | None = None,
 
     # SPY/200MA
     spy_above, ma_info = _spy_above_200ma(as_of)
-    if not spy_above and "error" not in ma_info:
+    if "error" in ma_info:
+        alerts.append({
+            "type": "MARKET_DATA_UNAVAILABLE",
+            "severity": "LOW",
+            "trigger": f"SPY/200MA 数据不可用：{ma_info.get('error')}",
+            "suggested_action": "市场防御数据缺失：本轮不把它当成买入放行信号；稍后重跑确认。",
+        })
+    elif not spy_above:
         alerts.append({
             "type": "TREND_BREAK",
             "severity": "HIGH",
@@ -120,6 +127,14 @@ def check_market_regime(as_of: str | None = None,
     # VIX
     _, vix_info = _vix_below_panic(as_of, panic_threshold=vix_panic)
     vix_now = vix_info.get("vix_close")
+    if "error" in vix_info:
+        alerts.append({
+            "type": "MARKET_DATA_UNAVAILABLE",
+            "severity": "LOW",
+            "trigger": f"VIX 数据不可用：{vix_info.get('error')}",
+            "suggested_action": "波动率数据缺失：本轮不把它当成买入放行信号；稍后重跑确认。",
+        })
+        vix_now = None
     if vix_now is not None:
         if vix_now >= vix_extreme:
             alerts.append({
@@ -193,7 +208,9 @@ def check_market_regime(as_of: str | None = None,
 # ─────────── 综合诊断 ───────────
 
 def diagnose_all(picks_today: list[dict[str, Any]],
-                 as_of: str | None = None) -> dict[str, Any]:
+                 as_of: str | None = None,
+                 include_macro: bool = True,
+                 include_options: bool = True) -> dict[str, Any]:
     """一站式诊断：检查市场层 + 个股层所有防御信号。
 
     返回 {
@@ -204,7 +221,11 @@ def diagnose_all(picks_today: list[dict[str, Any]],
       'summary': '...',
     }
     """
-    market_alerts = check_market_regime(as_of=as_of)
+    market_alerts = check_market_regime(
+        as_of=as_of,
+        include_macro=include_macro,
+        include_options=include_options,
+    )
     stop_alerts = check_stop_loss(picks_today)
     all_alerts = market_alerts + stop_alerts
 
