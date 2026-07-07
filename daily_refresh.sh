@@ -557,6 +557,9 @@ run_a_share_steps() {
     else
         run_step "21/25 A 股优选（研究模式，不写 DuckDB）" "-m stock_research.jobs.a_share_picks --require-after-close --dry-run --universe ${A_SHARE_UNIVERSE:-auto} --universe-limit ${A_SHARE_UNIVERSE_LIMIT:-80} --workers ${A_SHARE_WORKERS:-1}"
     fi
+    # 特色因子每日快照（港A股锦标赛埋种子）：现算龙虎榜/PEAD/政策题材/港股南向，
+    # 独立于生产权重（生产收敛成 reversal=1.0 不算这些）。enhance 级：失败不拦验收。
+    run_step "21b/25 特色因子快照（锦标赛埋种子）" "-m stock_research.jobs.snapshot_special_factors" enhance 300
 }
 
 # ── --a-share-only 模式：只跑 A 股闭环 + DuckDB 同步 + 重建 HTML，跳过其他 ──
