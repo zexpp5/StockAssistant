@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import sys
 import time
 from datetime import date, datetime
@@ -33,72 +34,124 @@ OUT = _REPO / "data" / "latest" / "alpha_trend.json"
 METRICS_START = "2026-05-25"   # 生产 cutoff，别动
 MARKETS = ("US", "HK", "CN")
 HORIZONS = ("1d", "5d", "20d")  # 2026-07-06 用户问"多久操作一次"→ 补 20d(月度操作真实持有期)验证
-DUAL_TRACK_MARKET = "US"
-DUAL_TRACK_TOP_NS = (5, 10, 20)
+DUAL_TRACK_TOP_NS = (5, 10, 20)          # 向后兼容：US 顶层默认 top_ns
 DUAL_TRACK_DEFAULT_TOP_N = 20
-DUAL_TRACK_FORMULAS = {
-    "legacy_baseline": "prod_recheck",
-    "val_down_grade": "val_down_grade",
-    # 2026-07-02 全变体锦标赛后注册的唯一挑战者（海选每轮只提拔 1 个，防多重比较）：
-    # quality_heavy 在 Top5/Top10 × 1d/5d 四个格全为正、跌市最稳(Top10 5d 跌市 +0.80%)。
-    # 只做前向追踪对照，不参与任何生产/精选层输出。
-    "challenger_quality_heavy": "quality_heavy",
+
+# ── 分市场双轨锦标赛配置（2026-07-07 泛化，docs/V2/2026-07-06_港A股影子组合锦标赛_方案）──
+# 每市场：基线(现行生产) vs 挑战者(锦标赛变体)，从 factor_snapshot_universe 全池
+# 各自独立选 TopN，算前向 alpha 对照。variant 名指向 replay_weight_variants.VARIANTS。
+# switch_rule 预注册、不许事后挪门槛；达标只亮绿灯，切生产仍须用户拍板。
+DUAL_TRACK_CONFIG: dict[str, dict[str, Any]] = {
+    "US": {
+        "benchmark": ("SPY", "QQQ"),
+        "eligibility": {"buyable", "research_only"},
+        "top_ns": (5, 10, 20),
+        "default_top_n": 20,
+        "baseline": "legacy_baseline",
+        "primary_challenger": "val_down_grade",
+        "formulas": {
+            "legacy_baseline": "prod_recheck",
+            "val_down_grade": "val_down_grade",
+            # 2026-07-02 锦标赛唯一挑战者（海选每轮只提拔 1 个，防多重比较）。
+            "challenger_quality_heavy": "quality_heavy",
+        },
+        "switch_rule": {
+            "target": "US 主榜 Top20 切换 val_down_grade",
+            "min_5d_n": 300, "consecutive_days_required": 10, "switch_top_n": 20,
+            "rollback": "切换后 top20 5d delta 连续 5 日 < 0 → 回滚",
+        },
+    },
+    "HK": {
+        "benchmark": ("^HSI",),
+        "eligibility": {"research_only"},
+        "top_ns": (5, 10),                 # 港股池小（33→100），不做 Top20
+        "default_top_n": 10,
+        "baseline": "hk_production",       # hk_scoring.HK_FACTOR_WEIGHTS
+        "primary_challenger": "hk_quality_heavy",  # 回放冠军（f_score 0.40）
+        "formulas": {
+            "hk_production": "hk_production",
+            "hk_quality_heavy": "quality_heavy",
+            "hk_equal_4": "equal_4",
+            "hk_val_down_quality": "val_down_quality",
+        },
+        "switch_rule": {
+            "target": "HK 主榜切换回放冠军 quality_heavy",
+            "min_5d_n": 150, "consecutive_days_required": 10, "switch_top_n": 10,
+            "rollback": "切换后 top10 5d delta 连续 5 日 < 0 → 回滚",
+        },
+    },
+    "CN": {
+        "benchmark": ("000300.SS",),
+        "eligibility": {"research_only"},
+        "top_ns": (5, 10),
+        "default_top_n": 10,
+        "baseline": "cn_production",       # reversal_pure = 生产 reversal 1.0
+        "primary_challenger": "cn_reversal_quality",
+        "formulas": {
+            "cn_production": "reversal_pure",
+            "cn_reversal_quality": "cn_reversal_quality",
+            # 全池等权：诊断「池子本身是不是负 alpha 源」。方案 §3B。
+            "cn_full_pool_equal": "equal_4",
+        },
+        "switch_rule": {
+            "target": "CN 换池：挑战者跑赢生产 reversal",
+            "min_5d_n": 300, "consecutive_days_required": 10, "switch_top_n": 10,
+            "rollback": "切换后 top10 5d delta 连续 5 日 < 0 → 回滚",
+        },
+    },
 }
-US_RECOMMENDABLE_ELIGIBILITY = {"buyable", "research_only"}
 
-# ── 预注册主榜切换标准（2026-07-02 拍板，不许事后挪门槛）────────────────
-# 全部满足才允许把美股主榜从 legacy 切到 val_down_grade：
-#   1. Top20 1d 与 5d 的 Δ(new-old) 同时 > 0
-#   2. Top20 新公式自身 5d alpha > 0（不能只是"输得比老公式少"）
-#   3. 5d 样本 n ≥ 300
-#   4. 以上条件连续满足 ≥ 10 个交易日（由 alpha_trend.json 历史判定）
-# 切换后回滚线：Top20 5d Δ 连续 5 日 < 0 → 立即回滚老公式。
-SWITCH_RULE = {
-    "target": "US 主榜 Top20 切换 val_down_grade",
-    "min_5d_n": 300,
-    "consecutive_days_required": 10,
-    "conditions": [
-        "top20.1d.delta>0",
-        "top20.5d.delta>0",
-        "top20.5d.val_down_grade.avg_alpha_pct>0",
-        "top20.5d.n>=300",
-    ],
-    "rollback": "切换后 top20 5d delta 连续 5 日 < 0 → 回滚",
-}
+# ── 向后兼容别名（旧代码/测试仍引用这些 US 常量）────────────────────────
+DUAL_TRACK_MARKET = "US"
+DUAL_TRACK_FORMULAS = DUAL_TRACK_CONFIG["US"]["formulas"]
+US_RECOMMENDABLE_ELIGIBILITY = DUAL_TRACK_CONFIG["US"]["eligibility"]
+SWITCH_RULE = DUAL_TRACK_CONFIG["US"]["switch_rule"]
 
 
-def _switch_criteria_verdict(dual_track: dict[str, Any], trend: list[dict]) -> dict[str, Any]:
-    """按 SWITCH_RULE 判定当天是否达标 + 已连续达标天数。纯读，不改任何生产行为。"""
-    top20 = ((dual_track.get("by_top_n") or {}).get("top20") or {}).get("horizons") or {}
-    h1, h5 = top20.get("1d") or {}, top20.get("5d") or {}
-    d1 = h1.get("delta_new_minus_old_avg_alpha_pct")
-    d5 = h5.get("delta_new_minus_old_avg_alpha_pct")
-    new5 = (h5.get("val_down_grade") or {}).get("avg_alpha_pct")
-    n5 = (h5.get("val_down_grade") or {}).get("n") or 0
+def _switch_criteria_verdict(dual_track: dict[str, Any], trend: list[dict],
+                             market: str, config: dict[str, Any]) -> dict[str, Any]:
+    """按该市场 switch_rule 判定当天是否达标 + 连续达标天数。纯读，不改生产。
+
+    达标条件（预注册）：默认 TopN 的 1d 与 5d，挑战者-基线 Δ 同时 > 0，
+    且挑战者自身 5d alpha > 0（不能只是「输得比基线少」），5d 样本 n ≥ min_5d_n。
+    连续满足 ≥ consecutive_days_required 个交易日 → switch_allowed 亮绿灯。
+    """
+    rule = config["switch_rule"]
+    challenger = config["primary_challenger"]
+    top_key = f"top{rule['switch_top_n']}"
+    top = ((dual_track.get("by_top_n") or {}).get(top_key) or {}).get("horizons") or {}
+    h1, h5 = top.get("1d") or {}, top.get("5d") or {}
+    d1 = (h1.get(challenger) or {}).get("delta_vs_baseline_avg_alpha_pct")
+    d5 = (h5.get(challenger) or {}).get("delta_vs_baseline_avg_alpha_pct")
+    new5 = (h5.get(challenger) or {}).get("avg_alpha_pct")
+    n5 = (h5.get(challenger) or {}).get("n") or 0
     checks = {
-        "top20_1d_delta_positive": d1 is not None and d1 > 0,
-        "top20_5d_delta_positive": d5 is not None and d5 > 0,
-        "top20_5d_new_alpha_positive": new5 is not None and new5 > 0,
-        "top20_5d_n_enough": n5 >= SWITCH_RULE["min_5d_n"],
+        f"{top_key}_1d_delta_positive": d1 is not None and d1 > 0,
+        f"{top_key}_5d_delta_positive": d5 is not None and d5 > 0,
+        f"{top_key}_5d_new_alpha_positive": new5 is not None and new5 > 0,
+        f"{top_key}_5d_n_enough": n5 >= rule["min_5d_n"],
     }
     met_today = all(checks.values())
-    # 连续达标天数：从历史 trend 里往回数（含今天）
     streak = 1 if met_today else 0
     if met_today:
         for entry in reversed(trend):
-            v = (entry.get("dual_track_us") or {}).get("switch_criteria") or {}
+            if market == "US":
+                v = (entry.get("dual_track_us") or {}).get("switch_criteria") or {}
+            else:
+                v = ((entry.get("dual_track") or {}).get(market) or {}).get("switch_criteria") or {}
             if v.get("met_today"):
                 streak += 1
             else:
                 break
     return {
-        "rule": SWITCH_RULE,
+        "rule": rule,
+        "market": market,
+        "challenger": challenger,
         "checks": checks,
         "met_today": met_today,
         "consecutive_met_days": streak,
-        "switch_allowed": met_today and streak >= SWITCH_RULE["consecutive_days_required"],
-        "values": {"top20_1d_delta": d1, "top20_5d_delta": d5,
-                   "top20_5d_new_alpha": new5, "top20_5d_n": n5},
+        "switch_allowed": met_today and streak >= rule["consecutive_days_required"],
+        "values": {"delta_1d": d1, "delta_5d": d5, "challenger_5d_alpha": new5, "n_5d": n5},
     }
 
 
@@ -143,30 +196,36 @@ def _safe_return(start: float | None, end: float | None) -> float | None:
         e = float(end)
     except (TypeError, ValueError):
         return None
-    if s <= 0:
+    # DuckDB 里 NaN close 不是 NULL，过不掉 `close IS NOT NULL`；这里必须挡掉
+    # 非有限值，否则一个 NaN 会把整组 avg 污染成 nan（HK/CN 价源出现过）。
+    if not (math.isfinite(s) and math.isfinite(e)) or s <= 0:
         return None
     return (e / s - 1.0) * 100.0
 
 
 def _summarize_alpha(samples: list[float]) -> dict[str, Any]:
-    if not samples:
+    finite = [x for x in samples if math.isfinite(x)]
+    if not finite:
         return {"n": 0}
     return {
-        "n": len(samples),
-        "avg_alpha_pct": round(sum(samples) / len(samples), 4),
-        "win_rate_pct": round(sum(1 for x in samples if x > 0) / len(samples) * 100.0, 2),
-        "worst_alpha_pct": round(min(samples), 4),
+        "n": len(finite),
+        "avg_alpha_pct": round(sum(finite) / len(finite), 4),
+        "win_rate_pct": round(sum(1 for x in finite if x > 0) / len(finite) * 100.0, 2),
+        "worst_alpha_pct": round(min(finite), 4),
     }
 
 
-def _us_trading_dates(conn: Any) -> list[date]:
+def _benchmark_trading_dates(conn: Any, market: str, benchmark: tuple[str, ...]) -> list[date]:
+    """以基准 ETF/指数的有价日作为该市场交易日历（US=SPY/QQQ, HK=^HSI, CN=000300.SS）。"""
+    placeholders = ",".join("?" for _ in benchmark)
     rows = conn.execute(
-        """
+        f"""
         SELECT DISTINCT trade_date
         FROM price_daily
-        WHERE market='US' AND symbol IN ('SPY','QQQ') AND close IS NOT NULL
+        WHERE market=? AND symbol IN ({placeholders}) AND close IS NOT NULL
         ORDER BY trade_date
-        """
+        """,
+        [market, *benchmark],
     ).fetchall()
     return [d for (d,) in rows if isinstance(d, date)]
 
@@ -203,9 +262,13 @@ def _close_map(conn: Any, market: str, trade_date: date) -> dict[str, float]:
     return out
 
 
-def _rank_full_pool_us(conn: Any, run_date_value: date, formula_key: str,
-                       limit: int | None = None) -> list[dict[str, Any]]:
-    """从 factor_snapshot_universe 全池按指定公式独立排序 US 候选。"""
+def _rank_full_pool(conn: Any, market: str, run_date_value: date, formula_key: str,
+                    eligibility: set[str], limit: int | None = None) -> list[dict[str, Any]]:
+    """从 factor_snapshot_universe 全池按指定公式独立排序某市场候选。
+
+    grade 因子仅美股有分析师覆盖：US 缺分时用 build_grade_score_map 补，
+    HK/CN 无此数据 → grade 恒中性（且港A股变体权重不含 grade，取值不影响排序）。
+    """
     import scripts.tools.replay_weight_variants as rp
     from stock_research.core.analyst_grade_factor import (
         NEUTRAL_GRADE_SCORE,
@@ -221,24 +284,24 @@ def _rank_full_pool_us(conn: Any, run_date_value: date, formula_key: str,
         FROM factor_snapshot_universe
         WHERE market=? AND run_date=?
         """,
-        [DUAL_TRACK_MARKET, run_date_value],
+        [market, run_date_value],
     ).fetchall()
     if not rows:
         return []
 
-    missing_grade_symbols = {
-        str(sym).upper()
-        for sym, *_rest, grade, eligibility in rows
-        if grade is None and str(eligibility or "") in US_RECOMMENDABLE_ELIGIBILITY
-    }
-    grade_map = (
-        build_grade_score_map(conn, missing_grade_symbols, run_date_value, market=DUAL_TRACK_MARKET)
-        if missing_grade_symbols else {}
-    )
-    weights = rp.weights_for_market(rp.VARIANTS[formula_key], DUAL_TRACK_MARKET)
+    grade_map: dict[str, float] = {}
+    if market == "US":
+        missing_grade_symbols = {
+            str(sym).upper()
+            for sym, *_rest, grade, eligibility_val in rows
+            if grade is None and str(eligibility_val or "") in eligibility
+        }
+        if missing_grade_symbols:
+            grade_map = build_grade_score_map(conn, missing_grade_symbols, run_date_value, market=market)
+    weights = rp.weights_for_market(rp.VARIANTS[formula_key], market)
     ranked = []
-    for sym, momentum, valuation, reversal, data_usability, f_score, grade, eligibility in rows:
-        if str(eligibility or "") not in US_RECOMMENDABLE_ELIGIBILITY:
+    for sym, momentum, valuation, reversal, data_usability, f_score, grade, eligibility_val in rows:
+        if str(eligibility_val or "") not in eligibility:
             continue
         symbol = str(sym).upper()
         scores = {
@@ -259,11 +322,23 @@ def _rank_full_pool_us(conn: Any, run_date_value: date, formula_key: str,
     return ranked[:limit] if limit else ranked
 
 
-def _dual_track_us(conn: Any) -> dict[str, Any]:
-    """US 新旧公式全池独立选 Top5/Top10/Top20 的前向 alpha 对照。"""
-    trading_dates = _us_trading_dates(conn)
+def _dual_track_market(conn: Any, market: str, config: dict[str, Any]) -> dict[str, Any]:
+    """某市场：基线 vs 挑战者全池独立选 TopN 的前向 alpha 对照。
+
+    每个 challenger 记 delta_vs_baseline；主挑战者的 delta 另存
+    delta_new_minus_old_avg_alpha_pct（US 向后兼容旧 dashboard/日志字段）。
+    """
+    benchmark = tuple(config["benchmark"])
+    eligibility = set(config["eligibility"])
+    top_ns = tuple(config["top_ns"])
+    default_top_n = config["default_top_n"]
+    formulas = config["formulas"]
+    baseline = config["baseline"]
+    primary = config["primary_challenger"]
+
+    trading_dates = _benchmark_trading_dates(conn, market, benchmark)
     if not trading_dates:
-        return {"status": "no_benchmark_dates"}
+        return {"status": "no_benchmark_dates", "market": market}
     run_dates = [
         d for (d,) in conn.execute(
             """
@@ -272,37 +347,46 @@ def _dual_track_us(conn: Any) -> dict[str, Any]:
             WHERE market=? AND run_date>=?
             ORDER BY run_date
             """,
-            [DUAL_TRACK_MARKET, METRICS_START],
+            [market, METRICS_START],
         ).fetchall()
         if isinstance(d, date)
     ]
     if not run_dates:
-        return {"status": "no_factor_snapshots"}
+        return {"status": "no_factor_snapshots", "market": market}
 
     result: dict[str, Any] = {
-        "market": DUAL_TRACK_MARKET,
+        "market": market,
         "pool_source": "factor_snapshot_universe",
-        "top_ns": list(DUAL_TRACK_TOP_NS),
-        "default_top_n": DUAL_TRACK_DEFAULT_TOP_N,
+        "benchmark": list(benchmark),
+        "top_ns": list(top_ns),
+        "default_top_n": default_top_n,
+        "baseline": baseline,
+        "primary_challenger": primary,
         "formulas": {
             public_name: {"variant": variant_name}
-            for public_name, variant_name in DUAL_TRACK_FORMULAS.items()
+            for public_name, variant_name in formulas.items()
         },
         "by_top_n": {},
         "run_date_count": len(run_dates),
         "note": (
-            "Top5/Top10 用来验证精选层；Top20 用来验证全榜替换。"
-            "精选层可优先研究，但不等于真实买入指令。"
+            "基线=现行生产，挑战者=锦标赛变体，同池各自独立选 TopN 前向对照；"
+            "达标只亮绿灯，切生产须用户拍板，不等于买入指令。"
         ),
     }
 
     close_cache: dict[date, dict[str, float]] = {}
     rank_cache: dict[tuple[date, str], list[dict[str, Any]]] = {}
-    max_top_n = max(DUAL_TRACK_TOP_NS)
-    for top_n in DUAL_TRACK_TOP_NS:
+    max_top_n = max(top_ns)
+
+    def _bench_ret(entry_close: dict[str, float], exit_close: dict[str, float]) -> float | None:
+        start = next((entry_close.get(b) for b in benchmark if entry_close.get(b)), None)
+        end = next((exit_close.get(b) for b in benchmark if exit_close.get(b)), None)
+        return _safe_return(start, end)
+
+    for top_n in top_ns:
         top_key = f"top{top_n}"
         top_block: dict[str, Any] = {
-            "market": DUAL_TRACK_MARKET,
+            "market": market,
             "pool_source": "factor_snapshot_universe",
             "top_n": top_n,
             "formulas": result["formulas"],
@@ -311,7 +395,7 @@ def _dual_track_us(conn: Any) -> dict[str, Any]:
         }
         for horizon in HORIZONS:
             horizon_block: dict[str, Any] = {}
-            for public_name, variant_name in DUAL_TRACK_FORMULAS.items():
+            for public_name, variant_name in formulas.items():
                 alphas: list[float] = []
                 used_run_dates: set[str] = set()
                 for rd in run_dates:
@@ -319,18 +403,17 @@ def _dual_track_us(conn: Any) -> dict[str, Any]:
                     if pair is None:
                         continue
                     entry_date, exit_date = pair
-                    close_cache.setdefault(entry_date, _close_map(conn, DUAL_TRACK_MARKET, entry_date))
-                    close_cache.setdefault(exit_date, _close_map(conn, DUAL_TRACK_MARKET, exit_date))
+                    close_cache.setdefault(entry_date, _close_map(conn, market, entry_date))
+                    close_cache.setdefault(exit_date, _close_map(conn, market, exit_date))
                     entry_close = close_cache[entry_date]
                     exit_close = close_cache[exit_date]
-                    bench_start = entry_close.get("SPY") or entry_close.get("QQQ")
-                    bench_end = exit_close.get("SPY") or exit_close.get("QQQ")
-                    bench_ret = _safe_return(bench_start, bench_end)
+                    bench_ret = _bench_ret(entry_close, exit_close)
                     if bench_ret is None:
                         continue
                     cache_key = (rd, variant_name)
                     if cache_key not in rank_cache:
-                        rank_cache[cache_key] = _rank_full_pool_us(conn, rd, variant_name, limit=max_top_n)
+                        rank_cache[cache_key] = _rank_full_pool(conn, market, rd, variant_name,
+                                                                eligibility, limit=max_top_n)
                     for pick in rank_cache[cache_key][:top_n]:
                         stock_ret = _safe_return(entry_close.get(pick["symbol"]), exit_close.get(pick["symbol"]))
                         if stock_ret is None:
@@ -340,17 +423,24 @@ def _dual_track_us(conn: Any) -> dict[str, Any]:
                 summary = _summarize_alpha(alphas)
                 summary["mature_run_dates"] = len(used_run_dates)
                 horizon_block[public_name] = summary
-            if all(horizon_block.get(k, {}).get("n", 0) for k in DUAL_TRACK_FORMULAS):
-                new_avg = horizon_block["val_down_grade"]["avg_alpha_pct"]
-                old_avg = horizon_block["legacy_baseline"]["avg_alpha_pct"]
-                horizon_block["delta_new_minus_old_avg_alpha_pct"] = round(new_avg - old_avg, 4)
+            # 每个挑战者记 delta_vs_baseline（基线自身 delta=0 不记）
+            base_avg = (horizon_block.get(baseline) or {}).get("avg_alpha_pct")
+            if base_avg is not None:
+                for public_name in formulas:
+                    if public_name == baseline:
+                        continue
+                    ch_avg = (horizon_block.get(public_name) or {}).get("avg_alpha_pct")
+                    if ch_avg is not None:
+                        horizon_block[public_name]["delta_vs_baseline_avg_alpha_pct"] = round(ch_avg - base_avg, 4)
+                # US 向后兼容：顶层 delta 字段=主挑战者 delta
+                primary_delta = (horizon_block.get(primary) or {}).get("delta_vs_baseline_avg_alpha_pct")
+                if primary_delta is not None:
+                    horizon_block["delta_new_minus_old_avg_alpha_pct"] = primary_delta
             top_block["horizons"][horizon] = horizon_block
         result["by_top_n"][top_key] = top_block
 
-    default_key = f"top{DUAL_TRACK_DEFAULT_TOP_N}"
-    default_block = result["by_top_n"].get(default_key) or {}
-    # 兼容旧面板/旧日志：顶层 horizons 仍代表默认 Top20。
-    result["top_n"] = DUAL_TRACK_DEFAULT_TOP_N
+    default_block = result["by_top_n"].get(f"top{default_top_n}") or {}
+    result["top_n"] = default_top_n
     result["horizons"] = default_block.get("horizons", {})
     return result
 
@@ -471,10 +561,15 @@ def compute(as_of: date | None = None) -> dict:
                     "worst_alpha_pct": round(m["worst_alpha_pct"], 4),
                     "sample_power": m["sample_power"],
                 }
-        dual = _dual_track_us(conn)
         prior = [r for r in _load_history() if str(r.get("date")) < rec["date"]]  # 同日重跑不重复计连胜
-        dual["switch_criteria"] = _switch_criteria_verdict(dual, prior)
-        rec["dual_track_us"] = dual
+        dual_by_market: dict[str, Any] = {}
+        for mkt, cfg in DUAL_TRACK_CONFIG.items():
+            block = _dual_track_market(conn, mkt, cfg)
+            if not block.get("status"):  # 有数据才判 switch
+                block["switch_criteria"] = _switch_criteria_verdict(block, prior, mkt, cfg)
+            dual_by_market[mkt] = block
+        rec["dual_track"] = dual_by_market
+        rec["dual_track_us"] = dual_by_market.get("US", {})  # 向后兼容 dashboard
         rec["pick_stop_gate"] = _pick_stop_gate(conn)
         return rec
     finally:
@@ -518,7 +613,21 @@ def _fmt_row(r: dict) -> str:
         if isinstance(delta, (int, float)):
             parts.append(f"Top{dual.get('top_n', DUAL_TRACK_DEFAULT_TOP_N)} {delta:+.2f}pp")
     dual_hint = f"  双轨5d {' / '.join(parts)}" if parts else ""
-    return f"{r['date']}  US 1d {cell(u1)}  5d {cell(u5)}{dual_hint}"
+    # 港A股锦标赛：主挑战者 vs 基线的默认 TopN 5d Δ
+    extra = []
+    for mkt in ("HK", "CN"):
+        blk = (r.get("dual_track") or {}).get(mkt) or {}
+        if blk.get("status"):
+            continue
+        dtn = blk.get("default_top_n")
+        h5 = ((blk.get("by_top_n") or {}).get(f"top{dtn}") or {}).get("horizons", {}).get("5d") or {}
+        ch = blk.get("primary_challenger")
+        d = (h5.get(ch) or {}).get("delta_vs_baseline_avg_alpha_pct")
+        n = (h5.get(ch) or {}).get("n") or 0
+        if isinstance(d, (int, float)):
+            extra.append(f"{mkt} Top{dtn} {d:+.2f}pp(n{n})")
+    extra_hint = f"  锦标赛5d {' / '.join(extra)}" if extra else ""
+    return f"{r['date']}  US 1d {cell(u1)}  5d {cell(u5)}{dual_hint}{extra_hint}"
 
 
 def main() -> int:

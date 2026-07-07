@@ -91,6 +91,12 @@ VARIANTS: dict[str, dict[str, float]] = {
     "reversal_pure": {"reversal": 1.0},
     "fscore_pure": {"f_score": 1.0},
     "grade_pure": {"grade": 1.0},
+    # 2026-07-07 港A股锦标赛基线/挑战者（docs/V2/2026-07-06_港A股影子组合锦标赛_方案）：
+    # hk_production = 港股现行生产权重(hk_scoring.HK_FACTOR_WEIGHTS)，作 HK 双轨基线。
+    "hk_production": {"f_score": 0.40, "momentum": 0.35, "reversal": 0.25},
+    # cn_reversal_quality = A 股换池挑战者：唯一 IC 验证有效的 reversal 主导 + f_score 质量过滤，
+    # 防「把继续下跌当触底」接飞刀。(CN 生产=reversal_pure=reversal 1.0 作基线)
+    "cn_reversal_quality": {"reversal": 0.60, "f_score": 0.40},
 }
 
 
