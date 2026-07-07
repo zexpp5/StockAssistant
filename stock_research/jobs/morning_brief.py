@@ -2348,7 +2348,51 @@ def section_weekly_hitrate(today: date | None = None) -> str:
     except Exception as e:
         lines.append(f"_strategy_eval 查询失败: {e}_")
     conn.close()
+    # 港A股规则锦标赛领跑（周一一行；A股遵循 _brief_show_a_share 门）
+    tourney = _tournament_leader_lines(markets)
+    if tourney:
+        lines.append("")
+        lines.append("**本周规则锦标赛领跑**（研究观察，切生产须拍板）")
+        lines.extend(tourney)
     return "\n".join(lines) + "\n"
+
+
+def _tournament_leader_lines(markets: list[str]) -> list[str]:
+    """从 alpha_trend.json 读各市场主挑战者默认TopN 5d Δvs基线 + 切换进度，一行/市场。
+
+    只覆盖有独立锦标赛的 HK/CN（美股双轨在 dashboard 另有面板）。A股是否显示
+    由调用方传入的 markets 决定（已含 _brief_show_a_share 门）。
+    """
+    try:
+        p = REPO / "data" / "latest" / "alpha_trend.json"
+        trend = (_load_json(p) or {}).get("trend") or []
+        dual = (trend[-1] if trend else {}).get("dual_track") or {}
+    except Exception:
+        return []
+    names = {"HK": "🇭🇰 港股", "CN": "🇨🇳 A股"}
+    out = []
+    for mkt in ("HK", "CN"):
+        if mkt not in markets:
+            continue
+        blk = dual.get(mkt) or {}
+        if blk.get("status"):
+            continue
+        dtn = blk.get("default_top_n")
+        h5 = ((blk.get("by_top_n") or {}).get(f"top{dtn}") or {}).get("horizons", {}).get("5d") or {}
+        ch = blk.get("primary_challenger")
+        c = h5.get(ch) or {}
+        d = c.get("delta_vs_baseline_avg_alpha_pct")
+        a = c.get("avg_alpha_pct")
+        n = c.get("n") or 0
+        if not isinstance(d, (int, float)) or not n:
+            continue
+        sc = blk.get("switch_criteria") or {}
+        streak = sc.get("consecutive_met_days", 0)
+        need = (sc.get("rule") or {}).get("consecutive_days_required", 10)
+        verdict = "跑赢生产" if d > 0 else "未跑赢"
+        self_neg = "（但自身仍负，未达标）" if isinstance(a, (int, float)) and a < 0 else ""
+        out.append(f"- {names[mkt]}：`{ch}` Top{dtn} 5日 {d:+.2f}pp {verdict}{self_neg} · 连续达标 {streak}/{need} 日")
+    return out
 
 
 def section_ai_alpha(risk_metrics: dict | None) -> str:
