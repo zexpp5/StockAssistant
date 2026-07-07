@@ -1,11 +1,12 @@
-"""财报前 1 周预告 —— 自选股 earnings_upcoming 提前一周飞书提醒。
+"""财报前 1 周预告 —— 自选股 + 真实持仓 earnings_upcoming 提前一周飞书提醒。
 
 和 bottleneck_earnings_reminder 的分工：
-  - 本 job：财报「前」7 天预告 —— 让你提前知道下周哪些自选股要出财报，好提前减仓/留意；
-            范围 = manual_watchlist[US] 全部，每家每季最多预告一次。
+  - 本 job：财报「前」7 天预告 —— 让你提前知道下周哪些股要出财报，好提前减仓/留意；
+            范围 = manual_watchlist[US+HK] ∪ real_holdings（美股+港股），每家每季最多预告一次。
   - bottleneck_earnings_reminder：财报「当天/盘后」到点复查提醒（仅瓶颈/capex 信号组）。
 
-数据源：data/event_calendar_us.json（event_calendar_us_daily.py 拉 yfinance 财报日）。
+数据源：data/event_calendar_us.json + data/event_calendar_hk.json
+        （event_calendar_{us,hk}_daily.py 拉 yfinance 财报日；港股如泡泡玛特 9992.HK 走 hk 文件）。
 出口：飞书一张「下周财报预告」汇总卡（复用 premarket_gate._push webhook）。
 状态：data/earnings_preview_reminder_state.json（按 ticker:年-月 去重，改期不重复推）。
 
@@ -26,45 +27,74 @@ logger = logging.getLogger(__name__)
 
 _REPO = Path(__file__).resolve().parents[2]
 CALENDAR_JSON = _REPO / "data" / "event_calendar_us.json"
+CALENDAR_JSON_HK = _REPO / "data" / "event_calendar_hk.json"
 STATE_FILE = _REPO / "data" / "earnings_preview_reminder_state.json"
 
 # 提前几天预告（含当天端点）：1 <= days_until <= LEAD_DAYS 才算「下周内」
 LEAD_DAYS = 7
 
 
-def _watchlist_us() -> dict[str, str]:
-    """ticker → name；manual_watchlist 美股（只读连库，缺失则空）。"""
-    out: dict[str, str] = {}
+def _connect_ro():
+    """只读连库；遇 enhancement_refresh 写锁带退避重试，失败返回 None。"""
     try:
         import time
 
         import duckdb
-        db_path = _REPO / "stock_history_v2.duckdb"
-        if not db_path.exists():
-            return out
-        # read_only 连接遇 enhancement_refresh 写锁会失败 → 带退避重试
-        con = None
-        for _ in range(15):
-            try:
-                con = duckdb.connect(str(db_path), read_only=True)
-                break
-            except Exception:
-                time.sleep(2)
-        if con is None:
-            logger.warning("读自选股：DB 持续被写锁占用，跳过本轮预告")
-            return out
+    except Exception as exc:
+        logger.warning("duckdb 不可用: %s", exc)
+        return None
+    db_path = _REPO / "stock_history_v2.duckdb"
+    if not db_path.exists():
+        return None
+    for _ in range(15):
+        try:
+            return duckdb.connect(str(db_path), read_only=True)
+        except Exception:
+            time.sleep(2)
+    logger.warning("读库：DB 持续被写锁占用，跳过本轮预告")
+    return None
+
+
+def _load_universe() -> tuple[dict[str, str], dict[str, str]]:
+    """返回 (美股 universe, 港股 universe)，各为 ticker→name。
+
+    范围 = manual_watchlist ∪ real_holdings（你持有但没加自选的也要提醒）。
+    分市场靠 .HK 后缀：以 .HK 结尾归港股，其余归美股。
+    """
+    us: dict[str, str] = {}
+    hk: dict[str, str] = {}
+
+    def _put(sym: str, name: str) -> None:
+        sym = str(sym).upper()
+        bucket = hk if sym.endswith(".HK") else us
+        # 已有非空 name 不覆盖，避免持仓表的 NULL 名把自选名抹掉
+        if sym not in bucket or not bucket[sym]:
+            bucket[sym] = name or ""
+
+    con = _connect_ro()
+    if con is None:
+        return us, hk
+    try:
+        # 自选（market 列取值不统一：US/美股/HK/NULL，一律按后缀重新归市场）
+        for sym, name in con.execute(
+            "SELECT symbol, name FROM manual_watchlist"
+        ).fetchall():
+            if sym:
+                _put(sym, name)
+        # 真实持仓（真钱账户，优先级更高）
         try:
             for sym, name in con.execute(
-                # market 列取值不统一：'US' 与 '美股' 都是美股（HK 排除）
-                "SELECT symbol, name FROM manual_watchlist WHERE market IN ('US', '美股') OR market IS NULL"
+                "SELECT symbol, name FROM real_holdings"
             ).fetchall():
                 if sym:
-                    out[str(sym).upper()] = name or ""
-        finally:
-            con.close()
+                    _put(sym, name)
+        except Exception as exc:
+            logger.warning("读真实持仓失败（表可能不存在）: %s", exc)
     except Exception as exc:
         logger.warning("读自选股失败: %s", exc)
-    return out
+    finally:
+        con.close()
+    return us, hk
 
 
 def _signal_groups() -> dict[str, str]:
@@ -81,27 +111,25 @@ def _signal_groups() -> dict[str, str]:
     return out
 
 
-def _load_due(as_of: date) -> list[dict]:
-    """自选股中，财报日落在 (as_of, as_of+LEAD_DAYS] 的事件，每只取最近一条。"""
-    if not CALENDAR_JSON.exists():
-        logger.warning("事件日历不存在：%s（跳过预告）", CALENDAR_JSON.name)
-        return []
-    try:
-        doc = json.loads(CALENDAR_JSON.read_text(encoding="utf-8"))
-    except Exception as exc:
-        logger.warning("事件日历读取失败：%s", exc)
-        return []
-    wl = _watchlist_us()
-    grp = _signal_groups()
-    if not wl:
-        return []
-    horizon = as_of + timedelta(days=LEAD_DAYS)
+def _due_from_calendar(as_of: date, calendar_json: Path,
+                       universe: dict[str, str], grp: dict[str, str]) -> dict[str, dict]:
+    """单个日历文件里，universe 内、财报日落在 (as_of, as_of+LEAD_DAYS] 的事件。"""
     best: dict[str, dict] = {}
+    if not universe or not calendar_json.exists():
+        if not calendar_json.exists():
+            logger.warning("事件日历不存在：%s（跳过该市场预告）", calendar_json.name)
+        return best
+    try:
+        doc = json.loads(calendar_json.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("事件日历读取失败（%s）：%s", calendar_json.name, exc)
+        return best
+    horizon = as_of + timedelta(days=LEAD_DAYS)
     for ev in doc.get("events") or []:
         if ev.get("event_type") != "earnings_upcoming":
             continue
         sym = str(ev.get("ticker") or ev.get("symbol") or "").upper()
-        if sym not in wl:
+        if sym not in universe:
             continue
         try:
             ed = date.fromisoformat(str(ev.get("event_date") or "")[:10])
@@ -114,11 +142,21 @@ def _load_due(as_of: date) -> list[dict]:
         if cur is None or ed < date.fromisoformat(cur["event_date"]):
             best[sym] = {
                 "ticker": sym,
-                "name": wl.get(sym) or "",
+                "name": universe.get(sym) or "",
                 "event_date": ed.isoformat(),
                 "days_until": (ed - as_of).days,
                 "group": grp.get(sym, ""),
             }
+    return best
+
+
+def _load_due(as_of: date) -> list[dict]:
+    """自选 + 持仓中，财报日落在 (as_of, as_of+LEAD_DAYS] 的事件（美股 + 港股），每只取最近一条。"""
+    us, hk = _load_universe()
+    grp = _signal_groups()
+    best: dict[str, dict] = {}
+    best.update(_due_from_calendar(as_of, CALENDAR_JSON, us, grp))
+    best.update(_due_from_calendar(as_of, CALENDAR_JSON_HK, hk, grp))
     return sorted(best.values(), key=lambda x: x["event_date"])
 
 
