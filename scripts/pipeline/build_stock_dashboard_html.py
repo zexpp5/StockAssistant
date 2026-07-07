@@ -545,6 +545,77 @@ def _dual_track_html() -> str:
             '</div>'
         )
 
+    def _tournament_market_card(mkt: str, label: str, blk: dict) -> str:
+        """港/A股锦标赛单市场卡：基线 vs 挑战者默认TopN 5d 对照 + 切换进度。"""
+        if not blk or blk.get("status"):
+            reason = (blk or {}).get("status") or "无数据"
+            return (
+                '<div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">'
+                f'<div class="text-sm font-semibold text-slate-700">{_e(label)}</div>'
+                f'<div class="text-[11px] text-slate-400 mt-1">等待样本（{_e(reason)}）</div></div>'
+            )
+        dtn = blk.get("default_top_n")
+        h5 = ((blk.get("by_top_n") or {}).get(f"top{dtn}") or {}).get("horizons", {}).get("5d") or {}
+        baseline, primary = blk.get("baseline"), blk.get("primary_challenger")
+        rows = []
+        for name in (blk.get("formulas") or {}):
+            c = h5.get(name) or {}
+            if not c.get("n"):
+                continue
+            a = c.get("avg_alpha_pct")
+            d = c.get("delta_vs_baseline_avg_alpha_pct")
+            tag = "基线" if name == baseline else ("主挑战" if name == primary else "影子")
+            tone = "text-slate-600" if name == baseline else ("text-violet-700 font-semibold" if name == primary else "text-slate-400")
+            dtxt = ""
+            if isinstance(d, (int, float)):
+                dcls = "text-emerald-600" if d > 0 else ("text-rose-500" if d < 0 else "text-slate-400")
+                dtxt = f' <span class="{dcls}">Δ{d:+.2f}pp</span>'
+            atxt = f"{a:+.2f}%" if isinstance(a, (int, float)) else "—"
+            rows.append(
+                f'<tr class="border-b border-slate-100"><td class="py-1 pr-2 text-[11px] {tone}">{_e(name)}'
+                f'<span class="text-slate-400">·{tag}</span></td>'
+                f'<td class="py-1 pr-2 text-right text-xs">{atxt}</td>'
+                f'<td class="py-1 pr-2 text-right text-[11px] text-slate-500">胜{c.get("win_rate_pct","—")}%·n{c.get("n",0)}</td>'
+                f'<td class="py-1 text-right text-[11px]">{dtxt}</td></tr>'
+            )
+        sc = blk.get("switch_criteria") or {}
+        streak = sc.get("consecutive_met_days", 0)
+        need = (sc.get("rule") or {}).get("consecutive_days_required", 10)
+        allowed = sc.get("switch_allowed")
+        prog_tone = "text-emerald-700" if allowed else "text-slate-500"
+        prog = f'切换进度：连续达标 {streak}/{need} 日' + ("（已达标·待用户拍板）" if allowed else "")
+        bench = "、".join(blk.get("benchmark") or [])
+        return (
+            '<div class="rounded-lg border border-slate-200 bg-white px-3 py-2">'
+            f'<div class="flex items-center justify-between"><div class="text-sm font-semibold text-slate-800">{_e(label)}</div>'
+            f'<div class="text-[11px] text-slate-400">Top{dtn}·5日·基准{_e(bench)}</div></div>'
+            '<table class="w-full mt-1"><tbody>' + "".join(rows) + '</tbody></table>'
+            f'<div class="mt-1 text-[11px] {prog_tone}">{_e(prog)}</div>'
+            '</div>'
+        )
+
+    def _hk_cn_tournament_html(latest: dict) -> str:
+        dual = latest.get("dual_track") or {}
+        hk, cn = dual.get("HK"), dual.get("CN")
+        if not hk and not cn:
+            return ""
+        return (
+            '<details class="mb-5 bg-white rounded-xl shadow-sm border border-sky-200 overflow-hidden">'
+            '<summary class="cursor-pointer select-none px-4 py-3 bg-sky-50 hover:bg-sky-100">'
+            '<div class="flex items-center justify-between gap-3 flex-wrap">'
+            '<h3 class="font-bold text-slate-900">港股 / A股 规则锦标赛（前向验证中）</h3>'
+            '<span class="text-xs text-sky-700 font-semibold">展开看各配方对照 →</span></div>'
+            '<div class="text-[11px] text-slate-500 mt-1">纸上记账验证哪套打分规则更优；达标只亮绿灯，切生产须用户拍板，不写持仓/自选，不是买入指令。</div>'
+            '</summary>'
+            '<div class="p-4 grid grid-cols-1 md:grid-cols-2 gap-3">'
+            + _tournament_market_card("HK", "🇭🇰 港股锦标赛", hk)
+            + _tournament_market_card("CN", "🇨🇳 A股锦标赛", cn)
+            + '</div>'
+            '<div class="px-4 pb-3 text-[11px] text-slate-400">口径：factor_snapshot_universe 全池各自独立选 TopN，'
+            'pick_outcomes 收盘价前向 alpha，与美股双轨同源。港股池 33→100 扩池中、A股换池诊断中，样本正在累积。</div>'
+            '</details>'
+        )
+
     def _move_text(r: dict) -> str:
         d = int(r.get("delta") or 0)
         if r.get("is_new"):
@@ -667,10 +738,11 @@ def _dual_track_html() -> str:
         '<p class="mt-1">2. 精选 Top10 用新公式，解决旧公式估值权重过重、忽略评级的问题。</p>'
         '<p class="mt-1">3. 真要研究，优先看「主榜靠前 + 精选靠前 + 无盘前橙红风险」的交集。</p>'
         '<p class="mt-1">4. Top20 新公式还没稳定赢旧公式前，不做全榜替换。</p>'
-        '<p class="mt-2 text-slate-400">评级因子目前美股专属；港股/A股仍保持旧规则，不在这里强行切换。</p>'
+        '<p class="mt-2 text-slate-400">评级因子目前美股专属；港股/A股规则锦标赛见下方独立面板。</p>'
         '</div></div></details>'
         '</div>'
         '</details>'
+        + _hk_cn_tournament_html(latest_alpha)
     )
 
 
