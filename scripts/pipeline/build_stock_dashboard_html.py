@@ -681,19 +681,24 @@ def _dual_track_html() -> str:
             "hk_production": "港股生产公式", "hk_quality_heavy": "质量重仓变体",
             "cn_production": "A股生产公式(纯反转)", "cn_reversal_quality": "反转+质量变体",
         }
+        # 每市场"现用生产公式"的 key：美股已切新公式(val_down_grade)，港/A 仍是各自 baseline。
+        # 2026-07-08 修：原先无脑取 baseline，导致美股切换后仍显示"老公式"，属错误。
+        prod_key = {"US": "val_down_grade", "HK": "hk_production", "CN": "cn_production"}
         rows = []
         for mkt in ("US", "HK", "CN"):
             m = dt.get(mkt) or {}
             if not m:
                 continue
             base = m.get("baseline"); chal = m.get("primary_challenger")
+            live = prod_key.get(mkt, base)                 # 现用生产公式
+            alt = base if live != base else chal           # 对照的另一套(美股=老公式影子；港A=挑战者)
             tn = f"top{m.get('default_top_n') or 10}"
             h5 = ((m.get("by_top_n") or {}).get(tn) or {}).get("horizons", {}).get("5d") or {}
-            bb = h5.get(base) or {}
-            a = bb.get("avg_alpha_pct"); w = bb.get("win_rate_pct"); n = bb.get("n") or 0
-            cb = h5.get(chal) or {}
-            ca = cb.get("avg_alpha_pct")
-            delta = (ca - a) if isinstance(a, (int, float)) and isinstance(ca, (int, float)) else None
+            lb = h5.get(live) or {}
+            a = lb.get("avg_alpha_pct"); w = lb.get("win_rate_pct"); n = lb.get("n") or 0
+            ab = h5.get(alt) or {}
+            aa = ab.get("avg_alpha_pct")
+            delta = (aa - a) if isinstance(a, (int, float)) and isinstance(aa, (int, float)) else None
             if not isinstance(a, (int, float)):
                 verdict, vcolor = "样本不足", "text-slate-400"
             elif a > 0:
@@ -704,8 +709,11 @@ def _dual_track_html() -> str:
             acolor = "text-emerald-700" if isinstance(a, (int, float)) and a > 0 else ("text-rose-700" if isinstance(a, (int, float)) else "text-slate-400")
             chal_txt = ""
             if delta is not None:
+                # delta = 对照 - 现用；对照更差→现用更好(说明切对了/维持对)
                 dsign = "更好" if delta > 0 else "更差"
-                chal_txt = f'<span class="text-slate-500">候选 {formula_cn.get(chal, chal)} {ca:+.2f}%（{dsign} {abs(delta):.2f}pp）</span>'
+                role = "老公式(已降为影子)" if (mkt == "US" and alt == base) else f"候选 {formula_cn.get(alt, alt)}"
+                chal_txt = f'<span class="text-slate-500">对照 {role} {aa:+.2f}%（比现用{dsign} {abs(delta):.2f}pp）</span>'
+            base = live  # 下面渲染"现用公式"列用 live
             rows.append(
                 f'<tr class="border-t border-slate-100">'
                 f'<td class="py-1.5 pr-3 font-semibold text-slate-800">{label[mkt]}</td>'
@@ -16635,11 +16643,13 @@ def _trading_plan_payload() -> dict:
 
 
 def _buy_zone_payload() -> dict:
-    """构建期给「美股自选+推荐+瓶颈」算全量可买区间，注入成 BUY_ZONES 全局。
+    """构建期给「自选+推荐+瓶颈」算全量可买区间，注入成 BUY_ZONES 全局。
 
     用途：「买点计划」列没有人工 trading_plan 时，兜底显示自动可买区间
-    （单一来源 stock_research/core/buy_zone）。US-only —— 港股/A股 buy_zone 待接
-    （memory: project_buy_zone_feature），非美票不收录，列仍显示「—」。
+    （单一来源 stock_research/core/buy_zone）。
+    2026-07-08：扩到港/A 股 —— buy_zone 本就 market-agnostic（技术回撤兜底只需
+    ≥20 日收盘价），港/A 有价格历史的票现在也出区间；历史不足 20 日或无目标价的
+    仍返回 None（列显示「—」，不硬造）。港/A 无分析师目标价 → 走技术回撤口径。
     撞写锁/无数据时返回 {} 优雅降级（列回到「—」），不让 dashboard 构建失败。
     """
     try:
@@ -16651,11 +16661,25 @@ def _buy_zone_payload() -> dict:
             return {}
         try:
             uni = pbs._gather_universe(conn)
-            us_syms = [
-                s for s, m in uni.items()
-                if not pbs._is_hk(s, m.get("market")) and not pbs._is_a_share(s, m.get("market"))
-            ]
-            zones = buy_zone.compute_buy_zones(us_syms, conn)
+            all_syms = set(uni.keys())  # 自选+推荐+瓶颈
+            # 2026-07-08：并入三市场最新一批推荐 picks，让 AI 推荐表每行都能出区间
+            try:
+                pick_rows = conn.execute("""
+                    WITH latest AS (
+                        SELECT rp.market, MAX(rr.generated_at) AS g
+                        FROM recommendation_runs rr
+                        JOIN recommendation_picks rp ON rp.run_id = rr.run_id
+                        WHERE rr.universe_scope = 'system_tech_universe'
+                        GROUP BY rp.market
+                    )
+                    SELECT rp.symbol FROM recommendation_runs rr
+                    JOIN recommendation_picks rp ON rp.run_id = rr.run_id
+                    JOIN latest l ON l.market = rp.market AND l.g = rr.generated_at
+                """).fetchall()
+                all_syms.update(str(r[0]).upper() for r in pick_rows if r[0])
+            except Exception:
+                pass
+            zones = buy_zone.compute_buy_zones(sorted(all_syms), conn)
         finally:
             conn.close()
     except Exception as exc:  # pragma: no cover - 防御
