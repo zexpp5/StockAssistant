@@ -14720,13 +14720,16 @@ function _reasonSummaryHtml(row) {
     // 整批 candidates 是同一次 build_pool_recommendations.py 跑出来的，时间相同；算一次复用
     const _discoveryTs = _fmtTs(DISCOVERY.generated_at);
     const _marketOrder = ["US", "CN", "HK"];
+    // recommendation_picks.rank 是跨市场全局连续名次(CN 1-20 / HK 21-40 / US 41-60)，
+    // 直接按 rank>20 过滤会误杀 HK(全落在 21-40)。改为市场内名次计数：每市场按
+    // (美股 new_rank / 其余 rank) 排序，取市场内前 20。美股仍走 new_rank 不变。
+    const _byMkt = {};
+    cands.forEach(c => { (_byMkt[_candidateMarketCode(c)] = _byMkt[_candidateMarketCode(c)] || []).push(c); });
     const _marketCounts = {};
-    cands.forEach(c => {
-      const key = _candidateMarketCode(c);
-      // 主榜计数只算前 20(美股=新公式名次); 20 名外的老候选已折叠, 不计进 tab 数字
-      const mainRank = Number(c.new_rank) || Number(c.rank) || 9999;
-      if (mainRank > 20) return;
-      _marketCounts[key] = (_marketCounts[key] || 0) + 1;
+    Object.keys(_byMkt).forEach(key => {
+      const sorted = _byMkt[key].slice().sort(
+        (a, b) => (Number(a.new_rank) || Number(a.rank) || 9999) - (Number(b.new_rank) || Number(b.rank) || 9999));
+      _marketCounts[key] = Math.min(20, sorted.length);
     });
     const _availableMarkets = _marketOrder.filter(k => _marketCounts[k]);
     if (!window._activeDiscoveryMarket || !_marketCounts[window._activeDiscoveryMarket]) {
