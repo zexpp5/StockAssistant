@@ -672,6 +672,70 @@ def _dual_track_html() -> str:
         delta = h5.get("delta_new_minus_old_avg_alpha_pct")
         return f"Top{top_n} {delta:+.2f}pp" if isinstance(delta, (int, float)) else f"Top{top_n} 等样本"
 
+    # ── 三市场真实成绩（含负数，如实展示；用户要求"即便数据是负的也要看到"）──
+    def _all_markets_health() -> str:
+        dt = latest_alpha.get("dual_track") or {}
+        label = {"US": "美股", "HK": "港股", "CN": "A股"}
+        formula_cn = {
+            "legacy_baseline": "老公式", "val_down_grade": "新公式(降估值+评级)",
+            "hk_production": "港股生产公式", "hk_quality_heavy": "质量重仓变体",
+            "cn_production": "A股生产公式(纯反转)", "cn_reversal_quality": "反转+质量变体",
+        }
+        rows = []
+        for mkt in ("US", "HK", "CN"):
+            m = dt.get(mkt) or {}
+            if not m:
+                continue
+            base = m.get("baseline"); chal = m.get("primary_challenger")
+            tn = f"top{m.get('default_top_n') or 10}"
+            h5 = ((m.get("by_top_n") or {}).get(tn) or {}).get("horizons", {}).get("5d") or {}
+            bb = h5.get(base) or {}
+            a = bb.get("avg_alpha_pct"); w = bb.get("win_rate_pct"); n = bb.get("n") or 0
+            cb = h5.get(chal) or {}
+            ca = cb.get("avg_alpha_pct")
+            delta = (ca - a) if isinstance(a, (int, float)) and isinstance(ca, (int, float)) else None
+            if not isinstance(a, (int, float)):
+                verdict, vcolor = "样本不足", "text-slate-400"
+            elif a > 0:
+                verdict, vcolor = "在赚钱 ✅", "text-emerald-700"
+            else:
+                verdict, vcolor = "在亏钱 ❌", "text-rose-700"
+            a_txt = f"{a:+.2f}%" if isinstance(a, (int, float)) else "—"
+            acolor = "text-emerald-700" if isinstance(a, (int, float)) and a > 0 else ("text-rose-700" if isinstance(a, (int, float)) else "text-slate-400")
+            chal_txt = ""
+            if delta is not None:
+                dsign = "更好" if delta > 0 else "更差"
+                chal_txt = f'<span class="text-slate-500">候选 {formula_cn.get(chal, chal)} {ca:+.2f}%（{dsign} {abs(delta):.2f}pp）</span>'
+            rows.append(
+                f'<tr class="border-t border-slate-100">'
+                f'<td class="py-1.5 pr-3 font-semibold text-slate-800">{label[mkt]}</td>'
+                f'<td class="py-1.5 pr-3 text-slate-600 text-xs">{formula_cn.get(base, base)}</td>'
+                f'<td class="py-1.5 pr-3 text-right font-mono font-bold {acolor}">{a_txt}</td>'
+                f'<td class="py-1.5 pr-3 text-right text-xs text-slate-500">{f"{w:.0f}%" if isinstance(w,(int,float)) else "—"}</td>'
+                f'<td class="py-1.5 pr-3 text-right text-xs text-slate-400">{n}</td>'
+                f'<td class="py-1.5 pr-3 font-semibold {vcolor}">{verdict}</td>'
+                f'<td class="py-1.5 text-xs">{chal_txt}</td>'
+                f'</tr>'
+            )
+        if not rows:
+            return ""
+        return (
+            '<div class="mb-4 rounded-xl border border-slate-200 bg-white p-4">'
+            '<div class="text-sm font-bold text-slate-900">📊 三市场真实成绩（近 5 日超额收益，含负数如实显示）</div>'
+            '<div class="text-[11px] text-slate-500 mt-0.5">每个市场现用选股公式的样本外真实战绩——赚就是赚、亏就是亏，不粉饰。口径：从全池各自选 TopN 前向对照。</div>'
+            '<div class="overflow-x-auto mt-2"><table class="w-full text-sm">'
+            '<thead><tr class="text-left text-[11px] text-slate-400">'
+            '<th class="py-1 pr-3 font-medium">市场</th><th class="py-1 pr-3 font-medium">现用公式</th>'
+            '<th class="py-1 pr-3 text-right font-medium">近5日超额</th><th class="py-1 pr-3 text-right font-medium">胜率</th>'
+            '<th class="py-1 pr-3 text-right font-medium">样本</th><th class="py-1 pr-3 font-medium">判定</th>'
+            '<th class="py-1 font-medium">有没有更好的候选</th></tr></thead>'
+            f'<tbody>{"".join(rows)}</tbody></table></div>'
+            '<div class="text-[11px] text-slate-400 mt-2">⚠️ 负数=该市场选股公式样本外还没跑出正超额；A股为负时页面默认隐藏其推荐，不建议照着操作。</div>'
+            '</div>'
+        )
+
+    all_markets_html = _all_markets_health()
+
     sc = ((latest_alpha.get("dual_track_us") or {}).get("switch_criteria")) or {}
     checks = sc.get("checks") or {}
     n_pass = sum(1 for v in checks.values() if v)
@@ -687,6 +751,7 @@ def _dual_track_html() -> str:
 
     return (
         stop_gate_front +
+        all_markets_html +
         '<details class="mb-5 bg-white rounded-xl shadow-sm border border-amber-200 overflow-hidden">'
         '<summary class="cursor-pointer select-none px-4 py-3 bg-amber-50 hover:bg-amber-100">'
         '<div class="flex items-center justify-between gap-3 flex-wrap">'
