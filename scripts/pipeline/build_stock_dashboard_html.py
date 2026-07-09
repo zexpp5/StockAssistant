@@ -693,11 +693,41 @@ def _dual_track_html() -> str:
             live = prod_key.get(mkt, base)                 # 现用生产公式
             alt = base if live != base else chal           # 对照的另一套(美股=老公式影子；港A=挑战者)
             tn = f"top{m.get('default_top_n') or 10}"
-            h5 = ((m.get("by_top_n") or {}).get(tn) or {}).get("horizons", {}).get("5d") or {}
+            hz = ((m.get("by_top_n") or {}).get(tn) or {}).get("horizons", {}) or {}
+
+            def _cell(h):  # 某持有期现用公式的 (alpha, n)
+                b = (hz.get(h) or {}).get(live) or {}
+                return b.get("avg_alpha_pct"), (b.get("n") or 0)
+
+            # 三个持有期，展示"越拿越好/越糟"的形状
+            hstr = []
+            vals = {}
+            for h, hl in (("1d", "1天"), ("5d", "5天"), ("20d", "20天")):
+                av, nn = _cell(h)
+                vals[h] = av
+                if isinstance(av, (int, float)):
+                    c = "text-emerald-700" if av > 0 else "text-rose-700"
+                    hstr.append(f'<span class="{c} font-mono font-semibold">{hl} {av:+.2f}%</span>')
+                else:
+                    hstr.append(f'<span class="text-slate-300">{hl} 待攒</span>')
+            horizon_html = " · ".join(hstr)
+
+            # 形状判断：拿越久是涨是衰减（有 1d 和 5d 才判）
+            shape = ""
+            v1, v5 = vals.get("1d"), vals.get("5d")
+            if isinstance(v1, (int, float)) and isinstance(v5, (int, float)):
+                if v5 > v1 + 0.2:
+                    shape = '<span class="text-emerald-600">越拿越好 → 该拿住</span>'
+                elif v5 < v1 - 0.2:
+                    shape = '<span class="text-amber-600">越拿越衰 → 只短期有效</span>'
+                else:
+                    shape = '<span class="text-slate-400">基本持平</span>'
+
+            # 判定以 5天为主口径
+            h5 = hz.get("5d") or {}
             lb = h5.get(live) or {}
             a = lb.get("avg_alpha_pct"); w = lb.get("win_rate_pct"); n = lb.get("n") or 0
-            ab = h5.get(alt) or {}
-            aa = ab.get("avg_alpha_pct")
+            aa = (h5.get(alt) or {}).get("avg_alpha_pct")
             delta = (aa - a) if isinstance(a, (int, float)) and isinstance(aa, (int, float)) else None
             if not isinstance(a, (int, float)):
                 verdict, vcolor = "样本不足", "text-slate-400"
@@ -705,23 +735,19 @@ def _dual_track_html() -> str:
                 verdict, vcolor = "在赚钱 ✅", "text-emerald-700"
             else:
                 verdict, vcolor = "在亏钱 ❌", "text-rose-700"
-            a_txt = f"{a:+.2f}%" if isinstance(a, (int, float)) else "—"
-            acolor = "text-emerald-700" if isinstance(a, (int, float)) and a > 0 else ("text-rose-700" if isinstance(a, (int, float)) else "text-slate-400")
             chal_txt = ""
             if delta is not None:
-                # delta = 对照 - 现用；对照更差→现用更好(说明切对了/维持对)
                 dsign = "更好" if delta > 0 else "更差"
                 role = "老公式(已降为影子)" if (mkt == "US" and alt == base) else f"候选 {formula_cn.get(alt, alt)}"
                 chal_txt = f'<span class="text-slate-500">对照 {role} {aa:+.2f}%（比现用{dsign} {abs(delta):.2f}pp）</span>'
-            base = live  # 下面渲染"现用公式"列用 live
             rows.append(
-                f'<tr class="border-t border-slate-100">'
+                f'<tr class="border-t border-slate-100 align-top">'
                 f'<td class="py-1.5 pr-3 font-semibold text-slate-800">{label[mkt]}</td>'
-                f'<td class="py-1.5 pr-3 text-slate-600 text-xs">{formula_cn.get(base, base)}</td>'
-                f'<td class="py-1.5 pr-3 text-right font-mono font-bold {acolor}">{a_txt}</td>'
-                f'<td class="py-1.5 pr-3 text-right text-xs text-slate-500">{f"{w:.0f}%" if isinstance(w,(int,float)) else "—"}</td>'
-                f'<td class="py-1.5 pr-3 text-right text-xs text-slate-400">{n}</td>'
-                f'<td class="py-1.5 pr-3 font-semibold {vcolor}">{verdict}</td>'
+                f'<td class="py-1.5 pr-3 text-slate-600 text-xs">{formula_cn.get(live, live)}</td>'
+                f'<td class="py-1.5 pr-3 text-xs whitespace-nowrap">{horizon_html}</td>'
+                f'<td class="py-1.5 pr-3 text-xs">{shape}</td>'
+                f'<td class="py-1.5 pr-3 text-right text-xs text-slate-400 whitespace-nowrap">{f"{w:.0f}%" if isinstance(w,(int,float)) else "—"} · n{n}</td>'
+                f'<td class="py-1.5 pr-3 font-semibold {vcolor} whitespace-nowrap">{verdict}</td>'
                 f'<td class="py-1.5 text-xs">{chal_txt}</td>'
                 f'</tr>'
             )
@@ -729,16 +755,18 @@ def _dual_track_html() -> str:
             return ""
         return (
             '<div class="mb-4 rounded-xl border border-slate-200 bg-white p-4">'
-            '<div class="text-sm font-bold text-slate-900">📊 三市场真实成绩（近 5 日超额收益，含负数如实显示）</div>'
-            '<div class="text-[11px] text-slate-500 mt-0.5">每个市场现用选股公式的样本外真实战绩——赚就是赚、亏就是亏，不粉饰。口径：从全池各自选 TopN 前向对照。</div>'
+            '<div class="text-sm font-bold text-slate-900">📊 三市场真实成绩（持有 1/5/20 天的超额收益，含负数如实显示）</div>'
+            '<div class="text-[11px] text-slate-500 mt-0.5">"5天"等只是量公式的尺子，不是让你持仓几天。看"越拿越好/越糟"那列更有用：'
+            '公式选的票是慢热型(该拿住)还是只短期有效(拿久反而亏)。口径：全池各自选 TopN、按各持有期算收盘超额、样本外前向对照。</div>'
             '<div class="overflow-x-auto mt-2"><table class="w-full text-sm">'
             '<thead><tr class="text-left text-[11px] text-slate-400">'
             '<th class="py-1 pr-3 font-medium">市场</th><th class="py-1 pr-3 font-medium">现用公式</th>'
-            '<th class="py-1 pr-3 text-right font-medium">近5日超额</th><th class="py-1 pr-3 text-right font-medium">胜率</th>'
-            '<th class="py-1 pr-3 text-right font-medium">样本</th><th class="py-1 pr-3 font-medium">判定</th>'
+            '<th class="py-1 pr-3 font-medium">持有 1天/5天/20天 超额</th><th class="py-1 pr-3 font-medium">拿久了怎样</th>'
+            '<th class="py-1 pr-3 text-right font-medium">胜率·样本</th><th class="py-1 pr-3 font-medium">判定</th>'
             '<th class="py-1 font-medium">有没有更好的候选</th></tr></thead>'
             f'<tbody>{"".join(rows)}</tbody></table></div>'
-            '<div class="text-[11px] text-slate-400 mt-2">⚠️ 负数=该市场选股公式样本外还没跑出正超额；A股为负时页面默认隐藏其推荐，不建议照着操作。</div>'
+            '<div class="text-[11px] text-slate-400 mt-2">⚠️ 20天需约 20 个交易日样本才成熟（本周起攒，正是你月度操作的真实持有期）；'
+            '负数=该公式样本外还没跑出正超额，A股为负页面默认隐藏其推荐，不建议照着操作。</div>'
             '</div>'
         )
 
