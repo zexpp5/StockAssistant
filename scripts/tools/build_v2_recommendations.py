@@ -109,11 +109,21 @@ def _current_model_version() -> str:
 
 
 def _current_per_market_formula() -> dict[str, str]:
+    # 2026-07-14 港/A 也切挑战者公式（HK=quality_heavy、CN=reversal_quality）；
+    # 各自打分链在 hk_scoring / a_share_picks，此处仅记录元数据保持口径一致。
+    def _hk() -> str:
+        flag = str(os.environ.get("HK_QUALITY_HEAVY_ACTIVE") or "").strip().lower()
+        return LEGACY_FORMULA_NAME if flag in {"0", "false", "no", "off", "inactive"} else "hk_quality_heavy"
+
+    def _cn() -> str:
+        flag = str(os.environ.get("CN_REVERSAL_QUALITY_ACTIVE") or "").strip().lower()
+        return LEGACY_FORMULA_NAME if flag in {"0", "false", "no", "off", "inactive"} else "cn_reversal_quality"
+
     return {
         "US": US_FORMULA_NAME if _use_us_val_down_grade() else LEGACY_FORMULA_NAME,
-        "HK": LEGACY_FORMULA_NAME,
-        "CN": LEGACY_FORMULA_NAME,
-        "A": LEGACY_FORMULA_NAME,
+        "HK": _hk(),
+        "CN": _cn(),
+        "A": _cn(),
     }
 
 

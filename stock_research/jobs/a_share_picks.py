@@ -141,8 +141,23 @@ def _load_calibrated_weights() -> tuple[dict[str, float] | None, str]:
     return weights, f"ic_calibrated@{calib.name}"
 
 
+# 2026-07-14 用户拍板切换：锦标赛挑战者 cn_reversal_quality（reversal 0.60 + f_score 0.40）。
+# A 股是「池子问题」——各变体绝对 alpha 均为负，此公式 5d 实测 -0.71%，仅比纯反转
+# (-1.52%) 少亏、Δ+0.81pp，属「少亏」而非「转正」。相对 IC 校准的纯反转，多加了 f_score
+# 质量过滤以防「把继续下跌当触底接飞刀」。回退开关 CN_REVERSAL_QUALITY_ACTIVE=0/off 立即回
+# IC 校准权重（纯反转）；回滚线（预注册）：切换后 Top10 5d Δ 连续 5 日 < 0 → 设 0 回退。
+CN_REVERSAL_QUALITY_WEIGHTS = {"reversal": 0.60, "f_score": 0.40}
+
+
+def _use_cn_reversal_quality() -> bool:
+    flag = str(os.environ.get("CN_REVERSAL_QUALITY_ACTIVE") or "").strip().lower()
+    return flag not in {"0", "false", "no", "off", "inactive"}
+
+
 def load_weights() -> tuple[dict[str, float], str]:
     """读生产校准权重；无有效文件时只返回启发式权重供 dry-run / bypass 使用。"""
+    if _use_cn_reversal_quality():
+        return dict(CN_REVERSAL_QUALITY_WEIGHTS), "cn_reversal_quality@tournament_challenger"
     weights, source = _load_calibrated_weights()
     if weights is not None:
         return weights, source

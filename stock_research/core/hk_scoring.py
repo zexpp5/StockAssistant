@@ -6,15 +6,49 @@ invent a second rating system.
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Iterable
 
 
-HK_FACTOR_WEIGHTS = {
+# 2026-05 起的港股生产权重（作双轨基线 hk_production）。
+HK_LEGACY_FACTOR_WEIGHTS = {
     "f_score": 0.40,
     "momentum": 0.35,
     "reversal": 0.25,
     "south_flow": 0.00,
 }
+
+# 2026-07-14 用户拍板切换：锦标赛回放冠军 quality_heavy（f_score 0.40 重仓质量、
+# momentum 0.10 压低追高）。原变体含 valuation 0.25，但港股打分链没有 valuation 因子，
+# 那部分在锦标赛里是「缺失记中性 50」的常数、不改排序，故落地时剔除并把剩余三因子
+# 归一到 1.0（除以 total_w 后名次与锦标赛完全一致）。5d 实测挑战者 +2.02%、Δ+0.67pp。
+def _normalize(weights: dict[str, float]) -> dict[str, float]:
+    total = sum(v for v in weights.values() if v > 0) or 1.0
+    return {k: (v / total if v > 0 else 0.0) for k, v in weights.items()}
+
+
+HK_QUALITY_HEAVY_WEIGHTS = _normalize({
+    "f_score": 0.40,
+    "momentum": 0.10,
+    "reversal": 0.25,
+    "south_flow": 0.00,
+})
+
+
+def hk_production_weights() -> dict[str, float]:
+    """港股生产权重解析。默认 quality_heavy（2026-07-14 切换）。
+
+    回退开关：HK_QUALITY_HEAVY_ACTIVE=0/off 立即回老公式（hk_production 基线）。
+    回滚线（预注册）：切换后 Top10 5d Δ 连续 5 日 < 0 → 设 0 回退。
+    """
+    flag = str(os.environ.get("HK_QUALITY_HEAVY_ACTIVE") or "").strip().lower()
+    if flag in {"0", "false", "no", "off", "inactive"}:
+        return dict(HK_LEGACY_FACTOR_WEIGHTS)
+    return dict(HK_QUALITY_HEAVY_WEIGHTS)
+
+
+# 生产使用的港股权重（下游 import 这个名字，语义 = 当前生效公式）。
+HK_FACTOR_WEIGHTS = hk_production_weights()
 
 HK_STRONG_THRESHOLD = 0.75
 HK_RECOMMEND_THRESHOLD = 0.60

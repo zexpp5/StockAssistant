@@ -681,9 +681,10 @@ def _dual_track_html() -> str:
             "hk_production": "港股生产公式", "hk_quality_heavy": "质量重仓变体",
             "cn_production": "A股生产公式(纯反转)", "cn_reversal_quality": "反转+质量变体",
         }
-        # 每市场"现用生产公式"的 key：美股已切新公式(val_down_grade)，港/A 仍是各自 baseline。
-        # 2026-07-08 修：原先无脑取 baseline，导致美股切换后仍显示"老公式"，属错误。
-        prod_key = {"US": "val_down_grade", "HK": "hk_production", "CN": "cn_production"}
+        # 每市场"现用生产公式"的 key：三市场均已切挑战者公式。
+        # 2026-07-08 美股切 val_down_grade；2026-07-14 港/A 也切（HK=quality_heavy、CN=reversal_quality）。
+        # 老/纯反转公式退对照列。回退开关：HK_QUALITY_HEAVY_ACTIVE / CN_REVERSAL_QUALITY_ACTIVE=0。
+        prod_key = {"US": "val_down_grade", "HK": "hk_quality_heavy", "CN": "cn_reversal_quality"}
         rows = []
         for mkt in ("US", "HK", "CN"):
             m = dt.get(mkt) or {}

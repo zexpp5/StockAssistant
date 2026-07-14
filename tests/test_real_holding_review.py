@@ -530,7 +530,8 @@ class RealHoldingReviewTest(unittest.TestCase):
         with patch("stock_research.jobs.real_holding_review._load_json", return_value=cache):
             out = _hk_watchlist_score_fallbacks(["9992.HK"])
         self.assertIn("9992.HK", out)
-        self.assertAlmostEqual(out["9992.HK"]["total_score"], 56.67, places=2)
+        # 2026-07-14 港股生产切 quality_heavy（f_score 重仓、momentum 压低）→ 56.67→58.89。
+        self.assertAlmostEqual(out["9992.HK"]["total_score"], 58.89, places=2)
         self.assertEqual(out["9992.HK"]["rating"], "⭐ 关注")
         self.assertEqual(out["9992.HK"]["signal"], "watch")
 
