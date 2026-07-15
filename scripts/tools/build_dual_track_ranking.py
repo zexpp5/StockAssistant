@@ -37,9 +37,21 @@ sys.path.insert(0, str(REPO / "scripts" / "lib"))
 
 OUT = REPO / "data" / "latest" / "dual_track_ranking.json"
 STRICT_OUT = REPO / "data" / "latest" / "daily_strict_picks.json"
+STRICT_MULTI_OUT = REPO / "data" / "latest" / "daily_strict_picks_multi.json"
+STRICT_LOG = REPO / "data" / "strict_picks_log.jsonl"  # 滚动严选史(买后盯盘匹配用)
 BASELINE = "legacy_baseline"   # 对外展示名：老公式影子基线
-BASELINE_VARIANT = "prod_recheck"      # replay 里的老公式复算权重
+BASELINE_VARIANT = "prod_recheck"      # replay 里的老公式复算权重(US)
 CANDIDATE = "val_down_grade"   # 第一候选规则（降估值+评级）
+
+# 2026-07-14 三市场生产全切挑战者(commit c3f4a7f) → 双轨对照两侧按市场取:
+# baseline=各市场老生产公式、candidate=各市场现生产公式；回退开关跟生产同一套 env。
+MARKET_BASELINE_VARIANTS = {"US": "prod_recheck", "HK": "hk_production", "CN": "reversal_pure"}
+MARKET_CANDIDATE_VARIANTS = {"US": "val_down_grade", "HK": "quality_heavy", "CN": "cn_reversal_quality"}
+MARKET_ROLLBACK_FLAGS = {
+    "US": "US_VAL_DOWN_GRADE_ACTIVE",
+    "HK": "HK_QUALITY_HEAVY_ACTIVE",
+    "CN": "CN_REVERSAL_QUALITY_ACTIVE",
+}
 TOP_NS = (5, 10, 20)
 TOP_N = max(TOP_NS)
 POOL_SOURCE = "factor_snapshot_universe"
@@ -80,14 +92,20 @@ def _price_move_20d(conn, symbol: str) -> dict:
         """
         SELECT trade_date, close
         FROM price_daily
-        WHERE market=? AND upper(symbol)=upper(?) AND close IS NOT NULL
+        WHERE upper(symbol)=upper(?) AND close IS NOT NULL
         ORDER BY trade_date DESC
         LIMIT 20
         """,
-        [US_MARKET, symbol],
+        [symbol],
     ).fetchall()
+    # 🐛修(2026-07-15): 原先 market 写死 US → 港/A 股永远查 0 行,接飞刀闸对港A失效、
+    # 退出线无收盘价兜底。symbol 三市场格式互斥(.HK/.SS/.SZ/纯字母),去掉 market 条件安全。
     if len(rows) < 20:
-        return {"symbol": symbol.upper(), "n": len(rows), "pct": None}
+        out = {"symbol": symbol.upper(), "n": len(rows), "pct": None}
+        if rows:
+            out["latest_date"] = str(rows[0][0])
+            out["latest_close"] = round(float(rows[0][1]), 4)
+        return out
     last_date, last_close = rows[0]
     start_date, start_close = rows[-1]
     try:
@@ -222,14 +240,19 @@ def _insider_events_map(symbols: list[str]) -> dict[str, list[dict]]:
     return out
 
 
-def _strict_pick_payload(data: dict, conn) -> dict:
-    """从 US candidate_focus_top10 生成首屏严选 3 只。只读、只解释研究优先级。"""
+def _strict_pick_payload(data: dict, conn, market: str = US_MARKET) -> dict:
+    """从该市场 candidate_focus_top10 生成首屏严选 3 只。只读、只解释研究优先级。
+
+    2026-07-15 泛化到 HK/CN(方案 P0-3)：同一套剔贵/接飞刀闸；
+    评级修正/内部人数据美股专属，非美市场优雅跳过；每只附卖出三条线(P0-2)。
+    """
     from stock_research.core import buy_zone
+    from stock_research.core.exit_rules import build_exit_plan, exit_plan_compact
     from stock_research.core.expectation_meter import expectation_meter, format_meter_line
     from stock_research.core.insider_summary import format_insider_line, summarize_insider_events
     from stock_research.core.revision_trend import format_revision_line, summarize_revision_trend
 
-    us = (data.get("markets") or {}).get(US_MARKET) or {}
+    us = (data.get("markets") or {}).get(market) or {}
     focus_rows = list(us.get("candidate_focus_top10") or [])
     symbols = [str(r.get("symbol") or "").upper() for r in focus_rows if r.get("symbol")]
     zones = buy_zone.compute_buy_zones(symbols, conn)
@@ -238,8 +261,9 @@ def _strict_pick_payload(data: dict, conn) -> dict:
         as_of = date.fromisoformat(str(us.get("run_date") or data.get("generated_at") or "")[:10])
     except Exception:
         as_of = date.today()
-    revision_events = _revision_events_map(conn, symbols, as_of)
-    insider_events = _insider_events_map(symbols)
+    # 评级修正/内部人 Form4 = 美股专属数据源，非美市场留空(渲染层自动省略)
+    revision_events = _revision_events_map(conn, symbols, as_of) if market == US_MARKET else {}
+    insider_events = _insider_events_map(symbols) if market == US_MARKET else {}
     selected: list[dict] = []
     excluded: list[dict] = []
 
@@ -274,6 +298,9 @@ def _strict_pick_payload(data: dict, conn) -> dict:
         )
         revision = summarize_revision_trend(revision_events.get(symbol) or [], as_of=as_of)
         insider = summarize_insider_events(insider_events.get(symbol) or [], as_of=as_of)
+        # 卖出三条线：按现价(收盘)估算入场；真实买入后 real_holding_review 按实际成本重算
+        entry_ref = (zone or {}).get("current") or move.get("latest_close")
+        exit_plan = build_exit_plan(market, entry_ref, zone)
         selected.append({
             "symbol": symbol,
             "name": row.get("name") or "",
@@ -295,17 +322,24 @@ def _strict_pick_payload(data: dict, conn) -> dict:
             "revision_line": format_revision_line(revision),
             "insider": insider,
             "insider_line": format_insider_line(insider),
+            "exit_plan": exit_plan,
+            "exit_line": exit_plan_compact(exit_plan),
         })
         if len(selected) >= STRICT_PICK_N:
             break
 
+    advisory = "研究严选，不是买入指令；整套策略样本外未达标时仍需买前审查。"
+    if market == "CN":
+        advisory += " ⚠️A股公式样本外 alpha 尚未证明为正（池子问题），仅供研究。"
+    elif market == "HK":
+        advisory += " 港股口径=拿住(复评 20 交易日)，别做快进快出。"
     return {
         "generated_at": data.get("generated_at"),
-        "market": US_MARKET,
-        "source": "dual_track_ranking.markets.US.candidate_focus_top10",
+        "market": market,
+        "source": f"dual_track_ranking.markets.{market}.candidate_focus_top10",
         "source_run_date": us.get("run_date"),
-        "formula": CANDIDATE,
-        "advisory": "研究严选，不是买入指令；整套策略样本外未达标时仍需买前审查。",
+        "formula": _candidate_variant_for_market(market),
+        "advisory": advisory,
         "rules": {
             "input": "candidate_focus_top10",
             "exclude_expensive": "buy_zone.position == 偏贵",
@@ -325,6 +359,37 @@ def write_outputs(data: dict) -> None:
     if strict:
         STRICT_OUT.parent.mkdir(parents=True, exist_ok=True)
         STRICT_OUT.write_text(json.dumps(strict, ensure_ascii=False, indent=2), encoding="utf-8")
+    multi = data.get("strict_picks_multi")
+    if multi:
+        STRICT_MULTI_OUT.write_text(json.dumps(multi, ensure_ascii=False, indent=2), encoding="utf-8")
+        _append_strict_log(multi)
+
+
+def _append_strict_log(multi: dict) -> None:
+    """滚动严选史(jsonl,每市场每天一行)——real_holding_review 用它匹配'照严选买的持仓'。
+
+    同日同市场重复运行只保留首次(当日已有记录则跳过),防止一天多批刷屏。
+    """
+    STRICT_LOG.parent.mkdir(parents=True, exist_ok=True)
+    existing: set[tuple[str, str]] = set()
+    if STRICT_LOG.exists():
+        for line in STRICT_LOG.read_text(encoding="utf-8").splitlines():
+            try:
+                rec = json.loads(line)
+                existing.add((str(rec.get("date")), str(rec.get("market"))))
+            except Exception:
+                continue
+    with STRICT_LOG.open("a", encoding="utf-8") as fh:
+        for mkt, payload in multi.items():
+            day = str(payload.get("source_run_date") or "")[:10]
+            if not day or (day, mkt) in existing:
+                continue
+            fh.write(json.dumps({
+                "date": day, "market": mkt,
+                "formula": payload.get("formula"),
+                "symbols": [p.get("symbol") for p in payload.get("picks") or []],
+                "exit_params_caliber": "preregistered_2026-07-15",
+            }, ensure_ascii=False) + "\n")
 
 
 def _connect():
@@ -378,11 +443,25 @@ def _inject_grade(conn, rows: list[dict], run_date: str) -> None:
         )
 
 
+def _rollback_flag_off(market: str) -> bool:
+    import os
+    flag = str(os.environ.get(MARKET_ROLLBACK_FLAGS.get(market, "")) or "").strip().lower()
+    return flag in {"0", "false", "no", "off", "inactive"}
+
+
+def _baseline_variant_for_market(market: str) -> str:
+    return MARKET_BASELINE_VARIANTS.get(market, BASELINE_VARIANT)
+
+
+def _candidate_variant_for_market(market: str) -> str:
+    """2026-07-14 起三市场生产都是挑战者公式；回退开关切回时 candidate=baseline。"""
+    if _rollback_flag_off(market):
+        return _baseline_variant_for_market(market)
+    return MARKET_CANDIDATE_VARIANTS.get(market, BASELINE_VARIANT)
+
+
 def _candidate_weights_for_market(rp, market: str) -> dict[str, float]:
-    """只有 US 切候选公式；非 US 与 baseline 相同，用来证明港/A 未切。"""
-    if market == US_MARKET:
-        return rp.weights_for_market(rp.VARIANTS[CANDIDATE], market)
-    return rp.weights_for_market(rp.VARIANTS[BASELINE_VARIANT], market)
+    return rp.weights_for_market(rp.VARIANTS[_candidate_variant_for_market(market)], market)
 
 
 def compute() -> dict:
@@ -392,7 +471,6 @@ def compute() -> dict:
         raise RuntimeError("DB 持续被写锁占用")
     try:
         names = _names(conn)
-        base_w = rp.VARIANTS[BASELINE_VARIANT]
         out: dict = {
             "generated_at": datetime.now().isoformat(timespec="seconds"),
             "baseline": BASELINE,
@@ -400,7 +478,8 @@ def compute() -> dict:
             "candidate": CANDIDATE,
             "pool_source": POOL_SOURCE,
             "top_n": TOP_N,
-            "note": "全量候选池同池各选再比；本切换只作用于 US，HK/CN candidate=baseline 用于证明未切。",
+            "note": ("全量候选池同池各选再比；2026-07-14 起三市场生产均为挑战者公式，"
+                     "baseline=各市场老公式退影子对照。"),
             "markets": {},
         }
         for mkt in ("US", "HK", "CN"):
@@ -437,7 +516,7 @@ def compute() -> dict:
             if not pool:
                 continue
             _inject_grade(conn, pool, run_date)
-            bw = rp.weights_for_market(base_w, mkt)
+            bw = rp.weights_for_market(rp.VARIANTS[_baseline_variant_for_market(mkt)], mkt)
             cw = _candidate_weights_for_market(rp, mkt)
             for p in pool:
                 p["_b"] = rp.variant_score(p["scores"], bw)[0]
@@ -491,18 +570,22 @@ def compute() -> dict:
                     "US eligibility in buyable/research_only before each formula ranks"
                     if mkt == US_MARKET else "legacy market: no P0 US eligibility filter"
                 ),
-                "candidate_active": mkt == US_MARKET,
+                "candidate_active": not _rollback_flag_off(mkt),
+                "baseline_variant": _baseline_variant_for_market(mkt),
+                "candidate_variant": _candidate_variant_for_market(mkt),
                 "baseline_weights": bw,
                 "candidate_weights": cw,
                 "top_ns": list(TOP_NS),
                 "rank_slices": rank_slices,
-                "candidate_focus_top10": (
-                    rank_slices.get("top10", {}).get("rows", []) if mkt == US_MARKET else []
-                ),
+                "candidate_focus_top10": rank_slices.get("top10", {}).get("rows", []),
                 # 兼容旧面板：顶层 rows/dropped 仍代表 Top20。
                 "rows": rows, "dropped": dropped,
             }
-        out["strict_picks"] = _strict_pick_payload(out, conn)
+        out["strict_picks"] = _strict_pick_payload(out, conn, US_MARKET)
+        out["strict_picks_multi"] = {
+            mkt: (out["strict_picks"] if mkt == US_MARKET else _strict_pick_payload(out, conn, mkt))
+            for mkt in ("US", "HK", "CN") if mkt in (out.get("markets") or {})
+        }
         return out
     finally:
         conn.close()
