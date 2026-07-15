@@ -11291,8 +11291,18 @@ async function renderRealHoldings() {
     _loadRealHoldingReviewHistory(),
     _loadAndRenderEquityCurve(),
   ]);
-  const holdingsFetchFailed = !hRes || !hRes.ok;
-  try { if (hRes && hRes.ok) _realHoldingsCache = await hRes.json(); } catch (e) {}
+  // db_busy 时 API 返回 200+JSON对象(非数组)——不能当"零持仓"渲染(2026-07-15 用户被"暂无持仓"吓到)。
+  // 忙时保留上次成功数据(有就照常渲染)，没有缓存才显示"数据库忙"并自动重试。
+  let _holdingsBusy = false;
+  try {
+    if (hRes && hRes.ok) {
+      const _hj = await hRes.json();
+      if (Array.isArray(_hj)) { _realHoldingsCache = _hj; }
+      else if (_hj && _hj.status === "db_busy") { _holdingsBusy = true; }
+    }
+  } catch (e) {}
+  const holdingsFetchFailed = !hRes || !hRes.ok
+    || (_holdingsBusy && !(Array.isArray(_realHoldingsCache) && _realHoldingsCache.length));
   _renderVerdictAggregateCard();
   _refreshMergedHoldingsCache();
   _loadLedgerPnlSummary();
@@ -11339,11 +11349,15 @@ async function renderRealHoldings() {
     if (assetSummaryEl) assetSummaryEl.innerHTML = "";
     if (filterTabsEl) filterTabsEl.innerHTML = "";
     _renderAccountRiskLine("real-alert-line", 0, "录入持仓后会显示真实账户风控线", "真实账户");
-    const emptyMsg = holdingsFetchFailed
-      ? (hRes && hRes.status >= 500
-          ? "无法读取持仓：DuckDB 正被 daily_refresh 等脚本占用，请稍后再点刷新。"
-          : "无法连接本地 API；登录后应由 launchd 自动启动（com.linearview.stockassistant.api）。")
-      : "暂无持仓 · 点击右上角「+ 录入持仓」添加";
+    let emptyMsg = "暂无持仓 · 点击右上角「+ 录入持仓」添加";
+    if (_holdingsBusy) {
+      emptyMsg = "⏳ 数据没丢：数据库正被后台任务短暂占用，10 秒后自动重试…";
+      setTimeout(() => { try { renderRealHoldings(); } catch (e) {} }, 10000);
+    } else if (holdingsFetchFailed) {
+      emptyMsg = (hRes && hRes.status >= 500)
+        ? "无法读取持仓：DuckDB 正被 daily_refresh 等脚本占用，请稍后再点刷新。"
+        : "无法连接本地 API；登录后应由 launchd 自动启动（com.linearview.stockassistant.api）。";
+    }
     tbody.innerHTML = `<tr><td colspan="16" class="text-center ${holdingsFetchFailed ? "text-amber-800" : "text-slate-500"} py-8">${emptyMsg}</td></tr>`;
     const realAlloc = document.getElementById("chart-real-allocation");
     const realTheme = document.getElementById("chart-real-theme");
