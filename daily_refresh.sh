@@ -656,7 +656,8 @@ run_step "4c/25 分析师目标价补齐（buy_zone 估值锚点）" "-m scripts
 # 6 (V1 daily_picks dry-run) / 7 (audit_picks V1 reviews) / 8 (weekly_review V1 picks)
 
 # R — 每日新闻同步飞书（财联社 100 条 → 国际/国内分类）
-is_research_step && run_step "8b/25 每日新闻同步飞书" "scripts/daily_news_to_feishu.py"
+# 2026-07-15 用户反馈"没在看"，停推。要恢复取消下行注释即可。
+# is_research_step && run_step "8b/25 每日新闻同步飞书" "scripts/daily_news_to_feishu.py"
 
 # M — v6 学术因子流水线（watchlist 空时静默退出，无慢操作）
 run_step "9/25 v6 学术因子选股（已落 DuckDB picks）" "scripts/pipeline/daily_picks_v5.py"

@@ -3495,17 +3495,103 @@ def _safe_parse_date(s: str) -> date | None:
         return None
 
 
+def _build_card_payload_minimal() -> dict:
+    """极短版早安卡 — 2026-07-15 用户「太长了都不看」后定的默认版。
+
+    正文 ≤5 行：风险灯一句话 + 持仓一行 + 3天内事件(有才显) + 今日动作一句。
+    完整版 _build_card_payload() 保留，export FEISHU_CARD_FULL=1 可切回。
+    细节全在 dashboard，本卡只回答「今天要不要管」。
+    """
+    defense = _latest_defense_snapshot()
+    qgate_payload = _quality_gate_payload()
+    acceptance_payload = _acceptance_payload()
+    severity, severity_icon, header_template, regime_reasons = _combined_severity(
+        defense, qgate_payload, acceptance_payload)
+    trade_blocked = str((qgate_payload or {}).get("status") or "").upper() == "FAIL"
+
+    today = date.today()
+    weekday_cn = "一二三四五六日"[today.weekday()]
+    lines: list[str] = []
+
+    # 1) 风险灯：一句话（只带最重要的一条升档理由）
+    top_reason = f"（{regime_reasons[0]}）" if regime_reasons else ""
+    lines.append(f"{severity_icon} **风险灯 {severity}**{top_reason}")
+
+    # 2) 持仓一行：优先当日涨跌，盘前拿不到就退回累计盈亏（打 * 区分）
+    review = _load_json(REPO / "data" / "latest" / "real_holding_review.json") or {}
+    hold_bits: list[str] = []
+    for it in (review.get("items") or [])[:6]:
+        sym = str(it.get("symbol") or "").replace(".HK", "")
+        day = it.get("day_change_pct")
+        try:
+            if day is not None and math.isfinite(float(day)):
+                hold_bits.append(f"{sym} {float(day):+.1f}%")
+            elif it.get("pnl_pct") is not None:
+                hold_bits.append(f"{sym} {float(it['pnl_pct']):+.1f}%*")
+        except (TypeError, ValueError):
+            continue
+    if hold_bits:
+        lines.append("💼 " + " · ".join(hold_bits))
+
+    # 3) 3 天内高相关政策事件（沿用完整版 relevance≥4 口径，只留条数+最近一条）
+    policy_events = _load_json(REPO / "data" / "policy_events.json")
+    horizon = today + timedelta(days=3)
+    soon: list[str] = []
+    for ev in (policy_events or {}).get("events", []) or []:
+        if (ev.get("relevance_score") or 0) < 4:
+            continue
+        ed_p = _safe_parse_date(ev.get("date", ""))
+        if ed_p and today <= ed_p <= horizon:
+            soon.append(str(ev.get("title") or "")[:40])
+    if soon:
+        lines.append(f"📅 3天内 {len(soon)} 条高相关事件：{soon[0]}" +
+                     ("等" if len(soon) > 1 else ""))
+
+    # 4) 今日动作：一句话收口
+    if trade_blocked:
+        lines.append("⛔ 质量闸门 FAIL — 今日 AI 推荐别照做")
+    elif severity in ("HIGH", "CRITICAL"):
+        lines.append("🛡️ 风险升档 — 今日少动，别加仓")
+    else:
+        lines.append("✅ 无必做动作 — 细节想看去 dashboard")
+
+    return {
+        "msg_type": "interactive",
+        "card": {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text",
+                          "content": f"☀️ 早安 · {today.isoformat()} 周{weekday_cn}"},
+                "template": header_template,
+            },
+            "elements": [
+                {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}},
+                {"tag": "note", "elements": [{"tag": "plain_text", "content": (
+                    "*=累计盈亏(盘前无当日价) · 极短版卡，切回完整版 export FEISHU_CARD_FULL=1 · "
+                    "详情看 dashboard"
+                )}]},
+            ],
+        },
+    }
+
+
 def _push_via_webhook() -> bool:
     """群机器人 webhook 推送 — 走结构化 card v1 schema。
 
     适用于跨租户 external 群 — lark-cli bot 无法进 external 群，但自定义
     机器人 webhook 不受限制。payload 由 _build_card_payload() 独立构造，
     所以本函数不再接受 brief markdown 参数。
+
+    2026-07-15 起默认推极短版（用户反馈完整卡太长不看）；
+    export FEISHU_CARD_FULL=1 切回完整版。
     """
     webhook = os.environ.get("FEISHU_BRIEF_WEBHOOK", "").strip()
     if not webhook:
         return False
-    payload = _build_card_payload()
+    if os.environ.get("FEISHU_CARD_FULL", "").strip() == "1":
+        payload = _build_card_payload()
+    else:
+        payload = _build_card_payload_minimal()
     try:
         r = requests.post(webhook, json=payload, timeout=15)
         ok = r.status_code == 200 and r.json().get("StatusCode", 0) == 0
