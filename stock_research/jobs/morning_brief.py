@@ -69,7 +69,10 @@ def _clip_text(value: Any, n: int = 42) -> str:
 
 
 def _daily_strict_picks_lines() -> list[str]:
-    """今日严选 3 只：只读 dashboard 同源 JSON，不在早报里复算。"""
+    """今日严选：美股 3 只 + 港股 3 只(拿住口径)。只读 dashboard 同源 JSON，不复算。
+
+    2026-07-15 买卖闭环：每只自带卖出三条线(exit_line)，早报=可动作清单。
+    """
     payload = _load_json(REPO / "data" / "latest" / "daily_strict_picks.json")
     if not isinstance(payload, dict):
         return []
@@ -79,17 +82,32 @@ def _daily_strict_picks_lines() -> list[str]:
     lines = [
         "🎯 **今日严选 3 只**（研究优先级，不是买入指令；同源 `daily_strict_picks.json`）"
     ]
-    for p in rows[:3]:
-        if not isinstance(p, dict):
-            continue
+
+    def _pick_lines(p: dict) -> list[str]:
         symbol = str(p.get("symbol") or "").upper()
         name = str(p.get("name") or "")
         intro = _clip_text(p.get("intro"), 34)
         zone = str(p.get("buy_zone_line") or "💰 区间待补").strip()
-        risk = _clip_text(p.get("risk"), 36)
-        lines.append(f"• **{symbol} {name}**：{intro}；{zone}；{risk}")
+        out = [f"• **{symbol} {name}**：{intro}；{zone}"]
+        exit_line = str(p.get("exit_line") or "").strip()
+        if exit_line:
+            out.append(f"  {exit_line}")
+        return out
+
+    for p in rows[:3]:
+        if isinstance(p, dict):
+            lines.extend(_pick_lines(p))
     if payload.get("empty_slots"):
         lines.append(f"• 今日只筛出 {len(rows[:3])} 只，系统不硬凑。")
+
+    multi = _load_json(REPO / "data" / "latest" / "daily_strict_picks_multi.json")
+    hk = (multi or {}).get("HK") if isinstance(multi, dict) else None
+    hk_rows = (hk or {}).get("picks") or []
+    if hk_rows:
+        lines.append("🇭🇰 **港股严选 3 只**（拿住口径：复评 20 交易日，别快进快出）")
+        for p in hk_rows[:3]:
+            if isinstance(p, dict):
+                lines.extend(_pick_lines(p))
     return lines
 
 

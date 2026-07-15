@@ -848,8 +848,71 @@ def _dual_track_html() -> str:
     )
 
 
+def _exit_plan_html(pick: dict) -> str:
+    """严选卡「卖出三条线」块（方案 P0-2：买卖闭环的卖出侧上卡）。"""
+    plan = pick.get("exit_plan") or {}
+    lines = plan.get("lines") or []
+    if not lines:
+        return ""
+    items = "".join(
+        f'<div class="mt-0.5">{html_lib.escape(str(line))}</div>' for line in lines
+    )
+    return (
+        '<div class="mt-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 '
+        'text-[11px] text-sky-900 leading-relaxed">'
+        '<div class="font-bold">📤 卖出三条线（按现价估算，买入后以实际成本为准）</div>'
+        f"{items}</div>"
+    )
+
+
+def _strict_compact_market_html(payload: dict, label: str, fold: bool = False) -> str:
+    """港/A 股严选紧凑卡（低噪：每只=名称+区间+三条线，不铺满面板）。"""
+    picks = payload.get("picks") or []
+    if not picks:
+        return ""
+    advisory = html_lib.escape(str(payload.get("advisory") or ""))
+    rows = []
+    for p in picks[:3]:
+        sym = html_lib.escape(str(p.get("symbol") or ""))
+        name = html_lib.escape(str(p.get("name") or ""))
+        bz = html_lib.escape(str(p.get("buy_zone_line") or "💰 区间待补(价史不足20日)").strip())
+        exit_line = html_lib.escape(str(p.get("exit_line") or "退出线待补(缺现价)"))
+        rows.append(
+            f'<div class="rounded-lg border border-slate-200 bg-white px-3 py-2">'
+            f'<span class="font-mono font-bold text-slate-900">{sym}</span> '
+            f'<span class="text-sm text-slate-700">{name}</span>'
+            f'<div class="mt-1 text-xs text-slate-600">{bz}</div>'
+            f'<div class="mt-1 text-xs font-semibold text-sky-800">📤 {exit_line}</div></div>'
+        )
+    excluded = payload.get("excluded") or []
+    ex_html = ""
+    if excluded:
+        ex_txt = "；".join(
+            f"{e.get('symbol')}({e.get('reason')})" for e in excluded[:4]
+        )
+        ex_html = (f'<div class="mt-2 text-[11px] text-slate-400">闸门排除: '
+                   f'{html_lib.escape(ex_txt)}</div>')
+    body = (
+        f'<div class="grid grid-cols-1 md:grid-cols-3 gap-2">{"".join(rows)}</div>'
+        f'<div class="mt-2 text-[11px] text-slate-500">{advisory}</div>{ex_html}'
+    )
+    if fold:
+        return (
+            f'<details class="mt-3"><summary class="cursor-pointer text-xs font-bold '
+            f'text-slate-500">{html_lib.escape(label)}（默认折叠）</summary>'
+            f'<div class="mt-2">{body}</div></details>'
+        )
+    return (
+        f'<div class="mt-3 border-t border-slate-100 pt-3">'
+        f'<div class="mb-2 text-sm font-bold text-slate-900">{html_lib.escape(label)}</div>'
+        f"{body}</div>"
+    )
+
+
 def strict_picks_card_html() -> str:
-    """AI 推荐页首屏严选 3 只。单一来源 data/latest/daily_strict_picks.json。"""
+    """AI 推荐页首屏严选。美股 3 只详卡 + 港股 3 只紧凑卡 + A股默认折叠。
+
+    单一来源 daily_strict_picks.json(美) + daily_strict_picks_multi.json(港/A)。"""
     data = _runtime_load_json("data/latest/daily_strict_picks.json") or {}
     picks = data.get("picks") or []
     empty_slots = int(data.get("empty_slots") or 0)
@@ -943,6 +1006,7 @@ def strict_picks_card_html() -> str:
             {meter_html}
             {revision_html}
             {insider_html}
+            {_exit_plan_html(p)}
             <div class="mt-2 text-[11px] text-amber-700 leading-relaxed">{_e(risk)}</div>
           </article>
         """)
@@ -962,17 +1026,23 @@ def strict_picks_card_html() -> str:
           </article>
         """)
 
+    multi = _runtime_load_json("data/latest/daily_strict_picks_multi.json") or {}
+    hk_html = _strict_compact_market_html(multi.get("HK") or {}, "🇭🇰 港股严选 3 只（拿住口径：复评 20 交易日）")
+    cn_html = _strict_compact_market_html(multi.get("CN") or {}, "A股严选（公式未证明正 alpha，仅研究）", fold=True)
+
     return f"""
   <section class="mb-4 rounded-xl border border-violet-200 bg-white p-4 shadow-sm">
     <div class="mb-3 flex items-start justify-between gap-3 flex-wrap">
       <div>
         <h3 class="text-lg font-black text-slate-900">🎯 今日严选 3 只</h3>
-        <p class="text-xs text-slate-500 mt-1">从美股新公式精选 Top10 再过滤“偏贵”和“接飞刀”；研究严选 ≠ 买入指令。</p>
+        <p class="text-xs text-slate-500 mt-1">从美股新公式精选 Top10 再过滤“偏贵”和“接飞刀”；研究严选 ≠ 买入指令。每只自带卖出三条线。</p>
       </div>
       <div class="text-[11px] text-slate-400">批次 {html_lib.escape(source_date)} · 生成 {html_lib.escape(generated)}</div>
     </div>
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">{"".join(cards)}</div>
-    <div class="mt-3 text-[11px] text-slate-500">固定提醒：整套策略样本外未达标前，所有严选只用于买前研究；下单前仍要看盘前预警、止损闸和个股研究。</div>
+    {hk_html}
+    {cn_html}
+    <div class="mt-3 text-[11px] text-slate-500">固定提醒：整套策略样本外未达标前，所有严选只用于买前研究；下单前仍要看盘前预警、止损闸和个股研究。卖出三条线按现价估算，实际买入后以成本价重算（持仓页自动盯）。</div>
   </section>
 """
 

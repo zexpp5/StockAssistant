@@ -37,7 +37,93 @@ from stock_research.jobs.morning_brief import compute_holdings_verdict
 
 
 OUT_PATH = REPO / "data" / "latest" / "real_holding_review.json"
+STRICT_LOG_PATH = REPO / "data" / "strict_picks_log.jsonl"
+STRICT_MATCH_LOOKBACK_DAYS = 40  # 严选史匹配窗口(覆盖港股20交易日≈28自然日+缓冲)
 logger = logging.getLogger(__name__)
+
+
+def _strict_pick_matches(lookback_days: int = STRICT_MATCH_LOOKBACK_DAYS) -> dict[str, dict]:
+    """读滚动严选史 → {SYMBOL: {date, market, formula}}(取最近一次命中)。
+
+    买卖闭环 P0-4：照严选买的持仓自动挂预注册退出线(方案 2026-07-15 §3)。
+    """
+    if not STRICT_LOG_PATH.exists():
+        return {}
+    cutoff = (date.today() - timedelta(days=lookback_days)).isoformat()
+    out: dict[str, dict] = {}
+    try:
+        for line in STRICT_LOG_PATH.read_text(encoding="utf-8").splitlines():
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            day = str(rec.get("date") or "")
+            if day < cutoff:
+                continue
+            for sym in rec.get("symbols") or []:
+                s = str(sym).upper()
+                prev = out.get(s)
+                if prev is None or day >= str(prev.get("date")):
+                    out[s] = {"date": day, "market": rec.get("market"),
+                              "formula": rec.get("formula")}
+    except Exception:
+        logger.warning("严选史日志读取失败,买后盯盘匹配跳过", exc_info=True)
+    return out
+
+
+def _strict_exit_synthetic_plan(holding: dict, matched: dict) -> dict | None:
+    """按预注册退出参数为严选命中持仓造合成纪律计划(不落库,只进当次评估)。
+
+    与 build_discipline_template_draft 的区别：这是严选口径(US-8%/HK-10%/CN-6% +
+    复评时间线)，且以实际持仓成本为锚；有人工计划时绝不覆盖(人工优先)。
+    """
+    from stock_research.core.exit_rules import build_exit_plan
+
+    cost = stock_db._as_float_or_none(holding.get("avg_cost_local_per_share")) \
+        or stock_db._as_float_or_none(holding.get("entry_price"))
+    if not cost or cost <= 0:
+        return None
+    market = str(matched.get("market") or holding.get("market") or "").upper()
+    plan = build_exit_plan(market, cost, None)
+    if not plan:
+        return None
+    sym = str(holding.get("symbol") or holding.get("code") or "").upper()
+    return {
+        "plan_id": f"strict_auto_{sym}_{matched.get('date')}",
+        "holding_id": holding.get("id"),
+        "market": market,
+        "symbol": sym,
+        "plan_type": "strict_exit_auto",
+        "source_type": "strict_pick_auto",
+        "validation_status": "preregistered_2026-07-15",
+        "status": "active",
+        "strict_matched_date": matched.get("date"),
+        "review_days": plan["review_days"],
+        "review_line": (f"⏰ 严选口径：{matched.get('date')} 起 {plan['review_days']} "
+                        f"个交易日复评，对照当日严选还在不在名单"),
+        "triggers": [
+            {
+                "trigger_id": f"strict_stop_{sym}",
+                "trigger_type": "strict_stop_loss",
+                "comparator": "lte",
+                "price_max": plan["stop_price"],
+                "severity": "critical",
+                "priority": 2,
+                "action_label": f"跌破严选止损线 {plan['stop_price']}（成本 {plan['stop_pct']:+.0f}%）：建议离场复查",
+                "suggested_size_text": "严选口径止损，advisory 非指令",
+            },
+            {
+                "trigger_id": f"strict_target_{sym}",
+                "trigger_type": "strict_take_profit",
+                "comparator": "gte",
+                "price_min": plan["target_price"],
+                "severity": "info",
+                "priority": 7,
+                "action_label": f"到达严选目标线 {plan['target_price']}：考虑部分落袋",
+                "suggested_size_text": "advisory 非指令",
+            },
+        ],
+    }
 
 ACTION_PRIORITY = {
     "风险复查": 1,
@@ -1110,6 +1196,7 @@ def build_real_holding_review(*, persist: bool = True) -> dict[str, Any]:
             for p in stock_db.fetch_real_holding_discipline_plans(status="active", conn=conn)
             if p.get("holding_id") is not None
         }
+        strict_matches = _strict_pick_matches()
         items = []
         for h in holdings:
             sym = str(h.get("symbol") or h.get("code"))
@@ -1149,6 +1236,23 @@ def build_real_holding_review(*, persist: bool = True) -> dict[str, Any]:
                     price_trade_date=item.get("price_trade_date"),
                     price_is_stale=bool(item.get("price_is_prior_session")),
                 )
+            else:
+                # 买卖闭环 P0-4：无人工计划且命中严选史 → 自动挂预注册退出线
+                # (人工计划永远优先；本合成计划不落库,只进当次评估+红警管道)
+                matched = strict_matches.get(sym.upper())
+                if matched:
+                    synth = _strict_exit_synthetic_plan(h, matched)
+                    if synth:
+                        evaluated = stock_db.evaluate_real_holding_discipline_plan(
+                            synth,
+                            current_price=item.get("current_price"),
+                            price_trade_date=item.get("price_trade_date"),
+                            price_is_stale=bool(item.get("price_is_prior_session")),
+                        )
+                        evaluated["source_type"] = "strict_pick_auto"
+                        evaluated["review_line"] = synth["review_line"]
+                        evaluated["strict_matched_date"] = synth["strict_matched_date"]
+                        item["discipline"] = evaluated
             items.append(item)
 
         hard_cap = float(rules.get("hard_single_cap_pct", 0.25) or 0.25)
