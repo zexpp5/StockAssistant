@@ -85,6 +85,13 @@ def resolve_caps(readiness: dict[str, Any]) -> dict[str, Any]:
 
 
 THEME_LIMIT = 0.15
+# 2026-07-16 用户反馈（TSM 实例）：同赛道硬去重不看实际仓位——排前面的那只可能只买了
+# 一点点甚至没买，就把区间内的好标的一票否决，不合理。改软去重：
+#   赛道实际持仓 ≥ THEME_DEDUP_MIN_WEIGHT 才触发「同赛道不重复下注」；
+#   实际仓位还很小时允许同赛道第 2 只（仍受 15% 赛道额度/单只上限约束），
+#   但同赛道单月最多 THEME_MAX_PICKS 只，保住跨赛道分散度。
+THEME_DEDUP_MIN_WEIGHT = 0.05
+THEME_MAX_PICKS = 2
 MAX_BUY_ROWS = 3
 OVERHEAT_1Y_PCT = 200.0
 SINGLE_NAME_CAP = 0.25
@@ -204,8 +211,16 @@ def build_monthly_plan(
             reasons.append("只观察，不进入本月买入")
         if theme_current_weight.get(theme, 0) >= THEME_LIMIT:
             reasons.append(f"{theme} 当前暴露 {theme_current_weight.get(theme,0)*100:.1f}%，超过 15% 赛道上限")
-        if theme_picked.get(theme):
-            reasons.append(f"本月已选择 {theme}，同赛道不重复下注")
+        picked_same_theme = theme_picked.get(theme) or []
+        if picked_same_theme:
+            actual_theme_w = theme_current_weight.get(theme, 0)
+            if actual_theme_w >= THEME_DEDUP_MIN_WEIGHT:
+                reasons.append(
+                    f"本月已选择 {theme}，且该赛道实际持仓 {actual_theme_w*100:.1f}% 已不小，"
+                    f"同赛道不重复下注")
+            elif len(picked_same_theme) >= THEME_MAX_PICKS:
+                reasons.append(
+                    f"本月 {theme} 已选 {len(picked_same_theme)} 只，同赛道单月最多 {THEME_MAX_PICKS} 只")
         for f in (cand.get("risk_flags") or []):
             txt = _risk_text(f)
             if txt and _RISK_RE.search(txt):

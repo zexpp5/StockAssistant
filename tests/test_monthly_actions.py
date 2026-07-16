@@ -95,12 +95,36 @@ class BuildMonthlyPlanTest(unittest.TestCase):
         )
         self.assertEqual(len(out["buy_rows"]), 3, "≤3 上限必须生效")
 
-    def test_same_theme_not_double_picked(self):
-        # 两只同赛道都便宜 → 第二只被"同赛道不重复"踢出
+    def test_same_theme_second_pick_allowed_when_actual_tiny(self):
+        # 2026-07-16 规则修订（TSM 案例）：赛道实际持仓很小(<5%)时，
+        # 同赛道第 2 只不再被一票否决
         out = self._run(
             [{"ticker": "NVDA", "target_weight": 0.05}, {"ticker": "AMD", "target_weight": 0.05}],
             buy_zones={"NVDA": _zone("便宜"), "AMD": _zone("便宜")},
             candidates={"NVDA": {"theme": "半导体/AI硬件"}, "AMD": {"theme": "半导体/AI硬件"}},
+        )
+        self.assertEqual([b["ticker"] for b in out["buy_rows"]], ["NVDA", "AMD"])
+
+    def test_same_theme_third_pick_blocked(self):
+        # 就算实际仓位为 0，同赛道单月最多 2 只
+        tks = ("NVDA", "AMD", "AVGO")
+        out = self._run(
+            [{"ticker": t, "target_weight": 0.05} for t in tks],
+            buy_zones={t: _zone("便宜") for t in tks},
+            candidates={t: {"theme": "半导体/AI硬件"} for t in tks},
+        )
+        self.assertEqual([b["ticker"] for b in out["buy_rows"]], ["NVDA", "AMD"])
+        skip = next(s for s in out["skip_rows"] if s["ticker"] == "AVGO")
+        self.assertTrue(any("最多" in r for r in skip["reasons"]))
+
+    def test_same_theme_dedup_when_actually_invested(self):
+        # 该赛道实际持仓已 6%（≥5% 阈值）→ 第 2 只仍被"同赛道不重复"踢出
+        out = self._run(
+            [{"ticker": "NVDA", "target_weight": 0.08}, {"ticker": "AMD", "target_weight": 0.05}],
+            buy_zones={"NVDA": _zone("便宜"), "AMD": _zone("便宜")},
+            candidates={"NVDA": {"theme": "半导体/AI硬件"}, "AMD": {"theme": "半导体/AI硬件"}},
+            review_items=[{"symbol": "NVDA", "current_weight": 0.06}],
+            real_weights={"NVDA": 0.06},
         )
         self.assertEqual([b["ticker"] for b in out["buy_rows"]], ["NVDA"])
         amd_skip = next(s for s in out["skip_rows"] if s["ticker"] == "AMD")
