@@ -621,7 +621,10 @@ is_morning_step && run_step "0b/25 汇率刷新（单一 FX 源）" "scripts/too
 #   critical→超时即 FAIL 快速失败,reconcile/下轮重试,绝不再挂 11h。
 run_step "0c/25 V2 系统池刷新（live universe → system_universe/pool_membership）" \
     "scripts/tools/refresh_system_universe_v2.py" critical 300
-run_step "1/25 抓价格（手动 watchlist + 科技/AI universe）" "scripts/pipeline/fetch_stock_prices.py --source both"
+# 价格抓取依赖 yfinance/FMP/akshare 等外部源，偶发会无输出挂住。
+# 必须有单步上限：超时显式 FAIL，避免生产状态长时间停在 RUNNING。
+run_step "1/25 抓价格（手动 watchlist + 科技/AI universe）" \
+    "scripts/pipeline/fetch_stock_prices.py --source both" critical 900
 # M — V2 Piotroski P5-Lite（必须早于 build_v2_recommendations，让 picks 当日带上 f_score）
 # 2026-06-01：A 股已用 akshare stock_financial_abstract 接通（杜邦三表融合宽表）
 # 全 3 市场跑 ~10 分钟（yfinance 美/港 + akshare A 股 ~ 17% 入库率，其余 akshare 限流）
