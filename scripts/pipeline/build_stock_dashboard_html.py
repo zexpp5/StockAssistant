@@ -1051,6 +1051,78 @@ def strict_picks_card_html() -> str:
 """
 
 
+def quality_dip_card_html() -> str:
+    """好公司低价雷达卡 — 8 只质量大盘股的折扣档位(单一来源 core/quality_dip_radar)。
+
+    起因 2026-07-20:苹果 6-25 低点 $274 系统完整错过(打分公式盲区,AAPL 排 58 名
+    进不了严选)。不改打分公式(需回测),用独立面板补盲区;触线才进早报,平时零打扰。
+    构建期现算(纯本地 price_daily),DB 撞写锁时回退读上次 JSON,再不行整卡隐藏。
+    """
+    import html as html_lib
+    rows: list[dict] = []
+    generated = ""
+    try:
+        from stock_research.core.buy_zone import _open_conn
+        from stock_research.core import quality_dip_radar as qdr
+        conn, ok = _open_conn()
+        if ok and conn is not None:
+            try:
+                rows = qdr.compute_quality_dips(conn)
+            finally:
+                conn.close()
+            if rows:
+                qdr.write_json(rows)
+    except Exception as exc:
+        print(f"  ⚠️  quality_dip_radar 现算失败({exc}),尝试读上次 JSON")
+    if not rows:
+        cached = _runtime_load_json("data/latest/quality_dip_radar.json") or {}
+        rows = cached.get("rows") or []
+        generated = cached.get("generated_at", "")
+        if not rows:
+            return ""
+    tier_badge = {
+        "deep": '<span class="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-700 font-bold">🟢 深折</span>',
+        "dip": '<span class="rounded bg-amber-100 px-1.5 py-0.5 text-amber-700 font-bold">🟡 打折</span>',
+        "near_high": '<span class="rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">⚪ 贴高点</span>',
+    }
+    trs = []
+    for r in rows:
+        line_cell = (f"已跌破 ${r['alert_line']:.0f}" if r.get("triggered")
+                     else f"回到 ${r['alert_line']:.0f} 再看")
+        trs.append(
+            f"<tr class='border-b border-slate-100'>"
+            f"<td class='py-1.5 pr-3 font-bold text-slate-800 whitespace-nowrap'>{html_lib.escape(r['symbol'])} {html_lib.escape(r['name_zh'])}"
+            f"<div class='text-[10px] font-normal text-slate-400'>{html_lib.escape(r.get('note',''))}</div></td>"
+            f"<td class='py-1.5 pr-3 text-right'>${r['last_close']:,.0f}</td>"
+            f"<td class='py-1.5 pr-3 text-right text-slate-500'>${r['high_252']:,.0f}</td>"
+            f"<td class='py-1.5 pr-3 text-right font-bold "
+            f"{'text-emerald-600' if r['tier']=='deep' else ('text-amber-600' if r['tier']=='dip' else 'text-slate-400')}'>-{r['discount_pct']}%</td>"
+            f"<td class='py-1.5 pr-3 text-[11px] text-slate-500 whitespace-nowrap'>{line_cell}</td>"
+            f"<td class='py-1.5 text-[11px]'>{tier_badge.get(r['tier'],'')}</td></tr>"
+        )
+    as_of = html_lib.escape(str(rows[0].get("as_of", "")) if rows else "")
+    stale = f" · 缓存 {html_lib.escape(generated[:16])}" if generated else ""
+    return f"""
+  <section class="mb-4 rounded-xl border border-emerald-200 bg-white p-4 shadow-sm">
+    <div class="mb-2 flex items-start justify-between gap-3 flex-wrap">
+      <div>
+        <h3 class="text-lg font-black text-slate-900">💎 好公司低价雷达</h3>
+        <p class="text-xs text-slate-500 mt-1">8 只公认质量大盘股,只回答一件事:<strong>现在打几折</strong>。跌破 85 折提醒线 = 值得认真研究的低价;和下面按因子分排序的 AI 推荐互补(那套抓不住这类票,苹果 6 月 $274 就是这样漏的)。</p>
+      </div>
+      <div class="text-[11px] text-slate-400">价格截至 {as_of}{stale}</div>
+    </div>
+    <div class="overflow-x-auto"><table class="w-full text-xs">
+      <thead><tr class="text-left text-slate-400 border-b border-slate-200">
+        <th class="py-1 pr-3">公司</th><th class="py-1 pr-3 text-right">现价</th>
+        <th class="py-1 pr-3 text-right">52周高点</th><th class="py-1 pr-3 text-right">距高点</th>
+        <th class="py-1 pr-3">提醒线(85折)</th><th class="py-1">档位</th>
+      </tr></thead><tbody>{"".join(trs)}</tbody>
+    </table></div>
+    <div class="mt-2 text-[11px] text-slate-500">🟢 深折 ≥20% · 🟡 打折 10~20% · ⚪ 贴高点 &lt;10%。打折 ≠ 该买(可能是基本面坏了),是"该研究"信号;研究参考非投资建议。</div>
+  </section>
+"""
+
+
 # ============================================================
 # 百倍股的 5 个共同条件
 # ============================================================
@@ -1996,6 +2068,7 @@ window.echarts = window.echarts || {
   <!-- 2026-06-11 顶部减负 + 信任红绿灯：最上面用大白话回答"能不能照着买"(数据驱动红/黄/绿)，
        技术自检面板折叠。纯展示，不改数据/逻辑。 -->
   {TRUST_VERDICT_PANEL}
+  {QUALITY_DIP_CARD}
   {STRICT_PICKS_CARD}
   <!-- 把 4 块技术自检面板折叠：策略验证进度 / P0验证 / 规则体检 / 严筛试运行。数据源不变，仅默认收起。 -->
   <details class="mb-4 rounded-xl border border-slate-200 bg-white">
@@ -23454,6 +23527,7 @@ def build():
     html = html.replace("{AI_NAV_BACKTEST}", ai_workbench_nav_html(3))
     html = html.replace("{AI_NAV_PORTFOLIO}", ai_workbench_nav_html(4))
     html = html.replace("{TRUST_VERDICT_PANEL}", trust_verdict_panel_html())
+    html = html.replace("{QUALITY_DIP_CARD}", quality_dip_card_html())
     html = html.replace("{STRICT_PICKS_CARD}", strict_picks_card_html())
     html = html.replace("{US_VALIDATION_PROGRESS}", us_validation_progress_html())
     html = html.replace("{P0_POLICY_VALIDATION_PANEL}", p0_policy_validation_panel_html())
