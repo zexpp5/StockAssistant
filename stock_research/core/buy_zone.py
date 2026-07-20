@@ -33,6 +33,14 @@ TARGET_MAX_AGE_DAYS = 120
 # 技术回撤窗口
 MA_SHORT = 20
 MA_LONG = 50
+# 估值合理性(2026-07-20)：现价低于目标价折扣带 ≠ 便宜,要看绝对市盈率。
+# 阈值同 expectation_meter(美股宇宙分位:90分位≈125/75分位≈64)。
+# 高 PE 或(偏高 PE + 已涨多)共振 → 「便宜」降级为「低于目标价·但估值高」,不剔除只说老实。
+VAL_CAUTION_TRAILING_PE_HIGH = 100.0
+VAL_CAUTION_TRAILING_PE_MID = 64.0
+VAL_CAUTION_RUNUP_PCT = 100.0
+# 极端涨幅:低 PE 也不叫便宜(周期股顶部"低PE≠便宜"陷阱,如 MU 一年涨 642%)。
+VAL_CAUTION_RUNUP_EXTREME_PCT = 300.0
 
 
 def _open_conn():
@@ -83,6 +91,46 @@ def _latest_close(conn, symbol: str) -> float | None:
     return close
 
 
+def _valuation_snapshot(conn, symbol: str) -> tuple[float | None, float | None]:
+    """取最新 trailing_pe + 一年涨幅(算便宜标签是否该降级)。"""
+    try:
+        row = conn.execute(
+            "SELECT trailing_pe, one_year_pct FROM price_daily WHERE upper(symbol)=upper(?) "
+            "AND close IS NOT NULL ORDER BY trade_date DESC LIMIT 1",
+            [symbol],
+        ).fetchone()
+    except Exception:
+        return None, None  # 列缺失(旧快照/测试桩)→ 不降级,退回原"便宜"语义
+    if not row:
+        return None, None
+    def _f(v):
+        try:
+            f = float(v)
+            return f if f == f else None
+        except (TypeError, ValueError):
+            return None
+    return _f(row[0]), _f(row[1])
+
+
+def _valuation_caution(trailing_pe: float | None, one_year_pct: float | None) -> str | None:
+    """便宜标签是否该降级 + 一句原因。None=不降级。
+
+    两条独立路径：①绝对市盈率高(COHR型) ②极端涨幅(MU型周期顶,低PE也不算便宜)。
+    都只降标签不剔除票(memory: 估值只警示不做闸)。
+    """
+    runup = one_year_pct or 0
+    # ② 极端涨幅：不看 PE，涨幅本身就说明预期透支
+    if runup >= VAL_CAUTION_RUNUP_EXTREME_PCT:
+        return f"一年已涨 {runup:.0f}%，涨幅透支，低价≠便宜"
+    # ① 绝对市盈率（亏损/缺失跳过，看成长口径不误判）
+    if trailing_pe is not None and trailing_pe > 0:
+        if trailing_pe >= VAL_CAUTION_TRAILING_PE_HIGH:
+            return f"历史市盈率 {trailing_pe:.0f} 倍(全市场最贵一档)"
+        if trailing_pe >= VAL_CAUTION_TRAILING_PE_MID and runup >= VAL_CAUTION_RUNUP_PCT:
+            return f"历史市盈率 {trailing_pe:.0f} 倍偏高 + 一年已涨 {runup:.0f}%"
+    return None
+
+
 def _recent_target(conn, symbol: str, today: date):
     cutoff = today - timedelta(days=TARGET_MAX_AGE_DAYS)
     row = conn.execute(
@@ -120,6 +168,8 @@ def compute_buy_zone(symbol: str, conn=None, *, today: date | None = None) -> di
             return None
     try:
         current, current_trade_date = _latest_close_row(conn, symbol)
+        tpe, runup = _valuation_snapshot(conn, symbol)
+        caution = _valuation_caution(tpe, runup)
         target, tdate = _recent_target(conn, symbol, today)
         if target:
             low = round(target * VAL_LOW_MULT, 2)
@@ -130,6 +180,8 @@ def compute_buy_zone(symbol: str, conn=None, *, today: date | None = None) -> di
                 "current_trade_date": current_trade_date,
                 "target": target, "target_date": str(tdate) if tdate else None,
                 "position": _position(current, low, high),
+                "trailing_pe": tpe,
+                "valuation_caution": caution,
             }
         ma_short, ma_long = _moving_avgs(conn, symbol)
         if ma_short and ma_long:
@@ -141,6 +193,8 @@ def compute_buy_zone(symbol: str, conn=None, *, today: date | None = None) -> di
                 "current_trade_date": current_trade_date,
                 "target": None, "target_date": None,
                 "position": _position(current, low, high),
+                "trailing_pe": tpe,
+                "valuation_caution": caution,
             }
         return None
     finally:
@@ -195,6 +249,16 @@ _POS_ICON_COMPACT = {
 }
 
 
+def _position_icon(zone: dict, compact: bool) -> str:
+    """位置标。position=="便宜" 但估值有警示 → 降级为老实措辞(不喊便宜)。"""
+    pos = zone.get("position")
+    caution = zone.get("valuation_caution")
+    if pos == "便宜" and caution:
+        return "🟡低于目标价·但估值高" if compact else f"🟡 现价低于区间, 但{caution}, 不等于便宜"
+    table = _POS_ICON_COMPACT if compact else _POS_ICON
+    return table.get(pos, "")
+
+
 def format_line(zone: dict | None, compact: bool = False) -> str | None:
     """渲染成早报一行(缩进 2 空格, 与现有 reason 行对齐)。研究参考措辞。
 
@@ -208,10 +272,10 @@ def format_line(zone: dict | None, compact: bool = False) -> str | None:
     method = zone.get("method")
     cur = zone.get("current")
     if compact:
-        pos_icon = _POS_ICON_COMPACT.get(zone.get("position"), "")
+        pos_icon = _position_icon(zone, compact=True)
         cur_str = f"现价 ${cur:.0f} " if cur else ""
         return f"  💰 ${low:.0f}~${high:.0f} · {cur_str}{pos_icon}"
-    pos_icon = _POS_ICON.get(zone.get("position"), "")
+    pos_icon = _position_icon(zone, compact=False)
     if method == "估值" and zone.get("target"):
         anchor = f"｜锚:分析师目标价 ${zone['target']:.0f}"
     else:

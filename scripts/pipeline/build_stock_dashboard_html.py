@@ -925,7 +925,7 @@ def strict_picks_card_html() -> str:
     def _tone(pos: str) -> str:
         if pos == "便宜":
             return "border-emerald-200 bg-emerald-50 text-emerald-800"
-        if pos == "区间内":
+        if pos in ("区间内", "估值偏高"):
             return "border-amber-200 bg-amber-50 text-amber-800"
         if pos == "偏贵":
             return "border-rose-200 bg-rose-50 text-rose-800"
@@ -940,6 +940,10 @@ def strict_picks_card_html() -> str:
         bz_line = str(p.get("buy_zone_line") or "💰 价格区间待补")
         risk = str(p.get("risk") or "仍需买前研究。")
         pos = str(p.get("price_position") or "未知")
+        # 估值合理性(2026-07-20): "便宜"但绝对估值高 → 徽标说老实,不喊便宜
+        _vcaution = (p.get("buy_zone") or {}).get("valuation_caution")
+        if pos == "便宜" and _vcaution:
+            pos = "估值偏高"
         meter = p.get("expectation") or {}
         meter_line = str(p.get("expectation_line") or "")
         revision = p.get("revision_trend") or {}

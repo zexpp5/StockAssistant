@@ -159,20 +159,23 @@ def _strict_risk(move: dict) -> str:
 
 def _expectation_inputs(conn, symbol: str) -> dict:
     """拉预期消耗度的输入：最新估值行 + 行业文本。缺哪项返回哪项 None。"""
-    out = {"close": None, "forward_pe": None, "peg_ratio": None,
+    out = {"close": None, "forward_pe": None, "trailing_pe": None, "peg_ratio": None,
            "one_year_pct": None, "industry_text": ""}
     try:
+        # 🐛修(2026-07-20): 原 market 写死 US → 港A严选拉不到估值输入,预期灯永远⚪。
+        # symbol 三市场格式互斥,去 market 条件安全。同时补 trailing_pe(绝对估值分量)。
         row = conn.execute(
             """
-            SELECT close, forward_pe, peg_ratio, one_year_pct
+            SELECT close, forward_pe, trailing_pe, peg_ratio, one_year_pct
             FROM price_daily
-            WHERE market=? AND upper(symbol)=upper(?) AND close IS NOT NULL
+            WHERE upper(symbol)=upper(?) AND close IS NOT NULL
             ORDER BY trade_date DESC LIMIT 1
             """,
-            [US_MARKET, symbol],
+            [symbol],
         ).fetchone()
         if row:
-            out.update(close=row[0], forward_pe=row[1], peg_ratio=row[2], one_year_pct=row[3])
+            out.update(close=row[0], forward_pe=row[1], trailing_pe=row[2],
+                       peg_ratio=row[3], one_year_pct=row[4])
     except Exception:
         pass
     try:
@@ -293,6 +296,7 @@ def _strict_pick_payload(data: dict, conn, market: str = US_MARKET) -> dict:
             target_price=(zone or {}).get("target"),
             peg_ratio=exp_in["peg_ratio"],
             forward_pe=exp_in["forward_pe"],
+            trailing_pe=exp_in["trailing_pe"],
             one_year_pct=exp_in["one_year_pct"],
             industry_text=exp_in["industry_text"],
         )

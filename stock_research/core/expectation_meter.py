@@ -58,6 +58,10 @@ RUNUP_HIGH_PCT = 200.0
 RUNUP_MID_PCT = 100.0
 CYCLICAL_RUNUP_PCT = 200.0
 CYCLICAL_LOW_FPE = 15.0
+# ⑤ 绝对估值(trailing PE)切点：数据驱动=美股宇宙 2026-07-20 分位(中位42/75分位64/90分位125)。
+# 这是相对信号(目标价/PEG/涨幅)都没覆盖的「绝对贵不贵」——COHR trailing 131 从旧信号漏出的洞。
+TRAILING_PE_HIGH = 100.0   # 逼近 90 分位 → 红分量(tier 2)
+TRAILING_PE_MID = 64.0     # 75 分位 → 黄分量(tier 1)
 RATIO_HIGH = 0.66                # 总分占比 → 红灯
 RATIO_MID = 0.33                 # → 黄灯
 
@@ -81,6 +85,7 @@ def expectation_meter(
     target_price: Any = None,
     peg_ratio: Any = None,
     forward_pe: Any = None,
+    trailing_pe: Any = None,
     one_year_pct: Any = None,
     industry_text: Any = None,
 ) -> dict[str, Any]:
@@ -89,6 +94,7 @@ def expectation_meter(
     target_f = _as_float(target_price)
     peg_f = _as_float(peg_ratio)
     fpe_f = _as_float(forward_pe)
+    tpe_f = _as_float(trailing_pe)
     runup_f = _as_float(one_year_pct)
 
     components: dict[str, Any] = {}
@@ -134,6 +140,19 @@ def expectation_meter(
             reasons.append(f"近一年已涨 {runup_f:+.0f}%，大量预期已入价")
         elif tier == 1:
             reasons.append(f"近一年涨 {runup_f:+.0f}%")
+
+    # ⑤ 绝对估值（trailing PE）——相对信号漏掉的"绝对贵不贵"。
+    # 只在 trailing PE 为正时计（亏损股为负/缺失 → 跳过，改看成长口径）。
+    # 周期股低 PE 是顶部陷阱，交④处理，这里不因低 PE 给绿灯误导。
+    if tpe_f is not None and tpe_f > 0:
+        tier = 2 if tpe_f >= TRAILING_PE_HIGH else (1 if tpe_f >= TRAILING_PE_MID else 0)
+        components["trailing_valuation"] = {"trailing_pe": round(tpe_f, 1), "tier": tier}
+        score += tier
+        max_score += 2
+        if tier == 2:
+            reasons.append(f"历史市盈率 {tpe_f:.0f} 倍（全市场最贵一档），绝对估值很高，靠未来利润兑现撑")
+        elif tier == 1:
+            reasons.append(f"历史市盈率 {tpe_f:.0f} 倍偏高")
 
     # ④ 周期顶警示（独立旗，命中直接红灯）
     cyclical_top = bool(

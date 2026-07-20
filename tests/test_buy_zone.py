@@ -119,5 +119,50 @@ class ComputeBuyZoneTest(unittest.TestCase):
         self.assertEqual(len(out), 1)
 
 
+class ValuationCautionTest(unittest.TestCase):
+    """便宜标签估值合理性(2026-07-20): 高绝对市盈率不再被喊"便宜"。"""
+
+    def test_high_pe_triggers_caution(self):
+        # COHR 型: trailing 131 → 直接降级
+        self.assertIsNotNone(buy_zone._valuation_caution(131.9, 178.7))
+
+    def test_mid_pe_with_runup_triggers(self):
+        # trailing 70 + 一年涨 120% → 共振降级
+        self.assertIsNotNone(buy_zone._valuation_caution(70.0, 120.0))
+
+    def test_mid_pe_without_runup_ok(self):
+        # trailing 70 但一年只涨 30% → 不降级
+        self.assertIsNone(buy_zone._valuation_caution(70.0, 30.0))
+
+    def test_normal_pe_no_caution(self):
+        self.assertIsNone(buy_zone._valuation_caution(18.5, 11.0))   # QCOM 型
+        self.assertIsNone(buy_zone._valuation_caution(31.0, 17.6))   # NVDA 型
+
+    def test_extreme_runup_triggers_even_low_pe(self):
+        # MU 型: trailing 19(低) 但一年涨 642% → 周期顶,不叫便宜
+        cau = buy_zone._valuation_caution(19.2, 642.0)
+        self.assertIsNotNone(cau)
+        self.assertIn("涨幅透支", cau)
+
+    def test_negative_pe_low_runup_no_caution(self):
+        self.assertIsNone(buy_zone._valuation_caution(-5, 20))       # 亏损股+涨幅正常
+        # 但亏损股若极端涨幅仍降级(路径②不依赖PE)
+        self.assertIsNotNone(buy_zone._valuation_caution(None, 400))
+
+    def test_format_line_demotes_cheap_label(self):
+        # position=便宜 但有 caution → 显示"估值高",不喊便宜
+        zone = {"symbol": "COHR", "method": "估值", "low": 304, "high": 370,
+                "current": 278, "target": 435, "position": "便宜",
+                "trailing_pe": 131.9, "valuation_caution": "历史市盈率 132 倍(全市场最贵一档)"}
+        compact = buy_zone.format_line(zone, compact=True)
+        self.assertNotIn("🟢便宜", compact)
+        self.assertIn("估值高", compact)
+        # 无 caution 的真便宜票仍正常喊便宜
+        cheap = {"symbol": "QCOM", "method": "估值", "low": 158, "high": 191,
+                 "current": 150, "position": "便宜", "trailing_pe": 18.5,
+                 "valuation_caution": None}
+        self.assertIn("🟢便宜", buy_zone.format_line(cheap, compact=True))
+
+
 if __name__ == "__main__":
     unittest.main()

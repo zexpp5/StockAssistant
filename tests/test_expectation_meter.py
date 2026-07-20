@@ -120,5 +120,38 @@ class TestExpectationMeter(unittest.TestCase):
         self.assertIsNone(mid["discipline"])
 
 
+    def test_t13_trailing_pe_absolute_valuation(self):
+        """T13 绝对估值分量(2026-07-20): COHR 型高 trailing PE 拉红,不再漏。"""
+        # COHR 实况: trailing 131, forward 33.6, PEG 0.92, 1yr 179%, 目标价435 现价278
+        cohr = expectation_meter(price=278, target_price=435, peg_ratio=0.92,
+                                 forward_pe=33.6, trailing_pe=131.9, one_year_pct=178.7,
+                                 industry_text="光通信")
+        self.assertEqual(cohr["components"]["trailing_valuation"]["tier"], 2)
+        self.assertIn("历史市盈率", " ".join(cohr["reasons"]))
+        # 加了绝对估值分量后,COHR 不再是 🟢(旧漏洞),至少升到 🟡
+        self.assertNotEqual(cohr["light"], LIGHT_LOW)
+
+    def test_t14_low_pe_cyclical_not_double_punished(self):
+        """T14 MU 型低 trailing PE(周期顶)不被绝对估值分量误红——走周期顶路径。"""
+        mu = expectation_meter(price=849, target_price=1350, peg_ratio=0.1,
+                               forward_pe=5.6, trailing_pe=19.2, one_year_pct=642,
+                               industry_text="内存 HBM storage")
+        # trailing 19 < 64 → 绝对估值 tier 0(不误伤)
+        self.assertEqual(mu["components"]["trailing_valuation"]["tier"], 0)
+        # 但周期顶警示仍命中(low forward PE + 高涨幅 + 周期行业)
+        self.assertTrue(mu["components"].get("cyclical_top") or "周期股顶部" in " ".join(mu["reasons"]))
+
+    def test_t15_normal_pe_not_flagged(self):
+        """T15 正常估值(QCOM 型 trailing 18)绝对估值分量 tier 0,不误伤。"""
+        qcom = expectation_meter(price=172, target_price=210, peg_ratio=0.5,
+                                 forward_pe=15.5, trailing_pe=18.5, one_year_pct=11)
+        self.assertEqual(qcom["components"]["trailing_valuation"]["tier"], 0)
+
+    def test_t16_negative_pe_skipped(self):
+        """T16 亏损股 trailing PE 负/缺失 → 跳过不误判。"""
+        m = expectation_meter(price=10, target_price=15, trailing_pe=-8, one_year_pct=20)
+        self.assertNotIn("trailing_valuation", m["components"])
+
+
 if __name__ == "__main__":
     unittest.main()
