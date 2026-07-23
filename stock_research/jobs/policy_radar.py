@@ -55,11 +55,35 @@ def fetch_cctv(day: str) -> list[dict]:
     for _ in range(2):
         try:
             df = ak.news_cctv(date=day)
-            return [{"date": day, "title": str(r["title"]), "content": str(r["content"])}
+            return [{"date": day, "title": str(r["title"]), "content": str(r["content"]),
+                     "src": "新闻联播"}
                     for _, r in df.iterrows()]
         except Exception as exc:
             logger.warning("news_cctv(%s) 失败: %s", day, exc)
     return []
+
+
+def fetch_em(day: str) -> list[dict]:
+    """第二源:东财全球财经快讯(实时200条,~1s)。补新闻联播漏掉的市场/政策快讯
+    (国家队增持/回购/部委规划印发)。只在扫「今天」时用——实时源无历史,回放跳过。
+
+    高门槛打分器天然过滤板块异动噪音;逆回购等例行操作走排除层。
+    """
+    if day != date.today().strftime("%Y%m%d"):
+        return []  # 实时源无法回放历史
+    import akshare as ak
+    try:
+        df = ak.stock_info_global_em()
+        return [{"date": day, "title": str(r["标题"]), "content": str(r["摘要"]),
+                 "src": "东财快讯"}
+                for _, r in df.iterrows()]
+    except Exception as exc:
+        logger.warning("stock_info_global_em 失败: %s", exc)
+        return []
+
+
+def fetch_all(day: str) -> list[dict]:
+    return fetch_cctv(day) + fetch_em(day)
 
 
 def _units(item: dict) -> list[tuple[str, str]]:
@@ -77,15 +101,19 @@ def _units(item: dict) -> list[tuple[str, str]]:
 
 def scan_day(day: str, seen: set[str]) -> list[dict]:
     signals = []
-    for item in fetch_cctv(day):
+    by_fp: dict[str, dict] = {}
+    for item in fetch_all(day):
         for unit_title, unit_content in _units(item):
             v = score_news(unit_title, unit_content)
             if not v["is_signal"]:
                 continue
             fp = _fingerprint(unit_title)
-            signals.append({
+            if fp in by_fp:  # 两源命中同一条 → 只留一条
+                continue
+            rec = {
                 "fp": fp,
                 "date": day,
+                "src": item.get("src", "?"),
                 "title": unit_title,
                 "line": signal_line(unit_title, v),
                 "score": v["score"],
@@ -94,7 +122,9 @@ def scan_day(day: str, seen: set[str]) -> list[dict]:
                 "themes": v["themes"],
                 "is_new": fp not in seen,
                 "summary": (unit_content or unit_title)[:160],
-            })
+            }
+            by_fp[fp] = rec
+            signals.append(rec)
     return signals
 
 

@@ -61,6 +61,13 @@ class ScoreNewsTest(unittest.TestCase):
         self.assertTrue(is_excluded("国际媒体积极评价中国推动人工智能发展与全球人工智能治理"))
         self.assertTrue(is_excluded("央视快评：携手构建公正合理的全球人工智能治理体系"))
 
+    def test_routine_reverse_repo_excluded(self):
+        """央行逆回购是每天例行操作,不是政策事件(否则天天误报)。"""
+        self.assertTrue(is_excluded("央行今日开展2040亿元7天期逆回购操作"))
+        self.assertFalse(score_news("央行今日开展2040亿元7天期逆回购操作")["is_signal"])
+        # 但降准是真政策,不能被误挡
+        self.assertFalse(is_excluded("中国人民银行决定下调存款准备金率0.5个百分点"))
+
     def test_no_actor_no_signal(self):
         """没有国家级主体 → 不是国家大动作。"""
         self.assertFalse(score_news("某公司发布新产品 计划扩大生产")["is_signal"])
