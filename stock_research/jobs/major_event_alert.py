@@ -191,11 +191,27 @@ def collect_opportunities() -> list[dict]:
         industry = meta.get("industry") or classify_theme(sym, "")
         rank_txt = f"系统排名#{rank}" if rank is not None else "未进今日Top20"
         ind_txt = f" · 行业 {industry}" if industry else ""
+
+        # 2026-07-24: 源头已算好接飞刀/目标价过期警示,此前被卡片丢弃 →
+        # 把 flags 带上;带警示的降级为"⚠️谨慎"(不再🟢绿),排序沉底,防把自由落体当便宜货。
+        flags = list(g.get("flags") or [])
+        is_knife = bool(g.get("falling_knife"))
+        is_stale = bool(g.get("target_stale"))
+        cautioned = is_knife or is_stale or bool(flags)
+        icon = "⚠️" if cautioned else "🟢"
+        head = f"{sym}（{rank_txt}{ind_txt}） 跌进可买区 {zone}（{curtxt}{disctxt}）".replace("（）", "")
+        if flags:
+            head += "  " + " ".join(flags)
         opps.append({
             "source": f"机会·{src}",
-            "headline": f"{sym}（{rank_txt}{ind_txt}） 跌进可买区 {zone}（{curtxt}{disctxt}）".replace("（）", ""),
+            "headline": head,
+            "icon": icon,
+            "cautioned": cautioned,
+            # 排序键:干净的在前(0),带警示的在后(1);同组内折价大的在前
+            "sort_key": (1 if cautioned else 0, -(abs(disc) if isinstance(disc, (int, float)) else 0)),
             "key": f"opp:{sym}",
         })
+    opps.sort(key=lambda o: o["sort_key"])
     return opps
 
 
@@ -214,9 +230,18 @@ def _build_card(result: dict) -> dict:
             for ev in majors[:8]:
                 lines.append(f"• 🔴 **{ev['source']}**：{ev['headline']}")
         if opps:
+            clean = [o for o in opps if not o.get("cautioned")]
+            caut = [o for o in opps if o.get("cautioned")]
             lines.append("\n**💡 机会**（跌进可买区，研究参考非买入信号）")
-            for o in opps[:8]:
-                lines.append(f"• 🟢 {o['headline']}")
+            if clean:
+                for o in clean[:6]:
+                    lines.append(f"• {o.get('icon', '🟢')} {o['headline']}")
+            else:
+                lines.append("_今日无干净回调标的（下面都是接飞刀/目标价偏旧，先查为什么跌）_")
+            if caut:
+                lines.append("\n**⚠️ 谨慎**（系统标了接飞刀/目标价偏旧，别当便宜货）")
+                for o in caut[:5]:
+                    lines.append(f"• ⚠️ {o['headline']}")
         others = [s for s in result.get("all_signals", [])
                   if core._order(s["severity"]) < core._order(result.get("threshold", "CRITICAL"))
                   and s["severity"] != "NONE"]

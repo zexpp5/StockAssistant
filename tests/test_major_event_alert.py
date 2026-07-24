@@ -122,5 +122,42 @@ class OpportunityTest(unittest.TestCase):
         self.assertTrue(calm["recovered"])
 
 
+class CollectOpportunitiesTest(unittest.TestCase):
+    """2026-07-24: 机会卡必须带出源头的接飞刀/过期警示,带警示的沉底不再标🟢。"""
+
+    def _run(self, green):
+        from unittest.mock import patch
+        from stock_research.jobs import major_event_alert as job
+        with patch.object(job, "_read_json", return_value={"buy_signals": {"green": green}}), \
+             patch.object(job, "_rank_industry_lookup", return_value={}):
+            return job.collect_opportunities()
+
+    def test_falling_knife_flagged_and_sunk(self):
+        green = [
+            {"symbol": "GOOD", "low": 90, "high": 110, "current": 88, "discount_pct": -20,
+             "falling_knife": False, "target_stale": False, "flags": []},
+            {"symbol": "KNIFE", "low": 280, "high": 340, "current": 195, "discount_pct": -51,
+             "falling_knife": True, "target_stale": False,
+             "flags": ["⚠️近20日跌37%·可能接飞刀,先查为什么跌"]},
+        ]
+        opps = self._run(green)
+        by = {o["key"]: o for o in opps}
+        self.assertFalse(by["opp:GOOD"]["cautioned"])
+        self.assertEqual(by["opp:GOOD"]["icon"], "🟢")
+        self.assertTrue(by["opp:KNIFE"]["cautioned"])
+        self.assertEqual(by["opp:KNIFE"]["icon"], "⚠️")
+        self.assertIn("接飞刀", by["opp:KNIFE"]["headline"])   # 警示带到卡片了
+        # 干净的排在带警示的前面
+        self.assertLess(opps.index(by["opp:GOOD"]), opps.index(by["opp:KNIFE"]))
+
+    def test_stale_target_is_cautioned(self):
+        green = [{"symbol": "OLD", "low": 4, "high": 5, "current": 3, "discount_pct": -47,
+                  "falling_knife": False, "target_stale": True,
+                  "flags": ["⚠️目标价70天前(偏旧,可能没反映最新情况)"]}]
+        opps = self._run(green)
+        self.assertTrue(opps[0]["cautioned"])
+        self.assertIn("偏旧", opps[0]["headline"])
+
+
 if __name__ == "__main__":
     unittest.main()
