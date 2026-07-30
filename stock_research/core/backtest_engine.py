@@ -113,6 +113,8 @@ def simulate(
     hold_days: int = 1,                        # 每几个快照日调一次仓
     cost_model: CostModel = ZERO_COST,
     eligibility_filter: Callable[[dict], bool] | None = None,
+    regime_ma: int | None = None,              # 防御闸:基准跌破 N 日均线→空仓休息
+    regime_series: dict[str, float] | None = None,  # 防御闸基准收盘序列(date->close)
 ) -> BacktestResult:
     """按 PIT 快照逐日推进：快照日收盘建仓/调仓，快照日之间吃 close-to-close 收益。"""
     result = BacktestResult(market=market)
@@ -140,6 +142,19 @@ def simulate(
                 rets.append(b / a - 1.0)
         return sum(rets) / len(rets) if rets else None
 
+    _regime_days = sorted(regime_series.keys()) if regime_series else []
+
+    def _regime_on(d: str) -> bool:
+        """基准在 N 日均线上方=True(可持仓)。数据不足不拦(宁可漏防不误伤)。"""
+        if not regime_ma or not regime_series:
+            return True
+        past = [k for k in _regime_days if k <= d]
+        if len(past) < regime_ma:
+            return True
+        window = [regime_series[k] for k in past[-regime_ma:]]
+        ma = sum(window) / len(window)
+        return regime_series[past[-1]] >= ma
+
     gross, net, bench = 1.0, 1.0, 1.0
     holdings: list[str] = []
     turnovers: list[float] = []
@@ -149,7 +164,7 @@ def simulate(
     for i, d in enumerate(dates[:-1]):
         next_d = dates[i + 1]
 
-        # 调仓日（含首日）：按当日 PIT 快照重排
+        # 调仓日（含首日）：按当日 PIT 快照重排；防御闸关(基准跌破均线)→目标=空仓
         if i % hold_days == 0:
             rows = frames.get(d) or []
             if eligibility_filter is not None:
@@ -158,14 +173,18 @@ def simulate(
                 rows,
                 key=lambda r: (-score_row(r, weights), str(r.get("symbol"))),
             )
-            target = [str(r["symbol"]) for r in ranked[:top_n]]
+            target = [str(r["symbol"]) for r in ranked[:top_n]] if _regime_on(d) else []
 
-            if not holdings:
-                # 建仓：全部买入，付 top_n 只的买入成本
-                if target:
-                    net *= 1.0 - cost_model.buy_pct / 100.0
-                    result.total_trades += len(target)
-            else:
+            if not holdings and target:
+                # 建仓/从空仓回场：全部买入
+                net *= 1.0 - cost_model.buy_pct / 100.0
+                result.total_trades += len(target)
+            elif holdings and not target:
+                # 防御闸触发：清仓休息，只付卖出侧
+                net *= 1.0 - cost_model.sell_pct / 100.0
+                result.total_trades += len(holdings)
+                turnovers.append(1.0)
+            elif holdings and target:
                 sold = [s for s in holdings if s not in target]
                 bought = [s for s in target if s not in holdings]
                 turnover = len(sold) / max(len(holdings), 1)
@@ -227,6 +246,8 @@ def simulate(
 US_ELIGIBLE = {"buyable", "research_only"}
 
 BENCHMARKS = {"US": ("SPY", "QQQ"), "HK": ("^HSI",), "CN": ("000300.SS",)}
+# 防御闸基准(2026-07-27 预注册):组合是科技风格 → US 用 QQQ 而非 SPY
+REGIME_BENCHMARK = {"US": "QQQ", "HK": "^HSI", "CN": "000300.SS"}
 
 
 def us_eligibility_filter(row: dict[str, Any]) -> bool:
@@ -295,12 +316,15 @@ def run_market_backtest(
     cost_model: CostModel | None = None,
     start: str | None = None,
     end: str | None = None,
+    regime_ma: int | None = None,
 ) -> tuple[BacktestResult, BacktestResult]:
     """返回 (毛成绩, 净成绩) —— 同一引擎两个成本模型，防双引擎漂移。"""
     frames = load_frames(conn, market, start, end)
     symbols = sorted({str(r["symbol"]) for rows in frames.values() for r in rows})
     closes = load_closes(conn, symbols, start)
-    bench = load_closes(conn, list(BENCHMARKS.get(market, ())), start)
+    # 基准不加 start:防御闸的均线要用快照期之前的历史算
+    bench = load_closes(conn, list(BENCHMARKS.get(market, ())))
+    regime_series = bench.get(REGIME_BENCHMARK.get(market, "")) if regime_ma else None
     # 周末/假日也可能有快照(daily_refresh 周末照跑)但没有收盘价 → 只保留基准
     # 指数有收盘价的日子（=该市场真交易日），否则缺价日按 0 收益会稀释成绩。
     # （同一教训: memory 周末 run 永久压低覆盖率, commit 30baa9e）
@@ -314,8 +338,11 @@ def run_market_backtest(
 
     common = dict(market=market, frames=frames, closes=closes,
                   benchmark_closes=bench, weights=weights, top_n=top_n,
-                  hold_days=hold_days, eligibility_filter=elig)
+                  hold_days=hold_days, eligibility_filter=elig,
+                  regime_ma=regime_ma, regime_series=regime_series)
     gross_r = simulate(cost_model=ZERO_COST, **common)
     net_r = simulate(cost_model=cm, **common)
     net_r.notes.append(f"成本模型[{market}]: {cm.label} (来回 {cm.round_trip_pct:.3f}%)")
+    if regime_ma:
+        net_r.notes.append(f"防御闸: {REGIME_BENCHMARK.get(market)} 跌破 {regime_ma} 日均线→空仓")
     return gross_r, net_r

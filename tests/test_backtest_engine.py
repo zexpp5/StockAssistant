@@ -123,6 +123,52 @@ class SimulateTest(unittest.TestCase):
         self.assertTrue(any("不足" in n for n in r.notes))
 
 
+class RegimeGateTest(unittest.TestCase):
+    """防御闸(2026-07-27): 基准跌破N日均线→空仓休息。"""
+
+    def test_gate_off_goes_to_cash(self):
+        frames, closes, bench = make_frames_closes()
+        # 基准序列: 3日均线之下(连跌) → 调仓日闸关 → 空仓
+        regime = {"2026-06-28": 110.0, "2026-06-29": 105.0, "2026-06-30": 100.0,
+                  "2026-07-01": 90.0, "2026-07-02": 85.0, "2026-07-03": 80.0}
+        r = simulate(market="US", frames=frames, closes=closes, benchmark_closes=bench,
+                     weights=WEIGHTS, top_n=2, hold_days=1, cost_model=ZERO_COST,
+                     regime_ma=3, regime_series=regime)
+        # 全程闸关 → никогда建仓 → 毛收益 0
+        self.assertEqual(r.gross_total_pct, 0.0)
+        self.assertEqual(r.total_trades, 0)
+
+    def test_gate_on_when_above_ma(self):
+        frames, closes, bench = make_frames_closes()
+        # 基准在均线上方(上涨) → 闸开,正常持仓
+        regime = {"2026-06-28": 80.0, "2026-06-29": 85.0, "2026-06-30": 90.0,
+                  "2026-07-01": 100.0, "2026-07-02": 105.0, "2026-07-03": 110.0}
+        r = simulate(market="US", frames=frames, closes=closes, benchmark_closes=bench,
+                     weights=WEIGHTS, top_n=2, hold_days=1, cost_model=ZERO_COST,
+                     regime_ma=3, regime_series=regime)
+        self.assertGreater(r.gross_total_pct, 0)   # 正常吃到 A 的上涨
+
+    def test_insufficient_history_does_not_block(self):
+        frames, closes, bench = make_frames_closes()
+        regime = {"2026-07-01": 50.0}  # 只有1天,不足N=3 → 不拦(宁可漏防不误伤)
+        r = simulate(market="US", frames=frames, closes=closes, benchmark_closes=bench,
+                     weights=WEIGHTS, top_n=2, hold_days=1, cost_model=ZERO_COST,
+                     regime_ma=3, regime_series=regime)
+        self.assertGreater(r.total_trades, 0)
+
+    def test_exit_pays_sell_side_only(self):
+        frames, closes, bench = make_frames_closes()
+        # 第1天闸开建仓,第2/3天闸关清仓 → 成本=建仓买入+清仓卖出各一次
+        regime = {"2026-06-28": 100.0, "2026-06-29": 100.0, "2026-06-30": 100.0,
+                  "2026-07-01": 101.0, "2026-07-02": 80.0, "2026-07-03": 70.0}
+        cm = CostModel(buy_pct=0.5, sell_pct=0.5, label="t")
+        r = simulate(market="US", frames=frames, closes=closes, benchmark_closes=bench,
+                     weights=WEIGHTS, top_n=2, hold_days=1, cost_model=cm,
+                     regime_ma=3, regime_series=regime)
+        # 建仓2买 + 第2天清仓2卖 = 4笔;期末无持仓无清仓成本
+        self.assertEqual(r.total_trades, 4)
+
+
 class CostModelTest(unittest.TestCase):
     def test_default_models_sane(self):
         # 成本排序符合常识: 港股 > A股 > 美股

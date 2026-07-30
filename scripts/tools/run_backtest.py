@@ -63,6 +63,7 @@ def main() -> int:
     p.add_argument("--hold-days", type=int, default=1, help="每几个交易日调一次仓")
     p.add_argument("--start", help="起始日 YYYY-MM-DD（默认快照最早）")
     p.add_argument("--end", help="结束日")
+    p.add_argument("--regime-ma", type=int, help="防御闸:基准跌破N日均线→空仓休息(如 20/200)")
     p.add_argument("--no-write", action="store_true", help="只打印，不写 JSON 产物")
     args = p.parse_args()
 
@@ -87,6 +88,7 @@ def main() -> int:
         gross, net = run_market_backtest(
             conn, market=mkt, weights=weights, top_n=args.top_n,
             hold_days=args.hold_days, start=args.start, end=args.end,
+            regime_ma=args.regime_ma,
         )
         cm = DEFAULT_COST_MODELS[mkt]
         print(f"\n【{MARKET_LABELS[mkt]}】公式={wname}  权重={json.dumps(weights, ensure_ascii=False)}")
